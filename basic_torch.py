@@ -548,7 +548,7 @@ def _U2(phi, lam, target_qubit=0):
     # Use torch.pi if available (PyTorch 2.0+), otherwise math.pi
     return _U3(torch.tensor(math.pi)/2, phi, lam, target_qubit)
 
-def RZZ(theta):
+def _RZZ(theta):
     """
     RZZ门（控制Z旋转门）
     作用在两个量子比特上，实现条件相位旋转
