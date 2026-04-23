@@ -16,14 +16,14 @@ from quantum_sim import (
 class TestNoiseModel(unittest.TestCase):
     def setUp(self):
         self.backend = TorchBackend(device="cpu")
-        self.engine = Measure(self.backend)
+        self.measure = Measure(self.backend)
 
     def test_bit_flip_full_probability(self):
         # 从 |0><0| 开始，经过 identity 后施加 bit flip(p=1) -> |1><1|
         circ = Circuit({"type": "identity", "n_qubits": 1}, n_qubits=1)
         noise = NoiseModel().add_channel(BitFlipChannel(target_qubit=0, p=1.0))
 
-        result = self.engine.run_density_matrix(circ, noise_model=noise, shots=None)
+        result = self.measure.run_density_matrix(circ, noise_model=noise, shots=None)
         self.assertAlmostEqual(result.probabilities[0], 0.0, places=6)
         self.assertAlmostEqual(result.probabilities[1], 1.0, places=6)
         self.assertEqual(result.metadata.get("noise_model"), "NoiseModel")
@@ -34,7 +34,7 @@ class TestNoiseModel(unittest.TestCase):
         rho1 = np.array([[0.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, 1.0 + 0.0j]], dtype=np.complex64)
         noise = NoiseModel().add_channel(AmplitudeDampingChannel(target_qubit=0, gamma=1.0))
 
-        result = self.engine.run_density_matrix(
+        result = self.measure.run_density_matrix(
             circ,
             initial_density_matrix=rho1,
             noise_model=noise,
@@ -49,7 +49,7 @@ class TestNoiseModel(unittest.TestCase):
         plus = np.array([[0.5 + 0.0j, 0.5 + 0.0j], [0.5 + 0.0j, 0.5 + 0.0j]], dtype=np.complex64)
         noise = NoiseModel().add_channel(PhaseFlipChannel(target_qubit=0, p=1.0))
 
-        result = self.engine.run_density_matrix(
+        result = self.measure.run_density_matrix(
             circ,
             initial_density_matrix=plus,
             noise_model=noise,
@@ -65,7 +65,7 @@ class TestNoiseModel(unittest.TestCase):
         circ = Circuit({"type": "pauli_x", "target_qubit": 0}, n_qubits=1)
         noise = NoiseModel().add_channel(BitFlipChannel(target_qubit=0, p=1.0), after_gates=["hadamard"])
 
-        result = self.engine.run_density_matrix(circ, noise_model=noise, shots=None)
+        result = self.measure.run_density_matrix(circ, noise_model=noise, shots=None)
         # 只受 X 作用：|0> -> |1>
         self.assertAlmostEqual(result.probabilities[0], 0.0, places=6)
         self.assertAlmostEqual(result.probabilities[1], 1.0, places=6)

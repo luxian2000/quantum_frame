@@ -1,6 +1,6 @@
-量子模拟器构架
+# 量子模拟器构架
 
-```
+```text
 quantum_sim/
 ├── core/
 │   ├── backends/             # 计算后端解耦
@@ -27,22 +27,22 @@ quantum_sim/
 │       ├── qasm.py           # OpenQASM 2.0/3.0 支持
 │       └── json_io.py        # 电路序列化
 │
-├── execution/                # 运行管理器
-│   ├── engine.py             # 调度后端执行逻辑的核心引擎
+├── measure/                  # 测量与结果生成模块
+│   ├── measure.py            # 调度后端执行逻辑并产生测量结果
 │   ├── result.py             # 统一的测量结果对象（均值、方差、样本）
 │   └── sampler.py            # 采样器逻辑
 │
 ├── algorithms/
-│   ├── universal/	          # QFT, Search, QPE, HHL, QW, QSVT ...
+│   ├── universal/            # QFT, Search, QPE, HHL, QW, QSVT ...
 │   ├── QML/
 │   │   ├── traditional QML/  # regression, SVM, kernel ...
-│   │   ├── deep QML/	      # neural networks, reservior ...
+│   │   ├── deep QML/         # neural networks, reservior ...
 │   │   └── QRL/
 │   ├── variational/
 │   │   ├── VQE
 │   │   ├── QAOA
 │   │   └── ansatz/           # 预定义的变分线路模板 (HEA 等)
-│   ├── QAS/		          # 量子架构搜索
+│   ├── QAS/                  # 量子架构搜索
 │   ├── chemistry/            # 特定领域：费米子映射、分子哈密顿量
 │   └── optimizers/           # QUBO/HUBO/SB 等优化算法
 │

@@ -11,7 +11,7 @@ quantum_sim/core/backends/base.py
 - `to_numpy` 提供统一的转换出口，用于输出/调试
 
 实现新后端时，继承 Backend 并实现全部抽象方法即可；
-上层代码（StateVector、Circuit、Engine …）只依赖此接口，不感知底层框架。
+上层代码（StateVector、Circuit、Measure …）只依赖此接口，不感知底层框架。
 """
 
 from __future__ import annotations

@@ -12,8 +12,8 @@ from .core.noise import (
     NoiseModel,
     PhaseFlipChannel,
 )
-from .execution.engine import Measure
-from .execution.result import Result
+from .measure.measure import Measure
+from .measure.result import Result
 from .circuit import (
     Circuit,
     ccnot,

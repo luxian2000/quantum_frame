@@ -27,7 +27,7 @@ pip install numpy torch
 
 - `quantum_sim.circuit`
   - `Circuit` 电路类与门构造器（`hadamard`、`cnot`、`rx` 等）
-- `quantum_sim.execution`
+- `quantum_sim.measure`
   - `Measure` 统一测量与执行入口
   - `Result` 统一结果对象
 - `quantum_sim.core.states`

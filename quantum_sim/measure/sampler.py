@@ -1,5 +1,5 @@
 """
-quantum_sim/execution/sampler.py
+quantum_sim/measure/sampler.py
 
 采样器逻辑：基于后端概率向量进行 shots 次采样并转换为 bitstring 计数字典。
 """
@@ -16,14 +16,6 @@ class Sampler:
         self.backend = backend
 
     def sample_counts(self, probs, n_qubits: int, shots: int = 1024) -> Dict[str, int]:
-        """
-        按概率采样并返回 bitstring 计数字典（只保留非零项）。
-
-        参数:
-            probs: 后端原生概率向量，shape (2^n,)
-            n_qubits: 量子比特数
-            shots: 采样次数
-        """
         if shots <= 0:
             raise ValueError("shots 必须为正整数")
 

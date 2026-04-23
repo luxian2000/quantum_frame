@@ -1,7 +1,7 @@
 """
-quantum_sim/execution/engine.py
+quantum_sim/measure/measure.py
 
-执行引擎：统一调度 "电路 -> 末态 -> 概率/采样/期望值" 的流程。
+测量入口：统一调度 "电路 -> 末态 -> 概率/采样/期望值" 的流程。
 """
 
 from __future__ import annotations
@@ -9,8 +9,8 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
-from ..circuit.model import Circuit
 
+from ..circuit.model import Circuit
 from ..core.states import DensityMatrix, StateVector
 from .result import Result
 from .sampler import Sampler
@@ -40,7 +40,6 @@ class Measure:
                 raise ValueError("initial_state.n_qubits 与电路 n_qubits 不一致")
             return initial_state
 
-        # 兼容输入后端张量或 numpy/list
         return StateVector(initial_state, n_qubits, self.backend)
 
     def _build_initial_density_matrix(
@@ -56,7 +55,6 @@ class Measure:
                 raise ValueError("initial_density_matrix.n_qubits 与电路 n_qubits 不一致")
             return initial_density_matrix
 
-        # 兼容输入后端张量或 numpy/list
         return DensityMatrix(initial_density_matrix, n_qubits, self.backend)
 
     def run(
@@ -68,7 +66,7 @@ class Measure:
         return_state: bool = True,
     ) -> Result:
         """
-        运行一个电路，返回统一结果对象。
+        测量一个电路，返回统一结果对象。
 
         参数:
             circuit: 必须具有 `n_qubits` 属性和 `unitary()` 方法
@@ -84,25 +82,20 @@ class Measure:
         if n_qubits <= 0:
             raise ValueError("n_qubits 必须为正整数")
 
-        # 构造初始态
         sv0 = self._build_initial_state(n_qubits, initial_state=initial_state)
 
-        # 计算电路酉矩阵并转换到当前后端
         unitary_raw = circuit.unitary()
         unitary = self.backend.cast(self.backend.to_numpy(unitary_raw))
 
-        # 演化
         sv = sv0.evolve(unitary)
         probs_backend = sv.probabilities()
         probs = self.backend.to_numpy(probs_backend).real
 
-        # 采样
         counts = None
         use_shots = shots if shots is not None else 0
         if use_shots > 0:
             counts = self.sampler.sample_counts(probs_backend, n_qubits=n_qubits, shots=use_shots)
 
-        # 期望值与方差
         exp_vals: Dict[str, float] = {}
         exp_vars: Dict[str, float] = {}
         if observables:
@@ -129,7 +122,7 @@ class Measure:
             expectation_variances=exp_vars,
             final_state=final_state_np,
             metadata={
-                "engine": "Measure",
+                "measure": "Measure",
                 "circuit_type": type(circuit).__name__,
                 "state_mode": "state_vector",
             },
@@ -145,7 +138,7 @@ class Measure:
         return_state: bool = True,
     ) -> Result:
         """
-        以密度矩阵路径运行一个电路，返回统一结果对象。
+        以密度矩阵路径测量一个电路，返回统一结果对象。
 
         参数:
             circuit: 必须具有 `n_qubits` 属性和 `unitary()` 方法
@@ -169,7 +162,6 @@ class Measure:
 
         rho = rho0
         if noise_model is not None and hasattr(circuit, "gates"):
-            # 有噪声时采用逐门演化，确保可在门间插入噪声通道。
             for gate in circuit.gates:
                 gate_unitary_raw = Circuit(gate, n_qubits=n_qubits).unitary()
                 gate_unitary = self.backend.cast(self.backend.to_numpy(gate_unitary_raw))
@@ -220,7 +212,7 @@ class Measure:
             expectation_variances=exp_vars,
             final_state=final_state_np,
             metadata={
-                "engine": "Measure",
+                "measure": "Measure",
                 "circuit_type": type(circuit).__name__,
                 "state_mode": "density_matrix",
                 "noise_model": type(noise_model).__name__ if noise_model is not None else None,
@@ -244,14 +236,6 @@ class Measure:
             observables: 全局可观测量字典（可被 per_circuit_options 覆盖）
             mode: "state_vector" 或 "density_matrix"
             per_circuit_options: 每个电路的附加参数字典序列，长度需与 circuits 相同
-                支持键:
-                - shots
-                - observables
-                - initial_state
-                - initial_density_matrix
-                - noise_model
-                - return_state
-                - label
         返回:
             Result 列表，顺序与输入 circuits 一致
         """
@@ -310,13 +294,6 @@ class Measure:
         """
         参数扫描：针对一组参数值构造电路并批量执行。
 
-        参数:
-            circuit_builder: 参数 -> 电路 的构造函数
-            param_values: 参数值可迭代对象
-            shots: 采样次数
-            observables: 可观测量字典
-            mode: "state_vector" 或 "density_matrix"
-            return_state: 是否在结果中附带末态
         返回:
             Result 列表，每个结果 metadata 包含 `scan_param`
         """

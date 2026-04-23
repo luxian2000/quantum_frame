@@ -33,23 +33,23 @@ def sep(title: str):
 def bell_demo():
     sep("Bell state (state vector)")
     backend = TorchBackend(device="cpu")
-    engine = Measure(backend)
+    measure = Measure(backend)
 
     circ = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
     print("Circuit:", circ)
 
-    res = engine.run(circ, shots=1024)
+    res = measure.run(circ, shots=1024)
     print("Probabilities:", np.round(res.probabilities, 6))
     print("Counts (sampled):", res.counts)
     print("Most probable:", res.most_probable())
-    return circ, engine, backend
+    return circ, measure, backend
 
 
-def expectation_demo(circ, engine, backend):
+def expectation_demo(circ, measure, backend):
     sep("Hamiltonian expectation (ZZ)")
     H = Hamiltonian(n_qubits=2).add_term(1.0, {"Z": [0, 1]})
     op = H.to_matrix(backend)
-    res = engine.run(circ, shots=None, observables={"ZZ": op})
+    res = measure.run(circ, shots=None, observables={"ZZ": op})
     print("<ZZ> =", res.expectation_values.get("ZZ"))
     print("Var(ZZ) =", res.expectation_variances.get("ZZ"))
 
@@ -57,15 +57,15 @@ def expectation_demo(circ, engine, backend):
 def noise_demo(circ):
     sep("Density matrix + noise demo")
     backend = TorchBackend(device="cpu")
-    engine = Measure(backend)
+    measure = Measure(backend)
     noise = NoiseModel().add_channel(BitFlipChannel(target_qubit=0, p=0.9))
-    res = engine.run_density_matrix(circ, shots=None, noise_model=noise)
+    res = measure.run_density_matrix(circ, shots=None, noise_model=noise)
     print("Probabilities with bit-flip(p=0.9):", np.round(res.probabilities, 6))
 
 
 def scan_demo(backend):
     sep("Parameter scan (RY on q0)")
-    engine = Measure(backend)
+    measure = Measure(backend)
     HZ = Hamiltonian(n_qubits=2).add_term(1.0, {"Z": [0]})
     op = HZ.to_matrix(backend)
 
@@ -74,7 +74,7 @@ def scan_demo(backend):
     def build(theta):
         return Circuit(ry(theta, 0), n_qubits=2)
 
-    results = engine.scan_parameters(build, params, shots=None, observables={"Z0": op})
+    results = measure.scan_parameters(build, params, shots=None, observables={"Z0": op})
     for r in results:
         print(
             f"index={r.metadata['scan_index']}, theta={r.metadata['scan_param']:.6f}, <Z0>={r.expectation_values['Z0']:.6f}"
@@ -94,14 +94,14 @@ def io_demo(circ):
 def numpy_backend_demo(circ):
     sep("Numpy backend demo")
     backend = NumpyBackend()
-    engine = Measure(backend)
-    res = engine.run(circ, shots=512)
+    measure = Measure(backend)
+    res = measure.run(circ, shots=512)
     print("Probabilities (NumpyBackend):", np.round(res.probabilities, 6))
 
 
 def main():
-    circ, engine, backend = bell_demo()
-    expectation_demo(circ, engine, backend)
+    circ, measure, backend = bell_demo()
+    expectation_demo(circ, measure, backend)
     noise_demo(circ)
     scan_demo(backend)
     io_demo(circ)
