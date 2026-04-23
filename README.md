@@ -28,8 +28,8 @@ pip install numpy torch
 - `quantum_sim.circuit`
   - `Circuit` 电路类与门构造器（`hadamard`、`cnot`、`rx` 等）
 - `quantum_sim.execution`
-  - `ExecutionEngine` 统一执行入口
-  - `ExecutionResult` 统一结果对象
+  - `Measure` 统一测量与执行入口
+  - `Result` 统一结果对象
 - `quantum_sim.core.states`
   - `StateVector`、`DensityMatrix`
 - `quantum_sim.core.operators`
@@ -39,19 +39,17 @@ pip install numpy torch
 - `quantum_sim.circuit.io`
   - JSON / OpenQASM 导入导出
 
-## 2.1 导入对照:
+## 2.1 导入对照
 
 优先使用顶层导入（`from quantum_sim import ...`）。
 
-| 使用内容                                                                                                       | 推荐导入                                                                                                                                   |
-| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Circuit`、`hadamard`、`cnot`、`rx/ry/rz`、`cx/cy/cz、u2/u3`、`swap`、`toffoli`                  | `from quantum_sim import Circuit, hadamard, cnot, rx, ry, rz, cx, cy, cz, u2, u3, swap, toffoli`                                         |
-| `ExecutionEngine`、`ExecutionResult`                                                                       | `from quantum_sim import ExecutionEngine, ExecutionResult`                                                                               |
-| `TorchBackend`、`NumpyBackend`                                                                             | `from quantum_sim import TorchBackend, NumpyBackend`                                                                                     |
-| `NoiseModel`、`BitFlipChannel`、`PhaseFlipChannel`、`DepolarizingChannel`、`AmplitudeDampingChannel` | `from quantum_sim import NoiseModel, BitFlipChannel, PhaseFlipChannel, DepolarizingChannel, AmplitudeDampingChannel`                     |
-| `Hamiltonian`、`PauliOp`、`PauliString`                                                                  | `from quantum_sim import Hamiltonian, PauliOp, PauliString`                                                                              |
-| `circuit_to_json`、`circuit_from_json` 等 JSON I/O                                                         | `from quantum_sim import circuit_to_json, circuit_from_json, save_circuit_json, load_circuit_json`                                       |
-| `circuit_to_qasm`、`circuit_from_qasm` 等 QASM I/O                                                         | `from quantum_sim import circuit_to_qasm, circuit_to_qasm3, circuit_from_qasm, save_circuit_qasm, save_circuit_qasm3, load_circuit_qasm` |
+- 使用 `Circuit`、`hadamard`、`cnot`、`rx/ry/rz`、`cx/cy/cz`、`u2/u3`、`swap`、`toffoli`：`from quantum_sim import Circuit, hadamard, cnot, rx, ry, rz, cx, cy, cz, u2, u3, swap, toffoli`
+- 使用 `Measure`、`Result`：`from quantum_sim import Measure, Result`
+- 使用 `TorchBackend`、`NumpyBackend`：`from quantum_sim import TorchBackend, NumpyBackend`
+- 使用 `NoiseModel`、`BitFlipChannel`、`PhaseFlipChannel`、`DepolarizingChannel`、`AmplitudeDampingChannel`：`from quantum_sim import NoiseModel, BitFlipChannel, PhaseFlipChannel, DepolarizingChannel, AmplitudeDampingChannel`
+- 使用 `Hamiltonian`、`PauliOp`、`PauliString`：`from quantum_sim import Hamiltonian, PauliOp, PauliString`
+- 使用 JSON I/O：`from quantum_sim import circuit_to_json, circuit_from_json, save_circuit_json, load_circuit_json`
+- 使用 QASM I/O：`from quantum_sim import circuit_to_qasm, circuit_to_qasm3, circuit_from_qasm, save_circuit_qasm, save_circuit_qasm3, load_circuit_qasm`
 
 补充说明：
 
@@ -63,10 +61,10 @@ pip install numpy torch
 ### 3.1 Bell 态示例（状态矢量）
 
 ```python
-from quantum_sim import Circuit, ExecutionEngine, TorchBackend, cnot, hadamard
+from quantum_sim import Circuit, Measure, TorchBackend, cnot, hadamard
 
 backend = TorchBackend(device="cpu")
-engine = ExecutionEngine(backend)
+measure = Measure(backend)
 
 circ = Circuit(
     hadamard(0),
@@ -74,7 +72,7 @@ circ = Circuit(
     n_qubits=2,
 )
 
-result = engine.run(circ, shots=1024)
+result = measure.run(circ, shots=1024)
 
 print(result.probabilities)
 print(result.counts)
@@ -84,11 +82,11 @@ print(result.summary())
 ### 3.2 期望值与方差
 
 ```python
-from quantum_sim import Circuit, ExecutionEngine, TorchBackend, cnot, hadamard
+from quantum_sim import Circuit, Measure, TorchBackend, cnot, hadamard
 from quantum_sim.core.operators import Hamiltonian
 
 backend = TorchBackend(device="cpu")
-engine = ExecutionEngine(backend)
+measure = Measure(backend)
 
 circ = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
 
@@ -96,7 +94,7 @@ circ = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
 H = Hamiltonian(n_qubits=2).add_term(1.0, {"Z": [0, 1]})
 op = H.to_matrix(backend)
 
-result = engine.run(circ, observables={"ZZ": op})
+result = measure.run(circ, observables={"ZZ": op})
 print("<ZZ> =", result.expectation_values["ZZ"])
 print("Var(ZZ) =", result.expectation_variances["ZZ"])
 ```
@@ -142,11 +140,11 @@ circ = Circuit(
 )
 ```
 
-## 5. 执行引擎
+## 5. 测量接口
 
 ### 5.1 状态矢量模式
 
-- 接口：`ExecutionEngine.run(...)`
+- 接口：`Measure.run(...)`
 - 适合无噪声或近似纯态场景
 
 关键参数：
@@ -157,7 +155,7 @@ circ = Circuit(
 
 ### 5.2 密度矩阵模式
 
-- 接口：`ExecutionEngine.run_density_matrix(...)`
+- 接口：`Measure.run_density_matrix(...)`
 - 支持噪声模型
 
 关键参数：
@@ -171,18 +169,18 @@ circ = Circuit(
 from quantum_sim import (
     BitFlipChannel,
     Circuit,
-    ExecutionEngine,
+    Measure,
     NoiseModel,
     TorchBackend,
 )
 
 backend = TorchBackend(device="cpu")
-engine = ExecutionEngine(backend)
+measure = Measure(backend)
 
 circ = Circuit({"type": "identity", "n_qubits": 1}, n_qubits=1)
 noise = NoiseModel().add_channel(BitFlipChannel(target_qubit=0, p=1.0))
 
-result = engine.run_density_matrix(circ, noise_model=noise)
+result = measure.run_density_matrix(circ, noise_model=noise)
 print(result.probabilities)  # 期望接近 [0, 1]
 ```
 
@@ -190,15 +188,15 @@ print(result.probabilities)  # 期望接近 [0, 1]
 
 ```python
 import numpy as np
-from quantum_sim import Circuit, ExecutionEngine, TorchBackend, ry
+from quantum_sim import Circuit, Measure, TorchBackend, ry
 
 backend = TorchBackend(device="cpu")
-engine = ExecutionEngine(backend)
+measure = Measure(backend)
 
 def build(theta):
     return Circuit(ry(theta, 0), n_qubits=1)
 
-results = engine.scan_parameters(
+results = measure.scan_parameters(
     circuit_builder=build,
     param_values=[0.0, np.pi / 2, np.pi],
     shots=None,
@@ -208,9 +206,9 @@ for r in results:
     print(r.metadata["scan_index"], r.metadata["scan_param"], r.probabilities)
 ```
 
-## 6. 结果对象 `ExecutionResult`
+## 6. 结果对象 `Result`
 
-`ExecutionResult` 主要字段：
+`Result` 主要字段：
 
 - `probabilities`: 概率向量
 - `counts`: 采样计数字典（例如 `|00>`）
@@ -297,7 +295,7 @@ python -m unittest discover -s tests -p 'test_*.py'
 
 - 新代码建议统一改为 `quantum_sim` 顶层导入
 - `quantum_sim` 内部已完成独立门逻辑与电路实现
-- 推荐入口：`Circuit + ExecutionEngine`
+- 推荐入口：`Circuit + Measure`
 
 示例迁移：
 

@@ -1,5 +1,5 @@
-from .engine import ExecutionEngine
-from .result import ExecutionResult
+from .engine import Measure
+from .result import Result
 from .sampler import Sampler
 
-__all__ = ["ExecutionEngine", "ExecutionResult", "Sampler"]
+__all__ = ["Measure", "ExecutioResultler"]

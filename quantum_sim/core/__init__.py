@@ -12,8 +12,8 @@ from .noise import (
     NoiseModel,
     PhaseFlipChannel,
 )
-from ..execution.engine import ExecutionEngine
-from ..execution.result import ExecutionResult
+from ..execution.engine import Measure
+from ..execution.result import Result
 
 __all__ = [
     "Backend",
@@ -30,6 +30,6 @@ __all__ = [
     "BitFlipChannel",
     "PhaseFlipChannel",
     "AmplitudeDampingChannel",
-    "ExecutionEngine",
-    "ExecutionResult",
+    "Measure",
+    "Result",
 ]

@@ -12,17 +12,17 @@ import numpy as np
 from ..circuit.model import Circuit
 
 from ..core.states import DensityMatrix, StateVector
-from .result import ExecutionResult
+from .result import Result
 from .sampler import Sampler
 
 
-class ExecutionEngine:
+class Measure:
     """
-    量子电路执行引擎。
+    量子测量与结果生成入口。
 
     使用方式:
-        engine = ExecutionEngine(backend)
-        result = engine.run(circuit, shots=1024)
+        measure = Measure(backend)
+        result = measure.run(circuit, shots=1024)
         print(result.counts)
     """
 
@@ -66,7 +66,7 @@ class ExecutionEngine:
         initial_state=None,
         observables: Optional[Dict[str, object]] = None,
         return_state: bool = True,
-    ) -> ExecutionResult:
+    ) -> Result:
         """
         运行一个电路，返回统一结果对象。
 
@@ -119,7 +119,7 @@ class ExecutionEngine:
 
         final_state_np = sv.to_numpy() if return_state else None
 
-        return ExecutionResult(
+        return Result(
             n_qubits=n_qubits,
             backend_name=self.backend.name,
             probabilities=probs,
@@ -129,7 +129,7 @@ class ExecutionEngine:
             expectation_variances=exp_vars,
             final_state=final_state_np,
             metadata={
-                "engine": "ExecutionEngine",
+                "engine": "Measure",
                 "circuit_type": type(circuit).__name__,
                 "state_mode": "state_vector",
             },
@@ -143,7 +143,7 @@ class ExecutionEngine:
         observables: Optional[Dict[str, object]] = None,
         noise_model=None,
         return_state: bool = True,
-    ) -> ExecutionResult:
+    ) -> Result:
         """
         以密度矩阵路径运行一个电路，返回统一结果对象。
 
@@ -210,7 +210,7 @@ class ExecutionEngine:
 
         final_state_np = rho.to_numpy().reshape(-1) if return_state else None
 
-        return ExecutionResult(
+        return Result(
             n_qubits=n_qubits,
             backend_name=self.backend.name,
             probabilities=np.asarray(probs, dtype=np.float64),
@@ -220,7 +220,7 @@ class ExecutionEngine:
             expectation_variances=exp_vars,
             final_state=final_state_np,
             metadata={
-                "engine": "ExecutionEngine",
+                "engine": "Measure",
                 "circuit_type": type(circuit).__name__,
                 "state_mode": "density_matrix",
                 "noise_model": type(noise_model).__name__ if noise_model is not None else None,
@@ -234,7 +234,7 @@ class ExecutionEngine:
         observables: Optional[Dict[str, object]] = None,
         mode: str = "state_vector",
         per_circuit_options: Optional[Sequence[Dict[str, Any]]] = None,
-    ) -> List[ExecutionResult]:
+    ) -> List[Result]:
         """
         批量运行多个电路。
 
@@ -253,7 +253,7 @@ class ExecutionEngine:
                 - return_state
                 - label
         返回:
-            ExecutionResult 列表，顺序与输入 circuits 一致
+            Result 列表，顺序与输入 circuits 一致
         """
         if not isinstance(circuits, Sequence) or len(circuits) == 0:
             raise ValueError("circuits 必须是非空序列")
@@ -265,7 +265,7 @@ class ExecutionEngine:
         if mode_norm not in {"state_vector", "density_matrix"}:
             raise ValueError("mode 仅支持 'state_vector' 或 'density_matrix'")
 
-        results: List[ExecutionResult] = []
+        results: List[Result] = []
         for idx, circ in enumerate(circuits):
             opts = per_circuit_options[idx] if per_circuit_options is not None else {}
             run_shots = opts.get("shots", shots)
@@ -306,7 +306,7 @@ class ExecutionEngine:
         observables: Optional[Dict[str, object]] = None,
         mode: str = "state_vector",
         return_state: bool = False,
-    ) -> List[ExecutionResult]:
+    ) -> List[Result]:
         """
         参数扫描：针对一组参数值构造电路并批量执行。
 
@@ -318,7 +318,7 @@ class ExecutionEngine:
             mode: "state_vector" 或 "density_matrix"
             return_state: 是否在结果中附带末态
         返回:
-            ExecutionResult 列表，每个结果 metadata 包含 `scan_param`
+            Result 列表，每个结果 metadata 包含 `scan_param`
         """
         params = list(param_values)
         if len(params) == 0:

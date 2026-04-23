@@ -6,7 +6,7 @@ from quantum_sim import (
     AmplitudeDampingChannel,
     BitFlipChannel,
     Circuit,
-    ExecutionEngine,
+    Measure,
     NoiseModel,
     PhaseFlipChannel,
     TorchBackend,
@@ -16,7 +16,7 @@ from quantum_sim import (
 class TestNoiseModel(unittest.TestCase):
     def setUp(self):
         self.backend = TorchBackend(device="cpu")
-        self.engine = ExecutionEngine(self.backend)
+        self.engine = Measure(self.backend)
 
     def test_bit_flip_full_probability(self):
         # 从 |0><0| 开始，经过 identity 后施加 bit flip(p=1) -> |1><1|

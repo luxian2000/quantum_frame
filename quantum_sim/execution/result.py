@@ -13,7 +13,7 @@ import numpy as np
 
 
 @dataclass
-class ExecutionResult:
+class Result:
     """一次电路执行的统一结果容器。"""
 
     n_qubits: int
@@ -49,7 +49,7 @@ class ExecutionResult:
         """返回可读摘要字符串。"""
         peak_state, peak_prob = self.most_probable()
         lines = [
-            f"ExecutionResult(n_qubits={self.n_qubits}, backend={self.backend_name})",
+            f"Result(n_qubits={self.n_qubits}, backend={self.backend_name})",
             f"peak={peak_state}, prob={peak_prob:.6f}",
         ]
         if self.shots is not None:

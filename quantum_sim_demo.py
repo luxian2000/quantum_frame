@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """quantum_sim_demo.py
 
-一个快速演示：从定义量子线路，到使用 `ExecutionEngine` 运行（状态矢量 / 密度矩阵 + 噪声）、参数扫描、以及 JSON/QASM I/O。
+一个快速演示：从定义量子线路，到使用 `Measure` 运行（状态矢量 / 密度矩阵 + 噪声）、参数扫描、以及 JSON/QASM I/O。
 
 运行：
     python quantum_sim_demo.py
@@ -15,7 +15,7 @@ from quantum_sim import (
     hadamard,
     cnot,
     ry,
-    ExecutionEngine,
+    Measure,
     TorchBackend,
     NumpyBackend,
     circuit_to_json,
@@ -33,7 +33,7 @@ def sep(title: str):
 def bell_demo():
     sep("Bell state (state vector)")
     backend = TorchBackend(device="cpu")
-    engine = ExecutionEngine(backend)
+    engine = Measure(backend)
 
     circ = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
     print("Circuit:", circ)
@@ -57,7 +57,7 @@ def expectation_demo(circ, engine, backend):
 def noise_demo(circ):
     sep("Density matrix + noise demo")
     backend = TorchBackend(device="cpu")
-    engine = ExecutionEngine(backend)
+    engine = Measure(backend)
     noise = NoiseModel().add_channel(BitFlipChannel(target_qubit=0, p=0.9))
     res = engine.run_density_matrix(circ, shots=None, noise_model=noise)
     print("Probabilities with bit-flip(p=0.9):", np.round(res.probabilities, 6))
@@ -65,7 +65,7 @@ def noise_demo(circ):
 
 def scan_demo(backend):
     sep("Parameter scan (RY on q0)")
-    engine = ExecutionEngine(backend)
+    engine = Measure(backend)
     HZ = Hamiltonian(n_qubits=2).add_term(1.0, {"Z": [0]})
     op = HZ.to_matrix(backend)
 
@@ -94,7 +94,7 @@ def io_demo(circ):
 def numpy_backend_demo(circ):
     sep("Numpy backend demo")
     backend = NumpyBackend()
-    engine = ExecutionEngine(backend)
+    engine = Measure(backend)
     res = engine.run(circ, shots=512)
     print("Probabilities (NumpyBackend):", np.round(res.probabilities, 6))
 

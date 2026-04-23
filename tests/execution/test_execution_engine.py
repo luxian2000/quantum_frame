@@ -3,14 +3,14 @@ import unittest
 import numpy as np
 import torch
 
-from quantum_sim import Circuit, ExecutionEngine, TorchBackend, cnot, hadamard, ry
+from quantum_sim import Circuit, Measure, TorchBackend, cnot, hadamard, ry
 from quantum_sim.core.operators import Hamiltonian
 
 
-class TestExecutionEngine(unittest.TestCase):
+class TestMeasure(unittest.TestCase):
     def setUp(self):
         self.backend = TorchBackend(device="cpu")
-        self.engine = ExecutionEngine(self.backend)
+        self.engine = Measure(self.backend)
         self.bell = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
 
     def test_run_state_vector_probabilities_and_counts(self):
