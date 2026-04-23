@@ -61,6 +61,14 @@ def run_basic_torch_tests():
     rzz_gate = bt._rzz(torch.tensor(0.8))
     print(f"RZZ(0.8) gate matrix:\n{rzz_gate}")
 
+    print("\n--- Partial Trace Test ---")
+    psi0 = bt.KET_0
+    psi1 = bt.KET_1
+    psi01 = bt.tensor_product(psi0, psi1)
+    rho01 = torch.matmul(psi01, bt.dagger(psi01))
+    rho_keep0 = bt.partial_trace(rho01, keep=[0], n_qubits=2)
+    print(f"partial_trace keep=[0] equals |0><0|: {torch.allclose(rho_keep0, bt.DENSITY_0)}")
+
 
 def run_define_torch_tests():
     import torch
@@ -68,30 +76,30 @@ def run_define_torch_tests():
 
     print("\n=== define_torch tests ===")
     psi0 = dt.phi_0(2)
-    bell_circuit = dt.Circuit(dt.hadamard(0), dt.cnot(1, [0]), num_qubits=2).unitary()
+    bell_circuit = dt.Circuit(dt.hadamard(0), dt.cnot(1, [0]), n_qubits=2).unitary()
     bell_state = torch.matmul(bell_circuit, psi0)
     exp_identity = dt.expectation(bell_state, dt.identity(2))
 
     print(f"bell_state shape: {bell_state.shape}")
     print(f"expectation on I: {exp_identity.item()}")
 
-    c1 = dt.Circuit(dt.pauli_x(0), dt.pauli_y(1), num_qubits=2)
-    c2 = dt.Circuit(dt.cnot(1, [0]), num_qubits=2)
+    c1 = dt.Circuit(dt.pauli_x(0), dt.pauli_y(1), n_qubits=2)
+    c2 = dt.Circuit(dt.cnot(1, [0]), n_qubits=2)
     c_big = c1 + c2
     u_big = c_big.unitary()
-    u_ref = dt.Circuit(dt.pauli_x(0), dt.pauli_y(1), dt.cnot(1, [0]), num_qubits=2).unitary()
+    u_ref = dt.Circuit(dt.pauli_x(0), dt.pauli_y(1), dt.cnot(1, [0]), n_qubits=2).unitary()
     print(f"Circuit '+' composition correct: {torch.allclose(u_big, u_ref)}")
 
     # Keep backward compatibility check for functional alias.
-    u_alias = dt.circuit(dt.pauli_x(0), dt.pauli_y(1), dt.cnot(1, [0]), num_qubits=2)
+    u_alias = dt.circuit(dt.pauli_x(0), dt.pauli_y(1), dt.cnot(1, [0]), n_qubits=2)
     print(f"circuit() alias to Circuit correct: {torch.allclose(u_alias, u_ref)}")
 
-    # num_qubits must match when using +
+    # n_qubits must match when using +
     try:
-        _ = dt.Circuit(dt.pauli_x(0), num_qubits=1) + dt.Circuit(dt.pauli_x(0), num_qubits=2)
-        print("Circuit '+' num_qubits check: False")
+        _ = dt.Circuit(dt.pauli_x(0), n_qubits=1) + dt.Circuit(dt.pauli_x(0), n_qubits=2)
+        print("Circuit '+' n_qubits check: False")
     except ValueError:
-        print("Circuit '+' num_qubits check: True")
+        print("Circuit '+' n_qubits check: True")
 
 
 def run_basic_mind_tests():
@@ -156,6 +164,14 @@ def run_basic_mind_tests():
     rzz_gate = bm._rzz(Tensor(0.8))
     print(f"RZZ(0.8) gate matrix:\n{rzz_gate}")
 
+    print("\n--- Partial Trace Test ---")
+    psi0 = bm.KET_0
+    psi1 = bm.KET_1
+    psi01 = bm.tensor_product(psi0, psi1)
+    rho01 = ops.matmul(psi01, bm.dagger(psi01))
+    rho_keep0 = bm.partial_trace(rho01, keep=[0], n_qubits=2)
+    print(f"partial_trace keep=[0] equals |0><0|: {ops.allclose(rho_keep0, bm.DENSITY_0).asnumpy()}")
+
 
 def run_define_mind_tests():
     import mindspore as ms
@@ -218,6 +234,20 @@ def run_define_mind_tests():
     print("\n--- RZZ with stack Test ---")
     rzz_gate = dm._rzz(Tensor(0.8))
     print(f"RZZ(0.8) gate matrix:\n{rzz_gate}")
+
+    print("\n--- Circuit Class Test ---")
+    c1 = dm.Circuit(dm.pauli_x(0), dm.pauli_y(1), n_qubits=2)
+    c2 = dm.Circuit(dm.cnot(1, [0]), n_qubits=2)
+    c_big = c1 + c2
+    u_big = c_big.unitary()
+    u_ref = dm.Circuit(dm.pauli_x(0), dm.pauli_y(1), dm.cnot(1, [0]), n_qubits=2).unitary()
+    print(f"Circuit '+' composition correct: {ops.allclose(u_big, u_ref).asnumpy()}")
+
+    try:
+        _ = dm.Circuit(dm.pauli_x(0), n_qubits=1) + dm.Circuit(dm.pauli_x(0), n_qubits=2)
+        print("Circuit '+' n_qubits check: False")
+    except ValueError:
+        print("Circuit '+' n_qubits check: True")
 
 
 def main():

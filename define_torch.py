@@ -4,18 +4,18 @@ from basic_torch import * # 导入所有转换后的函数和常量
 import torch
 import math # For math.pi if torch.pi is not available
 
-def phi_0(num_qubits=1):
+def phi_0(n_qubits=1):
     """
     生成全零态 |0...0> 的量子态向量
     参数:
-    num_qubits (int): 量子比特的数量
+    n_qubits (int): 量子比特的数量
     返回:
-    Tensor: 形状为 (2^num_qubits, 1) 的量子态向量
+    Tensor: 形状为 (2^n_qubits, 1) 的量子态向量
     """
     # 从单个量子比特的 |0> 态开始
     state = KET_0
     # 通过张量积构造多量子比特的 |0...0> 态
-    for _ in range(1, num_qubits):
+    for _ in range(1, n_qubits):
         state = torch.kron(state, KET_0)
     return state
 
@@ -57,20 +57,20 @@ def expectation(state, hamiltonian):
 class Circuit:
     """量子电路类：支持门序构建、拼接和矩阵生成。"""
 
-    def __init__(self, *gates, num_qubits):
+    def __init__(self, *gates, n_qubits):
         self.gates = list(gates)
-        self.num_qubits = num_qubits
+        self.n_qubits = n_qubits
 
     def __add__(self, other):
         """Compose two circuits by concatenating gate order: self followed by other."""
         if not isinstance(other, Circuit):
             return NotImplemented
-        if self.num_qubits != other.num_qubits:
+        if self.n_qubits != other.n_qubits:
             raise ValueError(
-                f"Cannot compose circuits with different num_qubits: "
-                f"{self.num_qubits} != {other.num_qubits}"
+                f"Cannot compose circuits with different n_qubits: "
+                f"{self.n_qubits} != {other.n_qubits}"
             )
-        return Circuit(*self.gates, *other.gates, num_qubits=self.num_qubits)
+        return Circuit(*self.gates, *other.gates, n_qubits=self.n_qubits)
 
     def append(self, gate):
         """Append one gate to the current circuit in-place."""
@@ -99,16 +99,16 @@ class Circuit:
             elif gate_type == 'swap':
                 gate_qubits = max(gate_qubits, gate['qubit_1'] + 1, gate['qubit_2'] + 1)
             elif gate_type in ['identity', 'I']:
-                gate_qubits = max(gate_qubits, gate['num_qubits'])
+                gate_qubits = max(gate_qubits, gate['n_qubits'])
             else:
                 gate_qubits = max(gate_qubits, gate['target_qubit'] + 1)
 
-        if gate_qubits > self.num_qubits:
-            raise ValueError(f"量子门的量子比特数量超出总量子比特数: {gate_qubits} > {self.num_qubits}")
+        if gate_qubits > self.n_qubits:
+            raise ValueError(f"量子门的量子比特数量超出总量子比特数: {gate_qubits} > {self.n_qubits}")
 
-        circuit_matrix = identity(self.num_qubits)
+        circuit_matrix = identity(self.n_qubits)
         for gate in self.gates:
-            gate_matrix = gate_to_matrix(gate, self.num_qubits)
+            gate_matrix = gate_to_matrix(gate, self.n_qubits)
             circuit_matrix = torch.matmul(gate_matrix, circuit_matrix)
         return circuit_matrix
 
@@ -123,12 +123,12 @@ class Circuit:
         return iter(self.gates)
 
     def __repr__(self):
-        return f"Circuit(num_qubits={self.num_qubits}, gates={self.gates})"
+        return f"Circuit(n_qubits={self.n_qubits}, gates={self.gates})"
 
 
-def circuit(*gates, num_qubits=1):
+def circuit(*gates, n_qubits=1):
     """兼容旧接口：内部已完全委托给 Circuit。"""
-    return Circuit(*gates, num_qubits=num_qubits).unitary()
+    return Circuit(*gates, n_qubits=n_qubits).unitary()
 
 SINGLE_QUBIT_GATES = [
     'pauli_x', 'X',

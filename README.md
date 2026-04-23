@@ -5,113 +5,81 @@
 - PyTorch 实现
 - MindSpore 实现
 
-当前仓库中的命名风格已按 PEP 8 统一（函数与变量采用 snake_case，常量采用 UPPER_SNAKE_CASE）。
+代码风格已按 PEP 8 统一（函数与变量采用 snake_case，常量采用 UPPER_SNAKE_CASE）。
 
 ## 项目结构
 
-- [basic_torch.py](basic_torch.py)
-  - PyTorch 版本的基础量子门与矩阵工具。
-  - 包含单比特门、多比特受控门、门到矩阵转换等底层能力。
-- [define_torch.py](define_torch.py)
-  - PyTorch 版本的线路层封装。
-  - 包含线路组合、期望值计算、门字典构造函数（如 hadamard、cnot、u3）。
-- [basic_mind.py](basic_mind.py)
-  - MindSpore 版本的基础量子门与矩阵工具。
-- [define_mind.py](define_mind.py)
-  - MindSpore 版本的线路层封装。
-- [run_tests.py](run_tests.py)
-  - 统一测试入口脚本。
-  - 负责集中执行 Torch 与 MindSpore 路径的示例测试。
+- [basic_torch.py](basic_torch.py) — PyTorch 的基础量子门与矩阵工具（新增 `partial_trace`）。
+- [define_torch.py](define_torch.py) — PyTorch 的线路层封装（以 `Circuit` 为主API，保留 `circuit()` 兼容别名）。
+- [basic_mind.py](basic_mind.py) — MindSpore 的基础量子门与矩阵工具（新增 `partial_trace`）。
+- [define_mind.py](define_mind.py) — MindSpore 的线路层封装（与 Torch 对齐，提供 `Circuit`）。
+- [run_tests.py](run_tests.py) — 统一测试入口脚本。
 
-## 功能概览
+## 新增与改动要点
 
-### 1. 基础矩阵与态工具
+- `Circuit` 类（在 `define_torch.py` 与 `define_mind.py` 中）：
+  - 面向对象的线路表示，构造时**必须显式传入** `n_qubits`。
+  - 支持 `+` 运算符表示“门序拼接”（`c1 + c2`），拼接前会检查 `n_qubits` 相等，否则抛出 `ValueError`。
+  - 提供 `append()` / `extend()` 增量构建方法，以及 `unitary()` / `matrix()` 生成整体矩阵。
+  - 为了兼容旧代码，函数式接口 `circuit(..., n_qubits=...)` 仍然可用，内部委托给 `Circuit(...).unitary()`。
 
-- matrix_product: 多矩阵连乘
-- tensor_product: 张量积（Kronecker 积）
-- dagger: 共轭转置
-- identity: n 比特单位矩阵
+- `partial_trace`（在 `basic_torch.py` 与 `basic_mind.py` 中）：
+  - 对方阵密度矩阵执行偏迹（reduced density matrix）。
+  - 接口示例（PyTorch）：
+    - `partial_trace(rho, keep, n_qubits=None)`
+      - `rho`: 形状为 `(2^N, 2^N)` 的密度矩阵
+      - `keep`: 要保留的量子比特索引（int 或 list）
+      - `n_qubits`: 可选，总量子比特数（不传时从 `rho` 维度推断）
 
-### 2. 基础量子门（底层）
+## 快速示例（PyTorch）
 
-- 单比特门：_pauli_x、_pauli_y、_pauli_z、_hadamard、_rx、_ry、_rz、_s_gate、_t_gate、_u2、_u3
-- 多比特门：_cx、_cy、_cz、_crx、_cry、_crz、_swap、_toffoli、_rzz
-- 门映射：gate_to_matrix
+Circuit 用法：
 
-### 3. 线路层封装
+```python
+from define_torch import Circuit, pauli_x, pauli_y, cnot
 
-- phi_0: 生成全零态
-- expectation: 计算期望值
-- circuit: 按门序列生成整体线路矩阵
-- 门构造函数：pauli_x、hadamard、cx/cnot、u3 等
+c1 = Circuit(pauli_x(0), pauli_y(1), n_qubits=2)
+c2 = Circuit(cnot(1, [0]), n_qubits=2)
+c_big = c1 + c2          # 门序拼接（先 c1 再 c2）
+u_big = c_big.unitary()  # 获取整体矩阵
+```
 
-## 运行环境
+兼容旧接口：
 
-- Python 3.10+
-- 必选依赖（Torch 路径）：
-  - torch
-  - numpy
-- 可选依赖（MindSpore 路径）：
-  - mindspore
+```python
+from define_torch import circuit, pauli_x, pauli_y, cnot
+u = circuit(pauli_x(0), pauli_y(1), cnot(1, [0]), n_qubits=2)
+```
 
-说明：
+partial_trace 用法：
 
-- [basic_mind.py](basic_mind.py) 与 [define_mind.py](define_mind.py) 中默认设置了 Ascend 设备上下文。
-- 如果本机没有对应 MindSpore/Ascend 环境，MindSpore 路径可能无法运行。
+```python
+from basic_torch import KET_0, KET_1, tensor_product, dagger, partial_trace
 
-## 安装依赖
+psi01 = tensor_product(KET_0, KET_1)          # |0>|1>
+rho01 = psi01 @ dagger(psi01)                 # 密度矩阵 |01><01|
+rho_keep0 = partial_trace(rho01, keep=[0], n_qubits=2)  # 保留第0比特 -> 得到 |0><0|
+```
 
-仅运行 Torch 路径时：
+MindSpore 使用方法与 PyTorch 对齐（参见 `basic_mind.py` / `define_mind.py`）。
 
-    pip install torch numpy
+## 运行测试
 
-若需要 MindSpore 路径，请按官方文档安装与你设备匹配的 MindSpore 版本。
+在仓库根目录运行：
 
-## 快速开始
+```bash
+python run_tests.py
+```
 
-在仓库根目录执行统一测试：
+- 脚本会优先执行 Torch 路径的测试。若系统未安装 `mindspore`，MindSpore 相关测试会被跳过（这是预期行为）。
 
-    python run_tests.py
+## 迁移说明
 
-测试行为：
+- 推荐新代码使用 `Circuit` 类作为主入口，能更方便做增量构建与组合。
+- 为了最小化侵入，`circuit(...)` 保持兼容，但 `Circuit` 提供更丰富的方法与类型检查（例如强制 `n_qubits`）。
 
-- 会先执行 Torch 相关测试。
-- 会尝试执行 MindSpore 相关测试。
-- 若缺少 mindspore，脚本会提示跳过 MindSpore 测试，不影响 Torch 测试结果。
+## 贡献与开发
 
-## 使用示例（Torch 线路层）
+- 如需新增门或优化底层矩阵构造，优先在 `basic_torch.py` / `basic_mind.py` 添加门矩阵实现，再在 `define_*` 层补充封装与测试。
 
-下面示例展示如何构造 2 比特 Bell 线路并计算期望值：
-
-    from define_torch import phi_0, circuit, hadamard, cnot, expectation, identity
-    import torch
-
-    psi0 = phi_0(2)
-    bell_u = circuit(
-        hadamard(0),
-        cnot(1, [0]),
-        num_qubits=2,
-    )
-    bell_state = torch.matmul(bell_u, psi0)
-    exp_i = expectation(bell_state, identity(2))
-    print(exp_i)
-
-## 开发说明
-
-- 测试代码已从业务脚本中抽离，统一维护在 [run_tests.py](run_tests.py)。
-- 建议新增功能时：
-  - 在基础层实现门矩阵与映射逻辑
-  - 在定义层补充门构造函数或线路接口
-  - 在 [run_tests.py](run_tests.py) 中补充对应测试段
-
-## 常见问题
-
-1. 运行 MindSpore 相关代码时报错 No module named mindspore
-
-- 原因：当前环境未安装 MindSpore。
-- 解决：安装与你硬件和系统匹配的 MindSpore 版本，或仅使用 Torch 路径。
-
-2. MindSpore 安装后仍报设备相关错误
-
-- 原因：默认上下文为 Ascend 设备，与你本机环境不匹配。
-- 解决：根据你的运行环境调整 [basic_mind.py](basic_mind.py) 与 [define_mind.py](define_mind.py) 的 context.set_context 配置。
+欢迎反馈改进建议。

@@ -75,6 +75,43 @@ def dagger(matrix):
     return torch.conj(torch.transpose(matrix, -2, -1)) # -2, -1 for last two dims
     # Or: return torch.transpose(matrix, -2, -1).conj()
 
+
+def partial_trace(rho, keep, n_qubits=None):
+    """对密度矩阵执行偏迹，返回保留子系统的约化密度矩阵。"""
+    if not isinstance(rho, torch.Tensor):
+        raise TypeError(f"rho必须是PyTorch Tensor类型，但得到了{type(rho)}")
+    if rho.dim() != 2 or rho.shape[0] != rho.shape[1]:
+        raise ValueError("rho必须是方阵，形状为(2^N, 2^N)")
+
+    dim = rho.shape[0]
+    if n_qubits is None:
+        n_qubits = int(math.log2(dim))
+        if 2 ** n_qubits != dim:
+            raise ValueError("无法从rho的维度推断量子比特数，请显式传入n_qubits")
+
+    if isinstance(keep, int):
+        keep = [keep]
+    if not isinstance(keep, (list, tuple)):
+        raise TypeError("keep必须是int、list或tuple")
+
+    keep = sorted(set(int(k) for k in keep))
+    if any(k < 0 or k >= n_qubits for k in keep):
+        raise ValueError("keep中的量子比特索引超出范围")
+
+    trace_out = [i for i in range(n_qubits) if i not in keep]
+    if not trace_out:
+        return rho.clone()
+
+    reshaped = rho.reshape([2] * n_qubits + [2] * n_qubits)
+    perm = keep + trace_out + [k + n_qubits for k in keep] + [t + n_qubits for t in trace_out]
+    permuted = reshaped.permute(perm)
+
+    d_keep = 2 ** len(keep)
+    d_trace = 2 ** len(trace_out)
+    permuted = permuted.reshape(d_keep, d_trace, d_keep, d_trace)
+    reduced = torch.einsum('abcb->ac', permuted)
+    return reduced
+
 # 量子比特基态 |0> 和 |1>
 KET_0 = torch.tensor([[1.+0.j], [0.+0.j]], dtype=MY_DTYPE, device=DEVICE)  # |0>
 KET_1 = torch.tensor([[0.+0.j], [1.+0.j]], dtype=MY_DTYPE, device=DEVICE)  # |1>
@@ -273,13 +310,13 @@ def _cx(target_qubit, control_qubits, control_states):
     px_matrix = _pauli_x() - IDENTITY_2
     # 确定所需量子比特总数
     all_qubits = [target_qubit] + control_qubits
-    num_qubits = max(all_qubits) + 1
+    n_qubits = max(all_qubits) + 1
     # 检查control_states长度是否与control_qubits匹配
     if len(control_states) != len(control_qubits):
         raise ValueError("control_states的长度必须与control_qubits的长度相同")
     # 构建张量积矩阵
     matrices = []
-    for qubit_index in range(num_qubits):
+    for qubit_index in range(n_qubits):
         if qubit_index == target_qubit:
             matrices.append(px_matrix)
         elif qubit_index in control_qubits:
@@ -294,7 +331,7 @@ def _cx(target_qubit, control_qubits, control_states):
     result_matrix = matrices[0]
     for i in range(1, len(matrices)):
         result_matrix = torch.kron(result_matrix, matrices[i])
-    result_matrix = identity(num_qubits) + result_matrix
+    result_matrix = identity(n_qubits) + result_matrix
     return result_matrix
 
 def _cy(target_qubit, control_qubits, control_states):
@@ -311,13 +348,13 @@ def _cy(target_qubit, control_qubits, control_states):
     py_matrix = _pauli_y() - IDENTITY_2
     # 确定所需量子比特总数
     all_qubits = [target_qubit] + control_qubits
-    num_qubits = max(all_qubits) + 1
+    n_qubits = max(all_qubits) + 1
     # 检查control_states长度是否与control_qubits匹配
     if len(control_states) != len(control_qubits):
         raise ValueError("control_states的长度必须与control_qubits的长度相同")
     # 构建张量积矩阵
     matrices = []
-    for qubit_index in range(num_qubits):
+    for qubit_index in range(n_qubits):
         if qubit_index == target_qubit:
             matrices.append(py_matrix)
         elif qubit_index in control_qubits:
@@ -332,7 +369,7 @@ def _cy(target_qubit, control_qubits, control_states):
     result_matrix = matrices[0]
     for i in range(1, len(matrices)):
         result_matrix = torch.kron(result_matrix, matrices[i])
-    result_matrix = identity(num_qubits) + result_matrix
+    result_matrix = identity(n_qubits) + result_matrix
     return result_matrix
 
 def _cz(target_qubit, control_qubits, control_states):
@@ -349,13 +386,13 @@ def _cz(target_qubit, control_qubits, control_states):
     pz_matrix = _pauli_z() - IDENTITY_2
     # 确定所需量子比特总数
     all_qubits = [target_qubit] + control_qubits
-    num_qubits = max(all_qubits) + 1
+    n_qubits = max(all_qubits) + 1
     # 检查control_states长度是否与control_qubits匹配
     if len(control_states) != len(control_qubits):
         raise ValueError("control_states的长度必须与control_qubits的长度相同")
     # 构建张量积矩阵
     matrices = []
-    for qubit_index in range(num_qubits):
+    for qubit_index in range(n_qubits):
         if qubit_index == target_qubit:
             matrices.append(pz_matrix)
         elif qubit_index in control_qubits:
@@ -370,7 +407,7 @@ def _cz(target_qubit, control_qubits, control_states):
     result_matrix = matrices[0]
     for i in range(1, len(matrices)):
         result_matrix = torch.kron(result_matrix, matrices[i])
-    result_matrix = identity(num_qubits) + result_matrix
+    result_matrix = identity(n_qubits) + result_matrix
     return result_matrix
 
 def _crx(theta, target_qubit, control_qubits, control_states):
@@ -388,13 +425,13 @@ def _crx(theta, target_qubit, control_qubits, control_states):
     rx_base = _rx(theta) - IDENTITY_2
     # 确定所需量子比特总数
     all_qubits = [target_qubit] + control_qubits
-    num_qubits = max(all_qubits) + 1
+    n_qubits = max(all_qubits) + 1
     # 检查control_states长度是否与control_qubits匹配
     if len(control_states) != len(control_qubits):
         raise ValueError("control_states的长度必须与control_qubits的长度相同")
     # 构建张量积矩阵
     matrices = []
-    for qubit_index in range(num_qubits):
+    for qubit_index in range(n_qubits):
         if qubit_index == target_qubit:
             matrices.append(rx_base)
         elif qubit_index in control_qubits:
@@ -410,7 +447,7 @@ def _crx(theta, target_qubit, control_qubits, control_states):
     for i in range(1, len(matrices)):
         result_matrix = torch.kron(result_matrix, matrices[i])
     # 加上单位矩阵得到完整的受控门 (注意：这里加上单位矩阵)
-    result_matrix = identity(num_qubits) + result_matrix
+    result_matrix = identity(n_qubits) + result_matrix
     return result_matrix
 
 def _cry(theta, target_qubit, control_qubits, control_states):
@@ -428,13 +465,13 @@ def _cry(theta, target_qubit, control_qubits, control_states):
     ry_base = _ry(theta) - IDENTITY_2
     # 确定所需量子比特总数
     all_qubits = [target_qubit] + control_qubits
-    num_qubits = max(all_qubits) + 1
+    n_qubits = max(all_qubits) + 1
     # 检查control_states长度是否与control_qubits匹配
     if len(control_states) != len(control_qubits):
         raise ValueError("control_states的长度必须与control_qubits的长度相同")
     # 构建张量积矩阵
     matrices = []
-    for qubit_index in range(num_qubits):
+    for qubit_index in range(n_qubits):
         if qubit_index == target_qubit:
             matrices.append(ry_base)
         elif qubit_index in control_qubits:
@@ -450,7 +487,7 @@ def _cry(theta, target_qubit, control_qubits, control_states):
     for i in range(1, len(matrices)):
         result_matrix = torch.kron(result_matrix, matrices[i])
     # 加上单位矩阵得到完整的受控门 (注意：这里加上单位矩阵)
-    result_matrix = identity(num_qubits) + result_matrix
+    result_matrix = identity(n_qubits) + result_matrix
     return result_matrix
 
 def _crz(theta, target_qubit, control_qubits, control_states):
@@ -468,13 +505,13 @@ def _crz(theta, target_qubit, control_qubits, control_states):
     rz_base = _rz(theta) - IDENTITY_2
     # 确定所需量子比特总数
     all_qubits = [target_qubit] + control_qubits
-    num_qubits = max(all_qubits) + 1
+    n_qubits = max(all_qubits) + 1
     # 检查control_states长度是否与control_qubits匹配
     if len(control_states) != len(control_qubits):
         raise ValueError("control_states的长度必须与control_qubits的长度相同")
     # 构建张量积矩阵
     matrices = []
-    for qubit_index in range(num_qubits):
+    for qubit_index in range(n_qubits):
         if qubit_index == target_qubit:
             matrices.append(rz_base)
         elif qubit_index in control_qubits:
@@ -490,31 +527,31 @@ def _crz(theta, target_qubit, control_qubits, control_states):
     for i in range(1, len(matrices)):
         result_matrix = torch.kron(result_matrix, matrices[i])
     # 加上单位矩阵得到完整的受控门 (注意：这里加上单位矩阵)
-    result_matrix = identity(num_qubits) + result_matrix
+    result_matrix = identity(n_qubits) + result_matrix
     return result_matrix
 
 def _swap(qubit_1=0, qubit_2=1):
     return matrix_product(_cx(qubit_1, [qubit_2], [1]), _cx(qubit_2, [qubit_1], [1]), _cx(qubit_1, [qubit_2], [1]))
 
 def _toffoli(target_qubit=2, control_qubits=[0,1]):
-    num_qubits = max(target_qubit, max(control_qubits)) + 1
-    matrices_0 = [IDENTITY_2] * num_qubits
+    n_qubits = max(target_qubit, max(control_qubits)) + 1
+    matrices_0 = [IDENTITY_2] * n_qubits
     matrices_0[control_qubits[0]] = DENSITY_1
     matrices_0[control_qubits[1]] = DENSITY_1
     matrices_0[target_qubit] = _pauli_x()
     result_0 = matrices_0[0]
-    for i in range(1, num_qubits):
+    for i in range(1, n_qubits):
         result_0 = torch.kron(result_0, matrices_0[i])
-    matrices_1 = [IDENTITY_2] * num_qubits
+    matrices_1 = [IDENTITY_2] * n_qubits
     matrices_1[control_qubits[0]] = DENSITY_0
     result_1 = matrices_1[0]
-    for i in range(1, num_qubits):
+    for i in range(1, n_qubits):
         result_1 = torch.kron(result_1, matrices_1[i])
-    matrices_2 = [IDENTITY_2] * num_qubits
+    matrices_2 = [IDENTITY_2] * n_qubits
     matrices_2[control_qubits[0]] = DENSITY_1
     matrices_2[control_qubits[1]] = DENSITY_0
     result_2 = matrices_2[0]
-    for i in range(1, num_qubits):
+    for i in range(1, n_qubits):
         result_2 = torch.kron(result_2, matrices_2[i])
     return result_0 + result_1 + result_2
 
@@ -656,7 +693,7 @@ def gate_to_matrix(gate, cir_qubits=1):
         gate_matrix = _toffoli(target_qubit=gate['target_qubit'], control_qubits=gate['control_qubits'])
     # 恒等门
     elif gate_type in ['identity', 'I']:
-        return identity(gate['num_qubits'])
+        return identity(gate['n_qubits'])
     else:
         raise ValueError(f"不支持的门类型: {gate_type}")
 

@@ -11,18 +11,18 @@ from mindspore import value_and_grad # For automatic differentiation
 # 指定在 Ascend 设备上运行
 context.set_context(device_target="Ascend", device_id=0) # device_id 选择具体的 NPU ID
 
-def phi_0(num_qubits=1):
+def phi_0(n_qubits=1):
     """
     生成全零态 |0...0> 的量子态向量
     参数:
-    num_qubits (int): 量子比特的数量
+    n_qubits (int): 量子比特的数量
     返回:
-    Tensor: 形状为 (2^num_qubits, 1) 的量子态向量
+    Tensor: 形状为 (2^n_qubits, 1) 的量子态向量
     """
     # 从单个量子比特的 |0> 态开始
     state = KET_0
     # 通过张量积构造多量子比特的 |0...0> 态
-    for _ in range(1, num_qubits):
+    for _ in range(1, n_qubits):
         state = ops.kron(state, KET_0)
     return state
 
@@ -61,57 +61,81 @@ def expectation(state, hamiltonian):
     # MindSpore 会自动处理复数张量的梯度（Wittrick规则或类似方法）
     return ops.real(expectation)
 
-def circuit(*gates, num_qubits=1):
-    """
-    量子电路函数，用于计算量子线路的矩阵表示
-    参数:
-    *gates: 可变数量的门，每个门是一个字典，包含 'type', 'target_qubit', 'control_qubit', 'parameter' 等键
-            例如: {'type': 'cnot', 'target_qubit': 1, 'control_qubit': 0, 'parameter': None}
-                 {'type': 'toffoli', 'target_qubit': 2, 'control_qubits': [0, 1], 'parameter': None}
-    num_qubits: 电路中的总量子比特数（可选），如果未指定，则根据门信息自动确定。注意：必做通过关键字显示传入！！！
-    返回:
-    Tensor: 整个电路的矩阵表示
-    使用示例:
-    # 创建贝尔态电路
-    circuit_matrix = circuit(
-        {'type': 'hadamard', 'target_qubit': 0, 'parameter': None},
-        {'type': 'cnot', 'target_qubit': 1, 'control_qubit': 0, 'parameter': None}
-    )
-    # 创建包含toffoli门的电路
-    circuit_matrix = circuit(
-        {'type': 'pauli_x', 'target_qubit': 0, 'parameter': None},
-        {'type': 'pauli_x', 'target_qubit': 1, 'parameter': None},
-        {'type': 'toffoli', 'target_qubit': 2, 'control_qubits': [0, 1], 'parameter': None}
-    )
-    """
-    if not gates:
-        # 如果没有门，则返回单位矩阵（默认1量子比特）
-        return IDENTITY_2
-    # 确定所有门中的最大量子比特数）
-    gate_qubits = 0
-    for gate in gates:
-        gate_type = gate['type']
-        if gate_type in ['pauli_x', 'X', 'pauli_y', 'Y', 'pauli_z', 'Z', 'hadamard', 'H', 's_gate', 'S', 't_gate', 'T', 'rx', 'ry', 'rz', 'u3', 'u2']:
-            gate_qubits = max(gate_qubits, gate['target_qubit'] + 1)
-        elif gate_type in ['cnot', 'cx', 'cz', 'cy', 'crx', 'cry', 'crz']:
-            gate_qubits = max(gate_qubits, gate['target_qubit'] + 1, max(gate['control_qubits']) + 1)
-        elif gate_type == 'toffoli':
-            gate_qubits = max(gate_qubits, gate['target_qubit'] + 1, max(gate['control_qubits']) + 1)
-        elif gate_type == 'swap':
-            gate_qubits = max(gate_qubits, gate['qubit_1'] + 1, gate['qubit_2'] + 1)
-        elif gate_type in ['identity', 'I']:
-            gate_qubits = max(gate_qubits, gate['num_qubits'])
-        else:
-            gate_qubits = max(gate_qubits, gate['target_qubit'] + 1)
-    # 依次计算每个门的矩阵并相乘
-    if gate_qubits > num_qubits:
-        raise ValueError(f"量子门的量子比特数量超出总量子比特数: {gate_qubits} > {num_qubits}")
-    else:
-        circuit_matrix = identity(num_qubits)
-        for gate in gates:
-            gate_matrix = gate_to_matrix(gate, num_qubits)
+class Circuit:
+    """量子电路类：支持门序构建、拼接和矩阵生成。"""
+
+    def __init__(self, *gates, n_qubits):
+        self.gates = list(gates)
+        self.n_qubits = n_qubits
+
+    def __add__(self, other):
+        """Compose two circuits by concatenating gate order: self followed by other."""
+        if not isinstance(other, Circuit):
+            return NotImplemented
+        if self.n_qubits != other.n_qubits:
+            raise ValueError(
+                f"Cannot compose circuits with different n_qubits: "
+                f"{self.n_qubits} != {other.n_qubits}"
+            )
+        return Circuit(*self.gates, *other.gates, n_qubits=self.n_qubits)
+
+    def append(self, gate):
+        """Append one gate to the current circuit in-place."""
+        self.gates.append(gate)
+        return self
+
+    def extend(self, *gates):
+        """Append multiple gates to the current circuit in-place."""
+        self.gates.extend(gates)
+        return self
+
+    def unitary(self):
+        """Build the full circuit matrix from gate sequence."""
+        if not self.gates:
+            return IDENTITY_2
+
+        gate_qubits = 0
+        for gate in self.gates:
+            gate_type = gate['type']
+            if gate_type in ['pauli_x', 'X', 'pauli_y', 'Y', 'pauli_z', 'Z', 'hadamard', 'H', 's_gate', 'S', 't_gate', 'T', 'rx', 'ry', 'rz', 'u3', 'u2']:
+                gate_qubits = max(gate_qubits, gate['target_qubit'] + 1)
+            elif gate_type in ['cnot', 'cx', 'cz', 'cy', 'crx', 'cry', 'crz']:
+                gate_qubits = max(gate_qubits, gate['target_qubit'] + 1, max(gate['control_qubits']) + 1)
+            elif gate_type == 'toffoli':
+                gate_qubits = max(gate_qubits, gate['target_qubit'] + 1, max(gate['control_qubits']) + 1)
+            elif gate_type == 'swap':
+                gate_qubits = max(gate_qubits, gate['qubit_1'] + 1, gate['qubit_2'] + 1)
+            elif gate_type in ['identity', 'I']:
+                gate_qubits = max(gate_qubits, gate['n_qubits'])
+            else:
+                gate_qubits = max(gate_qubits, gate['target_qubit'] + 1)
+
+        if gate_qubits > self.n_qubits:
+            raise ValueError(f"量子门的量子比特数量超出总量子比特数: {gate_qubits} > {self.n_qubits}")
+
+        circuit_matrix = identity(self.n_qubits)
+        for gate in self.gates:
+            gate_matrix = gate_to_matrix(gate, self.n_qubits)
             circuit_matrix = ops.matmul(gate_matrix, circuit_matrix)
-    return circuit_matrix 
+        return circuit_matrix
+
+    def matrix(self):
+        """Alias of unitary()."""
+        return self.unitary()
+
+    def __len__(self):
+        return len(self.gates)
+
+    def __iter__(self):
+        return iter(self.gates)
+
+    def __repr__(self):
+        return f"Circuit(n_qubits={self.n_qubits}, gates={self.gates})"
+
+
+def circuit(*gates, n_qubits=1):
+    """兼容旧接口：内部已完全委托给 Circuit。"""
+    return Circuit(*gates, n_qubits=n_qubits).unitary()
 
 SINGLE_QUBIT_GATES = [
     'pauli_x', 'X',
