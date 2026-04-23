@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
-from Circuit import Circuit as LegacyCircuit
+from ..circuit.model import Circuit
 
 from ..core.states import DensityMatrix, StateVector
 from .result import ExecutionResult
@@ -171,7 +171,7 @@ class ExecutionEngine:
         if noise_model is not None and hasattr(circuit, "gates"):
             # 有噪声时采用逐门演化，确保可在门间插入噪声通道。
             for gate in circuit.gates:
-                gate_unitary_raw = LegacyCircuit(gate, n_qubits=n_qubits).unitary()
+                gate_unitary_raw = Circuit(gate, n_qubits=n_qubits).unitary()
                 gate_unitary = self.backend.cast(self.backend.to_numpy(gate_unitary_raw))
                 rho = rho.evolve(gate_unitary)
                 rho_noisy = noise_model.apply(

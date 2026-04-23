@@ -3,8 +3,7 @@ import unittest
 import numpy as np
 import torch
 
-from Circuit import Circuit, cnot, hadamard, ry
-from quantum_sim import ExecutionEngine, TorchBackend
+from quantum_sim import Circuit, ExecutionEngine, TorchBackend, cnot, hadamard, ry
 from quantum_sim.core.operators import Hamiltonian
 
 

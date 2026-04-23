@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Dict, List
 
-from Circuit import Circuit
+from ..model import Circuit
 
 _QASM2_HEADER = 'OPENQASM 2.0;\ninclude "qelib1.inc";\n'
 _QASM3_HEADER = 'OPENQASM 3.0;\ninclude "stdgates.inc";\n'

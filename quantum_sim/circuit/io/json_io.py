@@ -15,7 +15,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict
 
-from Circuit import Circuit
+from ..model import Circuit
 
 _FORMAT_VERSION = "1.0"
 

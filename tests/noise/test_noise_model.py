@@ -2,10 +2,10 @@ import unittest
 
 import numpy as np
 
-from Circuit import Circuit
 from quantum_sim import (
     AmplitudeDampingChannel,
     BitFlipChannel,
+    Circuit,
     ExecutionEngine,
     NoiseModel,
     PhaseFlipChannel,

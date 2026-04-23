@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 import torch
 
-from Circuit import Circuit, cnot, crx, cry, crz, hadamard, rx, swap, toffoli, u3
+from quantum_sim import Circuit, cnot, crx, cry, crz, hadamard, rx, swap, toffoli, u3
 from quantum_sim.circuit.io.json_io import (
     circuit_from_json,
     circuit_to_json,
