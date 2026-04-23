@@ -1,6 +1,6 @@
 # 注意：此文件依赖于 basic_mind.txt 转换后的 PyTorch 版本。
 # 请将 basic_mind.txt 转换后的代码（所有函数名保持不变）保存为 'basic_torch.py' 并放在此文件同目录下。
-from basic_torch import * # 导入所有转换后的函数和常量
+from Core import * # 导入所有转换后的函数和常量
 import torch
 import math # For math.pi if torch.pi is not available
 
