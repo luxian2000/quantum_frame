@@ -49,6 +49,7 @@ pip install numpy torch
 - 使用 `Circuit`、`hadamard`、`cnot`、`rx/ry/rz`、`cx/cy/cz`、`u2/u3`、`swap`、`toffoli`：`from nexq import Circuit, hadamard, cnot, rx, ry, rz, cx, cy, cz, u2, u3, swap, toffoli`
 - 使用 `Measure`、`Result`：`from nexq import Measure, Result`
 - 使用 `TorchBackend`、`NumpyBackend`、`NPUBackend`：`from nexq import TorchBackend, NumpyBackend, NPUBackend`
+- 使用多 NPU 环境解析工具：`from nexq import NPURuntimeContext, npu_runtime_context_from_env`
 - 使用 `NoiseModel`、`BitFlipChannel`、`PhaseFlipChannel`、`DepolarizingChannel`、`AmplitudeDampingChannel`：`from nexq import NoiseModel, BitFlipChannel, PhaseFlipChannel, DepolarizingChannel, AmplitudeDampingChannel`
 - 使用 `Hamiltonian`、`PauliOp`、`PauliString`：`from nexq import Hamiltonian, PauliOp, PauliString`
 - 使用 JSON I/O：`from nexq import circuit_to_json, circuit_from_json, save_circuit_json, load_circuit_json`
@@ -71,6 +72,18 @@ from nexq import NPUBackend
 backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 print(backend.runtime_context)
 print(backend.name)
+```
+
+如果你希望在 NPU 不可用时直接报错（不回退 CPU）：
+
+```python
+backend = NPUBackend.from_distributed_env(fallback_to_cpu=False)
+```
+
+也支持手动指定单卡：
+
+```python
+backend = NPUBackend(device="npu:0", fallback_to_cpu=True)
 ```
 
 建议配合 `torchrun` 使用（进程数即 NPU 数量）：
@@ -299,12 +312,22 @@ parsed = circuit_from_qasm(qasm2)
   - 适合需要 GPU 或自动微分的场景
 - `NumpyBackend`
   - 轻量、依赖更少，适合快速验证
+- `NPUBackend`
+  - 适合 Ascend 环境；支持 `device="npu:x"` 单卡绑定
+  - 多卡推荐 `NPUBackend.from_distributed_env()` + `torchrun`
+  - 可通过 `fallback_to_cpu` 控制 NPU 不可用时是否回退到 CPU
 
 你可以在不改电路定义的情况下切换后端。
 
 ## 10. 运行测试
 
 在仓库根目录执行：
+
+```bash
+pytest -q
+```
+
+或使用等价的 `unittest` 方式：
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py'
