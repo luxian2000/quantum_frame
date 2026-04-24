@@ -54,6 +54,8 @@ from .circuit.io.qasm import (
     save_circuit_qasm,
     save_circuit_qasm3,
 )
+from . import algorithms
+from . import encoder
 
 __all__ = [
     "TorchBackend",
@@ -107,4 +109,6 @@ __all__ = [
     "save_circuit_qasm",
     "save_circuit_qasm3",
     "load_circuit_qasm",
+    "algorithms",
+    "encoder",
 ]
