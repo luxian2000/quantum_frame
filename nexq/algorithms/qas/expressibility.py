@@ -172,8 +172,8 @@ def KL_Haar_relative(
         cir1 = _replace_circuit_parameters(cir, params1)
         cir2 = _replace_circuit_parameters(cir, params2)
 
-        U1 = backend.cast(backend.to_numpy(cir1.unitary()))
-        U2 = backend.cast(backend.to_numpy(cir2.unitary()))
+        U1 = backend.cast(backend.to_numpy(cir1.unitary(backend=backend)))
+        U2 = backend.cast(backend.to_numpy(cir2.unitary(backend=backend)))
 
         # 计算末态：|ψ1⟩ = U1|0...0⟩，|ψ2⟩ = U2|0...0⟩
         sv1 = zero_state.evolve(U1)
@@ -287,7 +287,7 @@ def MMD_relative(
     for i in range(samples):
         params = np.random.uniform(0, 2 * np.pi, total_params)
         cir_i = _replace_circuit_parameters(cir, params)
-        U = backend.cast(backend.to_numpy(cir_i.unitary()))
+        U = backend.cast(backend.to_numpy(cir_i.unitary(backend=backend)))
         out_state = plus_state.evolve(U)
         probs = backend.to_numpy(out_state.probabilities()).reshape(-1)
         x_samples[i] = np.real(probs)

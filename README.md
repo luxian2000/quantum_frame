@@ -59,29 +59,29 @@ from nexq import (
 
 ### 2.1 门字典速查
 
-| 函数 | 参数 | 说明 |
-|---|---|---|
-| `pauli_x(q)` | target_qubit | X 门 |
-| `pauli_y(q)` | target_qubit | Y 门 |
-| `pauli_z(q)` | target_qubit | Z 门 |
-| `hadamard(q)` | target_qubit | H 门 |
-| `s_gate(q)` | target_qubit | S 门 |
-| `t_gate(q)` | target_qubit | T 门 |
-| `rx(θ, q)` | 角度, target_qubit | Rx 旋转门 |
-| `ry(θ, q)` | 角度, target_qubit | Ry 旋转门 |
-| `rz(θ, q)` | 角度, target_qubit | Rz 旋转门 |
-| `u2(φ, λ, q)` | phi, lambda, target_qubit | U2 门 |
-| `u3(θ, φ, λ, q)` | theta, phi, lambda, target_qubit | U3 通用单比特门 |
-| `cx(t, [c])` | target, control_list | CNOT（控制-X） |
-| `cnot(t, [c])` | target, control_list | 同 cx |
-| `cy(t, [c])` | target, control_list | 控制-Y |
-| `cz(t, [c])` | target, control_list | 控制-Z |
-| `crx(θ, t, [c])` | 角度, target, control_list | 受控 Rx |
-| `cry(θ, t, [c])` | 角度, target, control_list | 受控 Ry |
-| `crz(θ, t, [c])` | 角度, target, control_list | 受控 Rz |
-| `swap(q1, q2)` | qubit_1, qubit_2 | SWAP 门 |
-| `toffoli(t, [c0,c1])` | target, control_list | Toffoli (CCX) |
-| `ccnot(t, [c0,c1])` | target, control_list | 同 toffoli |
+| 函数                    | 参数                             | 说明            |
+| ----------------------- | -------------------------------- | --------------- |
+| `pauli_x(q)`          | target_qubit                     | X 门            |
+| `pauli_y(q)`          | target_qubit                     | Y 门            |
+| `pauli_z(q)`          | target_qubit                     | Z 门            |
+| `hadamard(q)`         | target_qubit                     | H 门            |
+| `s_gate(q)`           | target_qubit                     | S 门            |
+| `t_gate(q)`           | target_qubit                     | T 门            |
+| `rx(θ, q)`           | 角度, target_qubit               | Rx 旋转门       |
+| `ry(θ, q)`           | 角度, target_qubit               | Ry 旋转门       |
+| `rz(θ, q)`           | 角度, target_qubit               | Rz 旋转门       |
+| `u2(φ, λ, q)`       | phi, lambda, target_qubit        | U2 门           |
+| `u3(θ, φ, λ, q)`   | theta, phi, lambda, target_qubit | U3 通用单比特门 |
+| `cx(t, [c])`          | target, control_list             | CNOT（控制-X）  |
+| `cnot(t, [c])`        | target, control_list             | 同 cx           |
+| `cy(t, [c])`          | target, control_list             | 控制-Y          |
+| `cz(t, [c])`          | target, control_list             | 控制-Z          |
+| `crx(θ, t, [c])`     | 角度, target, control_list       | 受控 Rx         |
+| `cry(θ, t, [c])`     | 角度, target, control_list       | 受控 Ry         |
+| `crz(θ, t, [c])`     | 角度, target, control_list       | 受控 Rz         |
+| `swap(q1, q2)`        | qubit_1, qubit_2                 | SWAP 门         |
+| `toffoli(t, [c0,c1])` | target, control_list             | Toffoli (CCX)   |
+| `ccnot(t, [c0,c1])`   | target, control_list             | 同 toffoli      |
 
 ### 2.2 构建电路
 
@@ -198,16 +198,16 @@ print(counts)   # {'|00>': 512}
 
 ### 3.5 Result 对象字段速查
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `probabilities` | `np.ndarray` | 各基态概率，shape `(2^n,)` |
-| `counts` | `dict` or `None` | `{'\|00>': N, ...}` 采样计数 |
-| `shots` | `int` or `None` | 采样次数 |
-| `expectation_values` | `dict` | `{name: float}` 期望值 |
-| `expectation_variances` | `dict` | `{name: float}` 方差 |
-| `final_state` | `np.ndarray` or `None` | 末态向量 |
-| `most_probable()` | `(str, float)` | 最高概率基态及其概率 |
-| `summary()` | `str` | 单行摘要字符串 |
+| 字段                      | 类型                       | 说明                          |
+| ------------------------- | -------------------------- | ----------------------------- |
+| `probabilities`         | `np.ndarray`             | 各基态概率，shape `(2^n,)`  |
+| `counts`                | `dict` or `None`       | `{'\|00>': N, ...}` 采样计数 |
+| `shots`                 | `int` or `None`        | 采样次数                      |
+| `expectation_values`    | `dict`                   | `{name: float}` 期望值      |
+| `expectation_variances` | `dict`                   | `{name: float}` 方差        |
+| `final_state`           | `np.ndarray` or `None` | 末态向量                      |
+| `most_probable()`       | `(str, float)`           | 最高概率基态及其概率          |
+| `summary()`             | `str`                    | 单行摘要字符串                |
 
 ---
 
@@ -298,25 +298,81 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 
 ## 5. NPU 后端的使用
 
-nexq 通过 `NPUBackend` 支持 Ascend NPU（依赖 `torch_npu`）。所有 complex64 算子已内置针对 NPU 的兼容 workaround，无需任何额外配置。
+nexq 通过 `NPUBackend` 支持 Ascend NPU（依赖 `torch_npu`）。
 
-### 5.1 自动选择 NPU 或 CPU 回退
+说明：针对 NPU 上 `complex64` 的算子兼容性，库内已经在后端层实现了 workaround（例如 `matmul/kron/trace/inner_product/partial_trace/expectation/abs_sq/measure_probs` 的复数拆分路径）。
+
+### 5.1 方式 A（在测量阶段指定后端）
+
+该方式保持电路对象与后端解耦，在 `Measure` 中指定后端。
 
 ```python
-from nexq import NPUBackend
+from nexq import Circuit, Measure, NPUBackend, hadamard, cnot
 
-# NPU 可用时使用 npu:0，否则自动回退到 CPU
-backend = NPUBackend(fallback_to_cpu=True)
-print(backend.name)
+backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
+cir = Circuit(
+    hadamard(0),
+    cnot(1, [0]),
+    n_qubits=2,
+)
+
+result = Measure(backend).run(cir, shots=1024)
+print(result.backend_name)
 ```
 
-### 5.2 严格 NPU 模式（不允许回退）
+适用场景：
+
+- 你希望电路对象可复用在多种后端上（CPU/GPU/NPU）
+- 希望保持 API 简洁，执行时再选择设备
+
+### 5.2 方式 B（前端构建电路时绑定后端）
+
+该方式在 `Circuit` 构建阶段指定 backend，前端矩阵组装与后端执行保持同一 XPU。
+
+```python
+from nexq import Circuit, Measure, NPUBackend, hadamard, cnot
+
+backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
+cir = Circuit(
+    hadamard(0),
+    cnot(1, [0]),
+    n_qubits=2,
+    backend=backend,
+)
+
+# Measure 会优先使用 circuit.backend（若存在）
+result = Measure(backend).run(cir, shots=1024)
+print(result.backend_name)
+```
+
+也可先构建再绑定：
+
+```python
+cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
+cir.bind_backend(backend)
+```
+
+适用场景：
+
+- 你希望前端矩阵组装与执行严格在同一设备上
+- 希望减少 CPU 和 XPU 之间的数据迁移
+
+### 5.3 严格 NPU 模式（不允许回退）
 
 ```python
 from nexq import NPUBackend
 
 # NPU 不可用时直接抛 RuntimeError，用于验证平台
 backend = NPUBackend(device="npu:0", fallback_to_cpu=False)
+```
+
+### 5.4 运行示例
+
+仓库示例脚本：`demo_npu.py`
+
+```bash
+python demo_npu.py
+python demo_npu.py --shots 2048 --allow-cpu-fallback
 ```
 
 ### 5.3 分布式环境（多卡/多节点）
@@ -377,12 +433,34 @@ print(f"summary : {result.summary()}")
 
 ### 5.5 runtime_context 字段说明
 
-| 字段 | 说明 |
-|---|---|
-| `world_size` | 总进程数 |
-| `rank` | 全局进程编号 |
-| `local_rank` | 本节点本地编号（对应 `npu:local_rank`） |
-| `distributed` | `world_size > 1` 时为 True |
+| 字段            | 说明                                      |
+| --------------- | ----------------------------------------- |
+| `world_size`  | 总进程数                                  |
+| `rank`        | 全局进程编号                              |
+| `local_rank`  | 本节点本地编号（对应 `npu:local_rank`） |
+
+### 5.6 远程 NPU 验证输出示例（新路径）
+
+使用新路径 smoke 脚本进行全链路验证（单门、受控门、参数门、density matrix）：
+
+```bash
+python smoke_npu_new_path.py --shots 512
+```
+
+示例输出：
+
+```text
+=== Smoke NPU New Path ===
+backend: NPUBackend(dtype=torch.complex64, device=npu:0, npu_available=True)
+runtime_context: NPURuntimeContext(world_size=1, rank=0, local_rank=0, distributed=False)
+[PASS] single_gate
+[PASS] controlled_gate
+[PASS] parametric_gate
+[PASS] density_matrix
+
+Summary: PASS
+```
+| `distributed` | `world_size > 1` 时为 True              |
 
 ---
 
@@ -457,28 +535,28 @@ cir2 = load_circuit_qasm("my_circuit.qasm")
 
 nexq 在 3.0 模式下的主要差异：
 
-| 项目 | 2.0 | 3.0 |
-|---|---|---|
-| 版本头 | `OPENQASM 2.0;` | `OPENQASM 3.0;` |
-| 标准库 | `include "qelib1.inc";` | `include "stdgates.inc";` |
-| 量子寄存器声明 | `qreg q[2];` | `qubit[2] q;` |
-| U3 门名称 | `u3(θ,φ,λ)` | `u(θ,φ,λ)` |
+| 项目           | 2.0                       | 3.0                         |
+| -------------- | ------------------------- | --------------------------- |
+| 版本头         | `OPENQASM 2.0;`         | `OPENQASM 3.0;`           |
+| 标准库         | `include "qelib1.inc";` | `include "stdgates.inc";` |
+| 量子寄存器声明 | `qreg q[2];`            | `qubit[2] q;`             |
+| U3 门名称      | `u3(θ,φ,λ)`          | `u(θ,φ,λ)`             |
 
 ### 6.5 支持的 QASM 门集
 
-| QASM 门名 | nexq 对应函数 |
-|---|---|
-| `x`, `y`, `z` | `pauli_x`, `pauli_y`, `pauli_z` |
-| `h` | `hadamard` |
-| `s`, `t` | `s_gate`, `t_gate` |
-| `rx`, `ry`, `rz` | `rx`, `ry`, `rz` |
-| `u2(φ,λ)` | `u2` |
-| `u3(θ,φ,λ)` / `u(θ,φ,λ)` | `u3` |
-| `cx` | `cx` / `cnot` |
-| `cy`, `cz` | `cy`, `cz` |
-| `swap` | `swap` |
-| `crx`, `cry`, `crz` | `crx`, `cry`, `crz` |
-| `ccx` | `toffoli` / `ccnot` |
+| QASM 门名                          | nexq 对应函数                         |
+| ---------------------------------- | ------------------------------------- |
+| `x`, `y`, `z`                | `pauli_x`, `pauli_y`, `pauli_z` |
+| `h`                              | `hadamard`                          |
+| `s`, `t`                       | `s_gate`, `t_gate`                |
+| `rx`, `ry`, `rz`             | `rx`, `ry`, `rz`                |
+| `u2(φ,λ)`                      | `u2`                                |
+| `u3(θ,φ,λ)` / `u(θ,φ,λ)` | `u3`                                |
+| `cx`                             | `cx` / `cnot`                     |
+| `cy`, `cz`                     | `cy`, `cz`                        |
+| `swap`                           | `swap`                              |
+| `crx`, `cry`, `crz`          | `crx`, `cry`, `crz`             |
+| `ccx`                            | `toffoli` / `ccnot`               |
 
 > **当前不支持**：`if`、`reset`、`opaque`、自定义 `gate`、`cp`/`cu` 系列门。
 > `measure` 和 `barrier` 语句在导入时会被跳过。

@@ -180,6 +180,27 @@ class NPUBackend(TorchBackend):
             return self._complex_matmul_workaround(a, b)
         return super().matmul(a, b)
 
+    def eye(self, dim: int):
+        """NPU workaround: build complex identity from real eye when complex eye kernel is unsupported."""
+        if getattr(self._device, "type", None) == "npu" and self._dtype in (torch.complex64, torch.complex128):
+            real_dtype = torch.float32 if self._dtype == torch.complex64 else torch.float64
+            real_eye = torch.eye(dim, dtype=real_dtype, device=self._device)
+            imag_eye = torch.zeros_like(real_eye)
+            return torch.complex(real_eye, imag_eye).to(dtype=self._dtype)
+        return super().eye(dim)
+
+    def zeros_state(self, n_qubits: int):
+        """NPU workaround: avoid complex in-place write path when initializing |0...0>."""
+        if getattr(self._device, "type", None) == "npu" and self._dtype in (torch.complex64, torch.complex128):
+            dim = 1 << n_qubits
+            real_dtype = torch.float32 if self._dtype == torch.complex64 else torch.float64
+            head = torch.ones((1, 1), dtype=real_dtype, device=self._device)
+            tail = torch.zeros((dim - 1, 1), dtype=real_dtype, device=self._device)
+            real = torch.cat([head, tail], dim=0)
+            imag = torch.zeros_like(real)
+            return torch.complex(real, imag).to(dtype=self._dtype)
+        return super().zeros_state(n_qubits)
+
     def apply_unitary(self, state, unitary):
         return self.matmul(unitary, state)
 

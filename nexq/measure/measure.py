@@ -31,31 +31,48 @@ class Measure:
         self.sampler = Sampler(backend)
         self._variance_eps = 1e-7
 
-    def _build_initial_state(self, n_qubits: int, initial_state=None) -> StateVector:
+    def _resolve_backend(self, circuit):
+        circuit_backend = getattr(circuit, "backend", None)
+        return circuit_backend if circuit_backend is not None else self.backend
+
+    def _build_initial_state(self, n_qubits: int, backend, initial_state=None) -> StateVector:
         if initial_state is None:
-            return StateVector.zero_state(n_qubits, self.backend)
+            return StateVector.zero_state(n_qubits, backend)
 
         if isinstance(initial_state, StateVector):
             if initial_state.n_qubits != n_qubits:
                 raise ValueError("initial_state.n_qubits 与电路 n_qubits 不一致")
             return initial_state
 
-        return StateVector(initial_state, n_qubits, self.backend)
+        return StateVector(initial_state, n_qubits, backend)
 
     def _build_initial_density_matrix(
         self,
         n_qubits: int,
+        backend,
         initial_density_matrix=None,
     ) -> DensityMatrix:
         if initial_density_matrix is None:
-            return DensityMatrix.zero_state(n_qubits, self.backend)
+            return DensityMatrix.zero_state(n_qubits, backend)
 
         if isinstance(initial_density_matrix, DensityMatrix):
             if initial_density_matrix.n_qubits != n_qubits:
                 raise ValueError("initial_density_matrix.n_qubits 与电路 n_qubits 不一致")
             return initial_density_matrix
 
-        return DensityMatrix(initial_density_matrix, n_qubits, self.backend)
+        return DensityMatrix(initial_density_matrix, n_qubits, backend)
+
+    def _circuit_unitary_on_backend(self, circuit, backend):
+        """
+        优先走 `unitary(backend=...)` 路径以在设备端组装/累乘矩阵。
+
+        兼容旧式或外部电路实现：若不支持 backend 参数，则回退到 unitary()。
+        """
+        try:
+            unitary_raw = circuit.unitary(backend=backend)
+        except TypeError:
+            unitary_raw = circuit.unitary()
+        return backend.cast(backend.to_numpy(unitary_raw))
 
     def run(
         self,
@@ -82,28 +99,30 @@ class Measure:
         if n_qubits <= 0:
             raise ValueError("n_qubits 必须为正整数")
 
-        sv0 = self._build_initial_state(n_qubits, initial_state=initial_state)
+        backend = self._resolve_backend(circuit)
+        sampler = Sampler(backend)
 
-        unitary_raw = circuit.unitary()
-        unitary = self.backend.cast(self.backend.to_numpy(unitary_raw))
+        sv0 = self._build_initial_state(n_qubits, backend, initial_state=initial_state)
+
+        unitary = self._circuit_unitary_on_backend(circuit, backend)
 
         sv = sv0.evolve(unitary)
         probs_backend = sv.probabilities()
-        probs = self.backend.to_numpy(probs_backend).real
+        probs = backend.to_numpy(probs_backend).real
 
         counts = None
         use_shots = shots if shots is not None else 0
         if use_shots > 0:
-            counts = self.sampler.sample_counts(probs_backend, n_qubits=n_qubits, shots=use_shots)
+            counts = sampler.sample_counts(probs_backend, n_qubits=n_qubits, shots=use_shots)
 
         exp_vals: Dict[str, float] = {}
         exp_vars: Dict[str, float] = {}
         if observables:
             for name, op in observables.items():
-                op_backend = self.backend.cast(self.backend.to_numpy(op))
-                exp_val = float(self.backend.to_numpy(sv.expectation(op_backend)))
-                op2 = self.backend.matmul(op_backend, op_backend)
-                exp2 = float(self.backend.to_numpy(sv.expectation(op2)))
+                op_backend = backend.cast(backend.to_numpy(op))
+                exp_val = float(backend.to_numpy(sv.expectation(op_backend)))
+                op2 = backend.matmul(op_backend, op_backend)
+                exp2 = float(backend.to_numpy(sv.expectation(op2)))
                 var = exp2 - exp_val * exp_val
                 if abs(var) < self._variance_eps:
                     var = 0.0
@@ -114,7 +133,7 @@ class Measure:
 
         return Result(
             n_qubits=n_qubits,
-            backend_name=self.backend.name,
+            backend_name=backend.name,
             probabilities=probs,
             counts=counts,
             shots=use_shots if use_shots > 0 else None,
@@ -155,45 +174,50 @@ class Measure:
         if n_qubits <= 0:
             raise ValueError("n_qubits 必须为正整数")
 
+        backend = self._resolve_backend(circuit)
+        sampler = Sampler(backend)
+
         rho0 = self._build_initial_density_matrix(
             n_qubits,
+            backend,
             initial_density_matrix=initial_density_matrix,
         )
 
         rho = rho0
         if noise_model is not None and hasattr(circuit, "gates"):
             for gate in circuit.gates:
-                gate_unitary_raw = Circuit(gate, n_qubits=n_qubits).unitary()
-                gate_unitary = self.backend.cast(self.backend.to_numpy(gate_unitary_raw))
+                gate_unitary = self._circuit_unitary_on_backend(
+                    Circuit(gate, n_qubits=n_qubits, backend=backend),
+                    backend,
+                )
                 rho = rho.evolve(gate_unitary)
                 rho_noisy = noise_model.apply(
                     rho.data,
                     n_qubits=n_qubits,
-                    backend=self.backend,
+                    backend=backend,
                     gate_type=gate.get("type"),
                 )
-                rho = DensityMatrix(rho_noisy, n_qubits, self.backend)
+                rho = DensityMatrix(rho_noisy, n_qubits, backend)
         else:
-            unitary_raw = circuit.unitary()
-            unitary = self.backend.cast(self.backend.to_numpy(unitary_raw))
+            unitary = self._circuit_unitary_on_backend(circuit, backend)
             rho = rho.evolve(unitary)
 
         probs = rho.probabilities()
-        probs_backend = self.backend.cast(probs)
+        probs_backend = backend.cast(probs)
 
         counts = None
         use_shots = shots if shots is not None else 0
         if use_shots > 0:
-            counts = self.sampler.sample_counts(probs_backend, n_qubits=n_qubits, shots=use_shots)
+            counts = sampler.sample_counts(probs_backend, n_qubits=n_qubits, shots=use_shots)
 
         exp_vals: Dict[str, float] = {}
         exp_vars: Dict[str, float] = {}
         if observables:
             for name, op in observables.items():
-                op_backend = self.backend.cast(self.backend.to_numpy(op))
-                exp_val = float(self.backend.to_numpy(rho.expectation(op_backend)))
-                op2 = self.backend.matmul(op_backend, op_backend)
-                exp2 = float(self.backend.to_numpy(rho.expectation(op2)))
+                op_backend = backend.cast(backend.to_numpy(op))
+                exp_val = float(backend.to_numpy(rho.expectation(op_backend)))
+                op2 = backend.matmul(op_backend, op_backend)
+                exp2 = float(backend.to_numpy(rho.expectation(op2)))
                 var = exp2 - exp_val * exp_val
                 if abs(var) < self._variance_eps:
                     var = 0.0
@@ -204,7 +228,7 @@ class Measure:
 
         return Result(
             n_qubits=n_qubits,
-            backend_name=self.backend.name,
+            backend_name=backend.name,
             probabilities=np.asarray(probs, dtype=np.float64),
             counts=counts,
             shots=use_shots if use_shots > 0 else None,

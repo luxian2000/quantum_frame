@@ -4,6 +4,7 @@ import numpy as np
 import torch
 
 from nexq import Circuit, Measure, TorchBackend, cnot, hadamard, ry
+from nexq.channel.backends import NumpyBackend
 from nexq.channel.operators import Hamiltonian
 
 
@@ -94,6 +95,16 @@ class TestMeasure(unittest.TestCase):
             self.assertEqual(results[i].metadata.get("scan_index"), i)
             self.assertAlmostEqual(float(results[i].metadata.get("scan_param")), theta, places=12)
             self.assertAlmostEqual(results[i].expectation_values["Z0"], float(np.cos(theta)), places=5)
+
+    def test_run_prefers_circuit_bound_backend(self):
+        np_backend = NumpyBackend()
+        circ = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2, backend=np_backend)
+
+        result = self.measure.run(circ, shots=200)
+
+        self.assertTrue(result.backend_name.startswith("NumpyBackend("))
+        self.assertAlmostEqual(result.probabilities[0], 0.5, places=3)
+        self.assertAlmostEqual(result.probabilities[3], 0.5, places=3)
 
 
 if __name__ == "__main__":

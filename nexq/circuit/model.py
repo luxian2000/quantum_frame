@@ -58,9 +58,10 @@ def _infer_n_qubits_from_gates(gates):
 class Circuit:
     """量子电路类：支持门序构建、拼接和矩阵生成。"""
 
-    def __init__(self, *gates, n_qubits=None):
+    def __init__(self, *gates, n_qubits=None, backend=None):
         self.gates = list(gates)
         self.n_qubits = _infer_n_qubits_from_gates(self.gates) if n_qubits is None else n_qubits
+        self._backend = backend
 
     def __add__(self, other):
         if not isinstance(other, Circuit):
@@ -69,7 +70,8 @@ class Circuit:
             raise ValueError(
                 f"Cannot compose circuits with different n_qubits: {self.n_qubits} != {other.n_qubits}"
             )
-        return Circuit(*self.gates, *other.gates, n_qubits=self.n_qubits)
+        backend = self._backend if self._backend is not None else other._backend
+        return Circuit(*self.gates, *other.gates, n_qubits=self.n_qubits, backend=backend)
 
     def append(self, gate):
         self.gates.append(gate)
@@ -79,23 +81,35 @@ class Circuit:
         self.gates.extend(gates)
         return self
 
-    def unitary(self):
+    @property
+    def backend(self):
+        return self._backend
+
+    def bind_backend(self, backend):
+        self._backend = backend
+        return self
+
+    def unitary(self, backend=None):
+        backend = backend or self._backend
         if not self.gates:
-            return identity(self.n_qubits)
+            return identity(self.n_qubits) if backend is None else backend.eye(1 << self.n_qubits)
 
         gate_qubits = _infer_n_qubits_from_gates(self.gates)
 
         if gate_qubits > self.n_qubits:
             raise ValueError(f"量子门的量子比特数量超出总量子比特数: {gate_qubits} > {self.n_qubits}")
 
-        circuit_matrix = identity(self.n_qubits)
+        circuit_matrix = identity(self.n_qubits) if backend is None else backend.eye(1 << self.n_qubits)
         for gate in self.gates:
-            gm = gate_to_matrix(gate, self.n_qubits)
-            circuit_matrix = np.matmul(gm, circuit_matrix)
+            gm = gate_to_matrix(gate, self.n_qubits, backend=backend)
+            if backend is None:
+                circuit_matrix = np.matmul(gm, circuit_matrix)
+            else:
+                circuit_matrix = backend.matmul(gm, circuit_matrix)
         return circuit_matrix
 
-    def matrix(self):
-        return self.unitary()
+    def matrix(self, backend=None):
+        return self.unitary(backend=backend)
 
     def __len__(self):
         return len(self.gates)
@@ -104,11 +118,12 @@ class Circuit:
         return iter(self.gates)
 
     def __repr__(self):
-        return f"Circuit(n_qubits={self.n_qubits}, gates={self.gates})"
+        backend_name = None if self._backend is None else self._backend.name
+        return f"Circuit(n_qubits={self.n_qubits}, gates={self.gates}, backend={backend_name})"
 
 
-def circuit(*gates, n_qubits=1):
-    return Circuit(*gates, n_qubits=n_qubits).unitary()
+def circuit(*gates, n_qubits=1, backend=None):
+    return Circuit(*gates, n_qubits=n_qubits, backend=backend).unitary(backend=backend)
 
 
 def pauli_x(target_qubit=0):
