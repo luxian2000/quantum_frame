@@ -1,356 +1,484 @@
 # nexq 使用手册
 
-`nexq` 是一个可扩展的量子线路模拟器，支持：
+---
 
-- 状态矢量与密度矩阵两种执行模式
-- NumPy / PyTorch 后端
-- Ascend NPU 后端（基于 torch_npu）
-- 期望值与方差计算
-- 批量执行与参数扫描
-- 噪声模型（Kraus 通道）
-- JSON 与 OpenQASM 2.0/3.0 I/O
+## 1. 模块导入
 
-当前版本中，`nexq` 已具备独立电路与量子门实现。
-
-## 1. 安装与环境
-
-推荐 Python 3.10+。
-
-最小依赖：
-
-```bash
-pip install numpy torch
-```
-
-如果你仅使用 `NumpyBackend`，理论上只需 `numpy`。
-
-如果你使用 Ascend NPU 后端，请额外安装并配置 `torch_npu` 与 Ascend 运行时。
-
-## 2. 核心模块总览
-
-- `nexq.circuit`
-  - `Circuit` 电路类与门构造器（`hadamard`、`cnot`、`rx` 等）
-- `nexq.measure`
-  - `Measure` 统一测量与执行入口
-  - `Result` 统一结果对象
-- `nexq.channel.states`
-  - `StateVector`、`DensityMatrix`
-- `nexq.channel.operators`
-  - `PauliOp`、`PauliString`、`Hamiltonian`
-- `nexq.channel.noise`
-  - `NoiseModel` 与常见噪声通道
-- `nexq.circuit.io`
-  - JSON / OpenQASM 导入导出
-
-## 2.1 导入对照
-
-优先使用顶层导入（`from nexq import ...`）。
-
-- 使用 `Circuit`、`hadamard`、`cnot`、`rx/ry/rz`、`cx/cy/cz`、`u2/u3`、`swap`、`toffoli`：`from nexq import Circuit, hadamard, cnot, rx, ry, rz, cx, cy, cz, u2, u3, swap, toffoli`
-- 使用 `Measure`、`Result`：`from nexq import Measure, Result`
-- 使用 `TorchBackend`、`NumpyBackend`、`NPUBackend`：`from nexq import TorchBackend, NumpyBackend, NPUBackend`
-- 使用多 NPU 环境解析工具：`from nexq import NPURuntimeContext, npu_runtime_context_from_env`
-- 使用 `NoiseModel`、`BitFlipChannel`、`PhaseFlipChannel`、`DepolarizingChannel`、`AmplitudeDampingChannel`：`from nexq import NoiseModel, BitFlipChannel, PhaseFlipChannel, DepolarizingChannel, AmplitudeDampingChannel`
-- 使用 `Hamiltonian`、`PauliOp`、`PauliString`：`from nexq import Hamiltonian, PauliOp, PauliString`
-- 使用 JSON I/O：`from nexq import circuit_to_json, circuit_from_json, save_circuit_json, load_circuit_json`
-- 使用 QASM I/O：`from nexq import circuit_to_qasm, circuit_to_qasm3, circuit_from_qasm, save_circuit_qasm, save_circuit_qasm3, load_circuit_qasm`
-
-补充说明：
-
-- `from nexq import models` 会失败，因为顶层没有导出 `models` 这个名字。
-- 你可以直接用顶层导出的符号；若确实要导入子模块，请使用它的真实路径，例如 `from nexq.circuit.model import Circuit`。
-
-## 3. 快速开始
-
-### 3.0 多 NPU 运行入口
-
-`nexq` 提供了分布式环境变量自动入口，可读取 `WORLD_SIZE`、`RANK`、`LOCAL_RANK` 并按 `LOCAL_RANK` 选择设备：
+所有常用类与函数均可从顶层 `nexq` 包一次性导入。
 
 ```python
-from nexq import NPUBackend
+# 后端
+from nexq import TorchBackend, NumpyBackend, NPUBackend
 
-backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
-print(backend.runtime_context)
-print(backend.name)
-```
+# 量子态
+from nexq import StateVector, DensityMatrix
 
-如果你希望在 NPU 不可用时直接报错（不回退 CPU）：
-
-```python
-backend = NPUBackend.from_distributed_env(fallback_to_cpu=False)
-```
-
-也支持手动指定单卡：
-
-```python
-backend = NPUBackend(device="npu:0", fallback_to_cpu=True)
-```
-
-建议配合 `torchrun` 使用（进程数即 NPU 数量）：
-
-```bash
-torchrun --nproc_per_node=4 your_script.py
-```
-
-### 3.1 Bell 态示例（状态矢量）
-
-```python
-from nexq import Circuit, Measure, TorchBackend, cnot, hadamard
-
-backend = TorchBackend(device="cpu")
-measure = Measure(backend)
-
-circ = Circuit(
-    hadamard(0),
-    cnot(1, [0]),
-    n_qubits=2,
-)
-
-result = measure.run(circ, shots=1024)
-
-print(result.probabilities)
-print(result.counts)
-print(result.summary())
-```
-
-### 3.2 期望值与方差
-
-```python
-from nexq import Circuit, Measure, TorchBackend, cnot, hadamard
-from nexq.channel.operators import Hamiltonian
-
-backend = TorchBackend(device="cpu")
-measure = Measure(backend)
-
-circ = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
-
-# 可观测量: Z0 Z1
-H = Hamiltonian(n_qubits=2).add_term(1.0, {"Z": [0, 1]})
-op = H.to_matrix(backend)
-
-result = measure.run(circ, observables={"ZZ": op})
-print("<ZZ> =", result.expectation_values["ZZ"])
-print("Var(ZZ) =", result.expectation_variances["ZZ"])
-```
-
-## 4. 电路 API
-
-### 4.1 电路对象
-
-- `Circuit(*gates, n_qubits=...)`
-- `append(gate)` / `extend(*gates)`
-- `unitary()`：返回整体酉矩阵
-- `matrix()`：`unitary()` 的别名
-
-### 4.2 已支持门（与当前实现一致）
-
-- 单比特门
-  - `pauli_x` / `pauli_y` / `pauli_z`
-  - `hadamard`
-  - `s_gate` / `t_gate`
-  - `rx` / `ry` / `rz`
-  - `u2` / `u3`
-- 受控门
-  - `cx` / `cnot`
-  - `cy` / `cz`
-  - `crx` / `cry` / `crz`
-- 多比特门
-  - `swap`
-  - `toffoli` / `ccnot`
-- 其他
-  - `identity`（通过 gate dict 使用）
-  - `rzz`（通过 gate dict 使用）
-
-门构造器示例：
-
-```python
-from nexq import Circuit, crx, rx, toffoli
-
-circ = Circuit(
-    rx(0.3, 0),
-    crx(1.2, target_qubit=1, control_qubits=[0]),
-    toffoli(target_qubit=2, control_qubits=[0, 1]),
-    n_qubits=3,
-)
-```
-
-## 5. 测量接口
-
-### 5.1 状态矢量模式
-
-- 接口：`Measure.run(...)`
-- 适合无噪声或近似纯态场景
-
-关键参数：
-
-- `shots`：采样次数（`None`/`0` 表示不采样）
-- `initial_state`：可自定义初态
-- `observables`：`{"name": operator_matrix}`
-
-### 5.2 密度矩阵模式
-
-- 接口：`Measure.run_density_matrix(...)`
-- 支持噪声模型
-
-关键参数：
-
-- `initial_density_matrix`
-- `noise_model`
-
-示例：
-
-```python
+# 量子门（构造函数，返回门字典）
 from nexq import (
+    pauli_x, pauli_y, pauli_z,
+    hadamard,
+    rx, ry, rz,
+    s_gate, t_gate,
+    cx, cnot, cy, cz,
+    crx, cry, crz,
+    swap,
+    toffoli, ccnot,
+    u2, u3,
+)
+
+# 电路
+from nexq import Circuit
+
+# 测量
+from nexq import Measure, Result
+
+# 哈密顿量
+from nexq import PauliOp, PauliString, Hamiltonian
+
+# 噪声
+from nexq import (
+    NoiseChannel, NoiseModel,
+    DepolarizingChannel,
     BitFlipChannel,
-    Circuit,
-    Measure,
-    NoiseModel,
-    TorchBackend,
+    PhaseFlipChannel,
+    AmplitudeDampingChannel,
 )
 
-backend = TorchBackend(device="cpu")
-measure = Measure(backend)
-
-circ = Circuit({"type": "identity", "n_qubits": 1}, n_qubits=1)
-noise = NoiseModel().add_channel(BitFlipChannel(target_qubit=0, p=1.0))
-
-result = measure.run_density_matrix(circ, noise_model=noise)
-print(result.probabilities)  # 期望接近 [0, 1]
-```
-
-### 5.3 批量执行与参数扫描
-
-```python
-import numpy as np
-from nexq import Circuit, Measure, TorchBackend, ry
-
-backend = TorchBackend(device="cpu")
-measure = Measure(backend)
-
-def build(theta):
-    return Circuit(ry(theta, 0), n_qubits=1)
-
-results = measure.scan_parameters(
-    circuit_builder=build,
-    param_values=[0.0, np.pi / 2, np.pi],
-    shots=None,
+# OpenQASM 互转
+from nexq import (
+    circuit_to_qasm, circuit_to_qasm3,
+    circuit_from_qasm,
+    load_circuit_qasm, save_circuit_qasm,
+    load_circuit_qasm, save_circuit_qasm3,
 )
-
-for r in results:
-    print(r.metadata["scan_index"], r.metadata["scan_param"], r.probabilities)
-```
-
-## 6. 结果对象 `Result`
-
-`Result` 主要字段：
-
-- `probabilities`: 概率向量
-- `counts`: 采样计数字典（例如 `|00>`）
-- `expectation_values`
-- `expectation_variances`
-- `final_state`
-- `metadata`
-
-常用方法：
-
-- `most_probable()`
-- `variance(name)`
-- `stddev(name)`
-- `summary()`
-
-## 7. 算符与哈密顿量
-
-`nexq.channel.operators` 提供 Pauli 算符组合能力：
-
-- `PauliOp('Z', qubit=0)`
-- `PauliString({'Z': [0], 'X': [1]}, n_qubits=2, coefficient=0.5)`
-- `Hamiltonian(n_qubits).add_term(coeff, pauli_dict)`
-
-示例：
-
-```python
-from nexq import TorchBackend
-from nexq.channel.operators import Hamiltonian
-
-backend = TorchBackend(device="cpu")
-H = (Hamiltonian(n_qubits=2)
-     .add_term(-0.5, {"Z": [0, 1]})
-     .add_term(0.3, {"X": [0, 1]}))
-
-H_mat = H.to_matrix(backend)
-```
-
-## 8. I/O：JSON 与 OpenQASM
-
-### 8.1 JSON
-
-```python
-from nexq import Circuit, hadamard, cnot
-from nexq.circuit.io.json_io import circuit_to_json, circuit_from_json
-
-circ = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
-text = circuit_to_json(circ)
-new_circ = circuit_from_json(text)
-```
-
-### 8.2 OpenQASM 2.0 / 3.0
-
-```python
-from nexq.circuit.io.qasm import circuit_to_qasm, circuit_from_qasm
-
-qasm2 = circuit_to_qasm(new_circ, version="2.0")
-qasm3 = circuit_to_qasm(new_circ, version="3.0")
-
-parsed = circuit_from_qasm(qasm2)
-```
-
-已支持常见门：`x/y/z/h/s/t/rx/ry/rz/u2/u3/u/cx/cy/cz/swap/crx/cry/crz/ccx`。
-
-## 9. 后端选择建议
-
-- `TorchBackend`
-  - 适合需要 GPU 或自动微分的场景
-- `NumpyBackend`
-  - 轻量、依赖更少，适合快速验证
-- `NPUBackend`
-  - 适合 Ascend 环境；支持 `device="npu:x"` 单卡绑定
-  - 多卡推荐 `NPUBackend.from_distributed_env()` + `torchrun`
-  - 可通过 `fallback_to_cpu` 控制 NPU 不可用时是否回退到 CPU
-
-你可以在不改电路定义的情况下切换后端。
-
-## 10. 运行测试
-
-在仓库根目录执行：
-
-```bash
-pytest -q
-```
-
-或使用等价的 `unittest` 方式：
-
-```bash
-python -m unittest discover -s tests -p 'test_*.py'
-```
-
-## 11. 迁移说明
-
-如果你之前在项目里使用根目录 `Core.py` / `Circuit.py`：
-
-- 新代码建议统一改为 `nexq` 顶层导入
-- `nexq` 内部已完成独立门逻辑与电路实现
-- 推荐入口：`Circuit + Measure`
-
-示例迁移：
-
-```python
-# old
-# from Circuit import Circuit, hadamard, cnot
-
-# new
-from nexq import Circuit, hadamard, cnot
 ```
 
 ---
 
-如果你希望，我可以继续补一份 `README_en.md`（英文版）与一页 API 速查表。
+## 2. 量子线路的搭建
+
+### 2.1 门字典速查
+
+| 函数 | 参数 | 说明 |
+|---|---|---|
+| `pauli_x(q)` | target_qubit | X 门 |
+| `pauli_y(q)` | target_qubit | Y 门 |
+| `pauli_z(q)` | target_qubit | Z 门 |
+| `hadamard(q)` | target_qubit | H 门 |
+| `s_gate(q)` | target_qubit | S 门 |
+| `t_gate(q)` | target_qubit | T 门 |
+| `rx(θ, q)` | 角度, target_qubit | Rx 旋转门 |
+| `ry(θ, q)` | 角度, target_qubit | Ry 旋转门 |
+| `rz(θ, q)` | 角度, target_qubit | Rz 旋转门 |
+| `u2(φ, λ, q)` | phi, lambda, target_qubit | U2 门 |
+| `u3(θ, φ, λ, q)` | theta, phi, lambda, target_qubit | U3 通用单比特门 |
+| `cx(t, [c])` | target, control_list | CNOT（控制-X） |
+| `cnot(t, [c])` | target, control_list | 同 cx |
+| `cy(t, [c])` | target, control_list | 控制-Y |
+| `cz(t, [c])` | target, control_list | 控制-Z |
+| `crx(θ, t, [c])` | 角度, target, control_list | 受控 Rx |
+| `cry(θ, t, [c])` | 角度, target, control_list | 受控 Ry |
+| `crz(θ, t, [c])` | 角度, target, control_list | 受控 Rz |
+| `swap(q1, q2)` | qubit_1, qubit_2 | SWAP 门 |
+| `toffoli(t, [c0,c1])` | target, control_list | Toffoli (CCX) |
+| `ccnot(t, [c0,c1])` | target, control_list | 同 toffoli |
+
+### 2.2 构建电路
+
+```python
+from nexq import Circuit, hadamard, cnot, rz, rx, pauli_x, swap, toffoli
+
+# 方式一：构造时直接传入门列表（自动推断 n_qubits）
+cir = Circuit(
+    hadamard(0),
+    cnot(1, [0]),      # 目标比特=1，控制比特=[0]
+    rz(0.5, 1),
+    n_qubits=2,        # 也可手动指定
+)
+
+# 方式二：先构造空电路，再逐步追加
+cir = Circuit(hadamard(0), n_qubits=3)
+cir.append(cx(1, [0]))
+cir.extend(ry(1.2, 2), rz(0.3, 2))
+
+# 方式三：两段电路拼接
+part_a = Circuit(hadamard(0), n_qubits=2)
+part_b = Circuit(cnot(1, [0]), n_qubits=2)
+full = part_a + part_b
+
+# 获取电路酉矩阵（numpy complex64，2^n × 2^n）
+U = full.unitary()
+print(U.shape)   # (4, 4)
+```
+
+### 2.3 更多门用法示例
+
+```python
+import math
+from nexq import Circuit, rx, ry, rz, u3, crx, swap, toffoli
+
+cir = Circuit(
+    rx(math.pi / 2, 0),             # Rx(π/2) 作用在 qubit 0
+    ry(math.pi / 4, 1),             # Ry(π/4) 作用在 qubit 1
+    u3(math.pi, 0, math.pi, 2),     # U3(π, 0, π) ≡ X 门，作用在 qubit 2
+    crx(math.pi / 2, 2, [1]),       # 受控 Rx，控制=qubit1，目标=qubit2
+    swap(0, 1),                     # SWAP qubit0 和 qubit1
+    toffoli(2, [0, 1]),             # Toffoli，控制=[0,1]，目标=qubit2
+    n_qubits=3,
+)
+```
+
+---
+
+## 3. 量子测量
+
+`Measure` 对象绑定一个后端，`run()` 返回统一的 `Result` 对象。
+
+### 3.1 基本用法：概率 + 采样计数
+
+```python
+from nexq import Circuit, Measure, TorchBackend, hadamard, cnot
+
+backend = TorchBackend()
+measure = Measure(backend)
+
+cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
+
+# shots=None 时只返回概率，不采样
+result = measure.run(cir, shots=1024)
+
+print(result.probabilities)     # array([0.5, 0. , 0. , 0.5])
+print(result.counts)            # {'|00>': 512, '|11>': 512}
+print(result.most_probable())   # ('|00>', 0.5)
+print(result.summary())
+```
+
+### 3.2 仅获取概率（不采样）
+
+```python
+result = measure.run(cir, shots=None)
+print(result.probabilities)     # 仅概率，counts 为 None
+```
+
+### 3.3 期望值测量
+
+```python
+import numpy as np
+from nexq import Circuit, Measure, TorchBackend, hadamard
+
+backend = TorchBackend()
+# Z 算符矩阵
+Z = np.array([[1, 0], [0, -1]], dtype=np.complex64)
+
+result = measure.run(
+    Circuit(hadamard(0), n_qubits=1),
+    shots=1024,
+    observables={"Z0": Z},
+)
+print(result.expectation_values)   # {'Z0': ~0.0}
+print(result.expectation_variances)
+```
+
+### 3.4 从 StateVector 直接测量
+
+```python
+from nexq import StateVector, TorchBackend
+import numpy as np
+
+backend = TorchBackend()
+sv = StateVector.zero_state(2, backend)
+
+# 直接获取概率分布
+probs = sv.probabilities()
+
+# 模拟 512 次测量，返回 {bitstring: count}
+counts = sv.measure(shots=512)
+print(counts)   # {'|00>': 512}
+```
+
+### 3.5 Result 对象字段速查
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `probabilities` | `np.ndarray` | 各基态概率，shape `(2^n,)` |
+| `counts` | `dict` or `None` | `{'\|00>': N, ...}` 采样计数 |
+| `shots` | `int` or `None` | 采样次数 |
+| `expectation_values` | `dict` | `{name: float}` 期望值 |
+| `expectation_variances` | `dict` | `{name: float}` 方差 |
+| `final_state` | `np.ndarray` or `None` | 末态向量 |
+| `most_probable()` | `(str, float)` | 最高概率基态及其概率 |
+| `summary()` | `str` | 单行摘要字符串 |
+
+---
+
+## 4. 构建哈密顿量
+
+nexq 提供三个层次的算符构建工具：`PauliOp`、`PauliString`、`Hamiltonian`。
+
+### 4.1 单算符 PauliOp
+
+```python
+from nexq import PauliOp, TorchBackend
+
+backend = TorchBackend()
+
+# Z 作用在 qubit 0，在 2 比特空间里展开为 4×4 矩阵
+Z0 = PauliOp('Z', qubit=0)
+mat = Z0.to_matrix(n_qubits=2, backend=backend)
+print(mat.shape)   # torch.Size([4, 4])
+```
+
+### 4.2 多体泡利串 PauliString
+
+```python
+from nexq import PauliString, TorchBackend
+
+backend = TorchBackend()
+
+# 0.5 × Z₀ ⊗ X₁（2 比特空间）
+ps = PauliString({'Z': [0], 'X': [1]}, n_qubits=2, coefficient=0.5)
+mat = ps.to_matrix(backend)
+print(ps)   # PauliString(0.5 × ZX)
+```
+
+### 4.3 哈密顿量 Hamiltonian
+
+```python
+from nexq import Hamiltonian, TorchBackend, Circuit, Measure, hadamard
+
+backend = TorchBackend()
+
+# H = -1.0 × Z₀Z₁  +  0.5 × X₀X₁  +  0.3 × Z₀
+H = (Hamiltonian(n_qubits=2)
+     .add_term(-1.0, {'Z': [0, 1]})
+     .add_term( 0.5, {'X': [0, 1]})
+     .add_term( 0.3, {'Z': [0]}))
+
+# 转为后端矩阵
+H_mat = H.to_matrix(backend)
+print(H_mat.shape)   # torch.Size([4, 4])
+
+# 计算期望值（通过 StateVector）
+from nexq import StateVector
+sv = StateVector.zero_state(2, backend)
+print(H.expectation(sv, backend))   # 实数期望值
+
+# 通过 Measure.run() 传入 observables 参数
+measure = Measure(backend)
+cir = Circuit(hadamard(0), n_qubits=2)
+result = measure.run(cir, shots=None, observables={"H": H_mat})
+print(result.expectation_values["H"])
+```
+
+### 4.4 噪声通道（开放量子系统）
+
+```python
+from nexq import (
+    NoiseModel,
+    DepolarizingChannel,
+    BitFlipChannel,
+    PhaseFlipChannel,
+    AmplitudeDampingChannel,
+    DensityMatrix,
+    TorchBackend,
+)
+
+backend = TorchBackend()
+model = (NoiseModel()
+         .add_channel(DepolarizingChannel(target_qubit=0, p=0.01))
+         .add_channel(BitFlipChannel(target_qubit=1, p=0.02), after_gates=["hadamard"])
+         .add_channel(PhaseFlipChannel(target_qubit=0, p=0.005)))
+
+# 手动应用到密度矩阵
+rho = DensityMatrix.zero_state(2, backend)
+rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
+```
+
+---
+
+## 5. NPU 后端的使用
+
+nexq 通过 `NPUBackend` 支持 Ascend NPU（依赖 `torch_npu`）。所有 complex64 算子已内置针对 NPU 的兼容 workaround，无需任何额外配置。
+
+### 5.1 自动选择 NPU 或 CPU 回退
+
+```python
+from nexq import NPUBackend
+
+# NPU 可用时使用 npu:0，否则自动回退到 CPU
+backend = NPUBackend(fallback_to_cpu=True)
+print(backend.name)
+```
+
+### 5.2 严格 NPU 模式（不允许回退）
+
+```python
+from nexq import NPUBackend
+
+# NPU 不可用时直接抛 RuntimeError，用于验证平台
+backend = NPUBackend(device="npu:0", fallback_to_cpu=False)
+```
+
+### 5.3 分布式环境（多卡/多节点）
+
+使用环境变量 `WORLD_SIZE`、`RANK`、`LOCAL_RANK` 自动绑定对应卡：
+
+```python
+from nexq import NPUBackend
+
+# 自动读取 LOCAL_RANK 决定 npu:LOCAL_RANK
+backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
+print(backend.runtime_context)
+# NPURuntimeContext(world_size=4, rank=0, local_rank=0, distributed=True)
+```
+
+启动方式：
+
+```bash
+# 单卡验证
+python demo.py
+
+# 严格验证（NPU 不可用时报错）
+python demo.py
+
+# 允许 CPU 回退（本地调试用）
+python demo.py --allow-cpu-fallback
+
+# 多卡分布式启动
+torchrun --nproc_per_node=4 your_script.py
+```
+
+### 5.4 完整端到端示例
+
+```python
+import math
+from nexq import NPUBackend, Circuit, Measure, hadamard, cnot, rz
+
+# 1. 构建后端
+backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
+
+# 2. 构建电路
+cir = Circuit(
+    hadamard(0),
+    cnot(1, [0]),
+    rz(math.pi / 4, 1),
+    n_qubits=2,
+)
+
+# 3. 测量
+measure = Measure(backend)
+result = measure.run(cir, shots=2048)
+
+print(f"backend : {backend.name}")
+print(f"probs   : {result.probabilities}")
+print(f"counts  : {result.counts}")
+print(f"summary : {result.summary()}")
+```
+
+### 5.5 runtime_context 字段说明
+
+| 字段 | 说明 |
+|---|---|
+| `world_size` | 总进程数 |
+| `rank` | 全局进程编号 |
+| `local_rank` | 本节点本地编号（对应 `npu:local_rank`） |
+| `distributed` | `world_size > 1` 时为 True |
+
+---
+
+## 6. 与 OpenQASM 2.0 / 3.0 互转
+
+### 6.1 Circuit → QASM 字符串
+
+```python
+from nexq import Circuit, hadamard, cnot, rz, circuit_to_qasm, circuit_to_qasm3
+import math
+
+cir = Circuit(
+    hadamard(0),
+    cnot(1, [0]),
+    rz(math.pi / 4, 1),
+    n_qubits=2,
+)
+
+# 导出 OpenQASM 2.0
+qasm2 = circuit_to_qasm(cir, version="2.0")
+print(qasm2)
+# OPENQASM 2.0;
+# include "qelib1.inc";
+# qreg q[2];
+# h q[0];
+# cx q[0],q[1];
+# rz(pi/4) q[1];
+
+# 导出 OpenQASM 3.0
+qasm3 = circuit_to_qasm3(cir)
+print(qasm3)
+```
+
+### 6.2 QASM 字符串 → Circuit
+
+```python
+from nexq import circuit_from_qasm
+
+qasm_str = """
+OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[2];
+h q[0];
+cx q[0],q[1];
+rz(pi/4) q[1];
+"""
+
+cir = circuit_from_qasm(qasm_str)
+print(cir)          # Circuit(n_qubits=2, gates=[...])
+print(cir.unitary().shape)  # (4, 4)
+```
+
+### 6.3 读写 QASM 文件
+
+```python
+from nexq import (
+    save_circuit_qasm, load_circuit_qasm,
+    save_circuit_qasm3,
+)
+
+# 保存为 .qasm 文件（OpenQASM 2.0）
+save_circuit_qasm(cir, "my_circuit.qasm")
+
+# 保存为 OpenQASM 3.0
+save_circuit_qasm3(cir, "my_circuit_v3.qasm")
+
+# 从文件读取（自动识别 2.0/3.0 版本头）
+cir2 = load_circuit_qasm("my_circuit.qasm")
+```
+
+### 6.4 OpenQASM 3.0 格式差异
+
+nexq 在 3.0 模式下的主要差异：
+
+| 项目 | 2.0 | 3.0 |
+|---|---|---|
+| 版本头 | `OPENQASM 2.0;` | `OPENQASM 3.0;` |
+| 标准库 | `include "qelib1.inc";` | `include "stdgates.inc";` |
+| 量子寄存器声明 | `qreg q[2];` | `qubit[2] q;` |
+| U3 门名称 | `u3(θ,φ,λ)` | `u(θ,φ,λ)` |
+
+### 6.5 支持的 QASM 门集
+
+| QASM 门名 | nexq 对应函数 |
+|---|---|
+| `x`, `y`, `z` | `pauli_x`, `pauli_y`, `pauli_z` |
+| `h` | `hadamard` |
+| `s`, `t` | `s_gate`, `t_gate` |
+| `rx`, `ry`, `rz` | `rx`, `ry`, `rz` |
+| `u2(φ,λ)` | `u2` |
+| `u3(θ,φ,λ)` / `u(θ,φ,λ)` | `u3` |
+| `cx` | `cx` / `cnot` |
+| `cy`, `cz` | `cy`, `cz` |
+| `swap` | `swap` |
+| `crx`, `cry`, `crz` | `crx`, `cry`, `crz` |
+| `ccx` | `toffoli` / `ccnot` |
+
+> **当前不支持**：`if`、`reset`、`opaque`、自定义 `gate`、`cp`/`cu` 系列门。
+> `measure` 和 `barrier` 语句在导入时会被跳过。
