@@ -2,6 +2,7 @@ import unittest
 from unittest import mock
 
 import numpy as np
+import torch
 
 from nexq import NPUBackend, StateVector, npu_runtime_context_from_env
 from nexq.channel.backends.npu_backend import is_npu_available
@@ -77,6 +78,47 @@ class TestNPUBackend(unittest.TestCase):
         self.assertEqual(backend.runtime_context.rank, 3)
         self.assertEqual(backend.runtime_context.local_rank, 2)
         self.assertTrue(backend.runtime_context.distributed)
+
+    def test_complex_matmul_workaround_matches_torch(self):
+        backend = NPUBackend(fallback_to_cpu=True)
+        a = torch.tensor(
+            [[1 + 2j, 3 - 1j], [0.5 + 0.25j, -2j]],
+            dtype=torch.complex64,
+        )
+        b = torch.tensor(
+            [[2 - 0.5j], [1 + 4j]],
+            dtype=torch.complex64,
+        )
+
+        actual = backend._complex_matmul_workaround(a, b)
+        expected = torch.matmul(a, b)
+
+        self.assertTrue(torch.allclose(actual, expected, atol=1e-5, rtol=1e-5))
+
+    def test_npu_complex_matmul_uses_workaround(self):
+        backend = NPUBackend(fallback_to_cpu=True)
+        backend._device = torch.device("cpu")
+        a = torch.tensor([[1 + 1j]], dtype=torch.complex64)
+        b = torch.tensor([[1 - 1j]], dtype=torch.complex64)
+
+        with mock.patch.object(
+            NPUBackend,
+            "_complex_matmul_workaround",
+            return_value=torch.tensor([[2 + 0j]], dtype=torch.complex64),
+        ) as workaround:
+            self.assertTrue(torch.allclose(backend.matmul(a, b), torch.matmul(a, b)))
+            workaround.assert_not_called()
+
+        backend._device = torch.device("meta")
+        backend._device = type("FakeDevice", (), {"type": "npu"})()
+        with mock.patch.object(
+            NPUBackend,
+            "_complex_matmul_workaround",
+            return_value=torch.tensor([[2 + 0j]], dtype=torch.complex64),
+        ) as workaround:
+            result = backend.matmul(a, b)
+            workaround.assert_called_once_with(a, b)
+            self.assertTrue(torch.equal(result, torch.tensor([[2 + 0j]], dtype=torch.complex64)))
 
 
 if __name__ == "__main__":

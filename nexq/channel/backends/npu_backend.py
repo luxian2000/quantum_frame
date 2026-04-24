@@ -152,6 +152,33 @@ class NPUBackend(TorchBackend):
             f"npu_available={is_npu_available()})"
         )
 
+    @staticmethod
+    def _is_complex_tensor(value) -> bool:
+        return isinstance(value, torch.Tensor) and torch.is_complex(value)
+
+    def _should_use_complex_matmul_workaround(self, a, b) -> bool:
+        return (
+            getattr(self._device, "type", None) == "npu"
+            and self._is_complex_tensor(a)
+            and self._is_complex_tensor(b)
+        )
+
+    @staticmethod
+    def _complex_matmul_workaround(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        a_real, a_imag = torch.real(a), torch.imag(a)
+        b_real, b_imag = torch.real(b), torch.imag(b)
+        real = torch.matmul(a_real, b_real) - torch.matmul(a_imag, b_imag)
+        imag = torch.matmul(a_real, b_imag) + torch.matmul(a_imag, b_real)
+        return torch.complex(real, imag)
+
+    def matmul(self, a, b):
+        if self._should_use_complex_matmul_workaround(a, b):
+            return self._complex_matmul_workaround(a, b)
+        return super().matmul(a, b)
+
+    def apply_unitary(self, state, unitary):
+        return self.matmul(unitary, state)
+
     @property
     def runtime_context(self):
         """Distributed runtime context if created via from_distributed_env, else None."""
