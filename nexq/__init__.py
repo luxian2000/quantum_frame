@@ -2,7 +2,7 @@
 from .channel.backends.torch_backend import TorchBackend
 from .channel.backends.numpy_backend import NumpyBackend
 from .channel.backends.npu_backend import NPUBackend, NPURuntimeContext, npu_runtime_context_from_env
-from .circuit.state_vector import StateVector
+from .circuit.state_vector import State, StateVector
 from .circuit.density_matrix import DensityMatrix
 from .channel.operators import PauliOp, PauliString, Hamiltonian
 from .channel.noise import (
@@ -63,6 +63,7 @@ __all__ = [
     "NPUBackend",
     "NPURuntimeContext",
     "npu_runtime_context_from_env",
+    "State",
     "StateVector",
     "DensityMatrix",
     "PauliOp",
