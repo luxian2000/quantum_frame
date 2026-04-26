@@ -1,7 +1,7 @@
 """
 nexq/circuit/io/dag.py
 
-将 nexq Circuit 转换为 DAG 图表示。
+将 Circuit 转换为 DAG 表示。
 """
 
 from __future__ import annotations

@@ -19,7 +19,7 @@ nexq/
 │   │   └── vqe/
 │   └── wireless/
 │
-├── channel/                            # 后端抽象与量子态/噪声/算符
+├── channel/                            # 后端抽象、噪声与算符
 │   ├── __init__.py
 │   ├── operators.py
 │   ├── backends/
@@ -33,13 +33,11 @@ nexq/
 │   │   ├── base.py
 │   │   ├── channels.py
 │   │   └── model.py
-│   └── states/
-│       ├── __init__.py
-│       ├── state_vector.py
-│       └── density_matrix.py
 │
-├── circuit/                            # 电路模型、门矩阵、IO
+├── circuit/                            # 电路模型、量子态、门矩阵、IO
 │   ├── __init__.py
+│   ├── state_vector.py                 # 纯态表示 |ψ⟩
+│   ├── density_matrix.py               # 密度矩阵表示 ρ
 │   ├── gates.py                        # gate_to_matrix(..., backend=None)
 │   ├── model.py                        # Circuit(..., backend=None), unitary(backend=...)
 │   └── io/

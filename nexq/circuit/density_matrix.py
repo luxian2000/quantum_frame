@@ -1,5 +1,5 @@
 """
-nexq/channel/states/density_matrix.py
+nexq/circuit/density_matrix.py
 
 量子密度矩阵 ρ 的面向对象封装，同时支持纯态与混合态。
 
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Dict, List
 import numpy as np
 
 if TYPE_CHECKING:
-    from ..backends.base import Backend
+    from ..channel.backends.base import Backend
     from .state_vector import StateVector
 
 
@@ -28,7 +28,7 @@ class DensityMatrix:
     示例::
 
         from nexq.channel.backends import TorchBackend
-        from nexq.channel.states import StateVector, DensityMatrix
+        from nexq.circuit import StateVector, DensityMatrix
 
         bk = TorchBackend()
         sv  = StateVector.zero_state(2, bk)
@@ -56,8 +56,6 @@ class DensityMatrix:
             )
         self._data = backend.cast(np_data)
 
-    # ──────────────────────────── 工厂方法 ──────────────────────────
-
     @classmethod
     def zero_state(cls, n_qubits: int, backend: "Backend") -> "DensityMatrix":
         """创建 |0⊗n⟩⟨0⊗n| 密度矩阵。"""
@@ -84,8 +82,6 @@ class DensityMatrix:
         rho_np = np.eye(dim, dtype=np.complex64) / dim
         return cls(backend.cast(rho_np), n_qubits, backend)
 
-    # ──────────────────────────── 属性 ──────────────────────────────
-
     @property
     def data(self):
         """后端原生张量，shape (2^n, 2^n)。"""
@@ -102,8 +98,6 @@ class DensityMatrix:
     @property
     def backend(self) -> "Backend":
         return self._backend
-
-    # ──────────────────────────── 量子操作 ──────────────────────────
 
     def evolve(self, unitary) -> "DensityMatrix":
         """
@@ -164,9 +158,10 @@ class DensityMatrix:
         参数:
             operator: (2^n, 2^n) Hermitian 算符（后端原生张量）
         """
-        return self._backend.expectation_dm(self._data, operator)
-
-    # ──────────────────────────── 物理量 ────────────────────────────
+        value = self._backend.expectation_dm(self._data, operator)
+        if value is None:
+            raise ValueError("backend.expectation_dm 返回了空值")
+        return float(value)
 
     def purity(self) -> float:
         """
@@ -204,8 +199,6 @@ class DensityMatrix:
     def to_numpy(self) -> np.ndarray:
         """导出为 numpy 二维复数数组，shape (2^n, 2^n)。"""
         return self._backend.to_numpy(self._data)
-
-    # ──────────────────────────── 魔法方法 ──────────────────────────
 
     def __repr__(self) -> str:
         return (

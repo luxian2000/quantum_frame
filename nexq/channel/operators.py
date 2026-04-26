@@ -27,8 +27,8 @@ import numpy as np
 
 if TYPE_CHECKING:
     from .backends.base import Backend
-    from .states.state_vector import StateVector
-    from .states.density_matrix import DensityMatrix
+    from ..circuit.state_vector import StateVector
+    from ..circuit.density_matrix import DensityMatrix
 
 # ── 单比特泡利矩阵（NumPy 常量，用于构造复杂算符）──────────────────────
 _I = np.array([[1, 0], [0, 1]], dtype=np.complex64)
@@ -249,8 +249,8 @@ class Hamiltonian:
         返回:
             实数期望值
         """
-        from .states.state_vector import StateVector
-        from .states.density_matrix import DensityMatrix
+        from ..circuit.state_vector import StateVector
+        from ..circuit.density_matrix import DensityMatrix
 
         H_mat = self.to_matrix(backend)
         if isinstance(state, StateVector):

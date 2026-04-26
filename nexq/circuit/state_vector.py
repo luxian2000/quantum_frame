@@ -1,5 +1,5 @@
 """
-nexq/channel/states/state_vector.py
+nexq/circuit/state_vector.py
 
 纯量子态 |ψ⟩ 的面向对象封装。
 
@@ -11,12 +11,12 @@ nexq/channel/states/state_vector.py
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Dict
 
 import numpy as np
 
 if TYPE_CHECKING:
-    from ..backends.base import Backend
+    from ..channel.backends.base import Backend
     from .density_matrix import DensityMatrix
 
 
@@ -29,7 +29,7 @@ class StateVector:
     示例::
 
         from nexq.channel.backends import TorchBackend
-        from nexq.channel.states import StateVector
+        from nexq.circuit import StateVector
 
         bk = TorchBackend()
         sv = StateVector.zero_state(2, bk)          # |00⟩
@@ -49,20 +49,16 @@ class StateVector:
         self._backend = backend
         self._n_qubits = n_qubits
 
-        # 统一存储为列向量 (2^n, 1)
         np_data = backend.to_numpy(data)
         if np_data.ndim == 1:
             np_data = np_data.reshape(-1, 1)
         self._data = backend.cast(np_data)
 
-        # 维度检查
         expected = 1 << n_qubits
         if self._data.shape[0] != expected:
             raise ValueError(
                 f"数据长度 {self._data.shape[0]} 与 n_qubits={n_qubits} 不符（期望 {expected}）"
             )
-
-    # ──────────────────────────── 工厂方法 ──────────────────────────
 
     @classmethod
     def zero_state(cls, n_qubits: int, backend: "Backend") -> "StateVector":
@@ -83,8 +79,6 @@ class StateVector:
         data = backend.cast(np.asarray(array, dtype=np.complex64))
         return cls(data, n_qubits, backend)
 
-    # ──────────────────────────── 属性 ──────────────────────────────
-
     @property
     def data(self):
         """后端原生张量，shape (2^n, 1)。"""
@@ -104,8 +98,6 @@ class StateVector:
     def backend(self) -> "Backend":
         """当前使用的计算后端。"""
         return self._backend
-
-    # ──────────────────────────── 量子操作 ──────────────────────────
 
     def evolve(self, unitary) -> "StateVector":
         """
@@ -188,8 +180,6 @@ class StateVector:
         导出为 numpy 一维复数数组，shape (2^n,)。
         """
         return self._backend.to_numpy(self._data).reshape(-1)
-
-    # ──────────────────────────── 运算符重载 ────────────────────────
 
     def __len__(self) -> int:
         return self.dim

@@ -23,6 +23,8 @@ from .model import (
     u2,
     u3,
 )
+from .state_vector import StateVector
+from .density_matrix import DensityMatrix
 from .io.json_io import circuit_from_json, circuit_to_json, load_circuit_json, save_circuit_json
 from .io.qasm import (
     circuit_from_qasm,
@@ -35,6 +37,8 @@ from .io.qasm import (
 
 __all__ = [
     "Circuit",
+    "StateVector",
+    "DensityMatrix",
     "circuit",
     "pauli_x",
     "pauli_y",

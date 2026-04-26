@@ -6,12 +6,14 @@
 
 所有常用类与函数均可从顶层 `nexq` 包一次性导入。
 
+状态类 `StateVector`、`DensityMatrix` 的规范模块路径为 `nexq.circuit`，同时也可从顶层 `nexq` 导入。
+
 ```python
 # 后端
 from nexq import TorchBackend, NumpyBackend, NPUBackend
 
-# 量子态
-from nexq import StateVector, DensityMatrix
+# 量子态（规范路径）
+from nexq.circuit import StateVector, DensityMatrix
 
 # 量子门（构造函数，返回门字典）
 from nexq import (
@@ -182,7 +184,8 @@ print(result.expectation_variances)
 ### 3.4 从 StateVector 直接测量
 
 ```python
-from nexq import StateVector, TorchBackend
+from nexq.circuit import StateVector
+from nexq import TorchBackend
 import numpy as np
 
 backend = TorchBackend()
@@ -263,7 +266,7 @@ H_mat = H.to_matrix(backend)
 print(H_mat.shape)   # torch.Size([4, 4])
 
 # 计算期望值（通过 StateVector）
-from nexq import StateVector
+from nexq.circuit import StateVector
 sv = StateVector.zero_state(2, backend)
 print(H.expectation(sv, backend))   # 实数期望值
 
@@ -283,9 +286,9 @@ from nexq import (
     BitFlipChannel,
     PhaseFlipChannel,
     AmplitudeDampingChannel,
-    DensityMatrix,
     TorchBackend,
 )
+from nexq.circuit import DensityMatrix
 
 backend = TorchBackend()
 model = (NoiseModel()

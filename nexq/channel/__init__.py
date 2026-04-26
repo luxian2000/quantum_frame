@@ -2,8 +2,6 @@ from .backends.torch_backend import TorchBackend
 from .backends.numpy_backend import NumpyBackend
 from .backends.npu_backend import NPUBackend, NPURuntimeContext, npu_runtime_context_from_env
 from .backends.base import Backend
-from .states.state_vector import StateVector
-from .states.density_matrix import DensityMatrix
 from .operators import PauliOp, PauliString, Hamiltonian
 from .noise import (
     AmplitudeDampingChannel,
@@ -23,8 +21,6 @@ __all__ = [
     "NPUBackend",
     "NPURuntimeContext",
     "npu_runtime_context_from_env",
-    "StateVector",
-    "DensityMatrix",
     "PauliOp",
     "PauliString",
     "Hamiltonian",
