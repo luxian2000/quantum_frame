@@ -1,6 +1,14 @@
 """nexq.algorithms.qas
 
-量子加速服务（QAS）与量子应用堆栈占位模块。
+Quantum architecture search utilities and training entry points.
 """
 
-__all__ = []
+from .expressibility import KL_Haar_relative, MMD_relative
+from .qas_rl_1 import TrainConfig, run_training
+
+__all__ = [
+    "KL_Haar_relative",
+    "MMD_relative",
+    "TrainConfig",
+    "run_training",
+]
