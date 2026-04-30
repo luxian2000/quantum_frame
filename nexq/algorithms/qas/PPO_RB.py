@@ -1,5 +1,9 @@
 """Trust Region-based PPO with Rollback for Quantum Architecture Search.
 
+X. Zhu and X. Hou, ‘Quantum architecture search via truly proximal policy optimization’, 
+Sci Rep, vol. 13, no. 1, p. 5157, Mar. 2023, doi: 10.1038/s41598-023-32349-2.
+
+
 - 从 |0...0> 初态开始
 - 动作为追加一个门到当前线路
 - 输入为目标密度矩阵和保真度阈值 epsilon

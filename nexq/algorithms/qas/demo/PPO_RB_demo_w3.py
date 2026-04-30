@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # 添加项目根目录到路径
-project_root = Path(__file__).parent.parent.parent.parent
+project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 import numpy as np
@@ -58,7 +58,7 @@ def fidelity_pure_density(rho_target: np.ndarray, rho_pred: np.ndarray) -> float
     return float(np.real(np.trace(rho_target @ rho_pred)))
 
 
-def build_w3_action_gates() -> List[Dict[str, object]]:
+def build_w3_action_gates(include_cry: bool = True) -> List[Dict[str, object]]:
     """构建 3 比特 W 态专用动作集合。"""
     n = 3
 
@@ -85,20 +85,21 @@ def build_w3_action_gates() -> List[Dict[str, object]]:
             if ctrl != tgt:
                 gates.append({"type": "cx", "target_qubit": tgt, "control_qubits": [ctrl], "control_states": [1]})
 
-    # CRY(ctrl=|1⟩)（全连接有向对 × 多角度）
-    for ctrl in range(n):
-        for tgt in range(n):
-            if ctrl != tgt:
-                for theta in cry_angles:
-                    gates.append(
-                        {
-                            "type": "cry",
-                            "parameter": theta,
-                            "target_qubit": tgt,
-                            "control_qubits": [ctrl],
-                            "control_states": [1],
-                        }
-                    )
+    if include_cry:
+        # CRY(ctrl=|1⟩)（全连接有向对 × 多角度）
+        for ctrl in range(n):
+            for tgt in range(n):
+                if ctrl != tgt:
+                    for theta in cry_angles:
+                        gates.append(
+                            {
+                                "type": "cry",
+                                "parameter": theta,
+                                "target_qubit": tgt,
+                                "control_qubits": [ctrl],
+                                "control_states": [1],
+                            }
+                        )
 
     return gates
 
@@ -114,26 +115,34 @@ def main() -> None:
     print("=" * 68)
 
     rho_target = build_w3_density()
-    w3_action_gates = build_w3_action_gates()
-    print(f"动作集合: {len(w3_action_gates)} 个门")
+    # 分阶段动作空间：先在较小空间找到可行结构，再引入 CRY 提升上限。
+    w3_action_gates_coarse = build_w3_action_gates(include_cry=False)
+    w3_action_gates_full = build_w3_action_gates(include_cry=True)
+    print(f"动作集合(coarse): {len(w3_action_gates_coarse)} 个门")
+    print(f"动作集合(full):   {len(w3_action_gates_full)} 个门")
 
     # 课程学习：逐步提升目标阈值，并在阶段间热启动策略参数。
-    curriculum: List[Tuple[float, int, float, int]] = [
-        (0.85, 1500, 6.0, 101),
-        (0.93, 1800, 8.0, 202),
-        (0.98, 2200, 10.0, 303),
+    # (epsilon, episodes, terminal_bonus, gate_penalty, seed, action_gates)
+    curriculum: List[Tuple[float, int, float, float, int, List[Dict[str, object]]]] = [
+        (0.80, 1200, 5.0, 0.0005, 101, w3_action_gates_coarse),
+        (0.90, 1600, 7.0, 0.0005, 202, w3_action_gates_coarse),
+        (0.95, 2200, 9.0, 0.0010, 303, w3_action_gates_full),
+        (0.98, 2600, 12.0, 0.0010, 404, w3_action_gates_full),
     ]
-    attempts_per_stage = 3
+    attempts_per_stage = 4
 
     print("[1/4] 开始课程学习训练 PPO-RB...")
     theta: Optional[Dict[str, torch.Tensor]] = None
     best_fidelity = -1.0
     best_circuit: Optional[Circuit] = None
 
-    for stage_idx, (epsilon_stage, episodes, bonus, seed) in enumerate(curriculum, start=1):
+    for stage_idx, (epsilon_stage, episodes, bonus, gate_penalty, seed, stage_action_gates) in enumerate(
+        curriculum, start=1
+    ):
         print(
             f"  阶段 {stage_idx}/{len(curriculum)}: "
-            f"epsilon={epsilon_stage:.2f}, episodes={episodes}, terminal_bonus={bonus:.1f}"
+            f"epsilon={epsilon_stage:.2f}, episodes={episodes}, terminal_bonus={bonus:.1f}, "
+            f"actions={len(stage_action_gates)}"
         )
         stage_best_fid = -1.0
         stage_best_theta: Optional[Dict[str, torch.Tensor]] = None
@@ -151,15 +160,15 @@ def main() -> None:
                 value_loss_coef=0.5,
                 entropy_coef=0.01,
                 # 3 比特 W 态训练配置
-                action_gates=w3_action_gates,
+                action_gates=stage_action_gates,
                 terminal_bonus=bonus,
-                gate_penalty=0.001,
+                gate_penalty=gate_penalty,
                 episode_num=episodes,
-                max_steps_per_episode=10,
+                max_steps_per_episode=12,
                 update_timestep=128,
                 hidden_dim=128,
                 seed=seed + attempt,
-                log_interval=max(episodes // 10, 1),
+                log_interval=max(episodes // 8, 1),
                 init_theta=theta,  # 阶段热启动
             )
             cand_theta, cand_circuit = ppo_rb_qas(rho_target, epsilon=epsilon_stage, config=config)
@@ -208,7 +217,7 @@ def main() -> None:
 
     print("[4/4] 导出 QASM 3.0...")
     qasm_circuit = decompose_non_one_controls(circuit)
-    qasm_str = circuit_to_qasm(qasm_circuit)
+    qasm_str = circuit_to_qasm(qasm_circuit, version="3.0")
     out_path = Path(__file__).parent / "ppo_rb_w3_circuit.qasm"
     out_path.write_text(qasm_str, encoding="utf-8")
     print(f"QASM 已保存: {out_path}")
