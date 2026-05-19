@@ -3,7 +3,7 @@
 ```text
 nexq/
 ├── __init__.py
-├── algorithms/                         # 算法层（QAS/QML/Variational/Universal 等）
+├── algorithms/                         # 算法层（QAS/QML/VQC/Universal 等）
 │   ├── __init__.py
 │   ├── chemistry/
 │   │   └── __init__.py
@@ -36,14 +36,14 @@ nexq/
 │   │   └── __init__.py
 │   ├── universal/
 │   │   └── __init__.py
-│   ├── variational/
+│   ├── vqc/
 │   │   ├── __init__.py
 │   │   ├── ansatz/
 │   │   │   └── __init__.py
-│   │   ├── qaoa/
-│   │   │   └── __init__.py
-│   │   └── vqe/
-│   │       └── __init__.py
+│   │   ├── QAOA.py
+│   │   ├── SSVQE.py
+│   │   ├── VQD.py
+│   │   └── VQE.py
 │   └── wireless/
 │       └── __init__.py
 │
