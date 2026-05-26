@@ -1,33 +1,39 @@
-"""噪声模型组合器：按规则在执行过程中插入噪声通道。"""
+"""Noise model composition utilities."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional, Sequence, Set
+from typing import List, Optional, Sequence, Set
 
 
 @dataclass
 class NoiseRule:
     channel: object
     after_gates: Optional[Set[str]] = None
+    exclude_gate_qubits: bool = False
 
 
 @dataclass
 class NoiseModel:
-    """噪声模型：由一组 NoiseRule 组成。"""
+    """Noise model composed of gate-triggered channel rules."""
 
     rules: List[NoiseRule] = field(default_factory=list)
 
-    def add_channel(self, channel, after_gates: Optional[Sequence[str]] = None) -> "NoiseModel":
-        """
-        添加噪声通道规则。
-
-        参数:
-            channel: NoiseChannel 实例
-            after_gates: 仅在这些 gate type 之后施加；None 表示每个门后都施加
-        """
+    def add_channel(
+        self,
+        channel,
+        after_gates: Optional[Sequence[str]] = None,
+        *,
+        exclude_gate_qubits: bool = False,
+    ) -> "NoiseModel":
         gate_set = None if after_gates is None else {str(g) for g in after_gates}
-        self.rules.append(NoiseRule(channel=channel, after_gates=gate_set))
+        self.rules.append(
+            NoiseRule(
+                channel=channel,
+                after_gates=gate_set,
+                exclude_gate_qubits=bool(exclude_gate_qubits),
+            )
+        )
         return self
 
     def _match_rule(self, rule: NoiseRule, gate_type: Optional[str]) -> bool:
@@ -37,19 +43,38 @@ class NoiseModel:
             return False
         return gate_type in rule.after_gates
 
-    def apply(self, rho, n_qubits: int, backend, gate_type: Optional[str] = None):
-        """
-        对密度矩阵应用所有匹配规则。
+    def _gate_qubits(self, gate: Optional[dict]) -> Set[int]:
+        if not gate:
+            return set()
+        qubits: Set[int] = set()
+        target = gate.get("target_qubit")
+        if target is not None:
+            qubits.add(int(target))
+        for key in ("control_qubits", "qubits", "targets"):
+            values = gate.get(key)
+            if values is None:
+                continue
+            if isinstance(values, (list, tuple, set)):
+                qubits.update(int(q) for q in values)
+            else:
+                qubits.add(int(values))
+        return qubits
 
-        参数:
-            rho: 当前密度矩阵（后端张量）
-            n_qubits: 总量子比特数
-            backend: 后端实例
-            gate_type: 当前门类型（用于规则过滤）
-        """
+    def _should_apply_to_gate(self, rule: NoiseRule, gate: Optional[dict]) -> bool:
+        if not rule.exclude_gate_qubits:
+            return True
+        target_qubit = getattr(rule.channel, "target_qubit", None)
+        if target_qubit is None:
+            return True
+        return int(target_qubit) not in self._gate_qubits(gate)
+
+    def apply(self, rho, n_qubits: int, backend, gate_type: Optional[str] = None, gate: Optional[dict] = None):
+        """Apply all matching noise rules to a density matrix."""
         out = rho
         for rule in self.rules:
             if not self._match_rule(rule, gate_type):
+                continue
+            if not self._should_apply_to_gate(rule, gate):
                 continue
             kraus = rule.channel.kraus_operators(n_qubits, backend)
             acc = backend.zeros(out.shape)

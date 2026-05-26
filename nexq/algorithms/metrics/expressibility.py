@@ -1,5 +1,5 @@
-"""
-nexq/algorithms/qas/expressibility.py
+﻿"""
+nexq/algorithms/metrics/expressibility.py
 
 计算参数化量子电路的 expressibility 指标。
 
@@ -312,3 +312,43 @@ def MMD_relative(
 
     return float(exp_2)
 
+
+
+
+
+def _haar_population_distribution(dim: int, n_bins: int) -> np.ndarray:
+    """Discretized Haar fidelity/population reference distribution."""
+    if dim <= 1:
+        return np.ones(n_bins, dtype=np.float64) / n_bins
+    bin_width = 1.0 / n_bins
+    probs = np.zeros(n_bins, dtype=np.float64)
+    for i in range(n_bins):
+        f_center = np.clip((i + 0.5) * bin_width, 0.0, 1.0)
+        probs[i] = (dim - 1) * np.power(1.0 - f_center, dim - 2) * bin_width
+    total = np.sum(probs)
+    return probs / total if total > 0 else np.ones(n_bins, dtype=np.float64) / n_bins
+
+
+def _gaussian_kernel(x: np.ndarray, y: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian kernel matrix used by MMD-based expressibility metrics."""
+    if sigma <= 0:
+        raise ValueError("sigma must be positive")
+    dist2 = np.sum((x[:, None, :] - y[None, :, :]) ** 2, axis=2)
+    return np.exp(-dist2 / (4.0 * sigma ** 2))
+
+
+def KL_Haar_divergence(
+    cir: Circuit,
+    samples: int = 1000,
+    n_bins: int = 100,
+    backend: Optional[Backend] = None,
+) -> float:
+    """Backward-compatible name for the KL-Haar expressibility distance."""
+    return KL_Haar_relative(cir, samples=samples, n_bins=n_bins, backend=backend)
+
+
+__all__ = [
+    "KL_Haar_relative",
+    "KL_Haar_divergence",
+    "MMD_relative",
+]

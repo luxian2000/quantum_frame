@@ -1,4 +1,4 @@
-"""常见单比特噪声通道（通过 Kraus 算符作用到全系统）。"""
+"""Common single-qubit noise channels embedded through Kraus operators."""
 
 from __future__ import annotations
 
@@ -28,12 +28,12 @@ class _SingleQubitChannel(NoiseChannel):
 
     def _validate_target(self, n_qubits: int) -> None:
         if self.target_qubit < 0 or self.target_qubit >= n_qubits:
-            raise ValueError(f"target_qubit={self.target_qubit} 超出范围 [0, {n_qubits})")
+            raise ValueError(f"target_qubit={self.target_qubit} out of range [0, {n_qubits})")
 
 
 @dataclass
 class DepolarizingChannel(_SingleQubitChannel):
-    """单比特退极化通道，参数 p in [0,1]。"""
+    """Single-qubit depolarizing channel with parameter p in [0, 1]."""
 
     p: float
 
@@ -44,7 +44,7 @@ class DepolarizingChannel(_SingleQubitChannel):
     def kraus_operators(self, n_qubits: int, backend) -> List[object]:
         self._validate_target(n_qubits)
         if not (0.0 <= self.p <= 1.0):
-            raise ValueError("depolarizing p 必须在 [0,1]")
+            raise ValueError("depolarizing p must be in [0, 1]")
 
         p = float(self.p)
         k0 = np.sqrt(1.0 - p) * _I2
@@ -61,7 +61,7 @@ class DepolarizingChannel(_SingleQubitChannel):
 
 @dataclass
 class BitFlipChannel(_SingleQubitChannel):
-    """单比特比特翻转通道，参数 p in [0,1]。"""
+    """Single-qubit bit-flip channel with parameter p in [0, 1]."""
 
     p: float
 
@@ -72,7 +72,7 @@ class BitFlipChannel(_SingleQubitChannel):
     def kraus_operators(self, n_qubits: int, backend) -> List[object]:
         self._validate_target(n_qubits)
         if not (0.0 <= self.p <= 1.0):
-            raise ValueError("bit flip p 必须在 [0,1]")
+            raise ValueError("bit flip p must be in [0, 1]")
 
         p = float(self.p)
         k0 = np.sqrt(1.0 - p) * _I2
@@ -85,7 +85,7 @@ class BitFlipChannel(_SingleQubitChannel):
 
 @dataclass
 class PhaseFlipChannel(_SingleQubitChannel):
-    """单比特相位翻转通道，参数 p in [0,1]。"""
+    """Single-qubit phase-flip channel with parameter p in [0, 1]."""
 
     p: float
 
@@ -96,7 +96,7 @@ class PhaseFlipChannel(_SingleQubitChannel):
     def kraus_operators(self, n_qubits: int, backend) -> List[object]:
         self._validate_target(n_qubits)
         if not (0.0 <= self.p <= 1.0):
-            raise ValueError("phase flip p 必须在 [0,1]")
+            raise ValueError("phase flip p must be in [0, 1]")
 
         p = float(self.p)
         k0 = np.sqrt(1.0 - p) * _I2
@@ -109,7 +109,7 @@ class PhaseFlipChannel(_SingleQubitChannel):
 
 @dataclass
 class AmplitudeDampingChannel(_SingleQubitChannel):
-    """单比特幅度阻尼通道，参数 gamma in [0,1]。"""
+    """Single-qubit amplitude-damping channel with gamma in [0, 1]."""
 
     gamma: float
 
@@ -120,7 +120,7 @@ class AmplitudeDampingChannel(_SingleQubitChannel):
     def kraus_operators(self, n_qubits: int, backend) -> List[object]:
         self._validate_target(n_qubits)
         if not (0.0 <= self.gamma <= 1.0):
-            raise ValueError("amplitude damping gamma 必须在 [0,1]")
+            raise ValueError("amplitude damping gamma must be in [0, 1]")
 
         g = float(self.gamma)
         k0 = np.array([[1, 0], [0, np.sqrt(1.0 - g)]], dtype=np.complex64)

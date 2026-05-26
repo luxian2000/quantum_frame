@@ -1,0 +1,69 @@
+=== Noise-Adaptive QAS Candidate Architecture Scoring ===
+candidates: 12
+n_qubits: 3
+layers: 2
+expressibility_samples: 12
+weights: {'expressibility': 0.25, 'trainability': 0.2, 'noise_robustness': 0.35, 'hardware_efficiency': 0.2}
+
+=== 字段说明 ===
+candidates: 本次参与评分的候选架构数量，也就是 ArchitectureSpec 的个数。
+n_qubits: 每个候选架构使用的量子比特数。
+layers: 传入 build_common_architectures() 的重复结构层数。
+expressibility_samples: 表达能力 active 指标使用的 Monte Carlo 采样次数。
+weights: 顶层四组目标权重，weighted = sum(weight_i * score_i)。
+rank: 按 weighted 从高到低排序后的名次。
+architecture: 候选架构名称，对应 ArchitectureSpec.name。
+expr: 表达能力组评分；当前 active 指标是 kl_haar，越高越好。
+train: 可训练性组评分；当前 active 指标是 structure_proxy，越高越好。
+noise: 噪声鲁棒性组评分；当前 active 指标是 ion_trap_error_budget_proxy，越高越好。
+hw: 硬件效率组评分；当前 active 指标是 native_depth_twoq_efficiency，越高越好。
+weighted: 四组评分按 weights 加权后的总分，越高排名越靠前。
+gates: 候选线路中的总门数。
+2q: 候选线路中的双比特门或受控门数量。
+params: 候选线路中的标量可训练参数数量。
+err_budget: 离子阱总 error budget，计算 noise = exp(-err_budget) 之前的误差预算；越低越好。
+description: 候选架构库中给出的自然语言架构定义。
+tags: 架构族、拓扑、entangler 等标签。
+ion_trap_error_budget.total: 与表格中的 err_budget 相同。
+ion_trap_error_budget.gate: 单比特门和双比特门退极化错误贡献。
+ion_trap_error_budget.idle: 串行执行时非 active qubit 的 idle dephasing 贡献。
+ion_trap_error_budget.crosstalk: 默认离子阱配置中的串扰贡献。
+
+分数范围: expr/train/noise/hw/weighted 均裁剪到 [0, 1]；越高越好。
+噪声关系: noise = exp(-err_budget)，所以 err_budget 越大，噪声鲁棒评分越低。
+
+=== Ranking Table ===
+rank  architecture                expr    train   noise   hw      weighted  gates  2q  params  err_budget
+----  --------------------------  ------  ------  ------  ------  --------  -----  --  ------  ----------
+1     qaoa_linear_rzz_rx_p2       0.5246  0.5246  0.9403  0.7693  0.7190    13     4   10      0.061599  
+2     qaoa_all_to_all_rzz_rx_p2   0.4521  0.4521  0.9200  0.6940  0.6643    15     6   12      0.083361  
+3     ghz_ladder_dressed          0.0469  0.6245  0.9648  0.9402  0.6624    9      2   6       0.035820  
+4     mera_like_cx_L1             0.0299  0.6100  0.9552  0.9402  0.6518    14     2   12      0.045862  
+5     real_amplitudes_linear_L2   0.0303  0.5246  0.9403  0.8924  0.6201    13     4   9       0.061599  
+6     hea_linear_cx_L2            0.0455  0.4987  0.9290  0.8924  0.6147    19     4   15      0.073649  
+7     brickwork_cx_L2             0.0347  0.4854  0.9234  0.8924  0.6074    22     4   18      0.079674  
+8     hea_ring_cx_L2              0.0316  0.4326  0.9090  0.8268  0.5779    21     6   15      0.095411  
+9     efficient_su2_ring_cx_L2    0.0390  0.4071  0.8927  0.7683  0.5573    30     6   24      0.113486  
+10    two_local_all_to_all_cz_L2  0.0428  0.4233  0.9035  0.7040  0.5524    24     6   18      0.101436  
+11    cascade_cx_L2               0.0430  0.3751  0.8841  0.7376  0.5427    26     8   18      0.123198  
+12    strongly_entangling_crx_L2  0.0587  0.4609  0.9256  0.4540  0.5216    12     6   24      0.077337  
+
+=== Top Candidate Details ===
+
+#1 qaoa_linear_rzz_rx_p2
+description: QAOA-style ansatz with Ising RZZ cost layers and RX mixer layers.
+tags: QAOA, Ising, linear, rzz
+scores: expr=0.5246, train=0.5246, noise=0.9403, hw=0.7693, weighted=0.7190
+ion_trap_error_budget: total=0.061599, gate=0.051000, idle=0.010490, crosstalk=0.000109
+
+#2 qaoa_all_to_all_rzz_rx_p2
+description: QAOA-style ansatz with Ising RZZ cost layers and RX mixer layers.
+tags: QAOA, Ising, all_to_all, rzz
+scores: expr=0.4521, train=0.4521, noise=0.9200, hw=0.6940, weighted=0.6643
+ion_trap_error_budget: total=0.083361, gate=0.069750, idle=0.013485, crosstalk=0.000126
+
+#3 ghz_ladder_dressed
+description: GHZ ladder state-preparation backbone with a parameterized local dressing layer.
+tags: GHZ, ladder, cx
+scores: expr=0.0469, train=0.6245, noise=0.9648, hw=0.9402, weighted=0.6624
+ion_trap_error_budget: total=0.035820, gate=0.029250, idle=0.006495, crosstalk=0.000076
