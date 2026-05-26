@@ -1,4 +1,4 @@
-"""Trainability metrics for QAS."""
+"""Trainability metrics for quantum circuits and ansatz templates."""
 
 from __future__ import annotations
 

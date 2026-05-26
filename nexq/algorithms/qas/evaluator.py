@@ -1,4 +1,4 @@
-"""Flat, orthogonal evaluator for architecture-level QAS."""
+﻿"""Flat, orthogonal evaluator for architecture-level QAS."""
 
 from __future__ import annotations
 
@@ -7,13 +7,14 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 
 from ...channel.backends.base import Backend
+from ...channel.noise.analysis import noise_sensitivity
+from ...channel.noise.metrics import ion_trap_error_budget_proxy
 from ...channel.noise.model import NoiseModel
 from ._types import ArchitectureScore, ArchitectureSpec, MetricDefinition, MetricGroupScore
 from ._utils import assign_ranks, clipped_score, ensure_backend
-from .metrics_expressibility import KL_Haar_divergence, MMD_relative
-from .metrics_hardware import native_depth_twoq_efficiency, native_depth_twoq_efficiency_details
-from .metrics_noise import ion_trap_error_budget_proxy
-from .metrics_trainability import structure_proxy, structure_proxy_details
+from ..metrics.expressibility import KL_Haar_divergence, MMD_relative
+from ..metrics.hardware import native_depth_twoq_efficiency, native_depth_twoq_efficiency_details
+from ..metrics.trainability import structure_proxy, structure_proxy_details
 from .reward import RewardComposer, RewardWeights
 
 
@@ -36,7 +37,7 @@ def metric_catalog(active_metrics: Optional[Dict[str, str]] = None) -> Dict[str,
         "noise_robustness": [
             MetricDefinition("ion_trap_error_budget_proxy", "Ion-trap error budget from the default noise configuration", "implemented"),
             MetricDefinition("ideal_noisy_score_gap", "Direct ideal-vs-noisy score gap", "todo"),
-            MetricDefinition("noise_sensitivity", "Gate-type sensitivity under a NoiseModel", "todo"),
+            MetricDefinition("noise_sensitivity", "Ideal-vs-noisy fidelity under a provided NoiseModel", "implemented"),
             MetricDefinition("per_source_ablation", "Noise-source ablation such as idle/crosstalk/twoq", "todo"),
         ],
         "hardware_efficiency": [
@@ -77,9 +78,20 @@ class ArchitectureEvaluator:
         self.n_samples = int(n_samples)
         self.active_metrics = active_metrics or {}
 
-    def _active_metric_name(self, group_name: str) -> str:
+    def _active_metric_definition(self, group_name: str) -> MetricDefinition:
         catalog = metric_catalog(self.active_metrics)
-        return next(metric.name for metric in catalog[group_name] if metric.active)
+        active = [metric for metric in catalog[group_name] if metric.active]
+        if not active:
+            requested = self.active_metrics.get(group_name)
+            available = ", ".join(metric.name for metric in catalog[group_name])
+            raise ValueError(f"Unknown {group_name} metric {requested!r}. Available metrics: {available}")
+        metric = active[0]
+        if metric.status != "implemented":
+            raise NotImplementedError(f"{group_name} metric {metric.name!r} is marked as {metric.status!r}")
+        return metric
+
+    def _active_metric_name(self, group_name: str) -> str:
+        return self._active_metric_definition(group_name).name
 
     def _group_score(
         self,
@@ -89,7 +101,7 @@ class ArchitectureEvaluator:
         notes: Optional[List[str]] = None,
     ) -> MetricGroupScore:
         catalog = metric_catalog(self.active_metrics)
-        active = next(metric.name for metric in catalog[group_name] if metric.active)
+        active = self._active_metric_definition(group_name).name
         return MetricGroupScore(
             name=group_name,
             active_metric=active,
@@ -114,26 +126,67 @@ class ArchitectureEvaluator:
             return self._group_score("expressibility", score, {"mmd_relative_score": score})
         raise NotImplementedError(f"Unsupported expressibility metric: {metric_name}")
 
+    def _evaluate_trainability(self, architecture: ArchitectureSpec) -> MetricGroupScore:
+        metric_name = self._active_metric_name("trainability")
+        if metric_name == "structure_proxy":
+            score = structure_proxy(architecture.circuit)
+            return self._group_score("trainability", score, structure_proxy_details(architecture.circuit))
+        raise NotImplementedError(f"Unsupported trainability metric: {metric_name}")
+
+    def _evaluate_noise_robustness(self, architecture: ArchitectureSpec, backend: Backend) -> MetricGroupScore:
+        metric_name = self._active_metric_name("noise_robustness")
+        circuit = architecture.circuit
+        if metric_name == "ion_trap_error_budget_proxy":
+            score, raw_values = ion_trap_error_budget_proxy(circuit)
+            notes = []
+            if self.noise_model is not None:
+                notes.append("Provided noise_model ignored by ion_trap_error_budget_proxy; select noise_sensitivity to use it.")
+            return self._group_score(
+                "noise_robustness",
+                score,
+                {"ion_trap_error_budget_proxy_score": score, **raw_values},
+                notes,
+            )
+        if metric_name == "noise_sensitivity":
+            if self.noise_model is None:
+                raise ValueError("noise_sensitivity requires ArchitectureEvaluator(noise_model=...).")
+            result = noise_sensitivity(circuit, backend=backend, noise_model=self.noise_model, n_samples=self.n_samples)
+            score = 1.0 - result.avg_fidelity_loss
+            return self._group_score(
+                "noise_robustness",
+                score,
+                {
+                    "noise_sensitivity_score": score,
+                    "ideal_avg_fidelity": result.ideal_avg_fidelity,
+                    "noisy_avg_fidelity": result.noisy_avg_fidelity,
+                    "avg_fidelity_loss": result.avg_fidelity_loss,
+                    "gate_type_sensitivity": dict(result.gate_type_sensitivity),
+                    "n_gates_total": result.n_gates_total,
+                    "n_gates_by_type": dict(result.n_gates_by_type),
+                    "noise_strength": result.noise_strength,
+                },
+            )
+        raise NotImplementedError(f"Unsupported noise robustness metric: {metric_name}")
+
+    def _evaluate_hardware_efficiency(self, architecture: ArchitectureSpec) -> MetricGroupScore:
+        metric_name = self._active_metric_name("hardware_efficiency")
+        if metric_name == "native_depth_twoq_efficiency":
+            score = native_depth_twoq_efficiency(architecture.circuit)
+            return self._group_score(
+                "hardware_efficiency",
+                score,
+                native_depth_twoq_efficiency_details(architecture.circuit),
+            )
+        raise NotImplementedError(f"Unsupported hardware efficiency metric: {metric_name}")
+
     def evaluate(self, architecture: ArchitectureSpec) -> ArchitectureScore:
         backend = ensure_backend(self.backend)
         self.backend = backend
-        circuit = architecture.circuit
 
         expressibility = self._evaluate_expressibility(architecture, backend)
-        train_score = structure_proxy(circuit)
-        trainability = self._group_score("trainability", train_score, structure_proxy_details(circuit))
-        noise_score, noise_raw_values = ion_trap_error_budget_proxy(circuit)
-        noise_robustness = self._group_score(
-            "noise_robustness",
-            noise_score,
-            {"ion_trap_error_budget_proxy_score": noise_score, **noise_raw_values},
-        )
-        hardware_score = native_depth_twoq_efficiency(circuit)
-        hardware_efficiency = self._group_score(
-            "hardware_efficiency",
-            hardware_score,
-            native_depth_twoq_efficiency_details(circuit),
-        )
+        trainability = self._evaluate_trainability(architecture)
+        noise_robustness = self._evaluate_noise_robustness(architecture, backend)
+        hardware_efficiency = self._evaluate_hardware_efficiency(architecture)
 
         score = ArchitectureScore(
             architecture=architecture,
@@ -169,18 +222,13 @@ def evaluate_architectures(
     return evaluator.evaluate_many(architectures)
 
 
-try:
-    from .qas_evaluation import EvaluationResult, QASEvaluator, noise_aware_reward, quick_evaluate
-except ImportError:  # pragma: no cover - compatibility only
-    EvaluationResult = QASEvaluator = quick_evaluate = noise_aware_reward = None  # type: ignore[assignment]
-
 
 __all__ = [
     "ArchitectureEvaluator",
     "evaluate_architectures",
     "metric_catalog",
-    "EvaluationResult",
-    "QASEvaluator",
-    "quick_evaluate",
-    "noise_aware_reward",
 ]
+
+
+
+

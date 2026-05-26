@@ -1,6 +1,17 @@
-# Noise-Adaptive QAS Architecture Metrics
+﻿# Noise-Adaptive QAS Architecture Metrics
 
 本文档定义噪声自适应 QAS 中候选量子架构 / ansatz 的统一评分指标。当前实现遵循一个原则：每个指标组可以列出多种评估函数，但顶层加权时每组只使用一个 active 指标的 `score`，避免同类指标重复加权。
+
+本文档保留在 `algorithms/qas/` 下，因为它描述的是 QAS 如何组织四类目标、如何加权、哪些指标是 active、哪些指标是后续搜索策略的候选项。具体指标实现不再放在 QAS 内部：
+
+```text
+algorithms/metrics/expressibility.py        无噪表达能力
+algorithms/metrics/noisy_expressibility.py  含噪表达能力
+algorithms/metrics/trainability.py          可训练性
+algorithms/metrics/hardware.py              硬件效率
+channel/noise/                              噪声模型、噪声配置、噪声分析、噪声指标
+algorithms/qas/evaluator.py                 QAS 指标编排和加权评分
+```
 
 ## 1. 统一符号
 
@@ -30,12 +41,12 @@ weighted_score =
 
 | 指标组 | active 指标 | 实现位置 | 说明 |
 |---|---|---|---|
-| 表达能力 | `kl_haar` | `metrics_expressibility.py::KL_Haar_divergence`, `evaluator.py::ArchitectureEvaluator` | 衡量参数化线路诱导态分布与 Haar 随机态分布的距离 |
-| 可训练性 | `structure_proxy` | `metrics_trainability.py::structure_proxy` | 使用深度、双比特门比例、参数密度的低成本代理 |
-| 噪声鲁棒性 | `ion_trap_error_budget_proxy` | `metrics_noise.py::ion_trap_error_budget_proxy`, `ion_trap_noise_config.py` | 使用默认离子阱噪声配置估计线路 error budget |
-| 硬件效率 | `native_depth_twoq_efficiency` | `metrics_hardware.py::native_depth_twoq_efficiency` | 使用 native gate 比例、深度、双比特门密度评估硬件友好度 |
+| 表达能力 | `kl_haar` | `algorithms/metrics/expressibility.py::KL_Haar_divergence`, `evaluator.py::ArchitectureEvaluator` | 衡量参数化线路诱导态分布与 Haar 随机态分布的距离 |
+| 可训练性 | `structure_proxy` | `algorithms/metrics/trainability.py::structure_proxy` | 使用深度、双比特门比例、参数密度的低成本代理 |
+| 噪声鲁棒性 | `ion_trap_error_budget_proxy` | `channel/noise/metrics.py::ion_trap_error_budget_proxy`, `channel/noise/ion_trap.py` | 使用默认离子阱噪声配置估计线路 error budget |
+| 硬件效率 | `native_depth_twoq_efficiency` | `algorithms/metrics/hardware.py::native_depth_twoq_efficiency` | 使用 native gate 比例、深度、双比特门密度评估硬件友好度 |
 
-`structure_proxy` 和 `native_depth_twoq_efficiency` 是 `evaluator.py` 中登记的 active 指标名，真实计算分别在 `metrics_trainability.py` 和 `metrics_hardware.py` 中。旧 `qas_evaluation.py` / `multi_objective_reward.py` 保留兼容入口，但新主线不再从 reward 层直接 import 具体指标函数。
+`structure_proxy` 和 `native_depth_twoq_efficiency` 是 `evaluator.py` 中登记的 active 指标名，真实计算分别在 `algorithms/metrics/trainability.py` 和 `algorithms/metrics/hardware.py` 中。`multi_objective_reward.py` 保留 legacy RL reward wrapper；新主线不再从 reward 层直接 import 具体指标函数。
 
 ## 3. 表达能力组
 
@@ -52,10 +63,12 @@ P_PQC(F): 参数化线路采样得到的保真度分布
 P_Haar(F) = (d - 1) * (1 - F)^(d - 2)
 
 D_KL = sum_i P_PQC(i) * log(P_PQC(i) / P_Haar(i))
-score = exp(-D_KL)
+Exp_idle = (d - 1) * log(B)
+raw = -log(D_KL / Exp_idle)
+score = clip(raw, 0, 1)
 ```
 
-含义：`D_KL` 越小，线路生成态分布越接近 Haar 随机态；`score` 越接近 1，表达能力越强。
+含义：`D_KL` 越小，线路生成态分布越接近 Haar 随机态；`raw` 越大，表达能力越强。QAS evaluator 在聚合前将 active 指标分数裁剪到 `[0, 1]`，因此最终 `score` 越接近 1，表达能力越强。若线路没有参数化门，当前 evaluator 会回退到结构代理分数，避免候选库中的固定线路直接评估失败。
 
 依据：Sim et al., *Expressibility and entangling capability of parameterized quantum circuits for hybrid quantum-classical algorithms*。
 
@@ -67,7 +80,7 @@ O(M * cost(unitary/evolution) + B)
 
 在当前 dense simulator 下，线路演化随 `d = 2^n` 指数增长，适合小比特精确评估，大规模搜索需要 surrogate。
 
-### 3.2 `mmd_relative`（todo）
+### 3.2 `mmd_relative`（implemented，可选）
 
 公式：
 
@@ -160,7 +173,7 @@ score = f_phi(tokens(circuit))
 当前低成本代理：
 
 ```text
-depth_proxy = G / n
+depth_proxy = 按门作用 qubit 估计的 layer-like 深度
 twoq_ratio = G2 / G
 params_per_qubit = P / n
 
@@ -264,7 +277,7 @@ O(G)
 
 ## 5. 噪声鲁棒性组
 
-噪声鲁棒性组衡量候选架构在默认离子阱噪声模型下预计有多稳健。当前 active 使用 `ion_trap_noise_config.py`：
+噪声鲁棒性组衡量候选架构在默认离子阱噪声模型下预计有多稳健。当前 active 使用 `channel/noise/ion_trap.py`：
 
 ```python
 config = load_default_ion_trap_noise_config()
@@ -392,7 +405,7 @@ O(S * noisy_eval_cost)
 ```text
 native_ratio = native_gate_count / G
 
-depth_proxy = G / n
+depth_proxy = 按门作用 qubit 估计的 layer-like 深度
 depth_score = min(1, max_depth / max(1, depth_proxy * 10))
 
 twoq_ratio = G2 / n
@@ -485,3 +498,7 @@ score = exp(-T_total / T2)
 串行: O(G)
 简单分层调度: O(G log G) 或 O(G * n)
 ```
+
+
+
+

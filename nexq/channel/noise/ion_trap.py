@@ -1,4 +1,4 @@
-"""Unified ion-trap noise configuration loader.
+﻿"""Unified ion-trap noise configuration loader.
 
 This module reads a flat Markdown parameter table by default and turns it into
 a runtime NoiseModel for the current QAS stack.
@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from ...channel.noise import (
+from . import (
     BitFlipChannel,
     DepolarizingChannel,
     NoiseModel,
@@ -430,3 +430,4 @@ __all__ = [
     "load_default_ion_trap_noise_config",
     "DEFAULT_MD_NAME",
 ]
+

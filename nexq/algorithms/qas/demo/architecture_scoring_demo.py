@@ -1,4 +1,4 @@
-"""Demo: score and rank a library of candidate QAS architectures.
+﻿"""Demo: score and rank a library of candidate QAS architectures.
 
 Run from the repository root:
     C:/ProgramData/anaconda3/python.exe nexq/algorithms/qas/demo/architecture_scoring_demo.py
@@ -21,7 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from nexq.algorithms.qas import build_common_architectures, evaluate_architectures
 from nexq.algorithms.qas.multi_objective_reward import RewardWeights
-from nexq.algorithms.qas.qas_evaluation import ArchitectureScore
+from nexq.algorithms.qas import ArchitectureScore
 from nexq.channel.backends.numpy_backend import NumpyBackend
 
 

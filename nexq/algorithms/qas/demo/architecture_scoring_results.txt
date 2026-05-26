@@ -35,35 +35,35 @@ ion_trap_error_budget.crosstalk: 默认离子阱配置中的串扰贡献。
 === Ranking Table ===
 rank  architecture                expr    train   noise   hw      weighted  gates  2q  params  err_budget
 ----  --------------------------  ------  ------  ------  ------  --------  -----  --  ------  ----------
-1     qaoa_linear_rzz_rx_p2       0.5853  0.5853  0.9403  0.7693  0.7463    13     4   10      0.061599  
-2     ghz_ladder_dressed          0.2483  0.6782  0.9648  0.9402  0.7234    9      2   6       0.035820  
-3     mera_like_cx_L1             0.2788  0.6413  0.9552  0.9402  0.7203    14     2   12      0.045862  
-4     brickwork_cx_L2             0.3972  0.5304  0.9234  0.8924  0.7070    22     4   18      0.079674  
-5     hea_linear_cx_L2            0.3720  0.5484  0.9290  0.8924  0.7063    19     4   15      0.073649  
-6     qaoa_all_to_all_rzz_rx_p2   0.5321  0.5321  0.9200  0.6940  0.7003    15     6   12      0.083361  
-7     real_amplitudes_linear_L2   0.2042  0.5853  0.9403  0.8924  0.6757    13     4   9       0.061599  
-8     hea_ring_cx_L2              0.2559  0.4981  0.9090  0.8540  0.6525    21     6   15      0.095411  
-9     cascade_cx_L2               0.3554  0.4446  0.8841  0.8233  0.6519    26     8   18      0.123198  
-10    efficient_su2_ring_cx_L2    0.2814  0.4557  0.8927  0.8540  0.6447    30     6   24      0.113486  
-11    two_local_all_to_all_cz_L2  0.1727  0.4826  0.9035  0.7540  0.6067    24     6   18      0.101436  
-12    strongly_entangling_crx_L2  0.1476  0.5493  0.9256  0.4540  0.5615    12     6   24      0.077337  
+1     qaoa_linear_rzz_rx_p2       0.5246  0.5246  0.9403  0.7693  0.7190    13     4   10      0.061599  
+2     qaoa_all_to_all_rzz_rx_p2   0.4521  0.4521  0.9200  0.6940  0.6643    15     6   12      0.083361  
+3     ghz_ladder_dressed          0.0469  0.6245  0.9648  0.9402  0.6624    9      2   6       0.035820  
+4     mera_like_cx_L1             0.0299  0.6100  0.9552  0.9402  0.6518    14     2   12      0.045862  
+5     real_amplitudes_linear_L2   0.0303  0.5246  0.9403  0.8924  0.6201    13     4   9       0.061599  
+6     hea_linear_cx_L2            0.0455  0.4987  0.9290  0.8924  0.6147    19     4   15      0.073649  
+7     brickwork_cx_L2             0.0347  0.4854  0.9234  0.8924  0.6074    22     4   18      0.079674  
+8     hea_ring_cx_L2              0.0316  0.4326  0.9090  0.8268  0.5779    21     6   15      0.095411  
+9     efficient_su2_ring_cx_L2    0.0390  0.4071  0.8927  0.7683  0.5573    30     6   24      0.113486  
+10    two_local_all_to_all_cz_L2  0.0428  0.4233  0.9035  0.7040  0.5524    24     6   18      0.101436  
+11    cascade_cx_L2               0.0430  0.3751  0.8841  0.7376  0.5427    26     8   18      0.123198  
+12    strongly_entangling_crx_L2  0.0587  0.4609  0.9256  0.4540  0.5216    12     6   24      0.077337  
 
 === Top Candidate Details ===
 
 #1 qaoa_linear_rzz_rx_p2
 description: QAOA-style ansatz with Ising RZZ cost layers and RX mixer layers.
 tags: QAOA, Ising, linear, rzz
-scores: expr=0.5853, train=0.5853, noise=0.9403, hw=0.7693, weighted=0.7463
+scores: expr=0.5246, train=0.5246, noise=0.9403, hw=0.7693, weighted=0.7190
 ion_trap_error_budget: total=0.061599, gate=0.051000, idle=0.010490, crosstalk=0.000109
 
-#2 ghz_ladder_dressed
+#2 qaoa_all_to_all_rzz_rx_p2
+description: QAOA-style ansatz with Ising RZZ cost layers and RX mixer layers.
+tags: QAOA, Ising, all_to_all, rzz
+scores: expr=0.4521, train=0.4521, noise=0.9200, hw=0.6940, weighted=0.6643
+ion_trap_error_budget: total=0.083361, gate=0.069750, idle=0.013485, crosstalk=0.000126
+
+#3 ghz_ladder_dressed
 description: GHZ ladder state-preparation backbone with a parameterized local dressing layer.
 tags: GHZ, ladder, cx
-scores: expr=0.2483, train=0.6782, noise=0.9648, hw=0.9402, weighted=0.7234
+scores: expr=0.0469, train=0.6245, noise=0.9648, hw=0.9402, weighted=0.6624
 ion_trap_error_budget: total=0.035820, gate=0.029250, idle=0.006495, crosstalk=0.000076
-
-#3 mera_like_cx_L1
-description: Hierarchical MERA-like ansatz with increasing-range CX entanglers.
-tags: MERA, hierarchical, cx
-scores: expr=0.2788, train=0.6413, noise=0.9552, hw=0.9402, weighted=0.7203
-ion_trap_error_budget: total=0.045862, gate=0.036750, idle=0.008994, crosstalk=0.000118

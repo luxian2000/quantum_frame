@@ -1,4 +1,4 @@
-"""
+﻿"""
 nexq/algorithms/qas/multi_objective_reward.py
 
 Multi-objective reward function for noise-aware quantum architecture search.
@@ -26,16 +26,15 @@ from ...core.circuit import Circuit
 from ...channel.backends.base import Backend
 from ...channel.noise.model import NoiseModel
 
-from .expressibility import (
+from ..metrics.expressibility import (
     KL_Haar_divergence,
     MMD_relative,
 )
-from .noise_robustness import (
+from ..metrics.noisy_expressibility import (
     KL_Haar_noisy,
     MMD_noisy,
-    noise_sensitivity,
-    NoiseSensitivityResult,
 )
+from ...channel.noise.analysis import NoiseSensitivityResult, noise_sensitivity
 
 
 # =============================================================================
@@ -714,3 +713,4 @@ __all__ = [
     "MultiObjectiveReward",
     "QASRewardWrapper",
 ]
+

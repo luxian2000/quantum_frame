@@ -1,62 +1,102 @@
-"""nexq.algorithms.qas
+"""Quantum architecture search and state-synthesis utilities."""
 
-Quantum architecture search and state-synthesis utilities.
-"""
+from __future__ import annotations
 
-from .expressibility import KL_Haar_relative, MMD_relative
-from .expressibility_noise import (
+from ._types import (
+    ArchitectureScore,
+    ArchitectureSpec,
+    MetricDefinition,
+    MetricGroupScore,
+    SearchConfig,
+    SearchResult,
+)
+from .architecture_candidates import build_common_architectures, common_architecture_names
+from .architecture_search import ArchitectureSearch, NoiseAdaptiveQAS
+from .evaluator import ArchitectureEvaluator, evaluate_architectures, metric_catalog
+from .multi_objective_reward import (
+    ExpressibilityScore,
+    HardwareEfficiencyScore,
+    MultiObjectiveReward,
+    NoiseRobustnessScore,
+    QASRewardWrapper,
+    TrainabilityScore,
+)
+from .reward import RewardComposer, RewardWeights
+from .search_env import NoisyQASEnv, QASState
+from ..metrics.expressibility import KL_Haar_divergence, KL_Haar_relative, MMD_relative
+from ..metrics.noisy_expressibility import (
     KL_Haar_noisy,
     MMD_noisy,
-    noise_sensitivity,
-    NoiseSensitivityResult,
     comparative_expressibility,
     expressibility_score,
 )
-from .multi_objective_reward import (
-    RewardWeights,
-    MultiObjectiveReward,
-    ExpressibilityScore,
-    TrainabilityScore,
-    NoiseRobustnessScore,
-    HardwareEfficiencyScore,
-    QASRewardWrapper,
+from ...channel.noise import (
+    IonTrapNoiseConfig,
+    NoiseSensitivityResult,
+    load_default_ion_trap_noise_config,
+    load_ion_trap_noise_config,
+    noise_sensitivity,
 )
-from .qas_evaluation import (
-    QASEvaluator,
-    EvaluationResult,
-    quick_evaluate,
-    noise_aware_reward,
-)
-from .state_qas import StateQASConfig, state_to_circuit
+from ...channel.noise.metrics import ion_trap_error_budget_proxy
+
+_OPTIONAL_RL_EXPORTS: list[str] = []
+try:
+    from .CRLQAS import AdamSPSAConfig, CRLQASConfig, CRLQASResult, crlqas, train_crlqas
+    from .PPR_DQL import PPRDQLConfig, PPRDQLPolicy, PPRDQLResult, ppr_dql_state_to_circuit, train_ppr_dql
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+else:
+    _OPTIONAL_RL_EXPORTS.extend(
+        [
+            "AdamSPSAConfig",
+            "CRLQASConfig",
+            "CRLQASResult",
+            "PPRDQLConfig",
+            "PPRDQLPolicy",
+            "PPRDQLResult",
+            "crlqas",
+            "ppr_dql_state_to_circuit",
+            "train_crlqas",
+            "train_ppr_dql",
+        ]
+    )
 
 __all__ = [
-    # 原始表达能力
-    "KL_Haar_relative",
-    "MMD_relative",
-    # 含噪表达能力
-    "KL_Haar_noisy",
-    "MMD_noisy",
-    "noise_sensitivity",
-    "NoiseSensitivityResult",
-    "comparative_expressibility",
-    "expressibility_score",
-    # 多目标奖励
-    "RewardWeights",
-    "MultiObjectiveReward",
+    "ArchitectureEvaluator",
+    "ArchitectureScore",
+    "ArchitectureSearch",
+    "ArchitectureSpec",
     "ExpressibilityScore",
-    "TrainabilityScore",
-    "NoiseRobustnessScore",
     "HardwareEfficiencyScore",
+    "IonTrapNoiseConfig",
+    "KL_Haar_divergence",
+    "KL_Haar_noisy",
+    "KL_Haar_relative",
+    "MMD_noisy",
+    "MMD_relative",
+    "MetricDefinition",
+    "MetricGroupScore",
+    "MultiObjectiveReward",
+    "NoiseAdaptiveQAS",
+    "NoiseRobustnessScore",
+    "NoiseSensitivityResult",
+    "NoisyQASEnv",
     "QASRewardWrapper",
-    # 评估器
-    "QASEvaluator",
-    "EvaluationResult",
-    "quick_evaluate",
-    "noise_aware_reward",
-    # QAS
-    "state_to_circuit",
-    "StateQASConfig",
-]
-
-if StateQASConfig is not None and state_to_circuit is not None:
-    __all__.extend(["state_to_circuit", "StateQASConfig"])
+    "QASState",
+    "RewardComposer",
+    "RewardWeights",
+    "SearchConfig",
+    "SearchResult",
+    "TrainabilityScore",
+    "build_common_architectures",
+    "common_architecture_names",
+    "comparative_expressibility",
+    "evaluate_architectures",
+    "expressibility_score",
+    "ion_trap_error_budget_proxy",
+    "load_default_ion_trap_noise_config",
+    "load_ion_trap_noise_config",
+    "metric_catalog",
+    "noise_sensitivity",
+] + _OPTIONAL_RL_EXPORTS

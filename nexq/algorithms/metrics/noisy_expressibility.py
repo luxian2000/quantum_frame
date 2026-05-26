@@ -1,17 +1,15 @@
-"""Noise-robustness metrics built from expressibility metrics and NoiseModel."""
+"""Noisy expressibility metrics for parameterized quantum circuits."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict, Optional
 
 import numpy as np
 
 from ...channel.backends.base import Backend
+from ...channel.noise.analysis import default_plus_state, estimate_noise_strength, evolve_density_gatewise
 from ...channel.noise.model import NoiseModel
 from ...core.circuit import Circuit
-from ...core.density import DensityMatrix
-from ...core.gates import gate_to_matrix
 from ...core.state import State
 from .expressibility import (
     KL_Haar_divergence,
@@ -24,67 +22,6 @@ from .expressibility import (
 )
 
 
-@dataclass
-class NoiseSensitivityResult:
-    """Result of noise sensitivity analysis for a quantum circuit."""
-
-    circuit: Circuit
-    n_qubits: int
-    noise_model: Optional[NoiseModel]
-    ideal_avg_fidelity: float
-    noisy_avg_fidelity: float
-    avg_fidelity_loss: float
-    gate_type_sensitivity: Dict[str, float]
-    n_gates_total: int
-    n_gates_by_type: Dict[str, int]
-    noise_strength: float
-
-    def summary(self) -> str:
-        lines = [
-            "=== Noise Sensitivity Analysis ===",
-            f"Circuit gates: {self.n_gates_total}",
-            f"Ideal avg fidelity: {self.ideal_avg_fidelity:.4f}",
-            f"Noisy avg fidelity: {self.noisy_avg_fidelity:.4f}",
-            f"Fidelity loss: {self.avg_fidelity_loss:.4f}",
-            f"Noise strength: {self.noise_strength:.4f}",
-            "Gate-type sensitivity:",
-        ]
-        for gate_type, sensitivity in sorted(self.gate_type_sensitivity.items()):
-            lines.append(f"  {gate_type}: {sensitivity:.4f}")
-        return "\n".join(lines)
-
-
-def _default_plus_state(n_qubits: int, backend: Backend) -> State:
-    dim = 1 << n_qubits
-    plus_data = np.ones(dim, dtype=np.complex64) / np.sqrt(dim)
-    return State.from_array(plus_data, n_qubits=n_qubits, backend=backend)
-
-
-def _evolve_density_gatewise(
-    circuit: Circuit,
-    backend: Backend,
-    initial_state: State,
-    noise_model: Optional[NoiseModel] = None,
-) -> DensityMatrix:
-    rho = initial_state.to_density_matrix()
-    for gate in circuit.gates:
-        gate_unitary = gate_to_matrix(gate, cir_qubits=circuit.n_qubits, backend=backend)
-        rho = rho.evolve(gate_unitary)
-        if noise_model is not None:
-            rho = DensityMatrix(
-                noise_model.apply(
-                    rho.data,
-                    n_qubits=circuit.n_qubits,
-                    backend=backend,
-                    gate_type=gate.get("type"),
-                    gate=gate,
-                ),
-                circuit.n_qubits,
-                backend,
-            )
-    return rho
-
-
 def _sample_circuit_probability_vectors(
     circuit: Circuit,
     backend: Backend,
@@ -94,7 +31,7 @@ def _sample_circuit_probability_vectors(
 ) -> np.ndarray:
     dim = 1 << circuit.n_qubits
     if initial_state is None:
-        initial_state = _default_plus_state(circuit.n_qubits, backend)
+        initial_state = default_plus_state(circuit.n_qubits, backend)
 
     param_indices = _get_parametrized_gate_indices(circuit)
     total_params = _count_total_parameters(circuit, param_indices)
@@ -105,26 +42,10 @@ def _sample_circuit_probability_vectors(
         if total_params > 0:
             params = np.random.uniform(0, 2 * np.pi, total_params)
             sampled_circuit = _replace_circuit_parameters(circuit, params)
-        rho = _evolve_density_gatewise(sampled_circuit, backend, initial_state, noise_model=noise_model)
+        rho = evolve_density_gatewise(sampled_circuit, backend, initial_state, noise_model=noise_model)
         samples[sample_index] = rho.probabilities()
 
     return samples
-
-
-def _estimate_noise_strength(noise_model: NoiseModel) -> float:
-    total_strength = 0.0
-    n_channels = 0
-    for rule in noise_model.rules:
-        channel = rule.channel
-        p = getattr(channel, "p", None)
-        if p is not None:
-            total_strength += p
-            n_channels += 1
-        gamma = getattr(channel, "gamma", None)
-        if gamma is not None:
-            total_strength += gamma
-            n_channels += 1
-    return total_strength / n_channels if n_channels > 0 else 0.01
 
 
 def _apply_noise_to_fidelities(fidelities: np.ndarray, noise_strength: float = 0.01) -> np.ndarray:
@@ -165,7 +86,7 @@ def KL_Haar_noisy(
     )
     noisy_probs = np.max(noisy_probability_vectors, axis=1)
     if noise_model is not None and not use_density_matrix:
-        noisy_probs = _apply_noise_to_fidelities(noisy_probs, _estimate_noise_strength(noise_model))
+        noisy_probs = _apply_noise_to_fidelities(noisy_probs, estimate_noise_strength(noise_model))
 
     hist_counts, _ = np.histogram(noisy_probs, bins=np.linspace(0, 1, n_bins + 1))
     p_pqc = hist_counts / n_samples
@@ -209,66 +130,6 @@ def MMD_noisy(
     return float(max(0.0, mmd_sq))
 
 
-def noise_sensitivity(
-    circuit: Circuit,
-    backend: Optional[Backend] = None,
-    noise_model: Optional[NoiseModel] = None,
-    n_samples: int = 200,
-    initial_state: Optional[State] = None,
-) -> NoiseSensitivityResult:
-    """Compare ideal and noisy execution and summarize gate-type sensitivity."""
-    if backend is None:
-        from ...channel.backends.numpy_backend import NumpyBackend
-
-        backend = NumpyBackend()
-
-    n_qubits = circuit.n_qubits
-    if initial_state is None:
-        initial_state = _default_plus_state(n_qubits, backend)
-
-    rho_ideal = _evolve_density_gatewise(circuit, backend, initial_state, noise_model=None)
-    rho_noisy = _evolve_density_gatewise(circuit, backend, initial_state, noise_model=noise_model)
-    probs_ideal = rho_ideal.probabilities()
-    probs_noisy = rho_noisy.probabilities()
-    fidelity_noisy = float(np.square(np.sum(np.sqrt(probs_ideal) * np.sqrt(probs_noisy))))
-    avg_fidelity_loss = 1.0 - fidelity_noisy
-
-    n_gates_by_type: Dict[str, int] = {}
-    for gate in circuit.gates:
-        gate_type = gate.get("type", "unknown")
-        n_gates_by_type[gate_type] = n_gates_by_type.get(gate_type, 0) + 1
-
-    return NoiseSensitivityResult(
-        circuit=circuit,
-        n_qubits=n_qubits,
-        noise_model=noise_model,
-        ideal_avg_fidelity=1.0,
-        noisy_avg_fidelity=fidelity_noisy,
-        avg_fidelity_loss=avg_fidelity_loss,
-        gate_type_sensitivity=_analyze_gate_type_sensitivity(circuit, noise_model),
-        n_gates_total=len(circuit.gates),
-        n_gates_by_type=n_gates_by_type,
-        noise_strength=_estimate_noise_strength(noise_model) if noise_model else 0.0,
-    )
-
-
-def _analyze_gate_type_sensitivity(circuit: Circuit, noise_model: Optional[NoiseModel]) -> Dict[str, float]:
-    if noise_model is None:
-        return {}
-    sensitivity: Dict[str, float] = {}
-    for gate_type in {gate.get("type", "unknown") for gate in circuit.gates}:
-        count = sum(1 for gate in circuit.gates if gate.get("type", "unknown") == gate_type)
-        if gate_type in {"cx", "cnot", "cy", "cz", "rzz", "swap", "crx", "cry", "crz"}:
-            sensitivity[gate_type] = 0.02 * count
-        elif gate_type in {"rx", "ry", "rz", "u2", "u3"}:
-            sensitivity[gate_type] = 0.01 * count
-        elif gate_type in {"hadamard", "s_gate", "t_gate"}:
-            sensitivity[gate_type] = 0.005 * count
-        else:
-            sensitivity[gate_type] = 0.01 * count
-    return sensitivity
-
-
 def comparative_expressibility(
     circuit: Circuit,
     backend: Optional[Backend] = None,
@@ -303,7 +164,7 @@ def expressibility_score(
     method: str = "auto",
     initial_state: Optional[State] = None,
 ) -> float:
-    """Unified ideal/noisy expressibility distance interface for robustness analysis."""
+    """Unified ideal/noisy expressibility distance interface."""
     if backend is None:
         from ...channel.backends.numpy_backend import NumpyBackend
 
@@ -321,10 +182,8 @@ def expressibility_score(
 
 
 __all__ = [
-    "NoiseSensitivityResult",
     "KL_Haar_noisy",
     "MMD_noisy",
-    "noise_sensitivity",
     "comparative_expressibility",
     "expressibility_score",
 ]

@@ -1,4 +1,4 @@
-"""Noise-robustness metrics for QAS."""
+"""Shared noise-related circuit metrics."""
 
 from __future__ import annotations
 
@@ -7,19 +7,16 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from ...core.circuit import Circuit
-from .ion_trap_noise_config import ONEQ_GATE_TYPES, TWOQ_GATE_TYPES, load_default_ion_trap_noise_config
-from .noise_robustness import (
-    KL_Haar_noisy,
-    MMD_noisy,
-    NoiseSensitivityResult,
-    comparative_expressibility,
-    expressibility_score,
-    noise_sensitivity,
-)
+from .ion_trap import ONEQ_GATE_TYPES, TWOQ_GATE_TYPES, load_default_ion_trap_noise_config
 
 
 def ion_trap_error_budget_proxy(circuit: Circuit) -> Tuple[float, Dict[str, Any]]:
-    """Ion-trap noise score from the documented default error budget."""
+    """Estimate an ion-trap error-budget score for a circuit.
+
+    Returns a score in ``[0, 1]`` together with raw budget details. The score
+    is intentionally hardware/noise-layer logic; QAS can use it as one scoring
+    signal, but the calculation is reusable by other algorithms.
+    """
     config = load_default_ion_trap_noise_config()
     resolved = config.resolved_parameters()
 
@@ -79,12 +76,4 @@ def ion_trap_error_budget_proxy(circuit: Circuit) -> Tuple[float, Dict[str, Any]
     }
 
 
-__all__ = [
-    "KL_Haar_noisy",
-    "MMD_noisy",
-    "NoiseSensitivityResult",
-    "comparative_expressibility",
-    "expressibility_score",
-    "ion_trap_error_budget_proxy",
-    "noise_sensitivity",
-]
+__all__ = ["ion_trap_error_budget_proxy"]

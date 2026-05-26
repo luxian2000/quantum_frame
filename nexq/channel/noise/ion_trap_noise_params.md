@@ -1,7 +1,7 @@
-# Ion Trap Noise Parameters
+﻿# Ion Trap Noise Parameters
 
 This file is the single source of truth for the default ion-trap noise model.
-ion_trap_noise_config.py reads this file, normalizes the numbers, and builds a runtime NoiseModel.
+ion_trap.py reads this file, normalizes the numbers, and builds a runtime NoiseModel.
 
 # Formula profile (source: "离子阱量子计算系统噪声分析与模型设计", 2025)
 formula_profile: ion_trap_doc_2025

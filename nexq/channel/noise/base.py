@@ -1,4 +1,4 @@
-"""噪声模型抽象接口。"""
+"""Abstract interfaces for noise channels."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ from typing import List
 
 
 class NoiseChannel(ABC):
-    """Kraus 通道抽象：E(rho) = sum_k K_k rho K_k^dagger。"""
+    """Kraus channel abstraction: E(rho) = sum_k K_k rho K_k^dagger."""
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """通道名称。"""
+        """Channel name."""
 
     @abstractmethod
     def kraus_operators(self, n_qubits: int, backend) -> List[object]:
-        """返回作用在 n_qubits 全系统上的 Kraus 算符列表。"""
+        """Return Kraus operators embedded in the full n-qubit system."""

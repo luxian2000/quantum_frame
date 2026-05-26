@@ -1,4 +1,4 @@
-"""Two-stage noise-adaptive QAS orchestration."""
+﻿"""Two-stage architecture-search orchestration for QAS."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from .evaluator import ArchitectureEvaluator
 from .reward import RewardWeights
 
 
-class NoiseAdaptiveQAS:
+class ArchitectureSearch:
     """Generate candidates, then evaluate and rank them with orthogonal metrics."""
 
     def __init__(
@@ -79,5 +79,7 @@ class NoiseAdaptiveQAS:
             },
         )
 
+NoiseAdaptiveQAS = ArchitectureSearch
 
-__all__ = ["NoiseAdaptiveQAS"]
+__all__ = ["ArchitectureSearch", "NoiseAdaptiveQAS"]
+

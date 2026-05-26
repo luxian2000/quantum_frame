@@ -1,4 +1,4 @@
-"""Hardware-efficiency metrics for QAS."""
+"""Hardware-efficiency metrics for quantum circuits."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Shared data types for the flat QAS architecture."""
+"""Shared data types for QAS architecture search and scoring."""
 
 from __future__ import annotations
 
@@ -155,19 +155,18 @@ class ArchitectureScore:
 
 @dataclass
 class SearchConfig:
-    """Configuration for two-stage noise-adaptive QAS."""
+    """Configuration for architecture candidate generation and scoring."""
 
     n_qubits: int = 4
     candidate_layers: int = 2
     n_samples: int = 200
     include_common_candidates: bool = True
-    include_rl_candidates: bool = False
     active_metrics: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class SearchResult:
-    """Result of a two-stage QAS run."""
+    """Result of an architecture-search run."""
 
     candidates: List[ArchitectureSpec]
     scores: List[ArchitectureScore]
