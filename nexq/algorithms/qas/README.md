@@ -1,4 +1,4 @@
-# QAS 模块说明
+﻿# QAS 模块说明
 
 `nexq.algorithms.qas` 是量子构架搜索（Quantum Architecture Search, QAS）模块。
 
@@ -340,3 +340,4 @@ circuit = ppr_dql_state_to_circuit(state, config=config)
 python nexq/algorithms/qas/demo/PPR_DQL_demo_ghz3.py
 python nexq/algorithms/qas/demo/CRLQAS_demo_h2.py
 ```
+
