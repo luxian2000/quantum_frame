@@ -83,6 +83,7 @@ class NPUBackend(TorchBackend):
         self._requested_device = device
         self._fallback_to_cpu = bool(fallback_to_cpu)
         self._runtime_context = None
+        self._local_matrix_cache = {}
 
     @classmethod
     def from_distributed_env(cls, dtype=None, fallback_to_cpu: bool = True):
@@ -175,10 +176,90 @@ class NPUBackend(TorchBackend):
         imag = torch.matmul(a_real, b_imag) + torch.matmul(a_imag, b_real)
         return torch.complex(real, imag)
 
+    @staticmethod
+    def _real_complex_matmul(real_matrix: torch.Tensor, complex_matrix: torch.Tensor) -> torch.Tensor:
+        real = torch.matmul(real_matrix, torch.real(complex_matrix))
+        imag = torch.matmul(real_matrix, torch.imag(complex_matrix))
+        return torch.complex(real, imag).to(dtype=complex_matrix.dtype)
+
+    @staticmethod
+    def _complex_real_matmul(complex_matrix: torch.Tensor, real_matrix: torch.Tensor) -> torch.Tensor:
+        real = torch.matmul(torch.real(complex_matrix), real_matrix)
+        imag = torch.matmul(torch.imag(complex_matrix), real_matrix)
+        return torch.complex(real, imag).to(dtype=complex_matrix.dtype)
+
     def matmul(self, a, b):
+        if (
+            getattr(self._device, "type", None) == "npu"
+            and isinstance(a, torch.Tensor)
+            and isinstance(b, torch.Tensor)
+            and not torch.is_complex(a)
+            and torch.is_complex(b)
+        ):
+            return self._real_complex_matmul(a, b)
+        if (
+            getattr(self._device, "type", None) == "npu"
+            and isinstance(a, torch.Tensor)
+            and isinstance(b, torch.Tensor)
+            and torch.is_complex(a)
+            and not torch.is_complex(b)
+        ):
+            return self._complex_real_matmul(a, b)
         if self._should_use_complex_matmul_workaround(a, b):
             return self._complex_matmul_workaround(a, b)
         return super().matmul(a, b)
+
+    def cast_local_matrix(self, matrix, cache_key=None, real_if_possible: bool = True):
+        """
+        Cast a small gate matrix once per backend/device.
+
+        On NPU, real-valued gate matrices are kept as real tensors so local
+        gate application can use two real GEMMs instead of the generic four
+        real-GEMM complex workaround.
+        """
+        if cache_key is not None and cache_key in self._local_matrix_cache:
+            return self._local_matrix_cache[cache_key]
+
+        if isinstance(matrix, torch.Tensor):
+            value = matrix.to(device=self._device)
+            if value.is_complex() and not (
+                real_if_possible
+                and getattr(self._device, "type", None) == "npu"
+                and not bool(torch.any(torch.imag(value)).detach().cpu().item())
+            ):
+                value = value.to(dtype=self._dtype)
+            elif value.is_complex():
+                real_dtype = torch.float32 if self._dtype == torch.complex64 else torch.float64
+                value = torch.real(value).to(dtype=real_dtype, device=self._device)
+        else:
+            import numpy as np
+
+            array = np.asarray(matrix)
+            keep_real = (
+                real_if_possible
+                and getattr(self._device, "type", None) == "npu"
+                and np.allclose(np.imag(array), 0.0)
+            )
+            if keep_real:
+                real_dtype = torch.float32 if self._dtype == torch.complex64 else torch.float64
+                value = torch.tensor(np.real(array), dtype=real_dtype, device=self._device)
+            else:
+                value = torch.tensor(array, dtype=self._dtype, device=self._device)
+
+        if cache_key is not None:
+            self._local_matrix_cache[cache_key] = value
+        return value
+
+    def apply_local_matrix(self, local_matrix, state_block):
+        """
+        Apply a small local gate matrix to a flattened state block.
+
+        This path avoids the generic complex workaround for common real-valued
+        gates. A real local matrix times a complex state needs only two real
+        matmuls; a genuinely complex local matrix still uses the compatible
+        four-real-matmul decomposition on NPU.
+        """
+        return self.matmul(local_matrix, state_block)
 
     def eye(self, dim: int):
         """NPU workaround: build complex identity from real eye when complex eye kernel is unsupported."""

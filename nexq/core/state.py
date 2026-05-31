@@ -100,12 +100,14 @@ class State:
         self._n_qubits = n_qubits
         self._bit_order = _normalize_bit_order(bit_order)
 
-        np_data = backend.to_numpy(data)
-        if np_data.ndim == 1:
-            np_data = np_data.reshape(-1, 1)
-        casted = backend.cast(np_data)
+        if hasattr(data, "ndim") and data.ndim == 1:
+            data = data.reshape(-1, 1)
+
+        casted = backend.cast(data)
         if casted is None:
             raise TypeError("backend.cast 返回了 None，无法构造 State")
+        if len(casted.shape) == 1:
+            casted = casted.reshape(-1, 1)
         self._data = casted
 
         expected = 1 << n_qubits
