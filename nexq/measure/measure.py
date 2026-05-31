@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 
-from ..core.gates import gate_to_matrix
+from ..core.gates import apply_gate_to_state, gate_to_matrix
 from ..core.density import DensityMatrix
 from ..core.state import StateVector
 from .result import Result
@@ -85,8 +85,12 @@ class Measure:
     def _evolve_state_vector_gatewise(self, circuit, sv0: StateVector, backend) -> StateVector:
         sv = sv0
         for gate in circuit.gates:
-            gm = gate_to_matrix(gate, cir_qubits=sv.n_qubits, backend=backend)
-            sv = sv.evolve(gm)
+            new_data = apply_gate_to_state(gate, sv.data, sv.n_qubits, backend)
+            if new_data is None:
+                gm = gate_to_matrix(gate, cir_qubits=sv.n_qubits, backend=backend)
+                sv = sv.evolve(gm)
+            else:
+                sv = StateVector(new_data, sv.n_qubits, backend, bit_order=sv.bit_order)
         return sv
 
     def _evolve_density_matrix_gatewise(
@@ -309,8 +313,11 @@ class Measure:
         if mode_norm not in {"state_vector", "density_matrix"}:
             raise ValueError("mode 仅支持 'state_vector' 或 'density_matrix'")
 
-        results: List[Result] = []
+        indexed_results = []
         for idx, circ in enumerate(circuits):
+            if hasattr(self.backend, "should_run_batch_index") and not self.backend.should_run_batch_index(idx):
+                continue
+
             opts = per_circuit_options[idx] if per_circuit_options is not None else {}
             run_shots = opts.get("shots", shots)
             run_observables = opts.get("observables", observables)
@@ -338,9 +345,14 @@ class Measure:
             result.metadata["batch_index"] = idx
             if label is not None:
                 result.metadata["label"] = str(label)
-            results.append(result)
+            indexed_results.append((idx, result))
 
-        return results
+        if hasattr(self.backend, "gather_indexed_results"):
+            indexed_results = self.backend.gather_indexed_results(indexed_results)
+        else:
+            indexed_results = sorted(indexed_results, key=lambda item: item[0])
+
+        return [result for _, result in indexed_results]
 
     def scan_parameters(
         self,

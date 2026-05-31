@@ -1,8 +1,9 @@
 import unittest
+from unittest import mock
 
 import numpy as np
 
-from nexq import NumpyBackend, State, StateVector
+from nexq import NumpyBackend, State, StateVector, TorchBackend
 
 
 class TestState(unittest.TestCase):
@@ -41,3 +42,15 @@ class TestState(unittest.TestCase):
 
     def test_statevector_remains_alias(self):
         self.assertIs(StateVector, State)
+
+    def test_backend_native_tensor_construction_does_not_round_trip_through_numpy(self):
+        backend = TorchBackend(device="cpu")
+
+        with mock.patch.object(
+            backend,
+            "to_numpy",
+            side_effect=AssertionError("State should not copy backend-native tensors through NumPy"),
+        ):
+            state = StateVector.zero_state(2, backend)
+
+        self.assertEqual(tuple(state.data.shape), (4, 1))
