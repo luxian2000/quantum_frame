@@ -145,6 +145,34 @@ class TestNPUBackend(unittest.TestCase):
             workaround.assert_called_once_with(a, b)
             self.assertTrue(torch.equal(result, torch.tensor([[2 + 0j]], dtype=torch.complex64)))
 
+    def test_npu_real_complex_matmul_uses_real_complex_path(self):
+        backend = NPUBackend(fallback_to_cpu=True)
+        backend._device = type("FakeDevice", (), {"type": "npu"})()
+        real_gate = torch.tensor([[1.0, 0.0], [0.0, -1.0]], dtype=torch.float32)
+        complex_state = torch.tensor([[1 + 2j], [3 - 4j]], dtype=torch.complex64)
+
+        with mock.patch.object(
+            NPUBackend,
+            "_real_complex_matmul",
+            wraps=NPUBackend._real_complex_matmul,
+        ) as real_complex:
+            with mock.patch.object(NPUBackend, "_complex_matmul_workaround") as complex_workaround:
+                result = backend.matmul(real_gate, complex_state)
+
+        real_complex.assert_called_once()
+        complex_workaround.assert_not_called()
+        expected = torch.tensor([[1 + 2j], [-3 + 4j]], dtype=torch.complex64)
+        self.assertTrue(torch.allclose(result, expected, atol=1e-6))
+
+    def test_cast_local_matrix_caches_by_key(self):
+        backend = NPUBackend(fallback_to_cpu=True)
+        matrix = np.array([[1, 0], [0, -1]], dtype=np.complex64)
+
+        first = backend.cast_local_matrix(matrix, cache_key=("z",))
+        second = backend.cast_local_matrix(matrix, cache_key=("z",))
+
+        self.assertIs(first, second)
+
     # ──────── new operator workaround tests ────────
 
     def _npu_backend_forced(self):

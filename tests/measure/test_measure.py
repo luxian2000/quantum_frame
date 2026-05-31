@@ -147,6 +147,22 @@ class TestMeasure(unittest.TestCase):
                     msg=f"local gate mismatch for {backend.name}: {gate}",
                 )
 
+    def test_local_gate_application_reuses_cached_backend_matrix(self):
+        backend = NumpyBackend()
+        state = backend.zeros_state(1)
+        gate = hadamard(0)
+
+        with unittest.mock.patch.object(backend, "cast", wraps=backend.cast) as cast:
+            state = apply_gate_to_state(gate, state, 1, backend)
+            state = apply_gate_to_state(gate, state, 1, backend)
+
+        self.assertEqual(cast.call_count, 1)
+        np.testing.assert_allclose(
+            backend.to_numpy(state),
+            np.array([[1.0 + 0j], [0.0 + 0j]], dtype=np.complex64),
+            atol=1e-6,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
