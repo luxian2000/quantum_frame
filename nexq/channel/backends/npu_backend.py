@@ -12,7 +12,7 @@ Design goals:
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -38,6 +38,8 @@ class NPURuntimeContext:
     rank: int
     local_rank: int
     distributed: bool
+    process_group_initialized: bool = False
+    process_group_backend: str | None = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -63,6 +65,10 @@ def npu_runtime_context_from_env() -> NPURuntimeContext:
     )
 
 
+def _has_complete_distributed_env() -> bool:
+    return all(os.environ.get(name) for name in ("MASTER_ADDR", "MASTER_PORT", "WORLD_SIZE", "RANK"))
+
+
 class NPUBackend(TorchBackend):
     """NPU-first backend for Ascend devices, compatible with TorchBackend API."""
 
@@ -86,21 +92,92 @@ class NPUBackend(TorchBackend):
         self._local_matrix_cache = {}
 
     @classmethod
-    def from_distributed_env(cls, dtype=None, fallback_to_cpu: bool = True):
+    def from_distributed_env(
+        cls,
+        dtype=None,
+        fallback_to_cpu: bool = True,
+        init_process_group: bool = True,
+        process_group_backend: str | None = None,
+    ):
         """
         Create a backend instance from distributed env variables.
 
         Env variables used:
-            WORLD_SIZE, RANK, LOCAL_RANK
+            WORLD_SIZE, RANK, LOCAL_RANK, MASTER_ADDR, MASTER_PORT
 
         Behavior:
             - Preferred device is npu:{LOCAL_RANK}
             - Falls back to CPU when NPU is unavailable and fallback_to_cpu=True
+            - Initializes torch.distributed when WORLD_SIZE > 1 and torchrun-style
+              rendezvous env variables are present.
         """
         ctx = npu_runtime_context_from_env()
         backend = cls(dtype=dtype, device=f"npu:{ctx.local_rank}", fallback_to_cpu=fallback_to_cpu)
-        backend._runtime_context = ctx
+        pg_initialized = False
+        pg_backend = None
+
+        if ctx.distributed and init_process_group and _has_complete_distributed_env():
+            if not torch.distributed.is_available():
+                raise RuntimeError("torch.distributed is not available, cannot initialize distributed NPU runtime")
+            if not torch.distributed.is_initialized():
+                pg_backend = process_group_backend
+                if pg_backend is None:
+                    pg_backend = "hccl" if getattr(backend._device, "type", None) == "npu" else "gloo"
+                torch.distributed.init_process_group(
+                    backend=pg_backend,
+                    rank=ctx.rank,
+                    world_size=ctx.world_size,
+                )
+            else:
+                pg_backend = process_group_backend
+            pg_initialized = torch.distributed.is_initialized()
+
+        backend._runtime_context = replace(
+            ctx,
+            process_group_initialized=pg_initialized,
+            process_group_backend=pg_backend,
+        )
         return backend
+
+    @property
+    def distributed_initialized(self) -> bool:
+        """True when this backend has a usable torch.distributed process group."""
+        return bool(torch.distributed.is_available() and torch.distributed.is_initialized())
+
+    @property
+    def distributed_world_size(self) -> int:
+        ctx = self._runtime_context
+        return 1 if ctx is None else int(ctx.world_size)
+
+    @property
+    def distributed_rank(self) -> int:
+        ctx = self._runtime_context
+        return 0 if ctx is None else int(ctx.rank)
+
+    def should_run_batch_index(self, index: int) -> bool:
+        """Return True when this rank owns a batch item under task-parallel execution."""
+        if not self.distributed_initialized:
+            return True
+        return int(index) % self.distributed_world_size == self.distributed_rank
+
+    def gather_indexed_results(self, indexed_results):
+        """
+        Gather per-rank `(index, result)` pairs and return a globally ordered list.
+
+        This enables real multi-NPU utilization for embarrassingly parallel
+        workloads such as circuit batches and parameter scans. It does not shard
+        a single state vector across devices.
+        """
+        if not self.distributed_initialized:
+            return sorted(indexed_results, key=lambda item: item[0])
+
+        gathered = [None for _ in range(self.distributed_world_size)]
+        torch.distributed.all_gather_object(gathered, list(indexed_results))
+        merged = []
+        for rank_items in gathered:
+            if rank_items:
+                merged.extend(rank_items)
+        return sorted(merged, key=lambda item: item[0])
 
     @staticmethod
     def _is_npu_device(device) -> bool:
