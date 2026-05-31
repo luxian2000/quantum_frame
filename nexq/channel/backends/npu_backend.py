@@ -12,7 +12,7 @@ Design goals:
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -38,6 +38,8 @@ class NPURuntimeContext:
     rank: int
     local_rank: int
     distributed: bool
+    process_group_initialized: bool = False
+    process_group_backend: str | None = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -63,6 +65,10 @@ def npu_runtime_context_from_env() -> NPURuntimeContext:
     )
 
 
+def _has_complete_distributed_env() -> bool:
+    return all(os.environ.get(name) for name in ("MASTER_ADDR", "MASTER_PORT", "WORLD_SIZE", "RANK"))
+
+
 class NPUBackend(TorchBackend):
     """NPU-first backend for Ascend devices, compatible with TorchBackend API."""
 
@@ -83,23 +89,95 @@ class NPUBackend(TorchBackend):
         self._requested_device = device
         self._fallback_to_cpu = bool(fallback_to_cpu)
         self._runtime_context = None
+        self._local_matrix_cache = {}
 
     @classmethod
-    def from_distributed_env(cls, dtype=None, fallback_to_cpu: bool = True):
+    def from_distributed_env(
+        cls,
+        dtype=None,
+        fallback_to_cpu: bool = True,
+        init_process_group: bool = True,
+        process_group_backend: str | None = None,
+    ):
         """
         Create a backend instance from distributed env variables.
 
         Env variables used:
-            WORLD_SIZE, RANK, LOCAL_RANK
+            WORLD_SIZE, RANK, LOCAL_RANK, MASTER_ADDR, MASTER_PORT
 
         Behavior:
             - Preferred device is npu:{LOCAL_RANK}
             - Falls back to CPU when NPU is unavailable and fallback_to_cpu=True
+            - Initializes torch.distributed when WORLD_SIZE > 1 and torchrun-style
+              rendezvous env variables are present.
         """
         ctx = npu_runtime_context_from_env()
         backend = cls(dtype=dtype, device=f"npu:{ctx.local_rank}", fallback_to_cpu=fallback_to_cpu)
-        backend._runtime_context = ctx
+        pg_initialized = False
+        pg_backend = None
+
+        if ctx.distributed and init_process_group and _has_complete_distributed_env():
+            if not torch.distributed.is_available():
+                raise RuntimeError("torch.distributed is not available, cannot initialize distributed NPU runtime")
+            if not torch.distributed.is_initialized():
+                pg_backend = process_group_backend
+                if pg_backend is None:
+                    pg_backend = "hccl" if getattr(backend._device, "type", None) == "npu" else "gloo"
+                torch.distributed.init_process_group(
+                    backend=pg_backend,
+                    rank=ctx.rank,
+                    world_size=ctx.world_size,
+                )
+            else:
+                pg_backend = process_group_backend
+            pg_initialized = torch.distributed.is_initialized()
+
+        backend._runtime_context = replace(
+            ctx,
+            process_group_initialized=pg_initialized,
+            process_group_backend=pg_backend,
+        )
         return backend
+
+    @property
+    def distributed_initialized(self) -> bool:
+        """True when this backend has a usable torch.distributed process group."""
+        return bool(torch.distributed.is_available() and torch.distributed.is_initialized())
+
+    @property
+    def distributed_world_size(self) -> int:
+        ctx = self._runtime_context
+        return 1 if ctx is None else int(ctx.world_size)
+
+    @property
+    def distributed_rank(self) -> int:
+        ctx = self._runtime_context
+        return 0 if ctx is None else int(ctx.rank)
+
+    def should_run_batch_index(self, index: int) -> bool:
+        """Return True when this rank owns a batch item under task-parallel execution."""
+        if not self.distributed_initialized:
+            return True
+        return int(index) % self.distributed_world_size == self.distributed_rank
+
+    def gather_indexed_results(self, indexed_results):
+        """
+        Gather per-rank `(index, result)` pairs and return a globally ordered list.
+
+        This enables real multi-NPU utilization for embarrassingly parallel
+        workloads such as circuit batches and parameter scans. It does not shard
+        a single state vector across devices.
+        """
+        if not self.distributed_initialized:
+            return sorted(indexed_results, key=lambda item: item[0])
+
+        gathered = [None for _ in range(self.distributed_world_size)]
+        torch.distributed.all_gather_object(gathered, list(indexed_results))
+        merged = []
+        for rank_items in gathered:
+            if rank_items:
+                merged.extend(rank_items)
+        return sorted(merged, key=lambda item: item[0])
 
     @staticmethod
     def _is_npu_device(device) -> bool:
@@ -175,10 +253,90 @@ class NPUBackend(TorchBackend):
         imag = torch.matmul(a_real, b_imag) + torch.matmul(a_imag, b_real)
         return torch.complex(real, imag)
 
+    @staticmethod
+    def _real_complex_matmul(real_matrix: torch.Tensor, complex_matrix: torch.Tensor) -> torch.Tensor:
+        real = torch.matmul(real_matrix, torch.real(complex_matrix))
+        imag = torch.matmul(real_matrix, torch.imag(complex_matrix))
+        return torch.complex(real, imag).to(dtype=complex_matrix.dtype)
+
+    @staticmethod
+    def _complex_real_matmul(complex_matrix: torch.Tensor, real_matrix: torch.Tensor) -> torch.Tensor:
+        real = torch.matmul(torch.real(complex_matrix), real_matrix)
+        imag = torch.matmul(torch.imag(complex_matrix), real_matrix)
+        return torch.complex(real, imag).to(dtype=complex_matrix.dtype)
+
     def matmul(self, a, b):
+        if (
+            getattr(self._device, "type", None) == "npu"
+            and isinstance(a, torch.Tensor)
+            and isinstance(b, torch.Tensor)
+            and not torch.is_complex(a)
+            and torch.is_complex(b)
+        ):
+            return self._real_complex_matmul(a, b)
+        if (
+            getattr(self._device, "type", None) == "npu"
+            and isinstance(a, torch.Tensor)
+            and isinstance(b, torch.Tensor)
+            and torch.is_complex(a)
+            and not torch.is_complex(b)
+        ):
+            return self._complex_real_matmul(a, b)
         if self._should_use_complex_matmul_workaround(a, b):
             return self._complex_matmul_workaround(a, b)
         return super().matmul(a, b)
+
+    def cast_local_matrix(self, matrix, cache_key=None, real_if_possible: bool = True):
+        """
+        Cast a small gate matrix once per backend/device.
+
+        On NPU, real-valued gate matrices are kept as real tensors so local
+        gate application can use two real GEMMs instead of the generic four
+        real-GEMM complex workaround.
+        """
+        if cache_key is not None and cache_key in self._local_matrix_cache:
+            return self._local_matrix_cache[cache_key]
+
+        if isinstance(matrix, torch.Tensor):
+            value = matrix.to(device=self._device)
+            if value.is_complex() and not (
+                real_if_possible
+                and getattr(self._device, "type", None) == "npu"
+                and not bool(torch.any(torch.imag(value)).detach().cpu().item())
+            ):
+                value = value.to(dtype=self._dtype)
+            elif value.is_complex():
+                real_dtype = torch.float32 if self._dtype == torch.complex64 else torch.float64
+                value = torch.real(value).to(dtype=real_dtype, device=self._device)
+        else:
+            import numpy as np
+
+            array = np.asarray(matrix)
+            keep_real = (
+                real_if_possible
+                and getattr(self._device, "type", None) == "npu"
+                and np.allclose(np.imag(array), 0.0)
+            )
+            if keep_real:
+                real_dtype = torch.float32 if self._dtype == torch.complex64 else torch.float64
+                value = torch.tensor(np.real(array), dtype=real_dtype, device=self._device)
+            else:
+                value = torch.tensor(array, dtype=self._dtype, device=self._device)
+
+        if cache_key is not None:
+            self._local_matrix_cache[cache_key] = value
+        return value
+
+    def apply_local_matrix(self, local_matrix, state_block):
+        """
+        Apply a small local gate matrix to a flattened state block.
+
+        This path avoids the generic complex workaround for common real-valued
+        gates. A real local matrix times a complex state needs only two real
+        matmuls; a genuinely complex local matrix still uses the compatible
+        four-real-matmul decomposition on NPU.
+        """
+        return self.matmul(local_matrix, state_block)
 
     def eye(self, dim: int):
         """NPU workaround: build complex identity from real eye when complex eye kernel is unsupported."""

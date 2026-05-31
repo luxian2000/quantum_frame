@@ -78,6 +78,51 @@ class TestNPUBackend(unittest.TestCase):
         self.assertEqual(backend.runtime_context.rank, 3)
         self.assertEqual(backend.runtime_context.local_rank, 2)
         self.assertTrue(backend.runtime_context.distributed)
+        self.assertFalse(backend.runtime_context.process_group_initialized)
+
+    def test_from_distributed_env_initializes_process_group_when_rendezvous_env_exists(self):
+        env = {
+            "WORLD_SIZE": "2",
+            "RANK": "1",
+            "LOCAL_RANK": "1",
+            "MASTER_ADDR": "127.0.0.1",
+            "MASTER_PORT": "29500",
+        }
+        with mock.patch.dict("os.environ", env, clear=False):
+            with mock.patch("torch.distributed.is_available", return_value=True):
+                with mock.patch("torch.distributed.is_initialized", side_effect=[False, True]):
+                    with mock.patch("torch.distributed.init_process_group") as init_pg:
+                        backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
+
+        init_pg.assert_called_once_with(backend="gloo", rank=1, world_size=2)
+        self.assertTrue(backend.runtime_context.process_group_initialized)
+        self.assertEqual(backend.runtime_context.process_group_backend, "gloo")
+
+    def test_distributed_batch_helpers_partition_and_gather(self):
+        backend = NPUBackend(fallback_to_cpu=True)
+        backend._runtime_context = backend.runtime_context or npu_runtime_context_from_env()
+        backend._runtime_context = type(backend._runtime_context)(
+            world_size=2,
+            rank=1,
+            local_rank=1,
+            distributed=True,
+            process_group_initialized=True,
+            process_group_backend="gloo",
+        )
+
+        with mock.patch("torch.distributed.is_available", return_value=True):
+            with mock.patch("torch.distributed.is_initialized", return_value=True):
+                self.assertFalse(backend.should_run_batch_index(0))
+                self.assertTrue(backend.should_run_batch_index(1))
+
+                def fake_gather(output, local):
+                    output[0] = [(0, "rank0")]
+                    output[1] = local
+
+                with mock.patch("torch.distributed.all_gather_object", side_effect=fake_gather):
+                    gathered = backend.gather_indexed_results([(1, "rank1")])
+
+        self.assertEqual(gathered, [(0, "rank0"), (1, "rank1")])
 
     def test_complex_matmul_workaround_matches_torch(self):
         backend = NPUBackend(fallback_to_cpu=True)
@@ -144,6 +189,34 @@ class TestNPUBackend(unittest.TestCase):
             result = backend.matmul(a, b)
             workaround.assert_called_once_with(a, b)
             self.assertTrue(torch.equal(result, torch.tensor([[2 + 0j]], dtype=torch.complex64)))
+
+    def test_npu_real_complex_matmul_uses_real_complex_path(self):
+        backend = NPUBackend(fallback_to_cpu=True)
+        backend._device = type("FakeDevice", (), {"type": "npu"})()
+        real_gate = torch.tensor([[1.0, 0.0], [0.0, -1.0]], dtype=torch.float32)
+        complex_state = torch.tensor([[1 + 2j], [3 - 4j]], dtype=torch.complex64)
+
+        with mock.patch.object(
+            NPUBackend,
+            "_real_complex_matmul",
+            wraps=NPUBackend._real_complex_matmul,
+        ) as real_complex:
+            with mock.patch.object(NPUBackend, "_complex_matmul_workaround") as complex_workaround:
+                result = backend.matmul(real_gate, complex_state)
+
+        real_complex.assert_called_once()
+        complex_workaround.assert_not_called()
+        expected = torch.tensor([[1 + 2j], [-3 + 4j]], dtype=torch.complex64)
+        self.assertTrue(torch.allclose(result, expected, atol=1e-6))
+
+    def test_cast_local_matrix_caches_by_key(self):
+        backend = NPUBackend(fallback_to_cpu=True)
+        matrix = np.array([[1, 0], [0, -1]], dtype=np.complex64)
+
+        first = backend.cast_local_matrix(matrix, cache_key=("z",))
+        second = backend.cast_local_matrix(matrix, cache_key=("z",))
+
+        self.assertIs(first, second)
 
     # ──────── new operator workaround tests ────────
 
