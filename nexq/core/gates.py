@@ -314,6 +314,281 @@ def _rzz(theta, qubit_1=0, qubit_2=1):
     )
 
 
+def _inverse_permutation(perm):
+    inv = [0] * len(perm)
+    for i, p in enumerate(perm):
+        inv[p] = i
+    return inv
+
+
+def _permute_tensor(tensor, perm):
+    if isinstance(tensor, torch.Tensor):
+        return tensor.permute(perm)
+    return np.transpose(tensor, perm)
+
+
+def _contiguous_if_torch(tensor):
+    return tensor.contiguous() if isinstance(tensor, torch.Tensor) else tensor
+
+
+def _parameter_cache_key(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return tuple(_parameter_cache_key(v) for v in value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return repr(value)
+
+
+def _cast_local_matrix(backend, matrix, cache_key=None):
+    if hasattr(backend, "cast_local_matrix"):
+        return backend.cast_local_matrix(matrix, cache_key=cache_key)
+
+    if cache_key is not None:
+        cache = getattr(backend, "_local_matrix_cache", None)
+        if cache is None:
+            cache = {}
+            setattr(backend, "_local_matrix_cache", cache)
+        if cache_key in cache:
+            return cache[cache_key]
+        casted = backend.cast(matrix)
+        cache[cache_key] = casted
+        return casted
+
+    return backend.cast(matrix)
+
+
+def _apply_local_matrix_to_state(state, local_matrix, axes, n_qubits, backend):
+    axes = [int(axis) for axis in axes]
+    if len(set(axes)) != len(axes):
+        raise ValueError("局部门作用的量子比特不能重复")
+    if any(axis < 0 or axis >= n_qubits for axis in axes):
+        raise ValueError("局部门作用的量子比特索引超出范围")
+
+    dim_local = 1 << len(axes)
+    if local_matrix.shape != (dim_local, dim_local):
+        raise ValueError(
+            f"局部门矩阵维度 {local_matrix.shape} 与作用量子比特数量 {len(axes)} 不一致"
+        )
+
+    rest_axes = [axis for axis in range(n_qubits) if axis not in axes]
+    perm = axes + rest_axes
+    inv_perm = _inverse_permutation(perm)
+
+    psi = state.reshape([2] * n_qubits)
+    moved = _contiguous_if_torch(_permute_tensor(psi, perm))
+    flat = moved.reshape(dim_local, -1)
+    if hasattr(backend, "apply_local_matrix"):
+        updated = backend.apply_local_matrix(local_matrix, flat)
+    else:
+        updated = backend.matmul(local_matrix, flat)
+    restored = updated.reshape([2] * len(axes) + [2] * len(rest_axes))
+    restored = _contiguous_if_torch(_permute_tensor(restored, inv_perm))
+    return restored.reshape(1 << n_qubits, 1)
+
+
+def _single_qubit_base_for_gate(gate):
+    gate_type = gate["type"]
+    gate_parameter = gate.get("parameter", None)
+
+    if gate_type in ["pauli_x", "X", "cnot", "cx", "toffoli", "ccnot"]:
+        return np.array([[0.0 + 0.0j, 1.0 + 0.0j], [1.0 + 0.0j, 0.0 + 0.0j]], dtype=_CDTYPE)
+    if gate_type in ["pauli_y", "Y", "cy"]:
+        return np.array([[0.0 + 0.0j, -1j], [1j, 0.0 + 0.0j]], dtype=_CDTYPE)
+    if gate_type in ["pauli_z", "Z", "cz"]:
+        return np.array([[1.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, -1.0 + 0.0j]], dtype=_CDTYPE)
+    if gate_type in ["hadamard", "H"]:
+        sqrt2_inv = 1.0 / math.sqrt(2.0)
+        return np.array(
+            [[sqrt2_inv + 0.0j, sqrt2_inv + 0.0j], [sqrt2_inv + 0.0j, -sqrt2_inv + 0.0j]],
+            dtype=_CDTYPE,
+        )
+    if gate_type in ["s_gate", "S"]:
+        return np.array([[1.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, 1j]], dtype=_CDTYPE)
+    if gate_type in ["t_gate", "T"]:
+        return np.array([[1.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, np.exp(1j * math.pi / 4.0)]], dtype=_CDTYPE)
+    if gate_type in ["rx", "crx"]:
+        t = float(gate_parameter)
+        cos = math.cos(t / 2.0)
+        sin = math.sin(t / 2.0)
+        return np.array([[cos, -1j * sin], [-1j * sin, cos]], dtype=_CDTYPE)
+    if gate_type in ["ry", "cry"]:
+        t = float(gate_parameter)
+        cos = math.cos(t / 2.0)
+        sin = math.sin(t / 2.0)
+        return np.array([[cos, -sin], [sin, cos]], dtype=_CDTYPE)
+    if gate_type in ["rz", "crz"]:
+        t = float(gate_parameter)
+        return np.array([[np.exp(-1j * t / 2.0), 0.0 + 0.0j], [0.0 + 0.0j, np.exp(1j * t / 2.0)]], dtype=_CDTYPE)
+    if gate_type == "u3":
+        theta, phi, lam = float(gate_parameter[0]), float(gate_parameter[1]), float(gate_parameter[2])
+        cos = math.cos(theta / 2.0)
+        sin = math.sin(theta / 2.0)
+        return np.array(
+            [[cos, -np.exp(1j * lam) * sin], [np.exp(1j * phi) * sin, np.exp(1j * (phi + lam)) * cos]],
+            dtype=_CDTYPE,
+        )
+    if gate_type == "u2":
+        phi, lam = float(gate_parameter[0]), float(gate_parameter[1])
+        cos = math.cos(math.pi / 4.0)
+        sin = math.sin(math.pi / 4.0)
+        return np.array(
+            [[cos, -np.exp(1j * lam) * sin], [np.exp(1j * phi) * sin, np.exp(1j * (phi + lam)) * cos]],
+            dtype=_CDTYPE,
+        )
+    return None
+
+
+def _controlled_local_from_base(base_single, control_states):
+    control_states = [int(state) for state in control_states]
+    n_controls = len(control_states)
+    dim = 1 << (n_controls + 1)
+    local = np.eye(dim, dtype=_CDTYPE)
+
+    control_index = 0
+    for state in control_states:
+        if state not in (0, 1):
+            raise ValueError("control_states 只能包含 0 或 1")
+        control_index = (control_index << 1) | state
+
+    block_indices = [(control_index << 1) | target_state for target_state in (0, 1)]
+    local[np.ix_(block_indices, block_indices)] = np.asarray(base_single, dtype=_CDTYPE)
+    return local
+
+
+def apply_gate_to_state(gate, state, n_qubits: int, backend):
+    """
+    直接将局部门作用到态向量，避免构造 2^n × 2^n 全局矩阵。
+
+    返回后端原生态向量；若门类型无法局部展开则返回 None，调用方可回退到
+    gate_to_matrix + apply_unitary。
+    """
+    gate_type = gate["type"]
+
+    if gate_type in ["identity", "I"]:
+        return state
+
+    if gate_type == "unitary":
+        matrix = np.asarray(gate.get("parameter"), dtype=_CDTYPE)
+        if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+            raise ValueError("unitary 门参数必须是方阵")
+        dim = matrix.shape[0]
+        inferred = int(round(math.log2(dim))) if dim > 0 else 0
+        if (1 << inferred) != dim:
+            raise ValueError("unitary 门矩阵维度必须是 2 的幂")
+        gate_qubits = int(gate.get("n_qubits", inferred))
+        if (1 << gate_qubits) != dim:
+            raise ValueError("unitary 门的 n_qubits 与矩阵维度不一致")
+        if gate_qubits > n_qubits:
+            raise ValueError(f"量子门的量子比特数量超出总量子比特数: {gate_qubits} > {n_qubits}")
+        return _apply_local_matrix_to_state(
+            state,
+            backend.cast(matrix),
+            list(range(gate_qubits)),
+            n_qubits,
+            backend,
+        )
+
+    if gate_type in [
+        "pauli_x",
+        "X",
+        "pauli_y",
+        "Y",
+        "pauli_z",
+        "Z",
+        "hadamard",
+        "H",
+        "s_gate",
+        "S",
+        "t_gate",
+        "T",
+        "rx",
+        "ry",
+        "rz",
+        "u3",
+        "u2",
+    ]:
+        base = _single_qubit_base_for_gate(gate)
+        cache_key = ("single", gate_type, _parameter_cache_key(gate.get("parameter")))
+        return _apply_local_matrix_to_state(
+            state,
+            _cast_local_matrix(backend, base, cache_key=cache_key),
+            [gate["target_qubit"]],
+            n_qubits,
+            backend,
+        )
+
+    if gate_type in ["cnot", "cx", "cy", "cz", "crx", "cry", "crz"]:
+        controls = list(gate["control_qubits"])
+        control_states = gate.get("control_states", [1] * len(controls))
+        if len(control_states) != len(controls):
+            raise ValueError("control_states的长度必须与control_qubits的长度相同")
+        base = _single_qubit_base_for_gate(gate)
+        local = _controlled_local_from_base(base, control_states)
+        cache_key = (
+            "controlled",
+            gate_type,
+            len(controls),
+            tuple(int(state) for state in control_states),
+            _parameter_cache_key(gate.get("parameter")),
+        )
+        return _apply_local_matrix_to_state(
+            state,
+            _cast_local_matrix(backend, local, cache_key=cache_key),
+            controls + [gate["target_qubit"]],
+            n_qubits,
+            backend,
+        )
+
+    if gate_type in ["toffoli", "ccnot"]:
+        controls = list(gate["control_qubits"])
+        control_states = [1] * len(controls)
+        base = _single_qubit_base_for_gate(gate)
+        local = _controlled_local_from_base(base, control_states)
+        cache_key = ("controlled", gate_type, len(controls), tuple(control_states), None)
+        return _apply_local_matrix_to_state(
+            state,
+            _cast_local_matrix(backend, local, cache_key=cache_key),
+            controls + [gate["target_qubit"]],
+            n_qubits,
+            backend,
+        )
+
+    if gate_type == "swap":
+        local = np.array(
+            [
+                [1.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j],
+                [0.0 + 0.0j, 0.0 + 0.0j, 1.0 + 0.0j, 0.0 + 0.0j],
+                [0.0 + 0.0j, 1.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j],
+                [0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 1.0 + 0.0j],
+            ],
+            dtype=_CDTYPE,
+        )
+        cache_key = ("swap",)
+        return _apply_local_matrix_to_state(
+            state,
+            _cast_local_matrix(backend, local, cache_key=cache_key),
+            [gate["qubit_1"], gate["qubit_2"]],
+            n_qubits,
+            backend,
+        )
+
+    if gate_type == "rzz":
+        local = _rzz(gate.get("parameter"), gate["qubit_1"], gate["qubit_2"])
+        cache_key = ("rzz", _parameter_cache_key(gate.get("parameter")))
+        return _apply_local_matrix_to_state(
+            state,
+            _cast_local_matrix(backend, local, cache_key=cache_key),
+            [gate["qubit_1"], gate["qubit_2"]],
+            n_qubits,
+            backend,
+        )
+
+    return None
+
+
 def gate_to_matrix(gate, cir_qubits=1, backend=None):
     gate_type = gate["type"]
     gate_parameter = gate.get("parameter", None)

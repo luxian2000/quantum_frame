@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 
-from ..core.gates import gate_to_matrix
+from ..core.gates import apply_gate_to_state, gate_to_matrix
 from ..core.density import DensityMatrix
 from ..core.state import StateVector
 from .result import Result
@@ -85,8 +85,12 @@ class Measure:
     def _evolve_state_vector_gatewise(self, circuit, sv0: StateVector, backend) -> StateVector:
         sv = sv0
         for gate in circuit.gates:
-            gm = gate_to_matrix(gate, cir_qubits=sv.n_qubits, backend=backend)
-            sv = sv.evolve(gm)
+            new_data = apply_gate_to_state(gate, sv.data, sv.n_qubits, backend)
+            if new_data is None:
+                gm = gate_to_matrix(gate, cir_qubits=sv.n_qubits, backend=backend)
+                sv = sv.evolve(gm)
+            else:
+                sv = StateVector(new_data, sv.n_qubits, backend, bit_order=sv.bit_order)
         return sv
 
     def _evolve_density_matrix_gatewise(

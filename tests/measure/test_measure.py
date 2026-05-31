@@ -6,6 +6,8 @@ import torch
 from nexq import Circuit, Measure, TorchBackend, cnot, hadamard, ry
 from nexq.channel.backends import NumpyBackend
 from nexq.channel.operators import Hamiltonian
+from nexq.core.circuit import crx, swap, toffoli
+from nexq.core.gates import apply_gate_to_state, gate_to_matrix
 
 
 class TestMeasure(unittest.TestCase):
@@ -118,6 +120,32 @@ class TestMeasure(unittest.TestCase):
         result = self.measure.run(GateOnlyCircuit(), shots=None)
         self.assertAlmostEqual(result.probabilities[0], 0.5, places=3)
         self.assertAlmostEqual(result.probabilities[3], 0.5, places=3)
+
+    def test_local_gate_application_matches_full_matrix_path(self):
+        rng = np.random.default_rng(7)
+        gates = [
+            hadamard(0),
+            ry(0.3, 2),
+            cnot(0, [2], [0]),
+            crx(0.2, 2, [1]),
+            swap(0, 2),
+            toffoli(2, [0, 1]),
+        ]
+
+        for backend in (NumpyBackend(), TorchBackend(device="cpu")):
+            for gate in gates:
+                n_qubits = 3
+                state_np = rng.normal(size=(1 << n_qubits, 1)) + 1j * rng.normal(size=(1 << n_qubits, 1))
+                state_np = (state_np / np.linalg.norm(state_np)).astype(np.complex64)
+                state = backend.cast(state_np)
+
+                direct = apply_gate_to_state(gate, state, n_qubits, backend)
+                full = backend.apply_unitary(state, gate_to_matrix(gate, n_qubits, backend=backend))
+
+                self.assertTrue(
+                    np.allclose(backend.to_numpy(direct), backend.to_numpy(full), atol=1e-5),
+                    msg=f"local gate mismatch for {backend.name}: {gate}",
+                )
 
 
 if __name__ == "__main__":
