@@ -8,6 +8,7 @@ from nexq.channel.backends import NumpyBackend
 from nexq.channel.operators import Hamiltonian
 from nexq.core.circuit import crx, swap, toffoli
 from nexq.core.gates import apply_gate_to_state, gate_to_matrix
+from nexq.measure.result import Result
 
 
 class TestMeasure(unittest.TestCase):
@@ -74,6 +75,43 @@ class TestMeasure(unittest.TestCase):
         self.assertEqual(results[1].metadata.get("label"), "bell")
         self.assertAlmostEqual(results[0].expectation_values["ZZ"], 0.0, places=5)
         self.assertAlmostEqual(results[1].expectation_values["ZZ"], 1.0, places=5)
+
+    def test_run_batch_uses_distributed_backend_partition_and_gather(self):
+        class PartitionBackend(NumpyBackend):
+            def __init__(self):
+                super().__init__()
+                self.local_indices = []
+
+            def should_run_batch_index(self, index):
+                return index % 2 == 0
+
+            def gather_indexed_results(self, indexed_results):
+                self.local_indices = [idx for idx, _ in indexed_results]
+                remote_result = Result(
+                    n_qubits=1,
+                    backend_name="remote",
+                    probabilities=np.array([1.0, 0.0]),
+                    metadata={"batch_index": 1, "label": "remote"},
+                )
+                return sorted(indexed_results + [(1, remote_result)], key=lambda item: item[0])
+
+        backend = PartitionBackend()
+        measure = Measure(backend)
+        circuits = [
+            Circuit(hadamard(0), n_qubits=1),
+            Circuit(ry(0.1, 0), n_qubits=1),
+            Circuit(ry(0.2, 0), n_qubits=1),
+        ]
+
+        results = measure.run_batch(circuits, shots=None, per_circuit_options=[
+            {"label": "local_0"},
+            {"label": "skipped_remote"},
+            {"label": "local_2"},
+        ])
+
+        self.assertEqual(backend.local_indices, [0, 2])
+        self.assertEqual([r.metadata["batch_index"] for r in results], [0, 1, 2])
+        self.assertEqual(results[1].metadata["label"], "remote")
 
     def test_scan_parameters(self):
         h = Hamiltonian(n_qubits=2).term(1.0, {"Z": [0]})
