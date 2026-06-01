@@ -1,5 +1,8 @@
 """Curriculum-based RL Quantum Architecture Search (CRLQAS).
 
+- Papers: Curriculum reinforcement learning for quantum architecture search under hardware errors
+- Reference: arXiv:2402.03500
+
 This implementation follows the core ideas of CRLQAS in a nexq-native form:
 - DDQN chooses circuit architecture actions (gate appends)
 - Adam-SPSA refines all variational parameters after each append
