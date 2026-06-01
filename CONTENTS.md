@@ -109,7 +109,8 @@
 │   │       ├── ppo_rb_w3_circuit.qasm
 │   │       └── ppr_dql_ghz3_circuit.qasm
 │   ├── qml/
-│   │   └── __init__.py
+│   │   ├── __init__.py
+│   │   └── gradient.py
 │   ├── universal/
 │   │   ├── __init__.py
 │   │   └── qft.py
@@ -141,6 +142,7 @@
     │   ├── test_circuit_backend_unitary.py
     │   ├── test_circuit_show.py
     │   ├── test_optimizer_basic.py
+    │   ├── test_parameterized_circuit.py
     │   ├── test_state.py
     │   └── io/
     │       ├── __init__.py
@@ -151,6 +153,10 @@
     ├── noise/
     │   ├── __init__.py
     │   └── test_noise_model.py
-    └── universal/
-        └── test_qft.py
+    ├── qml/
+    │   └── test_gradient.py
+    ├── universal/
+    │   └── test_qft.py
+    └── vqc/
+        └── test_parameter_shift_uses_qml.py
 ```

@@ -1,7 +1,5 @@
-"""nexq.qml
+"""Quantum machine learning utilities."""
 
-骨架模块：量子机器学习（QML）相关算法占位处。
-包括数据编码、量子模型、损失与评估等高层 API（尚未实现）。
-"""
+from .gradient import psr
 
-__all__ = []
+__all__ = ["psr"]
