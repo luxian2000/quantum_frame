@@ -237,6 +237,21 @@ Training-Free QAS and common zero-cost NAS pipelines:
 This is still training-free: the SuperCircuit is not trained, SubCircuits do not
 inherit parameters, and task objectives are not used during architecture scoring.
 
+### Evolutionary And Task-Feedback Search
+
+P1.2 adds `supercircuit_evolution`: each generation is scored by the four
+zero-cost metric groups, the best masks become elites, and the next generation is
+created by mutation/crossover on SuperCircuit block choices. This remains
+zero-cost because no task objective or parameter optimization is used inside the
+search loop.
+
+P1.3 adds `run_task_feedback_validation_experiment`: after zero-cost filtering,
+it runs a small fixed task-optimization budget on selected SubCircuits and uses
+the optimized task score to choose parents for the next mutation generation. This
+is intentionally not zero-cost; it is the task-specific refinement route analogous
+to replacing PPR-DQL target-state fidelity improvement with problem-score
+improvement.
+
 ## Decision For This Repo
 
 1. Implement zero-cost trainability first: local-probe gradient norm and
@@ -268,11 +283,13 @@ inherit parameters, and task objectives are not used during architecture scoring
    that does not duplicate hardware-efficiency terms.
 9. Done: add `supercircuit_progressive`, a Training-Free-QAS-style coarse-to-fine
    search that prefilters SuperCircuit masks before four-metric ranking.
-10. Next: add mask mutation / beam / evolutionary updates on top of the progressive
-   score so the second candidate batch is not just another random sample.
-11. Next: add a P1b design or wrapper for task-feedback PPR-DQL without modifying the
-   original target-state PPR-DQL API.
-12. Re-run multi-seed benchmark with:
+10. Done: add mask mutation / crossover / evolutionary updates on top of the
+   SuperCircuit mask representation.
+11. Done: add a P1b/P1.3 task-feedback wrapper without modifying the original
+   target-state PPR-DQL API.
+12. Next: compare `supercircuit_progressive`, `supercircuit_evolution`, and
+   task-feedback search across multi-seed MaxCut/resource-allocation benchmarks.
+13. Re-run multi-seed benchmark with:
 
 ```python
 SearchConfig(

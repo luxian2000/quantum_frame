@@ -6,6 +6,7 @@ from nexq.qas import (
     SearchConfig,
     maxcut_line,
     run_multi_seed_validation_experiment,
+    run_task_feedback_validation_experiment,
     run_validation_experiment,
     small_resource_allocation,
 )
@@ -69,6 +70,35 @@ class TestQASTaskValidation(unittest.TestCase):
         self.assertIn("win_rate", summary[0])
         self.assertIn("group | name | runs | mean", "\n".join(report.summary_lines()))
         self.assertTrue(all("result_group" in row for row in summary))
+
+    def test_task_feedback_validation_mutates_supercircuit_masks(self):
+        report = run_task_feedback_validation_experiment(
+            maxcut_line(n_qubits=3),
+            search_config=SearchConfig(
+                n_qubits=3,
+                candidate_layers=1,
+                n_samples=4,
+                include_common_candidates=False,
+                search_strategy="supercircuit_evolution",
+                population_size=4,
+                search_generations=1,
+                beam_width=2,
+                mutation_rate=0.5,
+                top_k=3,
+            ),
+            optimizer_config=OptimizerConfig(max_evaluations=3, seed=11),
+            qas_top_k=2,
+            feedback_generations=2,
+            feedback_population_size=4,
+            feedback_elite_count=2,
+        )
+
+        self.assertEqual(len(report.baseline_results), 3)
+        self.assertEqual(len(report.qas_results), 2)
+        self.assertEqual(report.metadata["feedback_generations"], 2)
+        self.assertGreaterEqual(report.metadata["task_feedback_evaluated"], 4)
+        self.assertTrue(all(result.metadata["result_group"] == "qas_task_feedback" for result in report.qas_results))
+        self.assertTrue(all("supercircuit_mask" in result.metadata for result in report.qas_results))
 
 
 if __name__ == "__main__":

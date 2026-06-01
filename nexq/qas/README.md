@@ -97,8 +97,9 @@ print("\n".join(multi_seed_report.summary_lines()))
 - 已完成：MaxCut / resource allocation 问题抽象、任务级验证、同预算 baseline/QAS 对比、单 seed demo、NPU backend smoke 验证。
 - 进行中：多 seed 汇总、固定报告 schema、更多实际问题与噪声设置。
 - P0.5 进行中：已加入 QAS zero-cost trainability 第一版 `gradient_norm` / `gradient_variance`，基于任务无关 local-probe parameter-shift；已加入 `HardwareProfile` 与 `topology_mapping_efficiency`，输入硬件拓扑、native gate、联通度、routing/depth 和可选映射边质量，但不重复计算 noise fidelity。`expressibility` 保持 KL-Haar / MMD；`noise_robustness` 后续单独升级为噪声暴露/敏感度 profile。调研与实现建议见 `docs/qas_metric_research_report.md`。
-- P1 进行中：已加入 `supercircuit_progressive`。它按 Training-Free QAS / zero-cost NAS 的粗到细流程，先随机采样一批 SuperCircuit masks，用 DAG input-output path count、两比特门平衡、硬件拓扑可映射性等便宜结构代理预筛，再交给四个 zero-cost metrics 排序。后续可在这个 mask 表示上继续加入 mutation / beam / evolutionary 更新。
-- P1b 待做：新增 task-feedback PPR-DQL 变体，用“当前线路经小预算调参后的任务评分提升”替代 target-state fidelity improvement，作为 zero-cost QAS 之后的任务相关精搜路线。
+- P1.1 已完成第一版：`supercircuit_progressive` 按 Training-Free QAS / zero-cost NAS 的粗到细流程，先随机采样 SuperCircuit masks，用 DAG input-output path count、两比特门平衡、硬件拓扑可映射性等便宜结构代理预筛，再交给四个 zero-cost metrics 排序。
+- P1.2 已完成第一版：`supercircuit_evolution` 在 SuperCircuit mask 上做多代 elite selection、mutation、crossover，每一代都用四个 zero-cost metrics 评分。
+- P1.3 已完成第一版：`run_task_feedback_validation_experiment` 用 zero-cost 搜索得到父代，再以小预算任务调参后的分数作为反馈，突变出下一代。它是任务相关精搜路线，不属于 zero-cost 主评估。
 - P2/P3 待做：更多实例、噪声/硬件 profile、统计胜率与消融。
 
 SuperCircuit/SubCircuit zero-cost 搜索已提供第一版，不训练 SuperCircuit、不做参数继承，只把 SuperCircuit 作为结构搜索空间，每个 SubCircuit mask 作为一个候选架构：
@@ -135,6 +136,45 @@ result = search.run(
         progressive_keep=12,
         top_k=5,
     )
+)
+```
+
+Evolution 版本会多代迭代，适合正式搜索：
+
+```python
+result = search.run(
+    SearchConfig(
+        n_qubits=4,
+        candidate_layers=2,
+        search_strategy="supercircuit_evolution",
+        include_common_candidates=False,
+        population_size=16,
+        search_generations=3,
+        beam_width=4,
+        mutation_rate=0.35,
+        top_k=5,
+    )
+)
+```
+
+任务反馈版本会在 zero-cost 之后引入小预算调参反馈：
+
+```python
+from nexq.qas import run_task_feedback_validation_experiment
+
+report = run_task_feedback_validation_experiment(
+    maxcut_line(n_qubits=4),
+    search_config=SearchConfig(
+        n_qubits=4,
+        candidate_layers=2,
+        search_strategy="supercircuit_evolution",
+        population_size=12,
+        search_generations=2,
+        beam_width=3,
+    ),
+    optimizer_config=OptimizerConfig(max_evaluations=8, seed=2026),
+    qas_top_k=3,
+    feedback_generations=2,
 )
 ```
 
