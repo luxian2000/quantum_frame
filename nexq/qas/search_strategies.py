@@ -60,6 +60,16 @@ def _append_rotation_choice(gates: List[Dict[str, Any]], choice: str, n_qubits: 
             gates.append({"type": gate_type, "target_qubit": q, "parameter": cursor.next()})
 
 
+def _has_mixing_choice(mask: Sequence[int], blocks: Sequence[SuperCircuitBlock]) -> bool:
+    mixing_choices = {"h", "rx", "ry", "ry_rz", "rx_ry_rz"}
+    for index, block in zip(mask, blocks):
+        if not (block.name.startswith("rot") or block.name == "final_rot"):
+            continue
+        if block.choices[int(index) % len(block.choices)] in mixing_choices:
+            return True
+    return False
+
+
 def _append_entangler_choice(gates: List[Dict[str, Any]], choice: str, n_qubits: int, cursor: _ParameterCursor) -> None:
     if choice == "skip" or n_qubits < 2:
         return
@@ -169,7 +179,11 @@ def generate_supercircuit_subcircuits(
     for mask in seed_masks:
         if len(candidates) >= target_count:
             break
-        if mask in seen or all(block.choices[index] == "skip" for index, block in zip(mask, blocks)):
+        if (
+            mask in seen
+            or all(block.choices[index] == "skip" for index, block in zip(mask, blocks))
+            or not _has_mixing_choice(mask, blocks)
+        ):
             continue
         seen.add(mask)
         candidates.append(
@@ -181,7 +195,11 @@ def generate_supercircuit_subcircuits(
     while len(candidates) < target_count and attempts < max_attempts:
         attempts += 1
         mask = tuple(int(rng.integers(0, len(block.choices))) for block in blocks)
-        if mask in seen or all(block.choices[index] == "skip" for index, block in zip(mask, blocks)):
+        if (
+            mask in seen
+            or all(block.choices[index] == "skip" for index, block in zip(mask, blocks))
+            or not _has_mixing_choice(mask, blocks)
+        ):
             continue
         seen.add(mask)
         candidates.append(subcircuit_from_mask(config.n_qubits, mask, blocks, backend=backend))
