@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from nexq import NumpyBackend, State
-from nexq.algorithms.qas import PPRDQLConfig, ppr_dql_state_to_circuit, train_ppr_dql
+from nexq.qas import PPRDQLConfig, ppr_dql_state_to_circuit, train_ppr_dql
 
 
 def _fidelity_from_circuit(circuit, target_state: State) -> float:
