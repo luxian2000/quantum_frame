@@ -175,6 +175,7 @@ class SearchConfig:
     population_size: int = 12
     mutation_rate: float = 0.25
     beam_width: int = 4
+    progressive_keep: Optional[int] = None
 
 
 @dataclass

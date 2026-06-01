@@ -2,6 +2,7 @@ import unittest
 
 from nexq.qas import ArchitectureSearch, SearchConfig, build_common_architectures, common_architecture_names, evaluate_architectures
 from nexq.channel.backends.numpy_backend import NumpyBackend
+from nexq.metrics.hardware import HardwareProfile
 
 
 class TestArchitectureCandidates(unittest.TestCase):
@@ -66,6 +67,31 @@ class TestArchitectureCandidates(unittest.TestCase):
             choices = set(candidate.metadata["supercircuit_choices"])
             self.assertTrue(choices & {"h", "rx", "ry", "ry_rz", "rx_ry_rz"})
         self.assertTrue(all(0.0 <= score.weighted_score <= 1.0 for score in result.scores))
+
+    def test_progressive_supercircuit_prefilters_by_structural_proxy(self):
+        profile = HardwareProfile(coupling_map=[(0, 1), (1, 2)])
+        search = ArchitectureSearch(backend=self.backend, hardware_profile=profile)
+        result = search.run(
+            SearchConfig(
+                n_qubits=3,
+                candidate_layers=2,
+                n_samples=10,
+                include_common_candidates=False,
+                search_strategy="supercircuit_progressive",
+                population_size=12,
+                progressive_keep=4,
+                top_k=2,
+            )
+        )
+
+        self.assertEqual(result.metadata["search_strategy"], "supercircuit_progressive")
+        self.assertEqual(len(result.candidates), 4)
+        self.assertEqual(len(result.scores), 2)
+        ranks = [candidate.metadata["progressive_prefilter_rank"] for candidate in result.candidates]
+        self.assertEqual(ranks, [1, 2, 3, 4])
+        self.assertTrue(all(candidate.metadata["progressive_path_count"] > 0 for candidate in result.candidates))
+        scores = [candidate.metadata["progressive_structure_score"] for candidate in result.candidates]
+        self.assertEqual(scores, sorted(scores, reverse=True))
 
 
 if __name__ == "__main__":
