@@ -184,6 +184,18 @@ report = run_task_feedback_validation_experiment(
 python -m nexq.qas.demo.qas_strategy_comparison
 ```
 
+正式组合链路是：
+
+```text
+progressive 粗筛 -> evolution zero-cost 结构搜索 -> task_feedback 小预算任务精修
+```
+
+对应接口：
+
+```python
+from nexq.qas import run_hybrid_qas_validation_experiment
+```
+
 ## 5. 使用方法：PPO_RB
 
 `PPO_RB` 的输入是目标密度矩阵，输出是策略参数 `theta` 与搜索得到的 `Circuit`。

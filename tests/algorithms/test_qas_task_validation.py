@@ -5,6 +5,7 @@ from nexq.qas import (
     OptimizerConfig,
     SearchConfig,
     maxcut_line,
+    run_hybrid_qas_validation_experiment,
     run_multi_seed_validation_experiment,
     run_search_strategy_comparison,
     run_task_feedback_validation_experiment,
@@ -117,17 +118,43 @@ class TestQASTaskValidation(unittest.TestCase):
             ),
             optimizer_config=OptimizerConfig(max_evaluations=3, seed=13),
             qas_top_k=1,
-            strategies=("supercircuit_progressive", "supercircuit_evolution", "task_feedback"),
+            strategies=("supercircuit_progressive", "supercircuit_evolution", "task_feedback", "hybrid"),
             feedback_generations=1,
             feedback_population_size=3,
             feedback_elite_count=1,
         )
 
         rows = report.strategy_summary()
-        self.assertEqual(set(report.reports), {"supercircuit_progressive", "supercircuit_evolution", "task_feedback"})
-        self.assertEqual(len(rows), 3)
+        self.assertEqual(set(report.reports), {"supercircuit_progressive", "supercircuit_evolution", "task_feedback", "hybrid"})
+        self.assertEqual(len(rows), 4)
         self.assertIn("strategy | baseline_best | qas_best", "\n".join(report.summary_lines()))
         self.assertTrue(all("strategy" in row for row in rows))
+
+    def test_hybrid_validation_chains_all_three_search_stages(self):
+        report = run_hybrid_qas_validation_experiment(
+            maxcut_line(n_qubits=3),
+            search_config=SearchConfig(
+                n_qubits=3,
+                candidate_layers=1,
+                n_samples=4,
+                include_common_candidates=False,
+                population_size=4,
+                search_generations=1,
+                beam_width=2,
+                mutation_rate=0.5,
+                top_k=3,
+            ),
+            optimizer_config=OptimizerConfig(max_evaluations=3, seed=17),
+            qas_top_k=2,
+            feedback_generations=1,
+            feedback_population_size=3,
+            feedback_elite_count=1,
+        )
+
+        self.assertEqual(report.metadata["hybrid_pipeline"], "progressive->evolution->task_feedback")
+        self.assertEqual(len(report.baseline_results), 3)
+        self.assertEqual(len(report.qas_results), 2)
+        self.assertTrue(all(result.metadata["result_group"] == "qas_hybrid" for result in report.qas_results))
 
 
 if __name__ == "__main__":
