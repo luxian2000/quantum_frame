@@ -178,6 +178,12 @@ report = run_task_feedback_validation_experiment(
 )
 ```
 
+三种搜索策略可以用统一 demo 横向比较：
+
+```bash
+python -m nexq.qas.demo.qas_strategy_comparison
+```
+
 ## 5. 使用方法：PPO_RB
 
 `PPO_RB` 的输入是目标密度矩阵，输出是策略参数 `theta` 与搜索得到的 `Circuit`。
