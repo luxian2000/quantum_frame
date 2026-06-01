@@ -5,7 +5,7 @@ OpenQASM 2.0 / 3.0 导入导出（子集支持）。
 
 支持门：
 - 单比特: x, y, z, h, s, t, rx, ry, rz, p/u1, u2, u3/u
-- 双比特: cx, cy, cz, swap, crx, cry, crz
+- 双比特: cx, cy, cz, swap, crx, cry, crz, rzz
 - 三比特: ccx
 
 当前不处理：if、reset、opaque、自定义 gate、cp/cu 家族。
@@ -55,6 +55,7 @@ _DOUBLE_EXPORT = {
     "crx": "crx",
     "cry": "cry",
     "crz": "crz",
+    "rzz": "rzz",
 }
 
 _THREE_EXPORT = {
@@ -254,6 +255,11 @@ def circuit_to_qasm(circuit: Circuit, version: str = "2.0") -> str:
                 q1 = int(gate["qubit_1"])
                 q2 = int(gate["qubit_2"])
                 lines.append(f"swap q[{q1}],q[{q2}];")
+            elif qasm_gate == "rzz":
+                q1 = int(gate["qubit_1"])
+                q2 = int(gate["qubit_2"])
+                theta = _format_angle(gate["parameter"])
+                lines.append(f"rzz({theta}) q[{q1}],q[{q2}];")
             elif qasm_gate in {"crx", "cry", "crz"}:
                 t = int(gate["target_qubit"])
                 theta = _format_angle(gate["parameter"])
@@ -328,7 +334,7 @@ def circuit_from_qasm(qasm_text: str) -> Circuit:
     qubit_re = re.compile(r"^qubit\[(\d+)\]\s+([A-Za-z_]\w*)\s*;$", re.IGNORECASE)
     qubit_scalar_re = re.compile(r"^qubit\s+([A-Za-z_]\w*)\s*;$", re.IGNORECASE)
     gate3_re = re.compile(r"^(ccx)\s+(.+);$", re.IGNORECASE)
-    gate2_re = re.compile(r"^(cx|cy|cz|swap|crx|cry|crz)\s+(.+);$", re.IGNORECASE)
+    gate2_re = re.compile(r"^(cx|cy|cz|swap|crx|cry|crz|rzz)\s+(.+);$", re.IGNORECASE)
     gate1_re = re.compile(r"^(x|y|z|h|s|t)\s+(.+);$", re.IGNORECASE)
     gatep1_re = re.compile(r"^(rx|ry|rz|p|u1)\(([^)]+)\)\s+(.+);$", re.IGNORECASE)
     gateu2_re = re.compile(r"^(u2)\(([^,]+),([^\)]+)\)\s+(.+);$", re.IGNORECASE)
@@ -426,7 +432,7 @@ def circuit_from_qasm(qasm_text: str) -> Circuit:
             q2 = _parse_qubit_ref(ops[1], reg_info)
             if name == "swap":
                 gates.append({"type": "swap", "qubit_1": q1, "qubit_2": q2})
-            elif name in {"crx", "cry", "crz"}:
+            elif name in {"crx", "cry", "crz", "rzz"}:
                 raise ValueError(
                     f"无法从无参数语句解析 {name}，请检查语法。"
                 )
@@ -442,7 +448,7 @@ def circuit_from_qasm(qasm_text: str) -> Circuit:
             continue
 
         # 双比特参数门（crx/cry/crz）
-        m = re.match(r"^(crx|cry|crz)\(([^)]+)\)\s+(.+);$", line, re.IGNORECASE)
+        m = re.match(r"^(crx|cry|crz|rzz)\(([^)]+)\)\s+(.+);$", line, re.IGNORECASE)
         if m:
             name = m.group(1).lower()
             theta = _parse_qasm_angle(m.group(2))
@@ -451,6 +457,9 @@ def circuit_from_qasm(qasm_text: str) -> Circuit:
                 raise ValueError(f"{name} 操作数错误: {line}")
             q1 = _parse_qubit_ref(ops[0], reg_info)
             q2 = _parse_qubit_ref(ops[1], reg_info)
+            if name == "rzz":
+                gates.append({"type": "rzz", "qubit_1": q1, "qubit_2": q2, "parameter": theta})
+                continue
             gates.append(
                 {
                     "type": name,
