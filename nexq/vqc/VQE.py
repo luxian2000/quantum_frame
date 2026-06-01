@@ -11,7 +11,7 @@ from typing import Callable
 
 import numpy as np
 
-from ..qml.gradient import psr
+from ..qml.grad import psr
 
 
 def _infer_n_qubits(dim: int) -> int:
