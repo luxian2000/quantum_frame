@@ -76,6 +76,28 @@ report = run_validation_experiment(
 print("\n".join(report.summary_lines()))
 ```
 
+多 seed 汇总接口用于判断结果是否稳定，而不是只看一次随机优化结果：
+
+```python
+from nexq.qas import run_multi_seed_validation_experiment
+
+multi_seed_report = run_multi_seed_validation_experiment(
+    problem,
+    seeds=[2026, 2027, 2028],
+    search_config=SearchConfig(n_qubits=4, candidate_layers=1, n_samples=8),
+    optimizer_config=OptimizerConfig(max_evaluations=16),
+    qas_top_k=3,
+)
+
+print("\n".join(multi_seed_report.summary_lines()))
+```
+
+当前 roadmap 状态：
+
+- 已完成：MaxCut / resource allocation 问题抽象、任务级验证、同预算 baseline/QAS 对比、单 seed demo、NPU backend smoke 验证。
+- 进行中：多 seed 汇总、固定报告 schema、更多实际问题与噪声设置。
+- 待做：更强的随机/变异/beam 架构生成，梯度型 trainability，硬件 profile，更多实例上的统计胜率与消融。
+
 ## 5. 使用方法：PPO_RB
 
 `PPO_RB` 的输入是目标密度矩阵，输出是策略参数 `theta` 与搜索得到的 `Circuit`。

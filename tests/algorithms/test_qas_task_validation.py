@@ -5,6 +5,7 @@ from nexq.qas import (
     OptimizerConfig,
     SearchConfig,
     maxcut_line,
+    run_multi_seed_validation_experiment,
     run_validation_experiment,
     small_resource_allocation,
 )
@@ -51,6 +52,23 @@ class TestQASTaskValidation(unittest.TestCase):
         self.assertEqual(len(report.qas_results), 2)
         self.assertIsNotNone(report.best_result)
         self.assertIn("name | prior | optimized", "\n".join(report.summary_lines()))
+
+    def test_multi_seed_validation_report_aggregates_runs(self):
+        report = run_multi_seed_validation_experiment(
+            maxcut_line(n_qubits=3),
+            seeds=[7, 8],
+            search_config=SearchConfig(n_qubits=3, candidate_layers=1, n_samples=4, candidate_budget=4),
+            optimizer_config=OptimizerConfig(max_evaluations=4),
+            qas_top_k=1,
+        )
+
+        summary = report.architecture_summary()
+        self.assertEqual(report.n_seeds, 2)
+        self.assertTrue(summary)
+        self.assertIn("architecture_summary", report.to_dict())
+        self.assertIn("win_rate", summary[0])
+        self.assertIn("group | name | runs | mean", "\n".join(report.summary_lines()))
+        self.assertTrue(all("result_group" in row for row in summary))
 
 
 if __name__ == "__main__":
