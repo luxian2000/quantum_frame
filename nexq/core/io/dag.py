@@ -22,6 +22,13 @@ def _gate_name(gate: dict) -> str:
     return gate["type"]
 
 
+def _extend_qubits(qubits: List[int], values) -> None:
+    if isinstance(values, (list, tuple, set)):
+        qubits.extend(int(qubit) for qubit in values)
+    else:
+        qubits.append(int(values))
+
+
 def _gate_qubits(gate: dict) -> List[int]:
     """
     从 nexq 门字典中提取所有作用的量子比特索引列表。
@@ -34,17 +41,30 @@ def _gate_qubits(gate: dict) -> List[int]:
     """
     gate_type = gate["type"]
 
-    if gate_type in ("swap", "rzz"):
-        return [gate["qubit_1"], gate["qubit_2"]]
-
     if gate_type in ("identity", "I"):
         return list(range(gate["n_qubits"]))
 
-    if gate_type in ("cx", "cnot", "cy", "cz", "crx", "cry", "crz", "toffoli", "ccnot"):
-        return list(gate["control_qubits"]) + [gate["target_qubit"]]
+    qubits = []
 
-    # 其余均为单比特门
-    return [gate["target_qubit"]]
+    target = gate.get("target_qubit")
+    if target is not None:
+        qubits.append(int(target))
+
+    controls = gate.get("control_qubits")
+    if controls is not None:
+        _extend_qubits(qubits, controls)
+
+    for key in ("qubit_1", "qubit_2"):
+        qubit = gate.get(key)
+        if qubit is not None:
+            qubits.append(int(qubit))
+
+    for key in ("qubits", "targets"):
+        values = gate.get(key)
+        if values is not None:
+            _extend_qubits(qubits, values)
+
+    return list(dict.fromkeys(qubits))
 
 
 # ---------------------------------------------------------------------------

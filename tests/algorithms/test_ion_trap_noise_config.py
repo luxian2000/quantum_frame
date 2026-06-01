@@ -92,6 +92,28 @@ class TestIonTrapNoiseConfig(unittest.TestCase):
         self.assertEqual(active_channel.calls, 0)
         self.assertEqual(idle_channel.calls, 1)
 
+    def test_noise_model_excludes_qubit_pair_gate_fields(self):
+        backend = NumpyBackend()
+        model = NoiseModel()
+        active_q0 = _CountingIdentityChannel(target_qubit=0)
+        active_q2 = _CountingIdentityChannel(target_qubit=2)
+        idle_q1 = _CountingIdentityChannel(target_qubit=1)
+        model.add_channel(active_q0, after_gates=["rzz"], exclude_gate_qubits=True)
+        model.add_channel(active_q2, after_gates=["rzz"], exclude_gate_qubits=True)
+        model.add_channel(idle_q1, after_gates=["rzz"], exclude_gate_qubits=True)
+
+        rho = np.eye(8, dtype=np.complex64) / 8.0
+        _ = model.apply(
+            rho,
+            n_qubits=3,
+            backend=backend,
+            gate={"type": "rzz", "qubit_1": 0, "qubit_2": 2, "parameter": 0.5},
+        )
+
+        self.assertEqual(active_q0.calls, 0)
+        self.assertEqual(active_q2.calls, 0)
+        self.assertEqual(idle_q1.calls, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

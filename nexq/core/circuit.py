@@ -119,6 +119,26 @@ def _required_n_qubits_from_gate(gate):
             raise ValueError("unitary 门矩阵维度必须是 2 的幂")
         return inferred
 
+    def extend_qubits(qubits, values):
+        if isinstance(values, (list, tuple, set)):
+            qubits.extend(int(qubit) for qubit in values)
+        else:
+            qubits.append(int(values))
+
+    explicit_qubits = []
+    if "target_qubit" in gate:
+        explicit_qubits.append(int(gate["target_qubit"]))
+    controls = gate.get("control_qubits")
+    if controls is not None:
+        extend_qubits(explicit_qubits, controls)
+    for key in ("qubit_1", "qubit_2"):
+        if key in gate:
+            explicit_qubits.append(int(gate[key]))
+    for key in ("qubits", "targets"):
+        values = gate.get(key)
+        if values is not None:
+            extend_qubits(explicit_qubits, values)
+
     if gate_type in [
         "pauli_x",
         "X",
@@ -138,17 +158,15 @@ def _required_n_qubits_from_gate(gate):
         "u3",
         "u2",
     ]:
-        return gate["target_qubit"] + 1
+        return max(explicit_qubits) + 1
     if gate_type in ["cnot", "cx", "cz", "cy", "crx", "cry", "crz"]:
-        return max(gate["target_qubit"] + 1, max(gate["control_qubits"]) + 1)
+        return max(explicit_qubits) + 1
     if gate_type in ["toffoli", "ccnot"]:
-        return max(gate["target_qubit"] + 1, max(gate["control_qubits"]) + 1)
-    if gate_type == "swap":
-        return max(gate["qubit_1"] + 1, gate["qubit_2"] + 1)
+        return max(explicit_qubits) + 1
     if gate_type in ["identity", "I"]:
         return gate["n_qubits"]
-    if gate_type == "rzz":
-        return max(gate["qubit_1"] + 1, gate["qubit_2"] + 1)
+    if explicit_qubits:
+        return max(explicit_qubits) + 1
     return gate["target_qubit"] + 1
 
 
