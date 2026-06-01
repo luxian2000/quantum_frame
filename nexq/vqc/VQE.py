@@ -11,6 +11,8 @@ from typing import Callable
 
 import numpy as np
 
+from ..qml.gradient import psr
+
 
 def _infer_n_qubits(dim: int) -> int:
     if dim <= 0:
@@ -130,18 +132,7 @@ class BasicVQE:
 
     def parameter_shift_gradient(self, params: np.ndarray) -> np.ndarray:
         params = np.asarray(params, dtype=float).reshape(self.depth, self.n_qubits)
-        grad = np.zeros_like(params)
-        shift = np.pi / 2.0
-
-        for layer in range(self.depth):
-            for qubit in range(self.n_qubits):
-                plus = params.copy()
-                minus = params.copy()
-                plus[layer, qubit] += shift
-                minus[layer, qubit] -= shift
-                grad[layer, qubit] = 0.5 * (self.energy(plus) - self.energy(minus))
-
-        return grad
+        return psr(self.energy, params)
 
     def run(
         self,

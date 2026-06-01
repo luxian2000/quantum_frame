@@ -11,6 +11,7 @@ from typing import Callable
 
 import numpy as np
 
+from ..qml.gradient import psr
 from .VQE import _apply_cnot, _apply_single_qubit_gate, _infer_n_qubits, _ry
 
 
@@ -161,18 +162,7 @@ class BasicSSVQE:
 
     def parameter_shift_gradient(self, params: np.ndarray) -> np.ndarray:
         params = np.asarray(params, dtype=float).reshape(self.depth, self.n_qubits)
-        grad = np.zeros_like(params)
-        shift = np.pi / 2.0
-
-        for layer in range(self.depth):
-            for qubit in range(self.n_qubits):
-                plus = params.copy()
-                minus = params.copy()
-                plus[layer, qubit] += shift
-                minus[layer, qubit] -= shift
-                grad[layer, qubit] = 0.5 * (self.cost(plus) - self.cost(minus))
-
-        return grad
+        return psr(self.cost, params)
 
     def run(
         self,
