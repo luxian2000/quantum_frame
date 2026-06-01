@@ -11,7 +11,7 @@ from ._types import ArchitectureSpec, SearchConfig, SearchResult
 from .candidates import build_common_architectures
 from .evaluator import ArchitectureEvaluator
 from .reward import RewardWeights
-from .search_strategies import generate_supercircuit_subcircuits
+from .search_strategies import generate_progressive_supercircuit_subcircuits, generate_supercircuit_subcircuits
 
 
 class ArchitectureSearch:
@@ -50,6 +50,14 @@ class ArchitectureSearch:
             candidates.extend(extra_candidates)
         if cfg.search_strategy == "supercircuit":
             candidates.extend(generate_supercircuit_subcircuits(cfg, backend=self.backend))
+        elif cfg.search_strategy == "supercircuit_progressive":
+            candidates.extend(
+                generate_progressive_supercircuit_subcircuits(
+                    cfg,
+                    backend=self.backend,
+                    hardware_profile=self.hardware_profile,
+                )
+            )
         elif cfg.search_strategy != "preset":
             raise ValueError(f"Unsupported search_strategy: {cfg.search_strategy!r}")
         candidates = self._filter_candidates(candidates, cfg)

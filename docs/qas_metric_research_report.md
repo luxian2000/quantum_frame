@@ -220,6 +220,23 @@ reward =
 This second variant is not zero-cost, but it is useful after zero-cost QAS has
 filtered the search space.
 
+### Progressive Zero-Cost Search Process
+
+The implemented P1 search path now follows the coarse-to-fine pattern used by
+Training-Free QAS and common zero-cost NAS pipelines:
+
+1. Treat a block-level SuperCircuit as the search space.
+2. Treat each SubCircuit mask as one architecture.
+3. Sample a large mask pool.
+4. Apply cheap structural prefilters: DAG input-output path count, two-qubit
+   gate balance, compactness, and hardware-topology mappability.
+5. Keep `progressive_keep` candidates.
+6. Score only the retained candidates with the four zero-cost metric groups.
+7. Send Top-K to task-level validation and parameter optimization.
+
+This is still training-free: the SuperCircuit is not trained, SubCircuits do not
+inherit parameters, and task objectives are not used during architecture scoring.
+
 ## Decision For This Repo
 
 1. Implement zero-cost trainability first: local-probe gradient norm and
@@ -249,12 +266,18 @@ filtered the search space.
    two-local nearest-neighbor probes.
 8. Next: replace default noise robustness with a profile-aware exposure metric
    that does not duplicate hardware-efficiency terms.
-9. Next: add a P1b design or wrapper for task-feedback PPR-DQL without modifying the
+9. Done: add `supercircuit_progressive`, a Training-Free-QAS-style coarse-to-fine
+   search that prefilters SuperCircuit masks before four-metric ranking.
+10. Next: add mask mutation / beam / evolutionary updates on top of the progressive
+   score so the second candidate batch is not just another random sample.
+11. Next: add a P1b design or wrapper for task-feedback PPR-DQL without modifying the
    original target-state PPR-DQL API.
-10. Re-run multi-seed benchmark with:
+12. Re-run multi-seed benchmark with:
 
 ```python
 SearchConfig(
+    search_strategy="supercircuit_progressive",
+    progressive_keep=12,
     active_metrics={
         "trainability": "gradient_variance",
         "hardware_efficiency": "topology_mapping_efficiency",

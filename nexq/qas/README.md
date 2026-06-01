@@ -97,7 +97,7 @@ print("\n".join(multi_seed_report.summary_lines()))
 - 已完成：MaxCut / resource allocation 问题抽象、任务级验证、同预算 baseline/QAS 对比、单 seed demo、NPU backend smoke 验证。
 - 进行中：多 seed 汇总、固定报告 schema、更多实际问题与噪声设置。
 - P0.5 进行中：已加入 QAS zero-cost trainability 第一版 `gradient_norm` / `gradient_variance`，基于任务无关 local-probe parameter-shift；已加入 `HardwareProfile` 与 `topology_mapping_efficiency`，输入硬件拓扑、native gate、联通度、routing/depth 和可选映射边质量，但不重复计算 noise fidelity。`expressibility` 保持 KL-Haar / MMD；`noise_robustness` 后续单独升级为噪声暴露/敏感度 profile。调研与实现建议见 `docs/qas_metric_research_report.md`。
-- P1 待做：在度量可信后升级搜索。优先加入 random / mutation / beam search；已有 RL 搜索文件可复用 action space 和训练框架，但不能直接复用 target fidelity / Hamiltonian reward。
+- P1 进行中：已加入 `supercircuit_progressive`。它按 Training-Free QAS / zero-cost NAS 的粗到细流程，先随机采样一批 SuperCircuit masks，用 DAG input-output path count、两比特门平衡、硬件拓扑可映射性等便宜结构代理预筛，再交给四个 zero-cost metrics 排序。后续可在这个 mask 表示上继续加入 mutation / beam / evolutionary 更新。
 - P1b 待做：新增 task-feedback PPR-DQL 变体，用“当前线路经小预算调参后的任务评分提升”替代 target-state fidelity improvement，作为 zero-cost QAS 之后的任务相关精搜路线。
 - P2/P3 待做：更多实例、噪声/硬件 profile、统计胜率与消融。
 
@@ -114,6 +114,25 @@ result = search.run(
         search_strategy="supercircuit",
         include_common_candidates=False,
         population_size=16,
+        top_k=5,
+    )
+)
+```
+
+Progressive 版本先做便宜结构预筛，适合把候选池开大，再只对保留的子集计算更贵的 expressibility / trainability：
+
+```python
+from nexq.metrics.hardware import HardwareProfile
+
+search = ArchitectureSearch(hardware_profile=HardwareProfile(coupling_map=[(0, 1), (1, 2), (2, 3)]))
+result = search.run(
+    SearchConfig(
+        n_qubits=4,
+        candidate_layers=2,
+        search_strategy="supercircuit_progressive",
+        include_common_candidates=False,
+        population_size=64,
+        progressive_keep=12,
         top_k=5,
     )
 )
