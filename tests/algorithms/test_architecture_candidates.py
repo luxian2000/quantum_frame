@@ -93,6 +93,30 @@ class TestArchitectureCandidates(unittest.TestCase):
         scores = [candidate.metadata["progressive_structure_score"] for candidate in result.candidates]
         self.assertEqual(scores, sorted(scores, reverse=True))
 
+    def test_evolutionary_supercircuit_runs_multiple_generations(self):
+        search = ArchitectureSearch(backend=self.backend)
+        result = search.run(
+            SearchConfig(
+                n_qubits=3,
+                candidate_layers=2,
+                n_samples=4,
+                include_common_candidates=False,
+                search_strategy="supercircuit_evolution",
+                population_size=5,
+                search_generations=2,
+                beam_width=2,
+                mutation_rate=0.5,
+                top_k=3,
+            )
+        )
+
+        self.assertEqual(result.metadata["search_strategy"], "supercircuit_evolution")
+        self.assertEqual(result.metadata["search_generations"], 2)
+        self.assertEqual(len(result.scores), 3)
+        generations = {score.architecture.metadata["search_generation"] for score in result.scores}
+        self.assertTrue(generations <= {0, 1})
+        self.assertTrue(all("evolution_weighted_score" in score.architecture.metadata for score in result.scores))
+
 
 if __name__ == "__main__":
     unittest.main()

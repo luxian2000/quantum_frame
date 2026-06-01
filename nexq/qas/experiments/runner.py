@@ -6,6 +6,8 @@ from dataclasses import dataclass, field, replace
 import math
 from typing import Any, Dict, List, Optional, Sequence
 
+import numpy as np
+
 from ...channel.backends.numpy_backend import NumpyBackend
 from ...channel.noise.model import NoiseModel
 from ...metrics.hardware import HardwareProfile
@@ -13,6 +15,12 @@ from .._types import ArchitectureScore, ArchitectureSpec, SearchConfig
 from ..architecture_candidates import build_common_architectures
 from ..architecture_search import ArchitectureSearch
 from ..problems import ProblemInstance
+from ..search_strategies import (
+    candidate_from_supercircuit_mask,
+    mutate_supercircuit_mask,
+    sample_supercircuit_masks,
+    supercircuit_blocks,
+)
 from ..task_evaluation import OptimizerConfig, TaskEvaluationResult, optimize_task_parameters
 
 
@@ -286,4 +294,149 @@ def run_multi_seed_validation_experiment(
     )
 
 
-__all__ = ["MultiSeedValidationReport", "ValidationReport", "run_multi_seed_validation_experiment", "run_validation_experiment"]
+def _sort_task_results(problem: ProblemInstance, results: Sequence[TaskEvaluationResult]) -> List[TaskEvaluationResult]:
+    return sorted(results, key=lambda result: result.optimized_value, reverse=problem.maximize)
+
+
+def run_task_feedback_validation_experiment(
+    problem: ProblemInstance,
+    search_config: Optional[SearchConfig] = None,
+    optimizer_config: Optional[OptimizerConfig] = None,
+    qas_top_k: int = 3,
+    feedback_generations: int = 2,
+    feedback_population_size: Optional[int] = None,
+    feedback_elite_count: Optional[int] = None,
+    backend: Optional[NumpyBackend] = None,
+    noise_model: Optional[NoiseModel] = None,
+    hardware_profile: Optional[HardwareProfile] = None,
+) -> ValidationReport:
+    """Task-feedback SuperCircuit search after zero-cost candidate filtering.
+
+    This is the P1.3 route: unlike zero-cost QAS, it deliberately uses a small,
+    fixed task-optimization budget as feedback for mutating SubCircuit masks.
+    """
+    backend = backend or NumpyBackend()
+    search_cfg = search_config or SearchConfig(
+        n_qubits=problem.n_qubits,
+        candidate_layers=1,
+        n_samples=16,
+        search_strategy="supercircuit_evolution",
+    )
+    optimizer_cfg = optimizer_config or OptimizerConfig(max_evaluations=16)
+    population_size = max(1, int(feedback_population_size or search_cfg.population_size))
+    elite_count = max(1, min(population_size, int(feedback_elite_count or search_cfg.beam_width or qas_top_k)))
+    generations = max(1, int(feedback_generations))
+    blocks = supercircuit_blocks(search_cfg.candidate_layers)
+    rng = np.random.default_rng(int(search_cfg.seed) + 9173)
+
+    baselines = _baseline_architectures(problem, layers=search_cfg.candidate_layers, backend=backend)
+    search = ArchitectureSearch(backend=backend, noise_model=noise_model, hardware_profile=hardware_profile)
+    zero_cost_result = search.run(search_cfg)
+    prior_scores = zero_cost_result.scores
+    seed_masks = [
+        tuple(score.architecture.metadata["supercircuit_mask"])
+        for score in prior_scores
+        if "supercircuit_mask" in score.architecture.metadata
+    ]
+    if not seed_masks:
+        seed_masks = sample_supercircuit_masks(search_cfg, sample_count=population_size)
+    seed_masks = seed_masks[:population_size]
+
+    seen = set(seed_masks)
+    current_masks = list(seed_masks)
+    task_results: List[TaskEvaluationResult] = []
+    result_by_mask: Dict[tuple[int, ...], TaskEvaluationResult] = {}
+
+    for generation in range(generations):
+        candidates = [
+            candidate_from_supercircuit_mask(
+                search_cfg,
+                mask,
+                backend=backend,
+                generation=generation,
+                origin="task_feedback_seed" if generation == 0 else "task_feedback_mutation",
+            )
+            for mask in current_masks
+        ]
+        generation_results = _optimize_many(
+            candidates,
+            problem,
+            optimizer_cfg,
+            backend=backend,
+            noise_model=noise_model,
+            result_group="qas_task_feedback",
+        )
+        for candidate, result in zip(candidates, generation_results):
+            mask = tuple(candidate.metadata["supercircuit_mask"])
+            result.metadata.update(
+                {
+                    "feedback_generation": generation,
+                    "supercircuit_mask": mask,
+                    "search_origin": candidate.metadata.get("search_origin"),
+                }
+            )
+            previous = result_by_mask.get(mask)
+            is_better = previous is None or (
+                result.optimized_value > previous.optimized_value
+                if problem.maximize
+                else result.optimized_value < previous.optimized_value
+            )
+            if is_better:
+                result_by_mask[mask] = result
+        task_results.extend(generation_results)
+
+        if generation == generations - 1:
+            break
+        elites = [
+            tuple(result.metadata["supercircuit_mask"])
+            for result in _sort_task_results(problem, generation_results)[:elite_count]
+        ]
+        next_masks = list(elites)
+        attempts = 0
+        max_attempts = max(100, population_size * 30)
+        while len(next_masks) < population_size and attempts < max_attempts:
+            attempts += 1
+            parent = elites[int(rng.integers(0, len(elites)))]
+            child = mutate_supercircuit_mask(parent, blocks, rng, mutation_rate=search_cfg.mutation_rate)
+            if child in seen:
+                continue
+            seen.add(child)
+            next_masks.append(child)
+        current_masks = next_masks
+
+    baseline_results = _optimize_many(
+        baselines,
+        problem,
+        optimizer_cfg,
+        backend=backend,
+        noise_model=noise_model,
+        result_group="baseline",
+    )
+    qas_results = _sort_task_results(problem, list(result_by_mask.values()))[: max(0, int(qas_top_k))]
+    return ValidationReport(
+        problem=problem,
+        baseline_results=baseline_results,
+        qas_results=qas_results,
+        prior_scores=prior_scores,
+        metadata={
+            "qas_top_k": qas_top_k,
+            "n_prior_candidates": len(prior_scores),
+            "search_config": search_cfg.__dict__.copy(),
+            "optimizer_config": optimizer_cfg.__dict__.copy(),
+            "feedback_generations": generations,
+            "feedback_population_size": population_size,
+            "feedback_elite_count": elite_count,
+            "task_feedback_evaluated": len(task_results),
+            "noise_model": type(noise_model).__name__ if noise_model is not None else None,
+            "hardware_profile": None if hardware_profile is None else hardware_profile.__dict__.copy(),
+        },
+    )
+
+
+__all__ = [
+    "MultiSeedValidationReport",
+    "ValidationReport",
+    "run_multi_seed_validation_experiment",
+    "run_task_feedback_validation_experiment",
+    "run_validation_experiment",
+]

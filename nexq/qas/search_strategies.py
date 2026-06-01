@@ -278,6 +278,88 @@ def _sample_supercircuit_candidates(
     return candidates
 
 
+def sample_supercircuit_masks(config: SearchConfig, sample_count: Optional[int] = None) -> List[tuple[int, ...]]:
+    """Sample valid, unique SuperCircuit masks without materializing circuits."""
+    candidates = _sample_supercircuit_candidates(config, sample_count=sample_count)
+    return [tuple(candidate.metadata["supercircuit_mask"]) for candidate in candidates]
+
+
+def random_supercircuit_mask(
+    blocks: Sequence[SuperCircuitBlock],
+    rng: np.random.Generator,
+) -> tuple[int, ...]:
+    """Draw one valid SuperCircuit mask from an existing RNG."""
+    for _ in range(100):
+        mask = tuple(int(rng.integers(0, len(block.choices))) for block in blocks)
+        if _is_valid_supercircuit_mask(mask, blocks):
+            return mask
+    return tuple(1 if block.name.startswith("rot") or block.name == "final_rot" else 1 for block in blocks)
+
+
+def mutate_supercircuit_mask(
+    mask: Sequence[int],
+    blocks: Sequence[SuperCircuitBlock],
+    rng: np.random.Generator,
+    mutation_rate: float = 0.25,
+) -> tuple[int, ...]:
+    """Randomly replace block choices in one SuperCircuit mask."""
+    values = [int(value) for value in mask]
+    rate = float(mutation_rate)
+    for index, block in enumerate(blocks):
+        if rng.random() >= rate:
+            continue
+        old_value = values[index] % len(block.choices)
+        if len(block.choices) <= 1:
+            continue
+        new_value = int(rng.integers(0, len(block.choices) - 1))
+        if new_value >= old_value:
+            new_value += 1
+        values[index] = new_value
+    if tuple(values) == tuple(int(value) for value in mask):
+        index = int(rng.integers(0, len(blocks)))
+        block = blocks[index]
+        old_value = values[index] % len(block.choices)
+        new_value = int(rng.integers(0, len(block.choices) - 1))
+        if new_value >= old_value:
+            new_value += 1
+        values[index] = new_value
+    return tuple(values)
+
+
+def crossover_supercircuit_masks(
+    left: Sequence[int],
+    right: Sequence[int],
+    rng: np.random.Generator,
+) -> tuple[int, ...]:
+    """Combine two SuperCircuit masks with a one-point crossover."""
+    if len(left) != len(right):
+        raise ValueError("Masks must have the same length for crossover")
+    if len(left) <= 1:
+        return tuple(int(value) for value in left)
+    cut = int(rng.integers(1, len(left)))
+    return tuple(int(value) for value in left[:cut]) + tuple(int(value) for value in right[cut:])
+
+
+def candidate_from_supercircuit_mask(
+    config: SearchConfig,
+    mask: Sequence[int],
+    backend: Optional[Backend] = None,
+    generation: Optional[int] = None,
+    origin: str = "sample",
+) -> ArchitectureSpec:
+    """Materialize a mask and attach search provenance metadata."""
+    blocks = supercircuit_blocks(config.candidate_layers)
+    candidate = subcircuit_from_mask(config.n_qubits, mask, blocks, backend=backend)
+    candidate.metadata["search_generation"] = generation
+    candidate.metadata["search_origin"] = origin
+    return candidate
+
+
+def is_valid_supercircuit_mask(mask: Sequence[int], blocks: Sequence[SuperCircuitBlock]) -> bool:
+    """Public validity check for evolutionary mask search."""
+    return _is_valid_supercircuit_mask(mask, blocks)
+
+
 def generate_supercircuit_subcircuits(
     config: SearchConfig,
     backend: Optional[Backend] = None,
@@ -319,10 +401,16 @@ def generate_progressive_supercircuit_subcircuits(
 
 __all__ = [
     "SuperCircuitBlock",
+    "candidate_from_supercircuit_mask",
+    "crossover_supercircuit_masks",
     "dag_path_count",
     "generate_progressive_supercircuit_subcircuits",
     "generate_supercircuit_subcircuits",
+    "is_valid_supercircuit_mask",
+    "mutate_supercircuit_mask",
     "progressive_structure_score",
+    "random_supercircuit_mask",
+    "sample_supercircuit_masks",
     "subcircuit_from_mask",
     "supercircuit_blocks",
 ]
