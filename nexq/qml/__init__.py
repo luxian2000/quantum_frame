@@ -1,5 +1,5 @@
 """Quantum machine learning utilities."""
 
-from .gradient import psr
+from .gradient import multipsr, psr, spsr
 
-__all__ = ["psr"]
+__all__ = ["psr", "spsr", "multipsr"]
