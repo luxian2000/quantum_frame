@@ -11,6 +11,7 @@ from ._types import ArchitectureSpec, SearchConfig, SearchResult
 from .candidates import build_common_architectures
 from .evaluator import ArchitectureEvaluator
 from .reward import RewardWeights
+from .search_strategies import generate_supercircuit_subcircuits
 
 
 class ArchitectureSearch:
@@ -47,6 +48,10 @@ class ArchitectureSearch:
             )
         if extra_candidates:
             candidates.extend(extra_candidates)
+        if cfg.search_strategy == "supercircuit":
+            candidates.extend(generate_supercircuit_subcircuits(cfg, backend=self.backend))
+        elif cfg.search_strategy != "preset":
+            raise ValueError(f"Unsupported search_strategy: {cfg.search_strategy!r}")
         candidates = self._filter_candidates(candidates, cfg)
         if cfg.candidate_budget is not None:
             candidates = candidates[: max(0, int(cfg.candidate_budget))]
@@ -118,6 +123,7 @@ class ArchitectureSearch:
                 "stage_2": "orthogonal_evaluation",
                 "n_candidates": len(candidates),
                 "top_k": cfg.top_k,
+                "search_strategy": cfg.search_strategy,
             },
         )
 

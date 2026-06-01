@@ -170,6 +170,11 @@ class SearchConfig:
     allowed_gates: Optional[Sequence[str]] = None
     topology: Optional[Sequence[tuple[int, int]]] = None
     top_k: Optional[int] = None
+    search_strategy: str = "preset"
+    search_generations: int = 2
+    population_size: int = 12
+    mutation_rate: float = 0.25
+    beam_width: int = 4
 
 
 @dataclass

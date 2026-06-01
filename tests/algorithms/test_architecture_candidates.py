@@ -1,6 +1,6 @@
 import unittest
 
-from nexq.qas import build_common_architectures, common_architecture_names, evaluate_architectures
+from nexq.qas import ArchitectureSearch, SearchConfig, build_common_architectures, common_architecture_names, evaluate_architectures
 from nexq.channel.backends.numpy_backend import NumpyBackend
 
 
@@ -43,6 +43,26 @@ class TestArchitectureCandidates(unittest.TestCase):
         self.assertEqual(len({score.architecture.name for score in scores}), 3)
         self.assertTrue(all(0.0 <= score.weighted_score <= 1.0 for score in scores))
         self.assertTrue(all("total_error_budget" in score.noise_robustness.raw_values for score in scores))
+
+    def test_supercircuit_strategy_generates_subcircuits(self):
+        search = ArchitectureSearch(backend=self.backend)
+        result = search.run(
+            SearchConfig(
+                n_qubits=3,
+                candidate_layers=2,
+                n_samples=4,
+                include_common_candidates=False,
+                search_strategy="supercircuit",
+                population_size=6,
+                top_k=3,
+            )
+        )
+
+        self.assertEqual(result.metadata["search_strategy"], "supercircuit")
+        self.assertEqual(len(result.scores), 3)
+        self.assertTrue(result.candidates)
+        self.assertTrue(all("supercircuit_mask" in candidate.metadata for candidate in result.candidates))
+        self.assertTrue(all(0.0 <= score.weighted_score <= 1.0 for score in result.scores))
 
 
 if __name__ == "__main__":

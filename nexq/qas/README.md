@@ -101,6 +101,24 @@ print("\n".join(multi_seed_report.summary_lines()))
 - P1b 待做：新增 task-feedback PPR-DQL 变体，用“当前线路经小预算调参后的任务评分提升”替代 target-state fidelity improvement，作为 zero-cost QAS 之后的任务相关精搜路线。
 - P2/P3 待做：更多实例、噪声/硬件 profile、统计胜率与消融。
 
+SuperCircuit/SubCircuit zero-cost 搜索已提供第一版，不训练 SuperCircuit、不做参数继承，只把 SuperCircuit 作为结构搜索空间，每个 SubCircuit mask 作为一个候选架构：
+
+```python
+from nexq.qas import ArchitectureSearch, SearchConfig
+
+search = ArchitectureSearch()
+result = search.run(
+    SearchConfig(
+        n_qubits=4,
+        candidate_layers=2,
+        search_strategy="supercircuit",
+        include_common_candidates=False,
+        population_size=16,
+        top_k=5,
+    )
+)
+```
+
 ## 5. 使用方法：PPO_RB
 
 `PPO_RB` 的输入是目标密度矩阵，输出是策略参数 `theta` 与搜索得到的 `Circuit`。
