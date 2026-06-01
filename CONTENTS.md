@@ -112,7 +112,7 @@
 │   │   └── __init__.py
 │   ├── universal/
 │   │   ├── __init__.py
-│   │   └── QFT.py
+│   │   └── qft.py
 │   ├── vqc/
 │   │   ├── __init__.py
 │   │   ├── QAOA.py
@@ -148,7 +148,9 @@
     ├── execution/
     ├── measure/
     │   └── test_measure.py
-    └── noise/
-        ├── __init__.py
-        └── test_noise_model.py
+    ├── noise/
+    │   ├── __init__.py
+    │   └── test_noise_model.py
+    └── universal/
+        └── test_qft.py
 ```
