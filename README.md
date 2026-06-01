@@ -834,3 +834,105 @@ mixed = multipsr(objective_2d, params, parameter_indices=[(0, 0), (1, 0)])
 ### 7.4 VQC 中的使用
 
 `nexq.vqc` 中已有的 `BasicVQE.parameter_shift_gradient()`、`BasicSSVQE.parameter_shift_gradient()` 和 `BasicVQD.parameter_shift_gradient()` 已统一调用 `nexq.qml.grad.psr`。因此自定义 QNN/VQC 模型时也建议复用 `psr`、`spsr` 和 `multipsr`，避免各模块重复实现 parameter-shift 逻辑。
+
+---
+
+## 8. 可视化模块
+
+`nexq.visual` 提供第一阶段的轻量可视化工具，用于查看量子线路、量子态概率/振幅和密度矩阵。文本线路图与门统计不依赖额外图形库；绘图函数会在调用时按需导入 `matplotlib`。
+
+```python
+import numpy as np
+from nexq import Circuit, hadamard, cnot, rzz
+from nexq.visual import (
+    circuit_to_text,
+    draw_circuit,
+    gate_histogram,
+    plot_state_probs,
+    plot_state_amplitudes,
+    plot_density_matrix,
+)
+
+cir = Circuit(
+    hadamard(0),
+    cnot(1, [0]),
+    rzz(np.pi / 2, 0, 1),
+    n_qubits=2,
+)
+
+print(circuit_to_text(cir))
+print(gate_histogram(cir))  # {'cx': 1, 'hadamard': 1, 'rzz': 1}
+
+# draw_circuit 默认返回文本；output="mpl" 时返回 matplotlib 的 (fig, ax)
+diagram = draw_circuit(cir)
+fig, ax = draw_circuit(cir, output="mpl")
+
+# 态向量或概率向量均可输入
+state = np.array([1 / np.sqrt(2), 0, 0, 1 / np.sqrt(2)], dtype=np.complex64)
+fig, ax = plot_state_probs(state)
+fig, ax = plot_state_amplitudes(state)
+
+# 密度矩阵热力图，part 可取 "abs"、"real"、"imag"、"phase"
+rho = np.outer(state, np.conjugate(state))
+fig, ax = plot_density_matrix(rho, part="abs")
+```
+
+当前已实现的公共函数：
+
+- `circuit_to_text(circuit)`：返回 ASCII 线路图
+- `draw_circuit(circuit, output="text" | "mpl")`：统一线路图入口
+- `gate_histogram(circuit)`：按门 `type` 统计数量
+- `plot_state_probs(state_or_probs)`：绘制计算基概率柱状图
+- `plot_state_amplitudes(state)`：绘制振幅实部、虚部和模长
+- `plot_state_phase(state)`：绘制振幅相位
+- `plot_density_matrix(rho, part=...)`：绘制密度矩阵热力图
+- `plot_density_real_imag(rho)`：并排绘制密度矩阵实部和虚部
+
+### 8.1 QAS 与 metrics 可视化
+
+`nexq.visual` 也可以直接消费 `nexq.qas` 的 `SearchResult`、`ArchitectureScore`、`ArchitectureSpec`，用于对比架构搜索候选、查看四类 objective group 分数，以及把线路图和指标放在一个 summary 图中。
+
+```python
+from nexq.channel.backends.numpy_backend import NumpyBackend
+from nexq.qas import ArchitectureSearch, SearchConfig
+from nexq.visual import (
+    qas_scores_to_rows,
+    plot_search_history,
+    plot_architecture_metrics,
+    compare_architectures,
+    plot_qas_summary,
+)
+
+backend = NumpyBackend()
+search = ArchitectureSearch(backend=backend)
+result = search.run(SearchConfig(n_qubits=3, candidate_layers=1, n_samples=8))
+
+# 转成扁平行，便于打印、保存或接入其它分析流程
+rows = qas_scores_to_rows(result)
+print(rows[0])
+
+# 按 rank 展示候选架构的 weighted score 和分组指标
+fig, ax = plot_search_history(
+    result,
+    metrics=["weighted_score", "expressibility", "trainability", "hardware_efficiency"],
+)
+
+# 对比多个候选
+fig, ax = compare_architectures(
+    result.scores[:5],
+    metrics=["weighted_score", "n_gates", "two_qubit_gate_count"],
+)
+
+# 查看单个候选的指标，或生成带线路图的 summary
+best = result.best
+fig, ax = plot_architecture_metrics(best)
+fig, axes = plot_qas_summary(best, metrics=["weighted_score", "trainability", "hardware_efficiency"])
+```
+
+QAS/metrics 相关公共函数：
+
+- `qas_scores_to_rows(data)`：将 `SearchResult`、`ArchitectureScore`、`ArchitectureSpec` 或 dict 记录转为扁平行
+- `plot_search_history(history, metrics=None, x=None)`：绘制搜索过程或候选 ranking 的指标曲线
+- `plot_architecture_metrics(item, metrics=None)`：绘制单个候选的指标条形图
+- `compare_architectures(data, metrics=None)`：对比多个候选架构或评分
+- `plot_qas_summary(item, metrics=None)`：左侧线路图、右侧指标图的组合视图
