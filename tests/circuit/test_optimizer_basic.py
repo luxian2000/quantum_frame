@@ -86,6 +86,19 @@ def test_circuit_to_dag_marks_qubit_pair_gate_fields():
     np.testing.assert_array_equal(qubit_features[2], np.array([0.0, 1.0, 1.0], dtype=np.float32))
 
 
+def test_circuit_to_dag_marks_unitary_gate_width():
+    circuit = Circuit(
+        {"type": "unitary", "n_qubits": 2, "parameter": np.eye(4, dtype=np.complex64)},
+        n_qubits=3,
+    )
+    gate_types = ["unitary"]
+
+    X, _, _ = circuit_to_dag(circuit, gate_types)
+    qubit_features = X[:, len(gate_types) :]
+
+    np.testing.assert_array_equal(qubit_features[1], np.array([1.0, 1.0, 0.0], dtype=np.float32))
+
+
 def test_optimize_basic_dict_merges_adjacent_rotations():
     circuit = Circuit(
         {"type": "rx", "target_qubit": 0, "parameter": 0.1},

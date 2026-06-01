@@ -63,6 +63,15 @@ class TestJsonQasmIO(unittest.TestCase):
         self.assertEqual(rebuilt.gates[1]["parameter"].dtype, matrix.dtype)
         np.testing.assert_allclose(rebuilt.gates[1]["parameter"], matrix)
 
+    def test_json_serializes_torch_tensor_parameters_as_numeric_values(self):
+        circ = Circuit(rx(torch.tensor(np.pi / 7), 0), u3(0.1, torch.tensor(0.2), 0.3, 0), n_qubits=1)
+
+        rebuilt = circuit_from_json(circuit_to_json(circ))
+
+        self.assertAlmostEqual(rebuilt.gates[0]["parameter"], np.pi / 7)
+        self.assertEqual(rebuilt.gates[1]["type"], "u3")
+        self.assertAlmostEqual(rebuilt.gates[1]["parameter"][1], 0.2, places=6)
+
     def test_qasm_roundtrip_text(self):
         qasm = circuit_to_qasm(self.circ)
         rebuilt = circuit_from_qasm(qasm)

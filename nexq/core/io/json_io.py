@@ -19,6 +19,11 @@ import numpy as np
 
 from ..circuit import Circuit, Parameter
 
+try:
+    import torch
+except ImportError:  # pragma: no cover - torch is optional for JSON IO.
+    torch = None
+
 _FORMAT_VERSION = "1.0"
 
 
@@ -34,6 +39,11 @@ def _jsonable_value(value: Any) -> Any:
         }
     if isinstance(value, np.generic):
         return _jsonable_value(value.item())
+    if torch is not None and isinstance(value, torch.Tensor):
+        tensor = value.detach().cpu()
+        if tensor.ndim == 0:
+            return _jsonable_value(tensor.item())
+        return _jsonable_value(tensor.numpy())
     if isinstance(value, complex):
         return {"__nexq_type__": "complex", "real": float(value.real), "imag": float(value.imag)}
     if isinstance(value, dict):
