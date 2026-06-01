@@ -15,9 +15,50 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict
 
-from ..circuit import Circuit
+import numpy as np
+
+from ..circuit import Circuit, Parameter
 
 _FORMAT_VERSION = "1.0"
+
+
+def _jsonable_value(value: Any) -> Any:
+    if isinstance(value, Parameter):
+        return {"__nexq_type__": "Parameter", "name": value.name}
+    if isinstance(value, np.ndarray):
+        return {
+            "__nexq_type__": "ndarray",
+            "dtype": str(value.dtype),
+            "shape": list(value.shape),
+            "data": _jsonable_value(value.tolist()),
+        }
+    if isinstance(value, np.generic):
+        return _jsonable_value(value.item())
+    if isinstance(value, complex):
+        return {"__nexq_type__": "complex", "real": float(value.real), "imag": float(value.imag)}
+    if isinstance(value, dict):
+        return {key: _jsonable_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_value(item) for item in value]
+    return deepcopy(value)
+
+
+def _restore_json_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_restore_json_value(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    marker = value.get("__nexq_type__")
+    if marker == "Parameter":
+        return Parameter(value["name"])
+    if marker == "complex":
+        return complex(value["real"], value["imag"])
+    if marker == "ndarray":
+        data = _restore_json_value(value["data"])
+        return np.asarray(data, dtype=np.dtype(value["dtype"])).reshape(value["shape"])
+
+    return {key: _restore_json_value(item) for key, item in value.items()}
 
 
 def circuit_to_json_dict(circuit: Circuit) -> Dict[str, Any]:
@@ -29,7 +70,7 @@ def circuit_to_json_dict(circuit: Circuit) -> Dict[str, Any]:
         "format": "nexq.circuit",
         "version": _FORMAT_VERSION,
         "n_qubits": int(circuit.n_qubits),
-        "gates": deepcopy(list(circuit.gates)),
+        "gates": _jsonable_value(list(circuit.gates)),
     }
 
 
@@ -48,7 +89,7 @@ def circuit_from_json_dict(data: Dict[str, Any]) -> Circuit:
         raise ValueError("JSON 缺少必要字段：n_qubits 或 gates")
 
     n_qubits = int(data["n_qubits"])
-    gates = data["gates"]
+    gates = _restore_json_value(data["gates"])
     if not isinstance(gates, list):
         raise ValueError("gates 必须是 list")
 

@@ -649,6 +649,10 @@ def swap(qubit_1=0, qubit_2=1):
     return {"type": "swap", "qubit_1": qubit_1, "qubit_2": qubit_2}
 
 
+def rzz(theta, qubit_1=0, qubit_2=1):
+    return {"type": "rzz", "qubit_1": qubit_1, "qubit_2": qubit_2, "parameter": theta}
+
+
 def toffoli(target_qubit=2, control_qubits=(0, 1)):
     return {"type": "toffoli", "target_qubit": target_qubit, "control_qubits": list(control_qubits)}
 
@@ -661,7 +665,7 @@ def u3(theta, phi, lam, target_qubit=0):
 
 
 def u2(phi, lam, target_qubit=0):
-    return u3(math.pi / 2.0, phi, lam, target_qubit)
+    return {"type": "u2", "target_qubit": target_qubit, "parameter": [phi, lam]}
 
 
 __all__ = [
@@ -685,6 +689,7 @@ __all__ = [
     "cry",
     "crz",
     "swap",
+    "rzz",
     "toffoli",
     "ccnot",
     "u3",
