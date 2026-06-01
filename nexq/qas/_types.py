@@ -162,6 +162,14 @@ class SearchConfig:
     n_samples: int = 200
     include_common_candidates: bool = True
     active_metrics: Dict[str, str] = field(default_factory=dict)
+    candidate_budget: Optional[int] = None
+    seed: int = 1234
+    max_depth: Optional[int] = None
+    max_parameters: Optional[int] = None
+    max_two_qubit_gates: Optional[int] = None
+    allowed_gates: Optional[Sequence[str]] = None
+    topology: Optional[Sequence[tuple[int, int]]] = None
+    top_k: Optional[int] = None
 
 
 @dataclass

@@ -3,7 +3,11 @@ from unittest import mock
 
 import numpy as np
 
-from nexq import NumpyBackend, State, StateVector, TorchBackend
+from nexq import NumpyBackend, State, StateVector
+try:
+    from nexq import TorchBackend
+except ImportError:
+    TorchBackend = None
 
 
 class TestState(unittest.TestCase):
@@ -44,6 +48,8 @@ class TestState(unittest.TestCase):
         self.assertIs(StateVector, State)
 
     def test_backend_native_tensor_construction_does_not_round_trip_through_numpy(self):
+        if TorchBackend is None:
+            self.skipTest("TorchBackend test requires torch")
         backend = TorchBackend(device="cpu")
 
         with mock.patch.object(

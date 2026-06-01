@@ -10,7 +10,11 @@ import math
 from typing import Iterable
 
 import numpy as np
-import torch
+
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None
 
 _CDTYPE = np.complex64
 
@@ -52,7 +56,8 @@ def _controlled_from_base_backend(base_single, target_qubit: int, control_qubits
     result = backend.tensor_product(*matrices)
     identity_backend = backend.eye(1 << n_qubits)
     if (
-        isinstance(identity_backend, torch.Tensor)
+        torch is not None
+        and isinstance(identity_backend, torch.Tensor)
         and isinstance(result, torch.Tensor)
         and torch.is_complex(identity_backend)
         and torch.is_complex(result)
@@ -322,13 +327,13 @@ def _inverse_permutation(perm):
 
 
 def _permute_tensor(tensor, perm):
-    if isinstance(tensor, torch.Tensor):
+    if torch is not None and isinstance(tensor, torch.Tensor):
         return tensor.permute(perm)
     return np.transpose(tensor, perm)
 
 
 def _contiguous_if_torch(tensor):
-    return tensor.contiguous() if isinstance(tensor, torch.Tensor) else tensor
+    return tensor.contiguous() if torch is not None and isinstance(tensor, torch.Tensor) else tensor
 
 
 def _parameter_cache_key(value):

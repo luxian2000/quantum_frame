@@ -1,7 +1,5 @@
 # nexq — 量子模拟器顶层包
-from .channel.backends.torch_backend import TorchBackend
 from .channel.backends.numpy_backend import NumpyBackend
-from .channel.backends.npu_backend import NPUBackend, NPURuntimeContext, npu_runtime_context_from_env
 from .core.state import State, StateVector
 from .core.density import DensityMatrix
 from .channel.operators import PauliOp, PauliString, Hamiltonian
@@ -66,12 +64,25 @@ from . import (
     wireless,
 )
 
+_OPTIONAL_BACKENDS: list[str] = []
+try:
+    from .channel.backends.torch_backend import TorchBackend
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+else:
+    _OPTIONAL_BACKENDS.append("TorchBackend")
+
+try:
+    from .channel.backends.npu_backend import NPUBackend, NPURuntimeContext, npu_runtime_context_from_env
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+else:
+    _OPTIONAL_BACKENDS.extend(["NPUBackend", "NPURuntimeContext", "npu_runtime_context_from_env"])
+
 __all__ = [
-    "TorchBackend",
     "NumpyBackend",
-    "NPUBackend",
-    "NPURuntimeContext",
-    "npu_runtime_context_from_env",
     "State",
     "StateVector",
     "DensityMatrix",
@@ -128,4 +139,4 @@ __all__ = [
     "universal",
     "vqc",
     "wireless",
-]
+] + _OPTIONAL_BACKENDS
