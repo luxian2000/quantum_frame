@@ -48,6 +48,37 @@ def _normalize_control_states(gate: dict[str, Any]) -> tuple[int, ...]:
     return tuple(int(x) for x in raw)
 
 
+def _extend_qubits(qubits: list[int], values: Any) -> None:
+    if isinstance(values, (list, tuple, set)):
+        qubits.extend(int(qubit) for qubit in values)
+    else:
+        qubits.append(int(values))
+
+
+def _gate_qubits(gate: dict[str, Any]) -> list[int]:
+    qubits: list[int] = []
+
+    target = gate.get("target_qubit")
+    if target is not None:
+        qubits.append(int(target))
+
+    controls = gate.get("control_qubits")
+    if controls is not None:
+        _extend_qubits(qubits, controls)
+
+    for key in ("qubit_1", "qubit_2"):
+        qubit = gate.get(key)
+        if qubit is not None:
+            qubits.append(int(qubit))
+
+    for key in ("qubits", "targets"):
+        values = gate.get(key)
+        if values is not None:
+            _extend_qubits(qubits, values)
+
+    return sorted(set(qubits))
+
+
 def _cancel_gate_pair(prev: dict[str, Any], curr: dict[str, Any]) -> bool:
     pf = _gate_family_from_name(prev.get("type", ""))
     cf = _gate_family_from_name(curr.get("type", ""))
@@ -420,10 +451,9 @@ def _dag_arrays_from_gates(gates: list[dict[str, Any]], gate_types: list[str]) -
 
     max_q = -1
     for g in gates:
-        if "target_qubit" in g:
-            max_q = max(max_q, int(g["target_qubit"]))
-        for c in g.get("control_qubits", []) or []:
-            max_q = max(max_q, int(c))
+        qubits = _gate_qubits(g)
+        if qubits:
+            max_q = max(max_q, max(qubits))
     n_qubits = max_q + 1 if max_q >= 0 else 1
 
     total = len(gates) + 2
@@ -440,11 +470,7 @@ def _dag_arrays_from_gates(gates: list[dict[str, Any]], gate_types: list[str]) -
             type_onehot[idx, t_idx] = 1.0
             X[idx, t_idx] = 1.0
 
-        qubits: list[int] = []
-        if "target_qubit" in g:
-            qubits.append(int(g["target_qubit"]))
-        qubits.extend(int(c) for c in (g.get("control_qubits", []) or []))
-        qubits = sorted(set(qubits))
+        qubits = _gate_qubits(g)
 
         for q in qubits:
             X[idx, f_type + q] = 1.0

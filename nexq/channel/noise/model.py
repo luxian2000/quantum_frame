@@ -50,7 +50,7 @@ class NoiseModel:
         target = gate.get("target_qubit")
         if target is not None:
             qubits.add(int(target))
-        for key in ("control_qubits", "qubits", "targets"):
+        for key in ("control_qubits", "qubit_1", "qubit_2", "qubits", "targets"):
             values = gate.get(key)
             if values is None:
                 continue
