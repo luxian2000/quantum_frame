@@ -1,5 +1,6 @@
 from .circuit import (
     Circuit,
+    Parameter,
     ccnot,
     cnot,
     circuit,
@@ -37,6 +38,7 @@ from .io.qasm import (
 
 __all__ = [
     "Circuit",
+    "Parameter",
     "State",
     "StateVector",
     "DensityMatrix",
