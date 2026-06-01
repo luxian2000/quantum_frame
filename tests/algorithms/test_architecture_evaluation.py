@@ -1,6 +1,6 @@
 import unittest
 
-from nexq.algorithms.qas import ArchitectureSpec, evaluate_architectures
+from nexq.qas import ArchitectureSpec, evaluate_architectures
 from nexq.channel.backends.numpy_backend import NumpyBackend
 
 

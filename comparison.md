@@ -31,7 +31,7 @@
 | 编码器                    | 未见独立 `encoder` 模块                                                                                                                                                                                | 已实现 `AmplitudeEncoder`、`AngleEncoder`、`BasisEncoder`                                                                                              |
 | 控制流/程序结构           | `QuantumProg` 提供 `qif/trueif/falseif/qwhile/addwhile`，支持受控子电路 `control(...)`                                                                                                             | 以电路与测量为主，未见 `qif/qwhile` 这类程序控制流对象                                                                                                     |
 | 批处理能力                | 参数/电路存在 batch 概念（如门参数 batch、`set_batch`）                                                                                                                                                | `Measure.run_batch` 显式批量运行                                                                                                                           |
-| 量子架构搜索（QAS）       | 未见独立 QAS 模块                                                                                                                                                                                        | 已实现 `algorithms/qas`，含 `CRLQAS`、`PPR_DQL`、`PPO_RB` 等强化学习式架构搜索实现                                                                   |
+| 量子架构搜索（QAS）       | 未见独立 QAS 模块                                                                                                                                                                                        | 已实现 `qas`，含 `CRLQAS`、`PPR_DQL`、`PPO_RB` 等强化学习式架构搜索实现                                                                   |
 | 量子线路优化（Optimizer） | 未见独立优化器模块，主要是手工电路构建与转换接口                                                                                                                                                         | 已实现 `optimizer/basic.py`，支持局部重写优化（门对消、旋转门合并、QASM 文本级优化）                                                                       |
 | 作业系统                  | `job/job.py` 对接外部 QCOS Client（提交、查询、取消、删除任务）                                                                                                                                        | 当前仓库未见等价远程作业客户端                                                                                                                               |
 
@@ -133,7 +133,7 @@
 
 ### quantum_frame/nexq
 
-- `algorithms/qas` 为实装模块，不是纯占位：
+- `qas` 为实装模块，不是纯占位：
   - `CRLQAS.py`：DDQN + Adam-SPSA + curriculum 机制做架构搜索。
   - `PPR_DQL.py`：DQN + 经验回放 + policy reuse（持续学习）做态制备架构搜索。
   - `PPO_RB.py`：TR-PPO rollback 风格的架构搜索实现。
@@ -143,7 +143,7 @@
 
 ### WuYueSDK/wuyue
 
-- 未发现与 `algorithms/qas` 对等的“量子架构搜索”框架模块：
+- 未发现与 `qas` 对等的“量子架构搜索”框架模块：
   - `wuyue` 目录下无 `algorithms` 或 `qas` 子包。
   - `wuyue/example/algorithm.py` 是算法示例（QFT/Grover/Shor 等），非通用搜索训练框架。
 - 未发现与 `optimizer/basic.py` 对等的“线路优化器”模块：
@@ -155,7 +155,7 @@
 ## 4. “已实现”与“占位”观察
 
 - WuYueSDK：模块相对集中在模拟器、电路/程序、噪声、可视化、作业接口，偏“功能完整型 SDK”。
-- nexq：核心模拟/测量/编码较完善；同时在 `algorithms/qas` 与 `optimizer/basic` 上已有实装。算法目录中除 `qas` 外，多数子目录当前仍以 `__init__.py` 占位为主。
+- nexq：核心模拟/测量/编码较完善；同时在 `qas` 与 `optimizer/basic` 上已有实装。提升后的算法子包中除 `qas` 外，多数子目录当前仍以 `__init__.py` 占位为主。
 
 ## 5. 结论建议（按选型场景）
 
@@ -193,9 +193,9 @@
   - `nexq/encoder/amplitude.py`
   - `nexq/encoder/angle.py`
   - `nexq/encoder/basis.py`
-  - `nexq/algorithms/qas/CRLQAS.py`
-  - `nexq/algorithms/qas/PPR_DQL.py`
-  - `nexq/algorithms/qas/PPO_RB.py`
+  - `nexq/qas/CRLQAS.py`
+  - `nexq/qas/PPR_DQL.py`
+  - `nexq/qas/PPO_RB.py`
   - `nexq/optimizer/basic.py`
   - `nexq/core/io/qasm.py`
   - `nexq/core/io/json_io.py`

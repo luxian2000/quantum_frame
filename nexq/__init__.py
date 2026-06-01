@@ -54,8 +54,17 @@ from .core.io.qasm import (
     save_circuit_qasm,
     save_circuit_qasm3,
 )
-from . import algorithms
-from . import encoder
+from . import (
+    chemistry,
+    encoder,
+    metrics,
+    optimization,
+    qas,
+    qml,
+    universal,
+    vqc,
+    wireless,
+)
 
 __all__ = [
     "TorchBackend",
@@ -110,6 +119,13 @@ __all__ = [
     "save_circuit_qasm",
     "save_circuit_qasm3",
     "load_circuit_qasm",
-    "algorithms",
+    "chemistry",
     "encoder",
+    "metrics",
+    "optimization",
+    "qas",
+    "qml",
+    "universal",
+    "vqc",
+    "wireless",
 ]

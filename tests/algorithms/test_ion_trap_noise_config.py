@@ -5,7 +5,7 @@ import numpy as np
 
 from nexq.channel.backends.numpy_backend import NumpyBackend
 from nexq.channel.noise.model import NoiseModel
-from nexq.algorithms.qas import load_default_ion_trap_noise_config, load_ion_trap_noise_config
+from nexq.qas import load_default_ion_trap_noise_config, load_ion_trap_noise_config
 
 
 class _CountingIdentityChannel:

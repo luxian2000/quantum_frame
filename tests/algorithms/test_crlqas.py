@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from nexq.algorithms.qas import AdamSPSAConfig, CRLQASConfig, crlqas, train_crlqas
+from nexq.qas import AdamSPSAConfig, CRLQASConfig, crlqas, train_crlqas
 
 
 class TestCRLQAS(unittest.TestCase):

@@ -70,6 +70,8 @@ class NoiseModel:
 
     def apply(self, rho, n_qubits: int, backend, gate_type: Optional[str] = None, gate: Optional[dict] = None):
         """Apply all matching noise rules to a density matrix."""
+        if gate_type is None and gate is not None:
+            gate_type = gate.get("type")
         out = rho
         for rule in self.rules:
             if not self._match_rule(rule, gate_type):
