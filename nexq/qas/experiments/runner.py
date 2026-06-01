@@ -163,6 +163,61 @@ class MultiSeedValidationReport:
         return lines
 
 
+@dataclass
+class StrategyComparisonReport:
+    """Comparison of multiple QAS search strategies under one task budget."""
+
+    problem: ProblemInstance
+    reports: Dict[str, ValidationReport]
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "problem": self.problem.to_dict(),
+            "metadata": dict(self.metadata),
+            "reports": {name: report.to_dict() for name, report in self.reports.items()},
+            "strategy_summary": self.strategy_summary(),
+        }
+
+    def strategy_summary(self) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for strategy, report in self.reports.items():
+            baseline_best = report.best_result
+            if report.baseline_results:
+                baseline_best = _sort_task_results(self.problem, report.baseline_results)[0]
+            qas_best = None if not report.qas_results else _sort_task_results(self.problem, report.qas_results)[0]
+            overall_best = report.best_result
+            rows.append(
+                {
+                    "strategy": strategy,
+                    "baseline_best": None if baseline_best is None else baseline_best.optimized_value,
+                    "qas_best": None if qas_best is None else qas_best.optimized_value,
+                    "overall_best": None if overall_best is None else overall_best.optimized_value,
+                    "qas_best_name": None if qas_best is None else qas_best.architecture_name,
+                    "overall_best_name": None if overall_best is None else overall_best.architecture_name,
+                    "qas_best_ratio": None if qas_best is None else qas_best.approximation_ratio,
+                    "n_prior_candidates": report.metadata.get("n_prior_candidates"),
+                }
+            )
+        return rows
+
+    def summary_lines(self) -> List[str]:
+        lines = [
+            f"problem: {self.problem.name}",
+            "strategy | baseline_best | qas_best | qas_ratio | overall_best | best_name | n_prior",
+        ]
+        for row in self.strategy_summary():
+            baseline_best = "-" if row["baseline_best"] is None else f"{row['baseline_best']:.6f}"
+            qas_best = "-" if row["qas_best"] is None else f"{row['qas_best']:.6f}"
+            qas_ratio = "-" if row["qas_best_ratio"] is None else f"{row['qas_best_ratio']:.4f}"
+            overall_best = "-" if row["overall_best"] is None else f"{row['overall_best']:.6f}"
+            lines.append(
+                f"{row['strategy']} | {baseline_best} | {qas_best} | {qas_ratio} | "
+                f"{overall_best} | {row['overall_best_name']} | {row['n_prior_candidates']}"
+            )
+        return lines
+
+
 def _baseline_architectures(problem: ProblemInstance, layers: int, backend: NumpyBackend) -> List[ArchitectureSpec]:
     return build_common_architectures(
         n_qubits=problem.n_qubits,
@@ -433,10 +488,74 @@ def run_task_feedback_validation_experiment(
     )
 
 
+def run_search_strategy_comparison(
+    problem: ProblemInstance,
+    search_config: Optional[SearchConfig] = None,
+    optimizer_config: Optional[OptimizerConfig] = None,
+    qas_top_k: int = 3,
+    strategies: Sequence[str] = ("supercircuit_progressive", "supercircuit_evolution", "task_feedback"),
+    feedback_generations: int = 2,
+    feedback_population_size: Optional[int] = None,
+    feedback_elite_count: Optional[int] = None,
+    backend: Optional[NumpyBackend] = None,
+    noise_model: Optional[NoiseModel] = None,
+    hardware_profile: Optional[HardwareProfile] = None,
+) -> StrategyComparisonReport:
+    """Run several search strategies with the same task and optimizer budget."""
+    backend = backend or NumpyBackend()
+    base_cfg = search_config or SearchConfig(n_qubits=problem.n_qubits, candidate_layers=1, n_samples=8)
+    optimizer_cfg = optimizer_config or OptimizerConfig(max_evaluations=16)
+    reports: Dict[str, ValidationReport] = {}
+
+    for strategy in strategies:
+        if strategy == "task_feedback":
+            task_cfg = replace(base_cfg, search_strategy="supercircuit_evolution", include_common_candidates=False)
+            reports[strategy] = run_task_feedback_validation_experiment(
+                problem,
+                search_config=task_cfg,
+                optimizer_config=optimizer_cfg,
+                qas_top_k=qas_top_k,
+                feedback_generations=feedback_generations,
+                feedback_population_size=feedback_population_size,
+                feedback_elite_count=feedback_elite_count,
+                backend=backend,
+                noise_model=noise_model,
+                hardware_profile=hardware_profile,
+            )
+        else:
+            reports[strategy] = run_validation_experiment(
+                problem,
+                search_config=replace(base_cfg, search_strategy=strategy),
+                optimizer_config=optimizer_cfg,
+                qas_top_k=qas_top_k,
+                backend=backend,
+                noise_model=noise_model,
+                hardware_profile=hardware_profile,
+            )
+
+    return StrategyComparisonReport(
+        problem=problem,
+        reports=reports,
+        metadata={
+            "strategies": [str(strategy) for strategy in strategies],
+            "qas_top_k": qas_top_k,
+            "search_config": base_cfg.__dict__.copy(),
+            "optimizer_config": optimizer_cfg.__dict__.copy(),
+            "feedback_generations": feedback_generations,
+            "feedback_population_size": feedback_population_size,
+            "feedback_elite_count": feedback_elite_count,
+            "noise_model": type(noise_model).__name__ if noise_model is not None else None,
+            "hardware_profile": None if hardware_profile is None else hardware_profile.__dict__.copy(),
+        },
+    )
+
+
 __all__ = [
     "MultiSeedValidationReport",
+    "StrategyComparisonReport",
     "ValidationReport",
     "run_multi_seed_validation_experiment",
+    "run_search_strategy_comparison",
     "run_task_feedback_validation_experiment",
     "run_validation_experiment",
 ]
