@@ -235,16 +235,23 @@ filtered the search space.
 
 ## Proposed Implementation Order
 
-1. Add zero-cost local-probe gradient helpers in `nexq/metrics/trainability.py`.
-2. Add `gradient_norm` and `gradient_variance` support in `ArchitectureEvaluator`.
-3. Add tests comparing parameterized ansatzes with clearly flat/no-parameter
+1. Done: add zero-cost local-probe gradient helpers in `nexq/metrics/trainability.py`.
+2. Done: add `gradient_norm` and `gradient_variance` support in `ArchitectureEvaluator`.
+3. Done: add `HardwareProfile` and `topology_mapping_efficiency` in
+   `nexq/metrics/hardware.py`.
+4. Done: wire `hardware_profile` through `ArchitectureSearch` and validation
+   runners.
+5. Done: add tests comparing parameterized ansatzes with clearly flat/no-parameter
    circuits under the fixed local probes.
-4. Add `HardwareProfile` and profile-aware details in `nexq/metrics/hardware.py`.
-5. Add hardware profile tests for native gates, nonlocal edges, routing cost,
+6. Done: add hardware profile tests for native gates, nonlocal edges, routing cost,
    and optional mapping-fidelity reporting.
-6. Add a P1b design or wrapper for task-feedback PPR-DQL without modifying the
+7. Next: add more probe variants beyond `mean_z`, especially local `X/Y/Z` and
+   two-local nearest-neighbor probes.
+8. Next: replace default noise robustness with a profile-aware exposure metric
+   that does not duplicate hardware-efficiency terms.
+9. Next: add a P1b design or wrapper for task-feedback PPR-DQL without modifying the
    original target-state PPR-DQL API.
-7. Re-run multi-seed benchmark with:
+10. Re-run multi-seed benchmark with:
 
 ```python
 SearchConfig(

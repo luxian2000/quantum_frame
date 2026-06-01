@@ -6,6 +6,7 @@ from typing import List, Optional, Sequence
 
 from ..channel.backends.base import Backend
 from ..channel.noise.model import NoiseModel
+from ..metrics.hardware import HardwareProfile
 from ._types import ArchitectureSpec, SearchConfig, SearchResult
 from .candidates import build_common_architectures
 from .evaluator import ArchitectureEvaluator
@@ -19,11 +20,13 @@ class ArchitectureSearch:
         self,
         backend: Optional[Backend] = None,
         noise_model: Optional[NoiseModel] = None,
+        hardware_profile: Optional[HardwareProfile] = None,
         weights: Optional[RewardWeights] = None,
         evaluator: Optional[ArchitectureEvaluator] = None,
     ):
         self.backend = backend
         self.noise_model = noise_model
+        self.hardware_profile = hardware_profile
         self.weights = weights or RewardWeights()
         self.evaluator = evaluator
 
@@ -90,6 +93,7 @@ class ArchitectureSearch:
         evaluator = self.evaluator or ArchitectureEvaluator(
             backend=self.backend,
             noise_model=self.noise_model,
+            hardware_profile=self.hardware_profile,
             weights=self.weights,
             n_samples=cfg.n_samples,
             active_metrics=cfg.active_metrics,
