@@ -96,8 +96,9 @@ print("\n".join(multi_seed_report.summary_lines()))
 
 - 已完成：MaxCut / resource allocation 问题抽象、任务级验证、同预算 baseline/QAS 对比、单 seed demo、NPU backend smoke 验证。
 - 进行中：多 seed 汇总、固定报告 schema、更多实际问题与噪声设置。
-- P0.5 待做：先修正 QAS 度量。`trainability` 从结构启发式升级为 task-aware `gradient_norm` / `gradient_variance`；`hardware_efficiency` 从通用深度/双比特门启发式升级为 profile-aware native gate、connectivity、routing/error cost。调研与实现建议见 `docs/qas_metric_research_report.md`。
-- P1 待做：在度量可信后升级搜索。优先加入 random / mutation / beam search；已有 RL 搜索方法可作为后续候选，但不应在 placeholder reward 上直接训练。
+- P0.5 待做：先修正 QAS zero-cost 度量。`expressibility` 保持 KL-Haar / MMD；`trainability` 从结构启发式升级为任务无关的 local-probe `gradient_norm` / `gradient_variance`；`hardware_efficiency` 输入硬件拓扑、native gate、联通度、routing/depth 和可选映射边质量，但不重复计算 noise fidelity；`noise_robustness` 单独负责噪声暴露/敏感度。调研与实现建议见 `docs/qas_metric_research_report.md`。
+- P1 待做：在度量可信后升级搜索。优先加入 random / mutation / beam search；已有 RL 搜索文件可复用 action space 和训练框架，但不能直接复用 target fidelity / Hamiltonian reward。
+- P1b 待做：新增 task-feedback PPR-DQL 变体，用“当前线路经小预算调参后的任务评分提升”替代 target-state fidelity improvement，作为 zero-cost QAS 之后的任务相关精搜路线。
 - P2/P3 待做：更多实例、噪声/硬件 profile、统计胜率与消融。
 
 ## 5. 使用方法：PPO_RB
