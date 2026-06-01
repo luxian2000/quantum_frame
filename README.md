@@ -23,7 +23,7 @@ from nexq import (
     s_gate, t_gate,
     cx, cnot, cy, cz,
     crx, cry, crz,
-    swap,
+    swap, rzz,
     toffoli, ccnot,
     u2, u3,
 )
@@ -85,13 +85,16 @@ from nexq.qml import psr, spsr, multipsr
 | `cry(θ, t, [c])`     | 角度, target, control_list       | 受控 Ry         |
 | `crz(θ, t, [c])`     | 角度, target, control_list       | 受控 Rz         |
 | `swap(q1, q2)`        | qubit_1, qubit_2                 | SWAP 门         |
-| `toffoli(t, [c0,c1])` | target, control_list             | Toffoli (CCX)   |
-| `ccnot(t, [c0,c1])`   | target, control_list             | 同 toffoli      |
+| `rzz(θ, q1, q2)`      | 角度, qubit_1, qubit_2           | ZZ 旋转门       |
+| `toffoli(t, [c0,c1,...])` | target, control_list         | 多控制 X 门     |
+| `ccnot(t, [c0,c1,...])`   | target, control_list         | 同 toffoli      |
+
+`toffoli` / `ccnot` 的矩阵构造与逐门执行路径支持任意数量控制位，也支持门字典中的 `control_states`；导出为 OpenQASM `ccx` 时仍只适用于两个控制位。
 
 ### 2.2 构建电路
 
 ```python
-from nexq import Circuit, hadamard, cnot, rz, rx, pauli_x, swap, toffoli
+from nexq import Circuit, hadamard, cnot, cx, ry, rz
 
 # 方式一：构造时直接传入门列表（自动推断 n_qubits）
 cir = Circuit(
@@ -120,13 +123,15 @@ print(U.shape)   # (4, 4)
 
 ```python
 import math
-from nexq import Circuit, rx, ry, rz, u3, crx, swap, toffoli
+from nexq import Circuit, rx, ry, rz, u2, u3, crx, rzz, swap, toffoli
 
 cir = Circuit(
     rx(math.pi / 2, 0),             # Rx(π/2) 作用在 qubit 0
     ry(math.pi / 4, 1),             # Ry(π/4) 作用在 qubit 1
+    u2(math.pi / 3, math.pi / 5, 0), # U2 门，保留 type="u2"
     u3(math.pi, 0, math.pi, 2),     # U3(π, 0, π) ≡ X 门，作用在 qubit 2
     crx(math.pi / 2, 2, [1]),       # 受控 Rx，控制=qubit1，目标=qubit2
+    rzz(math.pi / 3, 0, 2),         # RZZ 作用在 qubit0 和 qubit2
     swap(0, 1),                     # SWAP qubit0 和 qubit1
     toffoli(2, [0, 1]),             # Toffoli，控制=[0,1]，目标=qubit2
     n_qubits=3,
@@ -179,8 +184,50 @@ template.bind_parameters({"theta0": 0.2, "theta1": 0.5}, inplace=True)
 
 - 未绑定参数的电路调用 `unitary()` 会报错，需要先 `bind_parameters(...)`。
 - `allow_partial=True` 可做部分绑定，返回仍含未绑定参数的电路。
-- 当前 `Parameter` 是符号占位符，不是自动微分张量；训练梯度建议使用第 7 节的 parameter-shift 工具。
-- 导出 QASM 或生成数值矩阵前，应先把所有参数绑定为数值。
+- `Parameter` 是符号占位符，不是自动微分张量；训练梯度可使用第 7 节的 parameter-shift 工具。
+- 如果要使用 PyTorch autograd，可直接把 Torch 标量张量作为门参数，并调用 `Circuit.unitary(backend=TorchBackend(...))`。当前 `rx`/`ry`/`rz`/`u2`/`u3`、受控旋转门、`rzz` 和自定义 `unitary` 的 Torch 参数会保留计算图。
+- 导出 QASM 前应先把所有符号参数绑定为数值。JSON 导出支持 `Parameter`、NumPy 标量/数组、复数和 Torch 张量数值；Torch 张量在 JSON 读回后会恢复为普通数值或列表，不会恢复为带计算图的 Tensor。
+
+### 2.5 自定义 unitary、identity 与 Torch 自动微分
+
+可以用门字典直接加入自定义酉矩阵：
+
+```python
+import numpy as np
+from nexq import Circuit
+
+custom = {
+    "type": "unitary",
+    "parameter": np.eye(4, dtype=np.complex64),
+    "n_qubits": 2,
+}
+
+cir = Circuit(custom, n_qubits=3)
+U = cir.unitary()   # 自定义 2-qubit unitary 会扩展到 3-qubit 电路宽度
+```
+
+`identity` 门也会按电路总宽度扩展；`Circuit.show()` 与 DAG 转换都能识别 `unitary` 门。
+
+Torch 参数示例：
+
+```python
+import torch
+from nexq import Circuit, TorchBackend, rx, rzz
+
+backend = TorchBackend(device="cpu")
+theta = torch.tensor(0.2, requires_grad=True)
+
+cir = Circuit(
+    rx(theta, 0),
+    rzz(theta, 0, 1),
+    n_qubits=2,
+)
+
+U = cir.unitary(backend=backend)
+loss = torch.real(U[0, 0])
+loss.backward()
+print(theta.grad)
+```
 
 ---
 
@@ -432,7 +479,7 @@ print(result.backend_name)
 
 - **可以在两处指定 backend**：`Circuit` 或 `Measure` 都支持传入后端。
 - **优先级**：`Measure` 会优先使用 `circuit.backend`（若存在），否则使用 `Measure` 自身的后端（见 `Measure._resolve_backend` 的实现）。因此将后端绑定到 `Circuit` 能避免回退到主机端拼装或与 Measure 中传入后端的混淆。
-- **为什么推荐绑定到 `Circuit`**：当电路具有 `gates` 时，`Measure` 会逐门调用 `gate_to_matrix(..., backend=resolved_backend)` 在目标设备上构造并作用门矩阵，从而减少构造完整 2^n×2^n 矩阵的内存与主机→设备搬运；若 `unitary(backend=...)` 不被支持则会回退到无 backend 的 `unitary()`（在 CPU 上用 numpy 拼装整矩阵），然后再 `backend.cast` 到设备，这会引起大规模数据搬运。
+- **为什么推荐绑定到 `Circuit`**：当电路具有 `gates` 时，`Measure` 会逐门调用 `gate_to_matrix(..., backend=resolved_backend)` 在目标设备上构造并作用门矩阵，从而减少构造完整 2^n×2^n 矩阵的内存与主机→设备搬运；若 `unitary(backend=...)` 不被支持则会回退到无 backend 的 `unitary()`（在 CPU 上用 numpy 拼装整矩阵），然后再 `backend.cast` 到设备，这会引起大规模数据搬运。对于 `TorchBackend`，参数化门的 Torch 标量张量会通过 torch 运算构造矩阵，从而保留 autograd 计算图。
 
 关于将多个电路合并（拼接）时的 backend 确定：
 
@@ -453,7 +500,7 @@ result = Measure(common_backend).run(full)
 - 构建阶段只保存门描述: 调用 `hadamard(0)` 等构造的是门的描述字典（例如 `{"type": "hadamard", "target_qubit": 0}`），`Circuit.__init__` 只是把这些描述存起来，并不会在构建时把门转换成数值矩阵。
 - 当前执行策略: `Measure.run`/`run_density_matrix` 在电路对象具备 `gates` 序列时，会优先走“逐门演化”路径（按门依次作用到态/密度矩阵），而不是先组装整条电路的全局矩阵后再一次性作用。
 - 矩阵在组装时生成: 真正把门变为 2^n×2^n 的数值矩阵发生在调用 `Circuit.unitary(backend=...)` 或 `Measure` 等需要数值矩阵的地方。此时会调用 `gate_to_matrix(gate, cir_qubits, backend)` 来生成每个门的矩阵。
-- backend 参数的作用: 当 `backend=None` 时，`gate_to_matrix` 会走 numpy 路径（例如调用 `_hadamard()` 等函数，在 CPU 上生成矩阵）；当传入 `backend` 时，`gate_to_matrix` 会使用后端分支（先构造 2×2 的 base 矩阵再通过 `_single_qubit_from_base_backend`/`_controlled_from_base_backend` 调用 `backend.cast`、`backend.kron`、`backend.matmul` 等接口），从而在目标后端（CPU/GPU/NPU）上构造和组合张量。
+- backend 参数的作用: 当 `backend=None` 时，`gate_to_matrix` 会走 numpy 路径（例如调用 `_hadamard()` 等函数，在 CPU 上生成矩阵）；当传入 `backend` 时，`gate_to_matrix` 会使用后端分支（先构造 base 矩阵再通过 `_single_qubit_from_base_backend`/`_controlled_from_base_backend` 等路径调用 `backend.cast`、`backend.kron`、`backend.matmul` 等接口），从而在目标后端（CPU/GPU/NPU）上构造和组合张量。`rx`/`ry`/`rz`/`u2`/`u3`、受控旋转、`rzz` 和自定义 `unitary` 可在 `TorchBackend` 下保留 Torch 参数的梯度链路。
 - 兼容回退路径: 若电路对象不提供 `gates` 序列，`Measure` 仍会回退到 `unitary()` 路径以兼容外部实现。
 - 可能的设备搬运: 在 `unitary()` 回退路径中，`Measure` 现在优先直接 `backend.cast(unitary_raw)`，避免无必要的 `to_numpy` 主机往返。
 - 性能建议: 对大 qubit 数，显式组装全矩阵会占用大量内存并产生迁移成本。若要最小化搬运，优先在构建时绑定后端（本节方式 B），或改为按门逐步在态上直接作用（逐门 apply），避免生成完整 2^n×2^n 矩阵；若需要彻底避免中间拷贝，可考虑修改 `Measure` 中的 `to_numpy` 使用点或直接在后端上逐门演化。
@@ -660,6 +707,7 @@ nexq 在 3.0 模式下的主要差异：
 | `h`                              | `hadamard`                          |
 | `s`, `t`                       | `s_gate`, `t_gate`                |
 | `rx`, `ry`, `rz`             | `rx`, `ry`, `rz`                |
+| `rzz(θ)`                         | `rzz`                               |
 | `u2(φ,λ)`                      | `u2`                                |
 | `u3(θ,φ,λ)` / `u(θ,φ,λ)` | `u3`                                |
 | `cx`                             | `cx` / `cnot`                     |
