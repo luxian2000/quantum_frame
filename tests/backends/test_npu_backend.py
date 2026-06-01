@@ -74,7 +74,8 @@ class TestNPUBackend(unittest.TestCase):
             {"WORLD_SIZE": "8", "RANK": "3", "LOCAL_RANK": "1"},
             clear=False,
         ):
-            backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
+            with mock.patch.object(NPUBackend, "_resolve_device", return_value=torch.device("cpu")):
+                backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 
         self.assertIsNotNone(backend.runtime_context)
         self.assertEqual(backend.runtime_context.world_size, 8)
@@ -92,15 +93,15 @@ class TestNPUBackend(unittest.TestCase):
             "MASTER_PORT": "29500",
         }
         with mock.patch.dict("os.environ", env, clear=False):
-            with mock.patch("torch.distributed.is_available", return_value=True):
-                with mock.patch("torch.distributed.is_initialized", side_effect=[False, True]):
-                    with mock.patch("torch.distributed.init_process_group") as init_pg:
-                        backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
+            with mock.patch.object(NPUBackend, "_resolve_device", return_value=torch.device("cpu")):
+                with mock.patch("torch.distributed.is_available", return_value=True):
+                    with mock.patch("torch.distributed.is_initialized", side_effect=[False, True]):
+                        with mock.patch("torch.distributed.init_process_group") as init_pg:
+                            backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 
-        expected_backend = "hccl" if is_npu_available() else "gloo"
-        init_pg.assert_called_once_with(backend=expected_backend, rank=1, world_size=2)
+        init_pg.assert_called_once_with(backend="gloo", rank=1, world_size=2)
         self.assertTrue(backend.runtime_context.process_group_initialized)
-        self.assertEqual(backend.runtime_context.process_group_backend, expected_backend)
+        self.assertEqual(backend.runtime_context.process_group_backend, "gloo")
 
     def test_distributed_batch_helpers_partition_and_gather(self):
         backend = NPUBackend(fallback_to_cpu=True)
