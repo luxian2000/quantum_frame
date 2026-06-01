@@ -96,7 +96,9 @@ print("\n".join(multi_seed_report.summary_lines()))
 
 - 已完成：MaxCut / resource allocation 问题抽象、任务级验证、同预算 baseline/QAS 对比、单 seed demo、NPU backend smoke 验证。
 - 进行中：多 seed 汇总、固定报告 schema、更多实际问题与噪声设置。
-- 待做：更强的随机/变异/beam 架构生成，梯度型 trainability，硬件 profile，更多实例上的统计胜率与消融。
+- P0.5 待做：先修正 QAS 度量。`trainability` 从结构启发式升级为 task-aware `gradient_norm` / `gradient_variance`；`hardware_efficiency` 从通用深度/双比特门启发式升级为 profile-aware native gate、connectivity、routing/error cost。调研与实现建议见 `docs/qas_metric_research_report.md`。
+- P1 待做：在度量可信后升级搜索。优先加入 random / mutation / beam search；已有 RL 搜索方法可作为后续候选，但不应在 placeholder reward 上直接训练。
+- P2/P3 待做：更多实例、噪声/硬件 profile、统计胜率与消融。
 
 ## 5. 使用方法：PPO_RB
 
