@@ -13,8 +13,18 @@ from ..channel.noise.model import NoiseModel
 from ._types import ArchitectureScore, ArchitectureSpec, MetricDefinition, MetricGroupScore
 from ._utils import assign_ranks, clipped_score, ensure_backend
 from ..metrics.expressibility import KL_Haar_divergence, MMD_relative
-from ..metrics.hardware import native_depth_twoq_efficiency, native_depth_twoq_efficiency_details
-from ..metrics.trainability import structure_proxy, structure_proxy_details
+from ..metrics.hardware import (
+    HardwareProfile,
+    native_depth_twoq_efficiency,
+    native_depth_twoq_efficiency_details,
+    topology_mapping_efficiency,
+    topology_mapping_efficiency_details,
+)
+from ..metrics.trainability import (
+    local_probe_gradient_statistics,
+    structure_proxy,
+    structure_proxy_details,
+)
 from .reward import RewardComposer, RewardWeights
 
 
@@ -30,8 +40,8 @@ def metric_catalog(active_metrics: Optional[Dict[str, str]] = None) -> Dict[str,
         ],
         "trainability": [
             MetricDefinition("structure_proxy", "Depth, two-qubit density, and parameter-count heuristic", "implemented"),
-            MetricDefinition("gradient_variance", "Sampled parameter-gradient variance", "todo"),
-            MetricDefinition("gradient_norm", "Sampled gradient norm statistics", "todo"),
+            MetricDefinition("gradient_variance", "Task-agnostic local-probe parameter-gradient variance", "implemented"),
+            MetricDefinition("gradient_norm", "Task-agnostic local-probe gradient norm statistics", "implemented"),
             MetricDefinition("barren_plateau_risk", "Risk estimate from expressibility, depth, and noise", "todo"),
         ],
         "noise_robustness": [
@@ -42,6 +52,7 @@ def metric_catalog(active_metrics: Optional[Dict[str, str]] = None) -> Dict[str,
         ],
         "hardware_efficiency": [
             MetricDefinition("native_depth_twoq_efficiency", "Native-gate, depth, and two-qubit-count heuristic", "implemented"),
+            MetricDefinition("topology_mapping_efficiency", "Native-gate, topology, routing, and depth mapping efficiency", "implemented"),
             MetricDefinition("connectivity_penalty", "Penalty from non-native connectivity or routing cost", "todo"),
             MetricDefinition("calibrated_error_cost", "Hardware-calibrated error/resource cost", "todo"),
             MetricDefinition("latency_cost", "Gate-time or schedule-length cost", "todo"),
@@ -67,12 +78,14 @@ class ArchitectureEvaluator:
         self,
         backend: Optional[Backend] = None,
         noise_model: Optional[NoiseModel] = None,
+        hardware_profile: Optional[HardwareProfile] = None,
         weights: Optional[RewardWeights] = None,
         n_samples: int = 200,
         active_metrics: Optional[Dict[str, str]] = None,
     ):
         self.backend = backend
         self.noise_model = noise_model
+        self.hardware_profile = hardware_profile
         self.weights = weights or RewardWeights()
         self.reward_composer = RewardComposer(self.weights)
         self.n_samples = int(n_samples)
@@ -131,6 +144,20 @@ class ArchitectureEvaluator:
         if metric_name == "structure_proxy":
             score = structure_proxy(architecture.circuit)
             return self._group_score("trainability", score, structure_proxy_details(architecture.circuit))
+        if metric_name == "gradient_norm":
+            samples = max(1, min(self.n_samples, 16))
+            raw_values = local_probe_gradient_statistics(architecture.circuit, samples=samples, backend=None)
+            scale = 1.0 / max(1, int(architecture.circuit.n_qubits))
+            score = float(np.clip(1.0 - np.exp(-raw_values["mean_gradient_norm"] / max(scale, 1e-12)), 0.0, 1.0))
+            return self._group_score("trainability", score, {"gradient_norm_score": score, **raw_values})
+        if metric_name == "gradient_variance":
+            samples = max(2, min(self.n_samples, 16))
+            raw_values = local_probe_gradient_statistics(architecture.circuit, samples=samples, backend=None)
+            scale = 1.0 / max(1, int(architecture.circuit.n_qubits)) ** 2
+            variance_score = 1.0 - np.exp(-raw_values["gradient_variance"] / max(scale, 1e-12))
+            norm_score = 1.0 - np.exp(-raw_values["mean_gradient_norm"] / max(np.sqrt(scale), 1e-12))
+            score = float(np.clip(0.65 * variance_score + 0.35 * norm_score, 0.0, 1.0))
+            return self._group_score("trainability", score, {"gradient_variance_score": score, **raw_values})
         raise NotImplementedError(f"Unsupported trainability metric: {metric_name}")
 
     def _evaluate_noise_robustness(self, architecture: ArchitectureSpec, backend: Backend) -> MetricGroupScore:
@@ -177,6 +204,13 @@ class ArchitectureEvaluator:
                 score,
                 native_depth_twoq_efficiency_details(architecture.circuit),
             )
+        if metric_name == "topology_mapping_efficiency":
+            score = topology_mapping_efficiency(architecture.circuit, profile=self.hardware_profile)
+            return self._group_score(
+                "hardware_efficiency",
+                score,
+                topology_mapping_efficiency_details(architecture.circuit, profile=self.hardware_profile),
+            )
         raise NotImplementedError(f"Unsupported hardware efficiency metric: {metric_name}")
 
     def evaluate(self, architecture: ArchitectureSpec) -> ArchitectureScore:
@@ -208,6 +242,7 @@ def evaluate_architectures(
     architectures: Sequence[ArchitectureSpec],
     backend: Optional[Backend] = None,
     noise_model: Optional[NoiseModel] = None,
+    hardware_profile: Optional[HardwareProfile] = None,
     weights: Optional[RewardWeights] = None,
     n_samples: int = 200,
     active_metrics: Optional[Dict[str, str]] = None,
@@ -215,6 +250,7 @@ def evaluate_architectures(
     evaluator = ArchitectureEvaluator(
         backend=backend,
         noise_model=noise_model,
+        hardware_profile=hardware_profile,
         weights=weights,
         n_samples=n_samples,
         active_metrics=active_metrics,

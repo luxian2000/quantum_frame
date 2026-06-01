@@ -40,6 +40,7 @@ from .problems import (
     small_resource_allocation,
 )
 from ..metrics.expressibility import KL_Haar_divergence, KL_Haar_relative, MMD_relative
+from ..metrics.hardware import HardwareProfile
 from ..metrics.noisy_expressibility import (
     KL_Haar_noisy,
     MMD_noisy,
@@ -85,6 +86,7 @@ __all__ = [
     "ArchitectureSpec",
     "ExpressibilityScore",
     "HardwareEfficiencyScore",
+    "HardwareProfile",
     "IonTrapNoiseConfig",
     "KL_Haar_divergence",
     "KL_Haar_noisy",

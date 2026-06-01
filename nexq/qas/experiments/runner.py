@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from ...channel.backends.numpy_backend import NumpyBackend
 from ...channel.noise.model import NoiseModel
+from ...metrics.hardware import HardwareProfile
 from .._types import ArchitectureScore, ArchitectureSpec, SearchConfig
 from ..architecture_candidates import build_common_architectures
 from ..architecture_search import ArchitectureSearch
@@ -195,6 +196,7 @@ def run_validation_experiment(
     qas_top_k: int = 3,
     backend: Optional[NumpyBackend] = None,
     noise_model: Optional[NoiseModel] = None,
+    hardware_profile: Optional[HardwareProfile] = None,
     extra_candidates: Optional[Sequence[ArchitectureSpec]] = None,
 ) -> ValidationReport:
     """Rank candidates by QAS priors, then compare optimized task objectives."""
@@ -203,7 +205,7 @@ def run_validation_experiment(
     optimizer_cfg = optimizer_config or OptimizerConfig(max_evaluations=32)
 
     baselines = _baseline_architectures(problem, layers=search_cfg.candidate_layers, backend=backend)
-    search = ArchitectureSearch(backend=backend, noise_model=noise_model)
+    search = ArchitectureSearch(backend=backend, noise_model=noise_model, hardware_profile=hardware_profile)
     search_result = search.run(search_cfg, extra_candidates=extra_candidates)
     prior_scores = search_result.scores
     top_scores = prior_scores[: max(0, int(qas_top_k))]
@@ -239,6 +241,7 @@ def run_validation_experiment(
             "search_config": search_cfg.__dict__.copy(),
             "optimizer_config": optimizer_cfg.__dict__.copy(),
             "noise_model": type(noise_model).__name__ if noise_model is not None else None,
+            "hardware_profile": None if hardware_profile is None else hardware_profile.__dict__.copy(),
         },
     )
 
@@ -251,6 +254,7 @@ def run_multi_seed_validation_experiment(
     qas_top_k: int = 3,
     backend: Optional[NumpyBackend] = None,
     noise_model: Optional[NoiseModel] = None,
+    hardware_profile: Optional[HardwareProfile] = None,
     extra_candidates: Optional[Sequence[ArchitectureSpec]] = None,
 ) -> MultiSeedValidationReport:
     """Run the same validation setup across optimizer seeds and aggregate it."""
@@ -264,6 +268,7 @@ def run_multi_seed_validation_experiment(
             qas_top_k=qas_top_k,
             backend=backend,
             noise_model=noise_model,
+            hardware_profile=hardware_profile,
             extra_candidates=extra_candidates,
         )
         for seed in seed_list
@@ -276,6 +281,7 @@ def run_multi_seed_validation_experiment(
             "search_config": None if search_config is None else search_config.__dict__.copy(),
             "optimizer_config": optimizer_cfg.__dict__.copy(),
             "noise_model": type(noise_model).__name__ if noise_model is not None else None,
+            "hardware_profile": None if hardware_profile is None else hardware_profile.__dict__.copy(),
         },
     )
 
