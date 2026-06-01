@@ -23,6 +23,22 @@ from .multi_objective_reward import (
 )
 from .reward import RewardComposer, RewardWeights
 from .search_env import NoisyQASEnv, QASState
+from .task_evaluation import (
+    OptimizerConfig,
+    TaskEvaluationResult,
+    bind_parameters,
+    evaluate_task_objective,
+    optimize_task_parameters,
+)
+from .experiments import ValidationReport, run_validation_experiment
+from .problems import (
+    MaxCutInstance,
+    ProblemInstance,
+    ResourceAllocationInstance,
+    maxcut_line,
+    maxcut_ring,
+    small_resource_allocation,
+)
 from ..metrics.expressibility import KL_Haar_divergence, KL_Haar_relative, MMD_relative
 from ..metrics.noisy_expressibility import (
     KL_Haar_noisy,
@@ -82,21 +98,34 @@ __all__ = [
     "NoiseRobustnessScore",
     "NoiseSensitivityResult",
     "NoisyQASEnv",
+    "OptimizerConfig",
+    "ProblemInstance",
     "QASRewardWrapper",
     "QASState",
+    "ResourceAllocationInstance",
     "RewardComposer",
     "RewardWeights",
     "SearchConfig",
     "SearchResult",
+    "TaskEvaluationResult",
     "TrainabilityScore",
+    "ValidationReport",
+    "MaxCutInstance",
+    "bind_parameters",
     "build_common_architectures",
     "common_architecture_names",
     "comparative_expressibility",
+    "evaluate_task_objective",
     "evaluate_architectures",
     "expressibility_score",
     "ion_trap_error_budget_proxy",
     "load_default_ion_trap_noise_config",
     "load_ion_trap_noise_config",
+    "maxcut_line",
+    "maxcut_ring",
     "metric_catalog",
     "noise_sensitivity",
+    "optimize_task_parameters",
+    "run_validation_experiment",
+    "small_resource_allocation",
 ] + _OPTIONAL_RL_EXPORTS

@@ -44,7 +44,42 @@ class ArchitectureSearch:
             )
         if extra_candidates:
             candidates.extend(extra_candidates)
+        candidates = self._filter_candidates(candidates, cfg)
+        if cfg.candidate_budget is not None:
+            candidates = candidates[: max(0, int(cfg.candidate_budget))]
         return candidates
+
+    def _filter_candidates(self, candidates: Sequence[ArchitectureSpec], cfg: SearchConfig) -> List[ArchitectureSpec]:
+        allowed_gates = None if cfg.allowed_gates is None else {str(gate) for gate in cfg.allowed_gates}
+        topology = None if cfg.topology is None else {tuple(sorted(edge)) for edge in cfg.topology}
+        filtered: List[ArchitectureSpec] = []
+        for candidate in candidates:
+            if cfg.max_depth is not None and candidate.n_gates > cfg.max_depth:
+                continue
+            if cfg.max_parameters is not None and candidate.parameter_count > cfg.max_parameters:
+                continue
+            if cfg.max_two_qubit_gates is not None and candidate.two_qubit_gate_count > cfg.max_two_qubit_gates:
+                continue
+            if allowed_gates is not None and any(gate.get("type") not in allowed_gates for gate in candidate.circuit.gates):
+                continue
+            if topology is not None and not self._matches_topology(candidate, topology):
+                continue
+            filtered.append(candidate)
+        return filtered
+
+    @staticmethod
+    def _matches_topology(candidate: ArchitectureSpec, topology: set[tuple[int, int]]) -> bool:
+        for gate in candidate.circuit.gates:
+            edge = None
+            if "control_qubits" in gate and "target_qubit" in gate:
+                controls = list(gate.get("control_qubits", []))
+                if len(controls) == 1:
+                    edge = tuple(sorted((int(controls[0]), int(gate["target_qubit"]))))
+            elif "qubit_1" in gate and "qubit_2" in gate:
+                edge = tuple(sorted((int(gate["qubit_1"]), int(gate["qubit_2"]))))
+            if edge is not None and edge not in topology:
+                return False
+        return True
 
     def evaluate_candidates(
         self,
@@ -69,6 +104,8 @@ class ArchitectureSearch:
         cfg = config or SearchConfig()
         candidates = self.generate_candidates(cfg, extra_candidates=extra_candidates)
         scores = self.evaluate_candidates(candidates, cfg)
+        if cfg.top_k is not None:
+            scores = scores[: max(0, int(cfg.top_k))]
         return SearchResult(
             candidates=candidates,
             scores=scores,
@@ -76,6 +113,7 @@ class ArchitectureSearch:
                 "stage_1": "candidate_generation",
                 "stage_2": "orthogonal_evaluation",
                 "n_candidates": len(candidates),
+                "top_k": cfg.top_k,
             },
         )
 

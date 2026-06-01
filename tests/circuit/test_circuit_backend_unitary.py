@@ -1,7 +1,10 @@
 import unittest
 
 import numpy as np
-import torch
+try:
+    import torch
+except ModuleNotFoundError as exc:
+    raise unittest.SkipTest("TorchBackend unitary tests require torch") from exc
 
 from nexq import Circuit, TorchBackend, cnot, hadamard, rx
 

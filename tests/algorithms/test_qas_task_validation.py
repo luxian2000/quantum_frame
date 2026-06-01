@@ -1,0 +1,57 @@
+import unittest
+
+from nexq.qas import (
+    ArchitectureSearch,
+    OptimizerConfig,
+    SearchConfig,
+    maxcut_line,
+    run_validation_experiment,
+    small_resource_allocation,
+)
+
+
+class TestQASTaskValidation(unittest.TestCase):
+    def test_maxcut_problem_has_bruteforce_reference(self):
+        problem = maxcut_line(n_qubits=4)
+
+        self.assertEqual(problem.n_qubits, 4)
+        self.assertEqual(problem.classical_optimum, 3.0)
+        self.assertEqual(problem.evaluate_bitstring("0101"), 3.0)
+
+    def test_resource_allocation_problem_constructs(self):
+        problem = small_resource_allocation()
+
+        self.assertEqual(problem.n_qubits, 4)
+        self.assertGreater(problem.classical_optimum, 0.0)
+
+    def test_architecture_search_honors_resource_filters(self):
+        search = ArchitectureSearch()
+        result = search.run(
+            SearchConfig(
+                n_qubits=3,
+                candidate_layers=1,
+                n_samples=4,
+                max_two_qubit_gates=2,
+                top_k=2,
+            )
+        )
+
+        self.assertLessEqual(len(result.scores), 2)
+        self.assertTrue(all(score.architecture.two_qubit_gate_count <= 2 for score in result.scores))
+
+    def test_validation_runner_compares_baselines_and_qas(self):
+        report = run_validation_experiment(
+            maxcut_line(n_qubits=3),
+            search_config=SearchConfig(n_qubits=3, candidate_layers=1, n_samples=4, candidate_budget=4),
+            optimizer_config=OptimizerConfig(max_evaluations=4, seed=7),
+            qas_top_k=2,
+        )
+
+        self.assertEqual(len(report.baseline_results), 3)
+        self.assertEqual(len(report.qas_results), 2)
+        self.assertIsNotNone(report.best_result)
+        self.assertIn("name | prior | optimized", "\n".join(report.summary_lines()))
+
+
+if __name__ == "__main__":
+    unittest.main()

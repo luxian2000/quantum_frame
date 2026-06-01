@@ -1,9 +1,14 @@
 import unittest
 
 import numpy as np
-import torch
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None
 
-from nexq import Circuit, Measure, TorchBackend, cnot, hadamard, ry
+from nexq import Circuit, Measure, cnot, hadamard, ry
+if torch is not None:
+    from nexq import TorchBackend
 from nexq.channel.backends import NumpyBackend
 from nexq.channel.operators import Hamiltonian
 from nexq.core.circuit import crx, swap, toffoli
@@ -13,6 +18,8 @@ from nexq.measure.result import Result
 
 class TestMeasure(unittest.TestCase):
     def setUp(self):
+        if torch is None:
+            self.skipTest("Torch-backed measure tests require torch")
         self.backend = TorchBackend(device="cpu")
         self.measure = Measure(self.backend)
         self.bell = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)

@@ -3,7 +3,12 @@ import unittest
 import numpy as np
 
 from nexq import NumpyBackend, State
-from nexq.qas import PPRDQLConfig, ppr_dql_state_to_circuit, train_ppr_dql
+try:
+    from nexq.qas import PPRDQLConfig, ppr_dql_state_to_circuit, train_ppr_dql
+except ImportError as exc:
+    if "PPRDQLConfig" not in str(exc):
+        raise
+    raise unittest.SkipTest("PPR-DQL tests require torch") from exc
 
 
 def _fidelity_from_circuit(circuit, target_state: State) -> float:

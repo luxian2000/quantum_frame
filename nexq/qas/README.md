@@ -41,12 +41,46 @@ from nexq.qas.PPO_RB import PPORollbackConfig, ppo_rb_qas
 ## 3. 依赖
 
 运行 `CRLQAS.py`、`PPR_DQL.py` 和 `PPO_RB.py` 都需要可用的 `torch`。
+架构先验评分、候选库、MaxCut/资源分配问题、任务级验证 runner 可以只依赖 NumPy 后端运行。
 
-## 4. 使用方法：PPO_RB
+当前本地无 `torch` 环境下，`TorchBackend`、`NPUBackend` 以及 RL 搜索接口不会从顶层包导出；对应测试会跳过。云服务器安装 `torch` 后，这些接口会自动恢复导出。
+
+## 4. Task-Level Validation
+
+Roadmap 中的验证目标是比较“参数优化后的任务目标”，不是只比较架构先验分数。当前已提供一条轻量验证链路：
+
+- `nexq.qas.problems`：`ProblemInstance`、`MaxCutInstance`、`ResourceAllocationInstance`
+- `nexq.qas.task_evaluation`：统一参数绑定、理想/含噪目标评估、固定预算随机优化
+- `nexq.qas.experiments.runner`：构建 QAOA/HEA/RealAmplitudes baselines，运行 QAS prior ranking，再做任务级比较
+- `nexq.qas.demo.qas_vs_baselines`：4 比特 MaxCut smoke demo
+
+本地 smoke test：
+
+```bash
+python -m nexq.qas.demo.qas_vs_baselines
+```
+
+核心接口示例：
+
+```python
+from nexq.qas import OptimizerConfig, SearchConfig, maxcut_line, run_validation_experiment
+
+problem = maxcut_line(n_qubits=4)
+report = run_validation_experiment(
+    problem,
+    search_config=SearchConfig(n_qubits=4, candidate_layers=1, n_samples=8),
+    optimizer_config=OptimizerConfig(max_evaluations=16, seed=2026),
+    qas_top_k=3,
+)
+
+print("\n".join(report.summary_lines()))
+```
+
+## 5. 使用方法：PPO_RB
 
 `PPO_RB` 的输入是目标密度矩阵，输出是策略参数 `theta` 与搜索得到的 `Circuit`。
 
-### 4.1 输入参数（`ppo_rb_qas`）
+### 5.1 输入参数（`ppo_rb_qas`）
 
 函数签名：`ppo_rb_qas(target_density_matrix, epsilon, config=None)`
 
@@ -61,7 +95,7 @@ from nexq.qas.PPO_RB import PPORollbackConfig, ppo_rb_qas
 - `theta: Dict[str, torch.Tensor]`：策略网络参数快照。
 - `circuit: Circuit`：训练过程中发现的最优线路（若未记录到，则回退到当前策略贪婪推演得到的线路）。
 
-### 4.2 超参数（`PPORollbackConfig`）
+### 5.2 超参数（`PPORollbackConfig`）
 
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
@@ -115,11 +149,11 @@ print(f"线路门数: {len(circuit.gates)}")
 print(circuit.show())
 ```
 
-## 5. 使用方法：PPR_DQL
+## 6. 使用方法：PPR_DQL
 
 `PPR_DQL` 的输入是目标 `State`，可直接返回 `Circuit`，也可以返回包含训练信息的结果对象。
 
-### 5.1 输入参数（`train_ppr_dql` / `ppr_dql_state_to_circuit`）
+### 6.1 输入参数（`train_ppr_dql` / `ppr_dql_state_to_circuit`）
 
 函数签名：
 
@@ -142,7 +176,7 @@ print(circuit.show())
     - `selected_policy_indices: List[int]`：每个 episode 选择的策略索引（`0` 表示当前新策略）
 - `ppr_dql_state_to_circuit(...) -> Circuit`：仅返回线路，便于快速调用
 
-### 5.2 超参数（`PPRDQLConfig`）
+### 6.2 超参数（`PPRDQLConfig`）
 
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
@@ -208,11 +242,11 @@ print(circuit)
 print(circuit.show())
 ```
 
-## 6. 使用方法：CRLQAS
+## 7. 使用方法：CRLQAS
 
 `CRLQAS` 的目标是最小化给定哈密顿量的能量。结构搜索由 DDQN 决策，参数优化由 Adam-SPSA 执行。
 
-### 6.1 输入参数（`train_crlqas` / `crlqas`）
+### 7.1 输入参数（`train_crlqas` / `crlqas`）
 
 函数签名：
 
@@ -229,7 +263,7 @@ print(circuit.show())
 - `train_crlqas(...) -> CRLQASResult`：包含最优 `circuit`、`minimum_energy`、课程阈值和训练轨迹。
 - `crlqas(...) -> Tuple[Circuit, float]`：快捷接口，仅返回 `(circuit, minimum_energy)`。
 
-### 6.2 超参数（`CRLQASConfig`）
+### 7.2 超参数（`CRLQASConfig`）
 
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
@@ -282,7 +316,7 @@ print(circuit.show())
 - 若训练震荡，可降低 `q_learning_rate`，并增大 `target_update_interval`。
 - 对结构化任务建议手动提供 `action_gates`，可显著减少搜索空间。
 
-### 6.3 最小示例（H2）
+### 7.3 最小示例（H2）
 
 ```python
 from nexq.qas import AdamSPSAConfig, CRLQASConfig, train_crlqas
@@ -307,7 +341,7 @@ print(result.minimum_energy)
 print(result.circuit.show())
 ```
 
-## 7. 可选：自定义动作门集合
+## 8. 可选：自定义动作门集合
 
 `PPRDQLConfig.action_gates` 支持自定义动作门集合。每个动作是一个门字典，格式与 `Circuit` 门定义一致。
 
@@ -328,7 +362,7 @@ config = PPRDQLConfig(action_gates=custom_actions)
 circuit = ppr_dql_state_to_circuit(state, config=config)
 ```
 
-## 8. 示例脚本
+## 9. 示例脚本
 
 - `PPO_RB_demo_ghz4.py`：使用 PPO-RB 搜索 4 比特 GHZ 线路
 - `PPR_DQL_demo_ghz3.py`：使用 PPR-DQL 搜索 3 比特 GHZ 线路，并导出 OpenQASM 3.0 到 `demo/ppr_dql_ghz3_circuit.qasm`
