@@ -72,10 +72,10 @@ class TestNPUBackend(unittest.TestCase):
         with mock.patch.dict(
             "os.environ",
             {"WORLD_SIZE": "8", "RANK": "3", "LOCAL_RANK": "1"},
-            clear=False,
+            clear=True,
         ):
             with mock.patch.object(NPUBackend, "_resolve_device", return_value=torch.device("cpu")):
-                backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
+                backend = NPUBackend.from_distributed_env(fallback_to_cpu=True, init_process_group=False)
 
         self.assertIsNotNone(backend.runtime_context)
         self.assertEqual(backend.runtime_context.world_size, 8)
@@ -92,7 +92,7 @@ class TestNPUBackend(unittest.TestCase):
             "MASTER_ADDR": "127.0.0.1",
             "MASTER_PORT": "29500",
         }
-        with mock.patch.dict("os.environ", env, clear=False):
+        with mock.patch.dict("os.environ", env, clear=True):
             with mock.patch.object(NPUBackend, "_resolve_device", return_value=torch.device("cpu")):
                 with mock.patch("torch.distributed.is_available", return_value=True):
                     with mock.patch("torch.distributed.is_initialized", side_effect=[False, True]):
