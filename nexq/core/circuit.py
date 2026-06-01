@@ -6,12 +6,101 @@ nexq 内部 Circuit 数据结构与门字典构造器。
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from copy import deepcopy
+from dataclasses import dataclass
 import math
 import sys
 
 import numpy as np
 
 from .gates import gate_to_matrix, identity
+
+
+@dataclass(frozen=True)
+class Parameter:
+    """Symbolic placeholder for a numeric circuit parameter."""
+
+    name: str
+
+    def __post_init__(self):
+        if not isinstance(self.name, str):
+            raise TypeError("Parameter name must be a string")
+        name = self.name.strip()
+        if not name:
+            raise ValueError("Parameter name cannot be empty")
+        object.__setattr__(self, "name", name)
+
+    def __str__(self):
+        return self.name
+
+    def __float__(self):
+        raise TypeError(f"Parameter {self.name!r} is unbound; call Circuit.bind_parameters(...) first")
+
+
+def _iter_parameters(value):
+    if isinstance(value, Parameter):
+        yield value
+        return
+    if isinstance(value, Mapping):
+        for item in value.values():
+            yield from _iter_parameters(item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _iter_parameters(item)
+
+
+def _collect_parameters(gates):
+    parameters = {}
+    for gate in gates:
+        for parameter in _iter_parameters(gate):
+            parameters.setdefault(parameter.name, parameter)
+    return tuple(parameters.values())
+
+
+def _parameter_key_name(key):
+    if isinstance(key, Parameter):
+        return key.name
+    if isinstance(key, str):
+        name = key.strip()
+        if not name:
+            raise ValueError("Parameter name cannot be empty")
+        return name
+    raise TypeError("Parameter bindings must use string or Parameter keys")
+
+
+def _normalize_parameter_bindings(values, parameters):
+    parameter_names = {parameter.name for parameter in parameters}
+    if isinstance(values, Mapping):
+        bindings = {_parameter_key_name(key): value for key, value in values.items()}
+        unknown = sorted(set(bindings) - parameter_names)
+        if unknown:
+            raise ValueError(f"Unknown parameter binding(s): {', '.join(unknown)}")
+        return bindings
+
+    if isinstance(values, (str, bytes)):
+        raise TypeError("Parameter bindings must be a mapping or a non-string sequence")
+    try:
+        sequence = list(values)
+    except TypeError as exc:
+        raise TypeError("Parameter bindings must be a mapping or a sequence") from exc
+
+    if len(sequence) != len(parameters):
+        raise ValueError(f"Expected {len(parameters)} parameter value(s), got {len(sequence)}")
+    return {parameter.name: value for parameter, value in zip(parameters, sequence)}
+
+
+def _bind_parameter_value(value, bindings):
+    if isinstance(value, Parameter):
+        return bindings.get(value.name, value)
+    if isinstance(value, Mapping):
+        return {key: _bind_parameter_value(item, bindings) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_bind_parameter_value(item, bindings) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_bind_parameter_value(item, bindings) for item in value)
+    return deepcopy(value)
 
 
 def _required_n_qubits_from_gate(gate):
@@ -351,6 +440,11 @@ class Circuit:
         return self
 
     @property
+    def parameters(self):
+        """Return unbound symbolic parameters in first-use order."""
+        return _collect_parameters(self.gates)
+
+    @property
     def backend(self):
         return self._backend
 
@@ -358,7 +452,30 @@ class Circuit:
         self._backend = backend
         return self
 
+    def bind_parameters(self, values, *, inplace: bool = False, allow_partial: bool = False):
+        """Bind symbolic ``Parameter`` placeholders to numeric values.
+
+        ``values`` can be either a mapping keyed by parameter name/``Parameter``
+        or a sequence ordered like ``self.parameters``.
+        """
+        parameters = self.parameters
+        bindings = _normalize_parameter_bindings(values, parameters)
+        missing = [parameter.name for parameter in parameters if parameter.name not in bindings]
+        if missing and not allow_partial:
+            raise ValueError(f"Missing parameter binding(s): {', '.join(missing)}")
+
+        gates = [_bind_parameter_value(gate, bindings) for gate in self.gates]
+        if inplace:
+            self.gates = gates
+            return self
+        return Circuit(*gates, n_qubits=self.n_qubits, backend=self._backend)
+
     def unitary(self, backend=None):
+        parameters = self.parameters
+        if parameters:
+            names = ", ".join(parameter.name for parameter in parameters)
+            raise ValueError(f"Circuit has unbound parameter(s): {names}; call bind_parameters(...) first")
+
         backend = backend or self._backend
         if not self.gates:
             return identity(self.n_qubits) if backend is None else backend.eye(1 << self.n_qubits)
@@ -531,6 +648,7 @@ def u2(phi, lam, target_qubit=0):
 
 __all__ = [
     "Circuit",
+    "Parameter",
     "circuit",
     "pauli_x",
     "pauli_y",

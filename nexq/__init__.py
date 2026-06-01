@@ -17,6 +17,7 @@ from .measure.measure import Measure
 from .measure.result import Result
 from .core import (
     Circuit,
+    Parameter,
     ccnot,
     cnot,
     circuit,
@@ -87,6 +88,7 @@ __all__ = [
     "Measure",
     "Result",
     "Circuit",
+    "Parameter",
     "circuit",
     "pauli_x",
     "pauli_y",
