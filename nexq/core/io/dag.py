@@ -29,7 +29,7 @@ def _extend_qubits(qubits: List[int], values) -> None:
         qubits.append(int(values))
 
 
-def _gate_qubits(gate: dict) -> List[int]:
+def _gate_qubits(gate: dict, circuit_n_qubits: int) -> List[int]:
     """
     从 nexq 门字典中提取所有作用的量子比特索引列表。
 
@@ -41,8 +41,8 @@ def _gate_qubits(gate: dict) -> List[int]:
     """
     gate_type = gate["type"]
 
-    if gate_type in ("identity", "I"):
-        return list(range(gate["n_qubits"]))
+    if gate_type in ("identity", "I", "unitary"):
+        return list(range(int(gate.get("n_qubits", circuit_n_qubits))))
 
     qubits = []
 
@@ -63,6 +63,9 @@ def _gate_qubits(gate: dict) -> List[int]:
         values = gate.get(key)
         if values is not None:
             _extend_qubits(qubits, values)
+
+    if not qubits:
+        return list(range(int(circuit_n_qubits)))
 
     return list(dict.fromkeys(qubits))
 
@@ -103,7 +106,7 @@ def circuit_to_dag(
         nodes[i] = {
             "name": "gate",
             "gate": _gate_name(gate),
-            "qubits": _gate_qubits(gate),
+            "qubits": _gate_qubits(gate, n_qubits),
         }
     nodes[N + 1] = {"name": "END", "gate": None, "qubits": []}
 

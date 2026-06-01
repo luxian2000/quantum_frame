@@ -74,14 +74,26 @@ def _swap_backend(qubit_1=0, qubit_2=1, backend=None):
     )
 
 
-def _toffoli_backend(target_qubit=2, control_qubits=(0, 1), backend=None):
+def _toffoli_backend(target_qubit=2, control_qubits=(0, 1), control_states=None, backend=None):
+    control_qubits = list(control_qubits)
+    if control_states is None:
+        control_states = [1] * len(control_qubits)
     return _controlled_from_base_backend(
         np.array([[0.0 + 0.0j, 1.0 + 0.0j], [1.0 + 0.0j, 0.0 + 0.0j]], dtype=_CDTYPE),
         target_qubit,
         control_qubits,
-        [1] * len(control_qubits),
+        control_states,
         backend,
     )
+
+
+def _unitary_parameter_matrix(value, backend=None):
+    if isinstance(value, torch.Tensor):
+        if backend is not None and hasattr(backend, "_device"):
+            return backend.cast(value)
+        return value.detach().cpu().numpy().astype(_CDTYPE)
+    matrix = np.asarray(value, dtype=_CDTYPE)
+    return backend.cast(matrix) if backend is not None else matrix
 
 
 def matrix_product(*matrices):
@@ -255,32 +267,11 @@ def _swap(qubit_1=0, qubit_2=1):
     )
 
 
-def _toffoli(target_qubit=2, control_qubits=(0, 1)):
-    c0, c1 = list(control_qubits)
-    n_qubits = max(target_qubit, c0, c1) + 1
-
-    matrices_0 = [IDENTITY_2] * n_qubits
-    matrices_0[c0] = DENSITY_1
-    matrices_0[c1] = DENSITY_1
-    matrices_0[target_qubit] = _pauli_x()
-    result_0 = matrices_0[0]
-    for i in range(1, n_qubits):
-        result_0 = np.kron(result_0, matrices_0[i])
-
-    matrices_1 = [IDENTITY_2] * n_qubits
-    matrices_1[c0] = DENSITY_0
-    result_1 = matrices_1[0]
-    for i in range(1, n_qubits):
-        result_1 = np.kron(result_1, matrices_1[i])
-
-    matrices_2 = [IDENTITY_2] * n_qubits
-    matrices_2[c0] = DENSITY_1
-    matrices_2[c1] = DENSITY_0
-    result_2 = matrices_2[0]
-    for i in range(1, n_qubits):
-        result_2 = np.kron(result_2, matrices_2[i])
-
-    return result_0 + result_1 + result_2
+def _toffoli(target_qubit=2, control_qubits=(0, 1), control_states=None):
+    control_qubits = list(control_qubits)
+    if control_states is None:
+        control_states = [1] * len(control_qubits)
+    return _controlled_from_base(_pauli_x(), target_qubit, control_qubits, control_states)
 
 
 def _u3(theta, phi, lam, target_qubit=0):
@@ -727,10 +718,11 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
         return state
 
     if gate_type == "unitary":
-        matrix = np.asarray(gate.get("parameter"), dtype=_CDTYPE)
-        if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        matrix = _unitary_parameter_matrix(gate.get("parameter"), backend)
+        shape = tuple(int(dim) for dim in matrix.shape)
+        if len(shape) != 2 or shape[0] != shape[1]:
             raise ValueError("unitary 门参数必须是方阵")
-        dim = matrix.shape[0]
+        dim = shape[0]
         inferred = int(round(math.log2(dim))) if dim > 0 else 0
         if (1 << inferred) != dim:
             raise ValueError("unitary 门矩阵维度必须是 2 的幂")
@@ -741,7 +733,7 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
             raise ValueError(f"量子门的量子比特数量超出总量子比特数: {gate_qubits} > {n_qubits}")
         return _apply_local_matrix_to_state(
             state,
-            backend.cast(matrix),
+            matrix,
             list(range(gate_qubits)),
             n_qubits,
             backend,
@@ -798,8 +790,7 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
         )
 
     if gate_type in ["toffoli", "ccnot"]:
-        controls = list(gate["control_qubits"])
-        control_states = [1] * len(controls)
+        controls, control_states = _normalized_control_data(gate)
         base = _single_qubit_base_for_gate(gate)
         local = _controlled_local_from_base(base, control_states)
         cache_key = ("controlled", gate_type, len(controls), tuple(control_states), None)
@@ -850,11 +841,12 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
     gate_parameter = gate.get("parameter", None)
 
     if gate_type == "unitary":
-        matrix = np.asarray(gate_parameter, dtype=_CDTYPE)
-        if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        matrix = _unitary_parameter_matrix(gate_parameter, backend)
+        shape = tuple(int(dim) for dim in matrix.shape)
+        if len(shape) != 2 or shape[0] != shape[1]:
             raise ValueError("unitary 门参数必须是方阵")
 
-        dim = matrix.shape[0]
+        dim = shape[0]
         inferred = int(round(math.log2(dim))) if dim > 0 else 0
         if (1 << inferred) != dim:
             raise ValueError("unitary 门矩阵维度必须是 2 的幂")
@@ -863,7 +855,7 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
         if (1 << int(gate_qubits)) != dim:
             raise ValueError("unitary 门的 n_qubits 与矩阵维度不一致")
 
-        gate_matrix = matrix if backend is None else backend.cast(matrix)
+        gate_matrix = matrix
         if gate_qubits < cir_qubits:
             for _ in range(gate_qubits, cir_qubits):
                 if backend is None:
@@ -936,10 +928,11 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
             gate_qubits = max(gate["qubit_1"], gate["qubit_2"]) + 1
             gate_matrix = _swap(gate["qubit_1"], gate["qubit_2"])
         elif gate_type in ["toffoli", "ccnot"]:
-            gate_qubits = max(gate["target_qubit"], gate["control_qubits"][0], gate["control_qubits"][1]) + 1
-            gate_matrix = _toffoli(gate["target_qubit"], gate["control_qubits"])
+            controls, control_states = _normalized_control_data(gate)
+            gate_qubits = max([gate["target_qubit"]] + controls) + 1
+            gate_matrix = _toffoli(gate["target_qubit"], controls, control_states)
         elif gate_type in ["identity", "I"]:
-            return identity(gate["n_qubits"])
+            return identity(cir_qubits)
         elif gate_type == "rzz":
             return _expand_local_matrix_to_full(
                 _rzz(gate_parameter),
@@ -1032,10 +1025,11 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
             gate_qubits = max(gate["qubit_1"], gate["qubit_2"]) + 1
             gate_matrix = _swap_backend(gate["qubit_1"], gate["qubit_2"], backend)
         elif gate_type in ["toffoli", "ccnot"]:
-            gate_qubits = max(gate["target_qubit"], gate["control_qubits"][0], gate["control_qubits"][1]) + 1
-            gate_matrix = _toffoli_backend(gate["target_qubit"], gate["control_qubits"], backend)
+            controls, control_states = _normalized_control_data(gate)
+            gate_qubits = max([gate["target_qubit"]] + controls) + 1
+            gate_matrix = _toffoli_backend(gate["target_qubit"], controls, control_states, backend)
         elif gate_type in ["identity", "I"]:
-            return backend.eye(1 << gate["n_qubits"])
+            return backend.eye(1 << cir_qubits)
         elif gate_type == "rzz":
             return _expand_local_matrix_to_full(
                 _rzz_backend(gate_parameter, backend),

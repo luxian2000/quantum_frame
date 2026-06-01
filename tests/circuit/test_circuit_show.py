@@ -54,6 +54,7 @@ class TestCircuitShow(unittest.TestCase):
     def test_show_supports_all_gate_families_from_gates_py(self):
         circ = Circuit(
             {"type": "I", "n_qubits": 3},
+            {"type": "unitary", "n_qubits": 2, "parameter": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]},
             {"type": "u2", "target_qubit": 0, "parameter": [0.1, 0.2]},
             {"type": "u3", "target_qubit": 1, "parameter": [0.1, 0.2, 0.3]},
             {"type": "cy", "target_qubit": 2, "control_qubits": [1], "control_states": [1]},
@@ -65,6 +66,7 @@ class TestCircuitShow(unittest.TestCase):
         diagram = circ.show(file=io.StringIO())
 
         self.assertIn("I", diagram)
+        self.assertIn("U", diagram)
         self.assertIn("U2", diagram)
         self.assertIn("U3", diagram)
         self.assertIn("Y", diagram)

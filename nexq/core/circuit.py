@@ -110,10 +110,17 @@ def _required_n_qubits_from_gate(gate):
         if "n_qubits" in gate:
             return int(gate["n_qubits"])
         parameter = gate.get("parameter")
-        matrix = np.asarray(parameter)
-        if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        shape = getattr(parameter, "shape", None)
+        if shape is None:
+            matrix = np.asarray(parameter)
+            shape = matrix.shape
+            ndim = matrix.ndim
+        else:
+            shape = tuple(int(dim) for dim in shape)
+            ndim = len(shape)
+        if ndim != 2 or shape[0] != shape[1]:
             raise ValueError("unitary 门参数必须是方阵")
-        dim = matrix.shape[0]
+        dim = shape[0]
         inferred = int(round(math.log2(dim))) if dim > 0 else 0
         if (1 << inferred) != dim:
             raise ValueError("unitary 门矩阵维度必须是 2 的幂")
@@ -335,6 +342,14 @@ def _gate_to_column(gate, n_qubits):
 
     if gate_type in ["identity", "I"]:
         qubit_col = [_symbol_cell("I")] * n_qubits
+        return qubit_col, between_col, angle_col
+
+    if gate_type == "unitary":
+        gate_n_qubits = min(int(gate.get("n_qubits", n_qubits)), n_qubits)
+        for q in range(gate_n_qubits):
+            qubit_col[q] = _symbol_cell("U")
+        for q in range(max(0, gate_n_qubits - 1)):
+            between_col[q] = _vertical_cell()
         return qubit_col, between_col, angle_col
 
     if gate_type == "swap":
