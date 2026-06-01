@@ -62,6 +62,9 @@ class TestArchitectureCandidates(unittest.TestCase):
         self.assertEqual(len(result.scores), 3)
         self.assertTrue(result.candidates)
         self.assertTrue(all("supercircuit_mask" in candidate.metadata for candidate in result.candidates))
+        for candidate in result.candidates:
+            choices = set(candidate.metadata["supercircuit_choices"])
+            self.assertTrue(choices & {"h", "rx", "ry", "ry_rz", "rx_ry_rz"})
         self.assertTrue(all(0.0 <= score.weighted_score <= 1.0 for score in result.scores))
 
 
