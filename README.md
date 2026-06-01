@@ -6,7 +6,7 @@
 
 所有常用类与函数均可从顶层 `nexq` 包一次性导入。
 
-状态类 `StateVector`、`DensityMatrix` 的规范模块路径为 `nexq.circuit`，同时也可从顶层 `nexq` 导入。
+状态类 `StateVector`、`DensityMatrix` 的规范模块路径为 `nexq.core`，同时也可从顶层 `nexq` 导入。
 
 ```python
 # 后端
@@ -28,8 +28,8 @@ from nexq import (
     u2, u3,
 )
 
-# 电路
-from nexq import Circuit
+# 电路与参数占位符
+from nexq import Circuit, Parameter
 
 # 测量
 from nexq import Measure, Result
@@ -53,6 +53,9 @@ from nexq import (
     load_circuit_qasm, save_circuit_qasm,
     save_circuit_qasm3,
 )
+
+# QML 梯度工具
+from nexq.qml import psr, spsr, multipsr
 ```
 
 ---
@@ -129,6 +132,55 @@ cir = Circuit(
     n_qubits=3,
 )
 ```
+
+### 2.4 参数化量子线路
+
+`Parameter` 可作为旋转门参数的符号占位符，用于构建量子神经网络、VQE、QAOA 等可训练线路模板。模板电路在绑定参数前只保存门字典，不会生成数值矩阵。
+
+```python
+from nexq import Circuit, Parameter, rx, ry, crz, cnot
+
+theta0 = Parameter("theta0")
+theta1 = Parameter("theta1")
+
+template = Circuit(
+    ry(theta0, 0),
+    crz(theta1, target_qubit=1, control_qubits=[0]),
+    cnot(1, [0]),
+    n_qubits=2,
+)
+
+print(template.parameters)
+# (Parameter(name='theta0'), Parameter(name='theta1'))
+
+# 默认返回绑定后的新 Circuit，不修改模板
+bound = template.bind_parameters({
+    "theta0": 0.2,
+    theta1: 0.5,   # key 也可以直接使用 Parameter 对象
+})
+
+U = bound.unitary()
+print(U.shape)    # (4, 4)
+```
+
+也可以按 `template.parameters` 的顺序传入序列：
+
+```python
+bound = template.bind_parameters([0.2, 0.5])
+```
+
+如果希望原地更新模板，可使用：
+
+```python
+template.bind_parameters({"theta0": 0.2, "theta1": 0.5}, inplace=True)
+```
+
+注意事项：
+
+- 未绑定参数的电路调用 `unitary()` 会报错，需要先 `bind_parameters(...)`。
+- `allow_partial=True` 可做部分绑定，返回仍含未绑定参数的电路。
+- 当前 `Parameter` 是符号占位符，不是自动微分张量；训练梯度建议使用第 7 节的 parameter-shift 工具。
+- 导出 QASM 或生成数值矩阵前，应先把所有参数绑定为数值。
 
 ---
 
@@ -618,3 +670,119 @@ nexq 在 3.0 模式下的主要差异：
 
 > **当前不支持**：`if`、`reset`、`opaque`、自定义 `gate`、`cp`/`cu` 系列门。
 > `measure` 和 `barrier` 语句在导入时会被跳过。
+
+---
+
+## 7. QML 梯度工具
+
+`nexq.qml.gradient` 提供面向量子机器学习和变分量子线路的梯度工具。常用函数可直接从 `nexq.qml` 导入：
+
+```python
+from nexq.qml import psr, spsr, multipsr
+```
+
+这些函数都假设目标函数 `fn(params)` 返回标量，`params` 可以是标量或任意形状的 NumPy 数组。
+
+### 7.1 标准 parameter-shift rule：`psr`
+
+`psr(fn, params)` 对每个参数计算：
+
+```text
+0.5 * [fn(theta + pi/2) - fn(theta - pi/2)]
+```
+
+默认系数 `0.5` 和位移 `pi/2` 适用于常见 Pauli 旋转生成元。
+
+```python
+import numpy as np
+from nexq.qml import psr
+
+params = np.array([0.3, -0.4])
+
+def loss(theta):
+    return np.cos(theta[0]) + np.sin(theta[1])
+
+grad = psr(loss, params)
+print(grad)  # [-sin(0.3), cos(-0.4)]
+```
+
+结合参数化电路使用：
+
+```python
+import numpy as np
+from nexq import Circuit, NumpyBackend, Parameter, State, ry
+from nexq.qml import psr
+
+theta = Parameter("theta")
+template = Circuit(ry(theta, 0), n_qubits=1)
+backend = NumpyBackend()
+Z = np.diag([1.0, -1.0])
+
+def expectation(values):
+    circuit = template.bind_parameters({"theta": values[0]})
+    state = State.zero_state(1, backend).evolve(circuit.unitary()).to_numpy().reshape(-1)
+    return np.real(np.vdot(state, Z @ state))
+
+grad = psr(expectation, np.array([0.5]))
+```
+
+### 7.2 stochastic parameter-shift rule：`spsr`
+
+`spsr` 随机抽样部分参数坐标，只对抽中的参数做 shift 评估。默认 `unbiased=True`，会按参数总数和采样数缩放，使估计量在期望上等于完整 `psr` 梯度。
+
+```python
+from nexq.qml import spsr
+
+grad_est = spsr(
+    loss,
+    params,
+    n_samples=1,
+    rng=42,
+)
+```
+
+常用参数：
+
+| 参数          | 说明                                                        |
+| ------------- | ----------------------------------------------------------- |
+| `n_samples` | 每次估计抽样的参数坐标数量                                  |
+| `rng`       | 随机种子或 NumPy generator                                  |
+| `replace`   | 是否允许重复抽样；默认 `False`                            |
+| `unbiased`  | 是否缩放为无偏估计；默认 `True`                            |
+| `shift`     | 参数位移；默认 `np.pi / 2`                                |
+| `coefficient` | shifted difference 系数；默认 `0.5`                     |
+
+### 7.3 multivariate parameter-shift rule：`multipsr`
+
+`multipsr` 用多参数符号求和公式计算选定参数的混合偏导。例如 `parameter_indices=[0, 1]` 表示计算：
+
+```text
+d² fn / d theta[0] d theta[1]
+```
+
+```python
+from nexq.qml import multipsr
+
+def objective(theta):
+    return np.cos(theta[0]) * np.sin(theta[1])
+
+mixed = multipsr(objective, np.array([0.4, -0.2]), parameter_indices=[0, 1])
+print(mixed)  # -sin(theta[0]) * cos(theta[1])
+```
+
+对于多维参数数组，可使用 tuple index：
+
+```python
+params = np.array([[0.4, 0.1], [-0.2, 0.3]])
+
+def objective_2d(theta):
+    return np.cos(theta[0, 0]) * np.sin(theta[1, 0])
+
+mixed = multipsr(objective_2d, params, parameter_indices=[(0, 0), (1, 0)])
+```
+
+如果省略 `parameter_indices`，`multipsr` 会对所有参数计算一个全参数混合偏导，此时需要 `2 ** params.size` 次函数调用，参数数量较大时成本会很高。
+
+### 7.4 VQC 中的使用
+
+`nexq.vqc` 中已有的 `BasicVQE.parameter_shift_gradient()`、`BasicSSVQE.parameter_shift_gradient()` 和 `BasicVQD.parameter_shift_gradient()` 已统一调用 `nexq.qml.gradient.psr`。因此自定义 QNN/VQC 模型时也建议复用 `psr`、`spsr` 和 `multipsr`，避免各模块重复实现 parameter-shift 逻辑。
