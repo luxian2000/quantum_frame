@@ -28,6 +28,7 @@ def main() -> None:
         ),
         optimizer_config=OptimizerConfig(max_evaluations=8, seed=2026),
         qas_top_k=3,
+        strategies=("supercircuit_progressive", "supercircuit_evolution", "task_feedback", "hybrid"),
         feedback_generations=2,
         feedback_population_size=5,
         feedback_elite_count=2,

@@ -17,7 +17,10 @@ from ..architecture_search import ArchitectureSearch
 from ..problems import ProblemInstance
 from ..search_strategies import (
     candidate_from_supercircuit_mask,
+    crossover_supercircuit_masks,
+    is_valid_supercircuit_mask,
     mutate_supercircuit_mask,
+    random_supercircuit_mask,
     sample_supercircuit_masks,
     supercircuit_blocks,
 )
@@ -353,6 +356,174 @@ def _sort_task_results(problem: ProblemInstance, results: Sequence[TaskEvaluatio
     return sorted(results, key=lambda result: result.optimized_value, reverse=problem.maximize)
 
 
+def _unique_masks(masks: Sequence[Sequence[int]]) -> List[tuple[int, ...]]:
+    seen: set[tuple[int, ...]] = set()
+    unique: List[tuple[int, ...]] = []
+    for mask in masks:
+        mask_tuple = tuple(int(value) for value in mask)
+        if mask_tuple in seen:
+            continue
+        seen.add(mask_tuple)
+        unique.append(mask_tuple)
+    return unique
+
+
+def _zero_cost_evolve_from_masks(
+    seed_masks: Sequence[Sequence[int]],
+    search_cfg: SearchConfig,
+    backend: NumpyBackend,
+    noise_model: Optional[NoiseModel],
+    hardware_profile: Optional[HardwareProfile],
+) -> List[ArchitectureScore]:
+    """Run zero-cost evolutionary refinement from explicit seed masks."""
+    blocks = supercircuit_blocks(search_cfg.candidate_layers)
+    rng = np.random.default_rng(int(search_cfg.seed) + 2718)
+    population_size = max(1, int(search_cfg.population_size))
+    generations = max(1, int(search_cfg.search_generations))
+    elite_count = max(1, min(population_size, int(search_cfg.beam_width)))
+    search = ArchitectureSearch(backend=backend, noise_model=noise_model, hardware_profile=hardware_profile)
+    current_masks = _unique_masks(seed_masks)[:population_size]
+    seen = set(current_masks)
+    while len(current_masks) < population_size:
+        mask = random_supercircuit_mask(blocks, rng)
+        if mask in seen:
+            continue
+        seen.add(mask)
+        current_masks.append(mask)
+
+    all_scores: Dict[tuple[int, ...], ArchitectureScore] = {}
+    for generation in range(generations):
+        candidates = [
+            candidate_from_supercircuit_mask(
+                search_cfg,
+                mask,
+                backend=backend,
+                generation=generation,
+                origin="hybrid_seed" if generation == 0 else "hybrid_evolved",
+            )
+            for mask in current_masks
+        ]
+        scores = search.evaluate_candidates(candidates, search_cfg)
+        for rank, score in enumerate(scores, start=1):
+            score.architecture.metadata["hybrid_evolution_generation_rank"] = rank
+            score.architecture.metadata["hybrid_evolution_score"] = score.weighted_score
+            mask = tuple(score.architecture.metadata["supercircuit_mask"])
+            previous = all_scores.get(mask)
+            if previous is None or score.weighted_score > previous.weighted_score:
+                all_scores[mask] = score
+        elites = [tuple(score.architecture.metadata["supercircuit_mask"]) for score in scores[:elite_count]]
+        if generation == generations - 1:
+            break
+
+        next_masks = list(elites)
+        attempts = 0
+        while len(next_masks) < population_size and attempts < max(100, population_size * 30):
+            attempts += 1
+            parent = elites[int(rng.integers(0, len(elites)))]
+            if len(elites) > 1 and rng.random() < 0.5:
+                other = elites[int(rng.integers(0, len(elites)))]
+                child = crossover_supercircuit_masks(parent, other, rng)
+            else:
+                child = parent
+            child = mutate_supercircuit_mask(child, blocks, rng, mutation_rate=search_cfg.mutation_rate)
+            if child in seen or not is_valid_supercircuit_mask(child, blocks):
+                continue
+            seen.add(child)
+            next_masks.append(child)
+        current_masks = next_masks
+
+    scores = sorted(all_scores.values(), key=lambda score: score.weighted_score, reverse=True)
+    for rank, score in enumerate(scores, start=1):
+        score.rank = rank
+    return scores
+
+
+def _task_feedback_from_masks(
+    seed_masks: Sequence[Sequence[int]],
+    problem: ProblemInstance,
+    search_cfg: SearchConfig,
+    optimizer_cfg: OptimizerConfig,
+    qas_top_k: int,
+    feedback_generations: int,
+    feedback_population_size: Optional[int],
+    feedback_elite_count: Optional[int],
+    backend: NumpyBackend,
+    noise_model: Optional[NoiseModel],
+) -> tuple[List[TaskEvaluationResult], int]:
+    """Run task-feedback mutation from explicit SuperCircuit masks."""
+    population_size = max(1, int(feedback_population_size or search_cfg.population_size))
+    elite_count = max(1, min(population_size, int(feedback_elite_count or search_cfg.beam_width or qas_top_k)))
+    generations = max(1, int(feedback_generations))
+    blocks = supercircuit_blocks(search_cfg.candidate_layers)
+    rng = np.random.default_rng(int(search_cfg.seed) + 9173)
+    current_masks = _unique_masks(seed_masks)[:population_size]
+    seen = set(current_masks)
+    while len(current_masks) < population_size:
+        mask = random_supercircuit_mask(blocks, rng)
+        if mask in seen:
+            continue
+        seen.add(mask)
+        current_masks.append(mask)
+
+    task_results: List[TaskEvaluationResult] = []
+    result_by_mask: Dict[tuple[int, ...], TaskEvaluationResult] = {}
+    for generation in range(generations):
+        candidates = [
+            candidate_from_supercircuit_mask(
+                search_cfg,
+                mask,
+                backend=backend,
+                generation=generation,
+                origin="hybrid_task_feedback_seed" if generation == 0 else "hybrid_task_feedback_mutation",
+            )
+            for mask in current_masks
+        ]
+        generation_results = _optimize_many(
+            candidates,
+            problem,
+            optimizer_cfg,
+            backend=backend,
+            noise_model=noise_model,
+            result_group="qas_hybrid",
+        )
+        for candidate, result in zip(candidates, generation_results):
+            mask = tuple(candidate.metadata["supercircuit_mask"])
+            result.metadata.update(
+                {
+                    "feedback_generation": generation,
+                    "supercircuit_mask": mask,
+                    "search_origin": candidate.metadata.get("search_origin"),
+                }
+            )
+            previous = result_by_mask.get(mask)
+            is_better = previous is None or (
+                result.optimized_value > previous.optimized_value
+                if problem.maximize
+                else result.optimized_value < previous.optimized_value
+            )
+            if is_better:
+                result_by_mask[mask] = result
+        task_results.extend(generation_results)
+        if generation == generations - 1:
+            break
+        elites = [
+            tuple(result.metadata["supercircuit_mask"])
+            for result in _sort_task_results(problem, generation_results)[:elite_count]
+        ]
+        next_masks = list(elites)
+        attempts = 0
+        while len(next_masks) < population_size and attempts < max(100, population_size * 30):
+            attempts += 1
+            parent = elites[int(rng.integers(0, len(elites)))]
+            child = mutate_supercircuit_mask(parent, blocks, rng, mutation_rate=search_cfg.mutation_rate)
+            if child in seen:
+                continue
+            seen.add(child)
+            next_masks.append(child)
+        current_masks = next_masks
+    return _sort_task_results(problem, list(result_by_mask.values()))[: max(0, int(qas_top_k))], len(task_results)
+
+
 def run_task_feedback_validation_experiment(
     problem: ProblemInstance,
     search_config: Optional[SearchConfig] = None,
@@ -488,12 +659,98 @@ def run_task_feedback_validation_experiment(
     )
 
 
+def run_hybrid_qas_validation_experiment(
+    problem: ProblemInstance,
+    search_config: Optional[SearchConfig] = None,
+    optimizer_config: Optional[OptimizerConfig] = None,
+    qas_top_k: int = 3,
+    progressive_keep: Optional[int] = None,
+    feedback_generations: int = 2,
+    feedback_population_size: Optional[int] = None,
+    feedback_elite_count: Optional[int] = None,
+    backend: Optional[NumpyBackend] = None,
+    noise_model: Optional[NoiseModel] = None,
+    hardware_profile: Optional[HardwareProfile] = None,
+) -> ValidationReport:
+    """Run progressive prefilter -> zero-cost evolution -> task-feedback refinement."""
+    backend = backend or NumpyBackend()
+    base_cfg = search_config or SearchConfig(n_qubits=problem.n_qubits, candidate_layers=1, n_samples=16)
+    optimizer_cfg = optimizer_config or OptimizerConfig(max_evaluations=16)
+    search = ArchitectureSearch(backend=backend, noise_model=noise_model, hardware_profile=hardware_profile)
+
+    progressive_cfg = replace(
+        base_cfg,
+        search_strategy="supercircuit_progressive",
+        include_common_candidates=False,
+        progressive_keep=progressive_keep or base_cfg.progressive_keep or base_cfg.population_size,
+    )
+    progressive_result = search.run(progressive_cfg)
+    progressive_masks = [
+        tuple(score.architecture.metadata["supercircuit_mask"])
+        for score in progressive_result.scores
+        if "supercircuit_mask" in score.architecture.metadata
+    ]
+
+    evolution_cfg = replace(base_cfg, search_strategy="supercircuit_evolution", include_common_candidates=False)
+    evolved_scores = _zero_cost_evolve_from_masks(
+        progressive_masks,
+        evolution_cfg,
+        backend=backend,
+        noise_model=noise_model,
+        hardware_profile=hardware_profile,
+    )
+    evolved_masks = [
+        tuple(score.architecture.metadata["supercircuit_mask"])
+        for score in evolved_scores[: max(1, int(feedback_population_size or base_cfg.population_size))]
+    ]
+    qas_results, task_evaluated = _task_feedback_from_masks(
+        evolved_masks,
+        problem,
+        evolution_cfg,
+        optimizer_cfg,
+        qas_top_k,
+        feedback_generations,
+        feedback_population_size,
+        feedback_elite_count,
+        backend,
+        noise_model,
+    )
+    baselines = _optimize_many(
+        _baseline_architectures(problem, layers=base_cfg.candidate_layers, backend=backend),
+        problem,
+        optimizer_cfg,
+        backend=backend,
+        noise_model=noise_model,
+        result_group="baseline",
+    )
+    return ValidationReport(
+        problem=problem,
+        baseline_results=baselines,
+        qas_results=qas_results,
+        prior_scores=evolved_scores,
+        metadata={
+            "qas_top_k": qas_top_k,
+            "n_prior_candidates": len(evolved_scores),
+            "search_config": base_cfg.__dict__.copy(),
+            "optimizer_config": optimizer_cfg.__dict__.copy(),
+            "hybrid_pipeline": "progressive->evolution->task_feedback",
+            "progressive_candidates": len(progressive_masks),
+            "feedback_generations": feedback_generations,
+            "feedback_population_size": feedback_population_size,
+            "feedback_elite_count": feedback_elite_count,
+            "task_feedback_evaluated": task_evaluated,
+            "noise_model": type(noise_model).__name__ if noise_model is not None else None,
+            "hardware_profile": None if hardware_profile is None else hardware_profile.__dict__.copy(),
+        },
+    )
+
+
 def run_search_strategy_comparison(
     problem: ProblemInstance,
     search_config: Optional[SearchConfig] = None,
     optimizer_config: Optional[OptimizerConfig] = None,
     qas_top_k: int = 3,
-    strategies: Sequence[str] = ("supercircuit_progressive", "supercircuit_evolution", "task_feedback"),
+    strategies: Sequence[str] = ("supercircuit_progressive", "supercircuit_evolution", "task_feedback", "hybrid"),
     feedback_generations: int = 2,
     feedback_population_size: Optional[int] = None,
     feedback_elite_count: Optional[int] = None,
@@ -508,7 +765,20 @@ def run_search_strategy_comparison(
     reports: Dict[str, ValidationReport] = {}
 
     for strategy in strategies:
-        if strategy == "task_feedback":
+        if strategy == "hybrid":
+            reports[strategy] = run_hybrid_qas_validation_experiment(
+                problem,
+                search_config=base_cfg,
+                optimizer_config=optimizer_cfg,
+                qas_top_k=qas_top_k,
+                feedback_generations=feedback_generations,
+                feedback_population_size=feedback_population_size,
+                feedback_elite_count=feedback_elite_count,
+                backend=backend,
+                noise_model=noise_model,
+                hardware_profile=hardware_profile,
+            )
+        elif strategy == "task_feedback":
             task_cfg = replace(base_cfg, search_strategy="supercircuit_evolution", include_common_candidates=False)
             reports[strategy] = run_task_feedback_validation_experiment(
                 problem,
@@ -554,6 +824,7 @@ __all__ = [
     "MultiSeedValidationReport",
     "StrategyComparisonReport",
     "ValidationReport",
+    "run_hybrid_qas_validation_experiment",
     "run_multi_seed_validation_experiment",
     "run_search_strategy_comparison",
     "run_task_feedback_validation_experiment",
