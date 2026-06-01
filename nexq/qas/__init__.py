@@ -30,7 +30,7 @@ from .task_evaluation import (
     evaluate_task_objective,
     optimize_task_parameters,
 )
-from .experiments import ValidationReport, run_validation_experiment
+from .experiments import MultiSeedValidationReport, ValidationReport, run_multi_seed_validation_experiment, run_validation_experiment
 from .problems import (
     MaxCutInstance,
     ProblemInstance,
@@ -93,6 +93,7 @@ __all__ = [
     "MMD_relative",
     "MetricDefinition",
     "MetricGroupScore",
+    "MultiSeedValidationReport",
     "MultiObjectiveReward",
     "NoiseAdaptiveQAS",
     "NoiseRobustnessScore",
@@ -127,5 +128,6 @@ __all__ = [
     "noise_sensitivity",
     "optimize_task_parameters",
     "run_validation_experiment",
+    "run_multi_seed_validation_experiment",
     "small_resource_allocation",
 ] + _OPTIONAL_RL_EXPORTS
