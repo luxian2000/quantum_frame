@@ -64,6 +64,7 @@ from . import (
     qas,
     qml,
     universal,
+    visual,
     vqc,
     wireless,
 )
@@ -130,6 +131,7 @@ __all__ = [
     "qas",
     "qml",
     "universal",
+    "visual",
     "vqc",
     "wireless",
 ]
