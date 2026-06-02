@@ -21,14 +21,14 @@
 
 ## 2. 接口
 
-使用统一入口 `run_qas` 和统一配置工厂 `config`。用户只需要记住 QAS 方法名，例如 `VQA_QAS` 对应 `config.vqa_qas(...)`，不需要导入 `VQAQASConfig`、`PPRDQLConfig` 等具体配置类。
+使用统一入口 `run` 和统一配置工厂 `config`。用户只需要记住 QAS 方法名，例如 `VQA_QAS` 对应 `config.vqa_qas(...)`，不需要导入 `VQAQASConfig`、`PPRDQLConfig` 等具体配置类。
 
 推荐入口：
 
-- `run_qas(method, **kwargs)`：按方法名运行对应 QAS 实现
+- `run(method, **kwargs)`：按方法名运行对应 QAS 实现
 - `config.<method>(**kwargs)`：按方法名创建对应配置对象，例如 `config.vqa_qas(...)`、`config.ppr_dql(...)`
 - `config.create(method, **kwargs)`：当方法名来自字符串或外部配置文件时，按方法名创建配置对象
-- `QASRunConfig`：把方法名、配置和任务输入封装成请求对象后传给 `run_qas`
+- `QASRunConfig`：把方法名、配置和任务输入封装成请求对象后传给 `run`
 - `default_qas_config(method, **kwargs)`：兼容旧入口，内部等价于 `config.create(method, **kwargs)`
 - `available_qas_methods()`：返回当前支持的统一入口方法名
 
@@ -36,7 +36,7 @@
 
 | `method`               | 必要参数                                        | 可选参数                                 | 返回值               |
 | ------------------------ | ----------------------------------------------- | ---------------------------------------- | -------------------- |
-| `"vqa_qas"`            | `objective_fn` 或在 `config` 中指定内置任务 | `config`、`dataset`、`hamiltonian` | `VQAQASResult`     |
+| `"vqa_qas"`            | `objective` 或在 `config` 中指定内置任务 | `config`、`dataset`、`hamiltonian` | `VQAQASResult`     |
 | `"vqa_classification"` | 无                                              | `config`                               | `VQAQASResult`     |
 | `"vqa_h2"`             | 无                                              | `config`                               | `VQAQASResult`     |
 | `"ppo_rb"`             | `target_density_matrix`、`epsilon`          | `config`                               | `(theta, circuit)` |
@@ -48,14 +48,14 @@
 示例：
 
 ```python
-from aicir.qas import config, run_qas
+from aicir.qas import config, run
 
 cfg = config.vqa_qas(task="classification", supernet_steps=20, ranking_num=20, finetune_steps=5)
-result = run_qas("VQA_QAS", config=cfg)
+result = run("VQA_QAS", config=cfg)
 
 # 如果方法名来自外部配置文件，可以用字符串创建配置对象。
 cfg = config.create("VQA_QAS", task="classification", supernet_steps=20)
-result = run_qas("VQA_QAS", config=cfg)
+result = run("VQA_QAS", config=cfg)
 ```
 
 各方法的配置函数：
@@ -69,7 +69,7 @@ result = run_qas("VQA_QAS", config=cfg)
 
 底层专用接口仍然保留，适合需要直接控制某个算法实现的用户：
 
-- `train_vqa_qas(objective_fn, config=None, dataset=None, hamiltonian=None)` / `vqa_qas(...)`
+- `train_vqa_qas(objective, config=None, dataset=None, hamiltonian=None)` / `vqa_qas(...)`
 - `classification_vqa_qas(config=None)` / `h2_vqe_qas(config=None)`
 - `ppo_rb_qas(target_density_matrix, epsilon, config=None)`
 - `train_ppr_dql(state, config=None, policy_library=None)` / `ppr_dql_state_to_circuit(...)`
@@ -78,7 +78,7 @@ result = run_qas("VQA_QAS", config=cfg)
 可通过以下方式导入：
 
 ```python
-from aicir.qas import config, run_qas
+from aicir.qas import config, run
 ```
 
 ## 3. VQA_QAS：面向变分量子算法的超网络架构搜索
@@ -95,14 +95,14 @@ from aicir.qas import config, run_qas
 
 函数签名：
 
-- `train_vqa_qas(objective_fn, config=None, dataset=None, hamiltonian=None)`
-- `vqa_qas(objective_fn, config=None, dataset=None, hamiltonian=None)`
+- `train_vqa_qas(objective, config=None, dataset=None, hamiltonian=None)`
+- `vqa_qas(objective, config=None, dataset=None, hamiltonian=None)`
 - `classification_vqa_qas(config=None)`
 - `h2_vqe_qas(config=None)`
 
 | 参数             | 类型                                               | 必填 | 说明                                                                                            |
 | ---------------- | -------------------------------------------------- | ---- | ----------------------------------------------------------------------------------------------- |
-| `objective_fn` | `Callable \| str \| None`                          | 否   | 自定义目标函数，或内置任务名。`classification_vqa_qas` 和 `h2_vqe_qas` 会自动选择内置目标。 |
+| `objective` | `Callable \| str \| None`                          | 否   | 自定义目标函数，或内置任务名。`classification_vqa_qas` 和 `h2_vqe_qas` 会自动选择内置目标。 |
 | `config`       | `VQAQASConfig \| None`                            | 否   | 搜索空间、训练步数、学习率和随机种子等配置；传 `None` 使用默认值。                            |
 | `dataset`      | `Mapping \| None`                                 | 否   | 分类任务数据集。为 `None` 时，内置分类任务会生成 3 维合成二分类数据。                         |
 | `hamiltonian`  | `Hamiltonian \| np.ndarray \| torch.Tensor \| None` | 否   | VQE 任务哈密顿量。为 `None` 时，`h2_vqe_qas` 使用内置 4 量子比特 H2 哈密顿量。              |
@@ -149,7 +149,7 @@ from aicir.qas import config, run_qas
 ### 3.3 分类任务示例
 
 ```python
-from aicir.qas import config, run_qas
+from aicir.qas import config, run
 
 cfg = config.vqa_qas(
     n_qubits=3,
@@ -163,7 +163,7 @@ cfg = config.vqa_qas(
     seed=42,
 )
 
-result = run_qas("vqa_classification", config=cfg)
+result = run("vqa_classification", config=cfg)
 print(result.best_score)
 print(result.best_circuit.show())
 ```
@@ -173,7 +173,7 @@ print(result.best_circuit.show())
 ### 3.4 H2 VQE 示例
 
 ```python
-from aicir.qas import config, run_qas
+from aicir.qas import config, run
 
 cfg = config.vqa_h2(
     n_qubits=4,
@@ -187,7 +187,7 @@ cfg = config.vqa_h2(
     seed=42,
 )
 
-result = run_qas("vqa_h2", config=cfg)
+result = run("vqa_h2", config=cfg)
 print(result.final_metrics)
 print(result.best_circuit.show())
 ```
@@ -251,7 +251,7 @@ print(result.best_circuit.show())
 ```python
 import numpy as np
 
-from aicir.qas import config, run_qas
+from aicir.qas import config, run
 
 # 3 比特 GHZ: (|000> + |111>) / sqrt(2)
 target = np.zeros((8, 1), dtype=np.complex64)
@@ -266,7 +266,7 @@ cfg = config.ppo_rb(
     seed=42,
 )
 
-theta, circuit = run_qas("ppo_rb", target_density_matrix=rho_target, epsilon=0.95, config=cfg)
+theta, circuit = run("ppo_rb", target_density_matrix=rho_target, epsilon=0.95, config=cfg)
 
 print(f"参数张量数量: {len(theta)}")
 print(f"线路门数: {len(circuit.gates)}")
@@ -350,7 +350,7 @@ print(circuit.show())
 示例：
 
 ```python
-from aicir.qas import config, run_qas
+from aicir.qas import config, run
 
 custom_actions = [
     {"type": "hadamard", "target_qubit": 0},
@@ -358,7 +358,7 @@ custom_actions = [
 ]
 
 cfg = config.ppr_dql(action_gates=custom_actions)
-result = run_qas("ppr_dql", target_state=state, config=cfg)
+result = run("ppr_dql", target_state=state, config=cfg)
 circuit = result.circuit
 ```
 
@@ -369,7 +369,7 @@ import numpy as np
 
 from aicir.channel.backends.numpy_backend import NumpyBackend
 from aicir.core.state import State
-from aicir.qas import config, run_qas
+from aicir.qas import config, run
 
 backend = NumpyBackend()
 target = np.zeros(8, dtype=np.complex64)
@@ -390,7 +390,7 @@ cfg = config.ppr_dql(
     seed=42,
 )
 
-result = run_qas("ppr_dql", target_state=state, config=cfg)
+result = run("ppr_dql", target_state=state, config=cfg)
 circuit = result.circuit
 
 print(circuit)
@@ -479,7 +479,7 @@ print(circuit.show())
 
 ```python
 from aicir.channel.operators import Hamiltonian
-from aicir.qas import config, run_qas
+from aicir.qas import config, run
 
 h2 = Hamiltonian(n_qubits=2)
 h2.term(-1.052373245772859, {"I": [0, 1]})
@@ -495,7 +495,7 @@ cfg = config.crlqas(
     seed=42,
 )
 
-result = run_qas("crlqas", hamiltonian=h2, config=cfg)
+result = run("crlqas", hamiltonian=h2, config=cfg)
 print(result.minimum_energy)
 print(result.circuit.show())
 ```

@@ -387,7 +387,7 @@ class VQAQAS:
 
     def _external_objective_loss(
         self,
-        objective_fn: ObjectiveFn,
+        objective: ObjectiveFn,
         *,
         architecture: Architecture,
         circuit: Circuit,
@@ -412,10 +412,10 @@ class VQAQAS:
             "simulate_state": self.simulate_state,
         }
 
-        signature = inspect.signature(objective_fn)
+        signature = inspect.signature(objective)
         parameters = signature.parameters
         if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
-            value = objective_fn(**kwargs)
+            value = objective(**kwargs)
         else:
             filtered = {
                 name: kwargs[name]
@@ -424,16 +424,16 @@ class VQAQAS:
                 and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
             }
             if filtered:
-                value = objective_fn(**filtered)
+                value = objective(**filtered)
             else:
-                value = objective_fn(circuit)
+                value = objective(circuit)
         return _as_torch_scalar(value, self.device)
 
     def _loss(
         self,
         architecture: Architecture,
         supernet_id: int,
-        objective_fn: ObjectiveFn | str | None,
+        objective: ObjectiveFn | str | None,
         dataset: Any = None,
         hamiltonian: Any = None,
         *,
@@ -447,18 +447,18 @@ class VQAQAS:
         )
 
         task = self.config.task.lower()
-        objective_name = objective_fn.lower() if isinstance(objective_fn, str) else None
+        objective_name = objective.lower() if isinstance(objective, str) else None
         if objective_name in {"classification", "binary_classification"} or (
-            objective_fn is None and task in {"classification", "binary_classification"}
+            objective is None and task in {"classification", "binary_classification"}
         ):
             loss = self._classification_loss(circuit, dataset, split)
         elif objective_name in {"h2", "h2_vqe", "vqe"} or (
-            objective_fn is None and task in {"h2", "h2_vqe", "vqe"}
+            objective is None and task in {"h2", "h2_vqe", "vqe"}
         ):
             loss = self._h2_energy(circuit, hamiltonian)
-        elif callable(objective_fn):
+        elif callable(objective):
             loss = self._external_objective_loss(
-                objective_fn,
+                objective,
                 architecture=architecture,
                 circuit=circuit,
                 supernet_id=supernet_id,
@@ -469,13 +469,13 @@ class VQAQAS:
                 split=split,
             )
         else:
-            raise ValueError("objective_fn must be callable, a known objective name, or None")
+            raise ValueError("objective must be callable, a known objective name, or None")
         return _as_torch_scalar(loss, self.device), circuit, active_keys, active_tensors
 
     def select_supernet(
         self,
         architecture: Architecture,
-        objective_fn: ObjectiveFn | str | None,
+        objective: ObjectiveFn | str | None,
         dataset: Any = None,
         hamiltonian: Any = None,
         *,
@@ -487,7 +487,7 @@ class VQAQAS:
                 loss, _, _, _ = self._loss(
                     architecture,
                     supernet_id,
-                    objective_fn,
+                    objective,
                     dataset,
                     hamiltonian,
                     split=split,
@@ -528,7 +528,7 @@ class VQAQAS:
 
     def optimize_supernet(
         self,
-        objective_fn: ObjectiveFn | str | None,
+        objective: ObjectiveFn | str | None,
         dataset: Any = None,
         hamiltonian: Any = None,
     ) -> list[dict[str, Any]]:
@@ -537,7 +537,7 @@ class VQAQAS:
             architecture = self.sample_architecture()
             selected_id, candidate_losses = self.select_supernet(
                 architecture,
-                objective_fn,
+                objective,
                 dataset,
                 hamiltonian,
                 split="train",
@@ -548,7 +548,7 @@ class VQAQAS:
                 loss_value, _, _, _ = self._loss(
                     architecture,
                     selected_id,
-                    objective_fn,
+                    objective,
                     dataset,
                     hamiltonian,
                     split="train",
@@ -558,7 +558,7 @@ class VQAQAS:
             loss, _, active_keys, active_tensors = self._loss(
                 architecture,
                 selected_id,
-                objective_fn,
+                objective,
                 dataset,
                 hamiltonian,
                 split="train",
@@ -594,7 +594,7 @@ class VQAQAS:
 
     def rank_architectures(
         self,
-        objective_fn: ObjectiveFn | str | None,
+        objective: ObjectiveFn | str | None,
         dataset: Any = None,
         hamiltonian: Any = None,
         *,
@@ -610,7 +610,7 @@ class VQAQAS:
         for architecture in candidates:
             selected_id, losses = self.select_supernet(
                 architecture,
-                objective_fn,
+                objective,
                 dataset,
                 hamiltonian,
                 split=split,
@@ -642,7 +642,7 @@ class VQAQAS:
         self,
         architecture: Architecture,
         supernet_id: int,
-        objective_fn: ObjectiveFn | str | None,
+        objective: ObjectiveFn | str | None,
         dataset: Any = None,
         hamiltonian: Any = None,
     ) -> tuple[Circuit, dict[ParameterKey, torch.nn.Parameter], list[dict[str, Any]], float]:
@@ -656,7 +656,7 @@ class VQAQAS:
             loss_value, _, _, _ = self._loss(
                 architecture,
                 supernet_id,
-                objective_fn,
+                objective,
                 dataset,
                 hamiltonian,
                 split="train",
@@ -705,7 +705,7 @@ class VQAQAS:
         circuit: Circuit,
         finetune_parameters: Mapping[ParameterKey, torch.Tensor | float],
         selected_supernet_id: int,
-        objective_fn: ObjectiveFn | str | None,
+        objective: ObjectiveFn | str | None,
         dataset: Any,
         hamiltonian: Any,
         ranking_best_score: float,
@@ -721,7 +721,7 @@ class VQAQAS:
                 loss, _, _, _ = self._loss(
                     architecture,
                     selected_supernet_id,
-                    objective_fn,
+                    objective,
                     dataset,
                     hamiltonian,
                     split=split,
@@ -734,7 +734,7 @@ class VQAQAS:
             energy, _, _, _ = self._loss(
                 architecture,
                 selected_supernet_id,
-                objective_fn,
+                objective,
                 dataset,
                 hamiltonian,
                 parameters=finetune_parameters,
@@ -746,7 +746,7 @@ class VQAQAS:
             loss, _, _, _ = self._loss(
                 architecture,
                 selected_supernet_id,
-                objective_fn,
+                objective,
                 dataset,
                 hamiltonian,
                 parameters=finetune_parameters,
@@ -789,7 +789,7 @@ class VQAQAS:
 
     def train(
         self,
-        objective_fn: ObjectiveFn | str | None = None,
+        objective: ObjectiveFn | str | None = None,
         dataset: Any = None,
         hamiltonian: Any = None,
     ) -> VQAQASResult:
@@ -803,9 +803,9 @@ class VQAQAS:
         else:
             ranking_split = "validation"
 
-        supernet_log = self.optimize_supernet(objective_fn, dataset=dataset, hamiltonian=hamiltonian)
+        supernet_log = self.optimize_supernet(objective, dataset=dataset, hamiltonian=hamiltonian)
         ranking_records = self.rank_architectures(
-            objective_fn,
+            objective,
             dataset=dataset,
             hamiltonian=hamiltonian,
             split=ranking_split,
@@ -816,7 +816,7 @@ class VQAQAS:
         best_circuit, finetune_parameters, finetune_log, finetune_score = self.finetune_architecture(
             best_architecture,
             selected_supernet_id,
-            objective_fn,
+            objective,
             dataset=dataset,
             hamiltonian=hamiltonian,
         )
@@ -825,7 +825,7 @@ class VQAQAS:
             best_circuit,
             finetune_parameters,
             selected_supernet_id,
-            objective_fn,
+            objective,
             dataset,
             hamiltonian,
             ranking_best_score=float(best_record["score"]),
@@ -942,21 +942,21 @@ def h2_hamiltonian() -> Hamiltonian:
 
 
 def train_vqa_qas(
-    objective_fn: ObjectiveFn | str | None = None,
+    objective: ObjectiveFn | str | None = None,
     config: VQAQASConfig | None = None,
     dataset: Any = None,
     hamiltonian: Any = None,
 ) -> VQAQASResult:
-    return VQAQAS(config).train(objective_fn, dataset=dataset, hamiltonian=hamiltonian)
+    return VQAQAS(config).train(objective, dataset=dataset, hamiltonian=hamiltonian)
 
 
 def vqa_qas(
-    objective_fn: ObjectiveFn | str | None = None,
+    objective: ObjectiveFn | str | None = None,
     config: VQAQASConfig | None = None,
     dataset: Any = None,
     hamiltonian: Any = None,
 ) -> VQAQASResult:
-    return train_vqa_qas(objective_fn, config=config, dataset=dataset, hamiltonian=hamiltonian)
+    return train_vqa_qas(objective, config=config, dataset=dataset, hamiltonian=hamiltonian)
 
 
 def classification_vqa_qas(config: VQAQASConfig | None = None) -> VQAQASResult:
