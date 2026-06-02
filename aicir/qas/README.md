@@ -21,46 +21,51 @@
 
 ## 2. 主要接口
 
-面向打包发布后的使用者，推荐优先使用统一入口 `run_qas`，将方法名、任务输入和对应配置对象传入即可。用户不需要知道各实现文件的位置，也不需要从子模块导入函数。
+面向打包发布后的使用者，推荐优先使用统一入口 `run_qas` 和统一配置工厂 `config`。用户只需要记住 QAS 方法名，例如 `VQA_QAS` 对应 `config.vqa_qas(...)`，不需要导入 `VQAQASConfig`、`PPRDQLConfig` 等具体配置类。
 
 推荐入口：
 
 - `run_qas(method, **kwargs)`：按方法名运行对应 QAS 实现
+- `config.<method>(**kwargs)`：按方法名创建对应配置对象，例如 `config.vqa_qas(...)`、`config.ppr_dql(...)`
+- `config.create(method, **kwargs)`：当方法名来自字符串或外部配置文件时，按方法名创建配置对象
 - `QASRunConfig`：把方法名、配置和任务输入封装成请求对象后传给 `run_qas`
-- `default_qas_config(method)`：返回某个方法的默认配置对象，便于用户在默认值基础上修改字段
+- `default_qas_config(method, **kwargs)`：兼容旧入口，内部等价于 `config.create(method, **kwargs)`
 - `available_qas_methods()`：返回当前支持的统一入口方法名
 
 统一入口支持的方法和参数：
 
 | `method`               | 必要参数                               | 可选参数                                 | 返回值               |
 | ------------------------ | -------------------------------------- | ---------------------------------------- | -------------------- |
-| `"vqa"`                | `objective_fn`                       | `config`、`dataset`、`hamiltonian` | `VQAQASResult`     |
+| `"vqa_qas"`            | `objective_fn` 或在 `config` 中指定内置任务 | `config`、`dataset`、`hamiltonian` | `VQAQASResult`     |
 | `"vqa_classification"` | 无                                     | `config`                               | `VQAQASResult`     |
 | `"vqa_h2"`             | 无                                     | `config`                               | `VQAQASResult`     |
 | `"ppo_rb"`             | `target_density_matrix`、`epsilon` | `config`                               | `(theta, circuit)` |
 | `"ppr_dql"`            | `target_state`                       | `config`、`policy_library`           | `PPRDQLResult`     |
 | `"crlqas"`             | `hamiltonian`                        | `config`                               | `CRLQASResult`     |
 
+方法名大小写不敏感，也支持常见别名，例如 `"VQA_QAS"`、`"h2_vqe"`、`"ppr"`。
+
 示例：
 
 ```python
-from aicir.qas import QASRunConfig, VQAQASConfig, run_qas
+from aicir.qas import config, run_qas
 
-config = VQAQASConfig(supernet_steps=20, ranking_num=20, finetune_steps=5)
-result = run_qas("vqa_classification", config=config)
+cfg = config.vqa_qas(task="classification", supernet_steps=20, ranking_num=20, finetune_steps=5)
+result = run_qas("VQA_QAS", config=cfg)
 
-# 也可以先封装请求对象，适合在应用层或配置文件解析后统一传参。
-request = QASRunConfig(method="vqa_classification", config=config)
-result = run_qas(request)
+# 如果方法名来自外部配置文件，可以用字符串创建配置对象。
+cfg = config.create("VQA_QAS", task="classification", supernet_steps=20)
+result = run_qas("VQA_QAS", config=cfg)
 ```
 
-各方法的专用配置对象：
+各方法的配置函数：
 
-- `VQAQASConfig`：VQA_QAS 搜索空间和训练超参数配置
-- `PPORollbackConfig`：PPO-RB 超参数配置
-- `PPRDQLConfig`：PPR-DQL 超参数配置
-- `CRLQASConfig`：CRLQAS 超参数配置
-- `AdamSPSAConfig`：CRLQAS 中 Adam-SPSA 参数优化器配置
+- `config.vqa_qas(...)`：VQA_QAS 搜索空间和训练超参数配置
+- `config.vqa_classification(...)`：内置分类任务的 VQA_QAS 配置
+- `config.vqa_h2(...)`：内置 H2 VQE 任务的 VQA_QAS 配置
+- `config.ppo_rb(...)`：PPO-RB 超参数配置
+- `config.ppr_dql(...)`：PPR-DQL 超参数配置
+- `config.crlqas(...)`：CRLQAS 超参数配置；`adam_spsa` 可传字典，例如 `config.crlqas(adam_spsa={"iterations": 10})`
 
 底层专用接口仍然保留，适合需要直接控制某个算法实现的用户：
 
@@ -73,8 +78,7 @@ result = run_qas(request)
 可通过以下方式导入：
 
 ```python
-from aicir.qas import QASRunConfig, default_qas_config, run_qas
-from aicir.qas import VQAQASConfig, PPRDQLConfig, PPORollbackConfig, CRLQASConfig
+from aicir.qas import config, run_qas
 ```
 
 ## 3. VQA_QAS：面向变分量子算法的超网络架构搜索
@@ -145,9 +149,9 @@ from aicir.qas import VQAQASConfig, PPRDQLConfig, PPORollbackConfig, CRLQASConfi
 ### 3.3 分类任务示例
 
 ```python
-from aicir.qas import VQAQASConfig, classification_vqa_qas
+from aicir.qas import config, run_qas
 
-config = VQAQASConfig(
+cfg = config.vqa_qas(
     n_qubits=3,
     layers=3,
     single_qubit_gates=("ry",),
@@ -159,7 +163,7 @@ config = VQAQASConfig(
     seed=42,
 )
 
-result = classification_vqa_qas(config)
+result = run_qas("vqa_classification", config=cfg)
 print(result.best_score)
 print(result.best_circuit.show())
 ```
@@ -169,9 +173,9 @@ print(result.best_circuit.show())
 ### 3.4 H2 VQE 示例
 
 ```python
-from aicir.qas import VQAQASConfig, h2_vqe_qas
+from aicir.qas import config, run_qas
 
-config = VQAQASConfig(
+cfg = config.vqa_h2(
     n_qubits=4,
     layers=3,
     single_qubit_gates=("ry", "rz"),
@@ -183,7 +187,7 @@ config = VQAQASConfig(
     seed=42,
 )
 
-result = h2_vqe_qas(config)
+result = run_qas("vqa_h2", config=cfg)
 print(result.final_metrics)
 print(result.best_circuit.show())
 ```
@@ -247,7 +251,7 @@ print(result.best_circuit.show())
 ```python
 import numpy as np
 
-from aicir.qas.PPO_RB import PPORollbackConfig, ppo_rb_qas
+from aicir.qas import config, run_qas
 
 # 3 比特 GHZ: (|000> + |111>) / sqrt(2)
 target = np.zeros((8, 1), dtype=np.complex64)
@@ -255,14 +259,14 @@ target[0, 0] = 1 / np.sqrt(2)
 target[7, 0] = 1 / np.sqrt(2)
 rho_target = target @ target.conj().T
 
-config = PPORollbackConfig(
+cfg = config.ppo_rb(
     episode_num=800,
     max_steps_per_episode=8,
     gate_penalty=0.005,
     seed=42,
 )
 
-theta, circuit = ppo_rb_qas(rho_target, epsilon=0.95, config=config)
+theta, circuit = run_qas("ppo_rb", target_density_matrix=rho_target, epsilon=0.95, config=cfg)
 
 print(f"参数张量数量: {len(theta)}")
 print(f"线路门数: {len(circuit.gates)}")
@@ -336,7 +340,7 @@ print(circuit.show())
 
 ### 5.3 自定义动作门集合
 
-`PPRDQLConfig.action_gates` 支持自定义动作门集合。每个动作是一个门字典，格式与 `Circuit` 门定义一致。
+`config.ppr_dql(action_gates=...)` 支持自定义动作门集合。每个动作是一个门字典，格式与 `Circuit` 门定义一致。
 
 注意：
 
@@ -346,13 +350,16 @@ print(circuit.show())
 示例：
 
 ```python
+from aicir.qas import config, run_qas
+
 custom_actions = [
     {"type": "hadamard", "target_qubit": 0},
     {"type": "cx", "target_qubit": 1, "control_qubits": [0], "control_states": [1]},
 ]
 
-config = PPRDQLConfig(action_gates=custom_actions)
-circuit = ppr_dql_state_to_circuit(state, config=config)
+cfg = config.ppr_dql(action_gates=custom_actions)
+result = run_qas("ppr_dql", target_state=state, config=cfg)
+circuit = result.circuit
 ```
 
 ### 5.4 最小示例（GHZ）
@@ -362,7 +369,7 @@ import numpy as np
 
 from aicir.channel.backends.numpy_backend import NumpyBackend
 from aicir.core.state import State
-from aicir.qas import PPRDQLConfig, ppr_dql_state_to_circuit
+from aicir.qas import config, run_qas
 
 backend = NumpyBackend()
 target = np.zeros(8, dtype=np.complex64)
@@ -370,7 +377,7 @@ target[0] = 1 / np.sqrt(2)
 target[7] = 1 / np.sqrt(2)
 state = State.from_array(target, n_qubits=3, backend=backend)
 
-config = PPRDQLConfig(
+cfg = config.ppr_dql(
     episode_num=800,
     max_steps_per_episode=3,
     fidelity_threshold=0.99,
@@ -383,7 +390,8 @@ config = PPRDQLConfig(
     seed=42,
 )
 
-circuit = ppr_dql_state_to_circuit(state, config=config)
+result = run_qas("ppr_dql", target_state=state, config=cfg)
+circuit = result.circuit
 
 print(circuit)
 print(circuit.show())
@@ -470,8 +478,8 @@ print(circuit.show())
 ### 6.3 最小示例（H2）
 
 ```python
-from aicir.qas import AdamSPSAConfig, CRLQASConfig, train_crlqas
 from aicir.channel.operators import Hamiltonian
+from aicir.qas import config, run_qas
 
 h2 = Hamiltonian(n_qubits=2)
 h2.term(-1.052373245772859, {"I": [0, 1]})
@@ -480,14 +488,14 @@ h2.term(-0.39793742484318045, {"Z": [1]})
 h2.term(-0.01128010425623538, {"Z": [0, 1]})
 h2.term(0.18093119978423156, {"X": [0, 1]})
 
-cfg = CRLQASConfig(
-        max_episodes=300,
-        n_act=10,
-        adam_spsa=AdamSPSAConfig(iterations=20),
-        seed=42,
+cfg = config.crlqas(
+    max_episodes=300,
+    n_act=10,
+    adam_spsa={"iterations": 20},
+    seed=42,
 )
 
-result = train_crlqas(h2, config=cfg)
+result = run_qas("crlqas", hamiltonian=h2, config=cfg)
 print(result.minimum_energy)
 print(result.circuit.show())
 ```

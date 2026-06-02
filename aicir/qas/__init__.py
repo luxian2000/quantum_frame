@@ -41,6 +41,7 @@ from ..channel.noise.metrics import ion_trap_error_budget_proxy
 
 _OPTIONAL_RL_EXPORTS: list[str] = []
 try:
+    from . import config
     from .CRLQAS import AdamSPSAConfig, CRLQASConfig, CRLQASResult, crlqas, train_crlqas
     from .PPR_DQL import PPRDQLConfig, PPRDQLPolicy, PPRDQLResult, ppr_dql_state_to_circuit, train_ppr_dql
     from .PPO_RB import PPORollbackConfig, ppo_rb_qas
@@ -77,6 +78,7 @@ else:
             "VQAQASResult",
             "available_qas_methods",
             "classification_vqa_qas",
+            "config",
             "crlqas",
             "default_qas_config",
             "h2_vqe_qas",
