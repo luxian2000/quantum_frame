@@ -249,6 +249,14 @@ python -m nexq.qas.demo.vqe_ising4_budget_sweep
 python -m nexq.qas.demo.vqe_ising4_multistart_sa
 ```
 
+在继续 GA / beam search 之前，先验证 short-step VQE fitness 是否能预测 fair final VQE 排序：
+
+```bash
+python -m nexq.qas.demo.vqe_ising4_fitness_correlation
+```
+
+如果 `spearman_short_vs_fair` 较低，说明搜索失败主要来自 fitness 信号不可靠，而不是 SA 步数或起点不足。
+
 HEA mask 的搜索维度固定为：
 
 - `layers`: `1 / 2 / 3`

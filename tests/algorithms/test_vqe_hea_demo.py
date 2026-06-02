@@ -9,6 +9,7 @@ from nexq.qas import (
     ising4_demo_problem,
     mutate_hea_mask,
     run_ising4_budget_sweep,
+    run_ising4_fitness_correlation,
     run_ising4_multistart_sa,
     run_vqe_hea_demo,
     run_vqe_ising4_demo,
@@ -106,6 +107,25 @@ class TestVQEHEADemo(unittest.TestCase):
         self.assertTrue(report.capped_results)
         self.assertTrue(report.fair_results)
         self.assertIn("Multi-start SA", summary)
+
+    def test_ising4_fitness_correlation_reports_spearman(self):
+        report = run_ising4_fitness_correlation(
+            seed=19,
+            top_k=4,
+            candidate_limit=8,
+            stage1_keep_top=6,
+            short_max_evaluations=6,
+            fair_n_starts=1,
+            fair_evals_per_param=2,
+            fair_min_evaluations=4,
+        )
+        summary = "\n".join(report.summary_lines())
+        correlations = report.correlations()
+
+        self.assertEqual(len(report.rows), 4)
+        self.assertIn("spearman_short_vs_fair", correlations)
+        self.assertIn("top4_overlap", correlations)
+        self.assertIn("VQE-QAS short/fair fitness validation", summary)
 
 
 if __name__ == "__main__":
