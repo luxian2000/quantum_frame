@@ -1,9 +1,11 @@
 import math
 
 import numpy as np
+import pytest
 import torch
 
 from aicir.channel.backends.torch_backend import TorchBackend
+from aicir.qas.VQA_QAS import h2_hamiltonian, prepare_classification_dataset
 from aicir.qas import (
     Architecture,
     LayerArchitecture,
@@ -83,6 +85,15 @@ def test_h2_search_space_size_is_128_cubed():
     qas = VQAQAS(_h2_config())
 
     assert qas.logical_search_space_size() == 128**3
+
+
+def test_supplementary_config_fields_are_available():
+    config = VQAQASConfig()
+
+    assert config.track_best_validation is True
+    assert config.ranking_strategy == "random"
+    assert config.use_evolutionary_ranking is False
+    assert config.noise_mode == "none"
 
 
 def test_architecture_sampling_returns_valid_architecture():
@@ -228,6 +239,44 @@ def test_ranking_returns_lowest_loss_architecture_among_candidates():
     assert records[1]["architecture"] == with_cnot
 
 
+def test_evolutionary_ranking_extension_raises_clear_error():
+    qas = VQAQAS(_h2_config(ranking_strategy="evolutionary"))
+
+    with pytest.raises(NotImplementedError, match="Evolutionary ranking"):
+        qas.rank_architectures(lambda **_: 0.0)
+
+
+def test_supplementary_classification_dataset_has_expected_split_and_labels():
+    dataset = prepare_classification_dataset(None, _classification_config(), torch.device("cpu"))
+
+    assert dataset["train"][0].shape == (100, 3)
+    assert dataset["validation"][0].shape == (100, 3)
+    assert dataset["test"][0].shape == (100, 3)
+    for _, labels in dataset.values():
+        assert set(labels.cpu().numpy().tolist()).issubset({0.0, 1.0})
+
+
+def test_h2_hamiltonian_matches_supplementary_eq_19_terms():
+    hamiltonian = h2_hamiltonian()
+    terms = [(term.coefficient.real, tuple(term.qubit_labels)) for term in hamiltonian.terms]
+
+    assert (-0.042, ("I", "I", "I", "I")) in terms
+    assert (0.178, ("Z", "I", "I", "I")) in terms
+    assert (0.178, ("I", "Z", "I", "I")) in terms
+    assert (-0.243, ("I", "I", "Z", "I")) in terms
+    assert (-0.243, ("I", "I", "I", "Z")) in terms
+    assert (0.171, ("Z", "Z", "I", "I")) in terms
+    assert (0.123, ("Z", "I", "Z", "I")) in terms
+    assert (0.168, ("Z", "I", "I", "Z")) in terms
+    assert (0.168, ("I", "Z", "Z", "I")) in terms
+    assert (0.123, ("I", "Z", "I", "Z")) in terms
+    assert (0.176, ("I", "I", "Z", "Z")) in terms
+    assert (0.045, ("Y", "X", "X", "Y")) in terms
+    assert (-0.045, ("Y", "Y", "X", "X")) in terms
+    assert (-0.045, ("X", "X", "Y", "Y")) in terms
+    assert (0.045, ("X", "Y", "Y", "X")) in terms
+
+
 def test_classification_vqa_qas_smoke_runs_small_config():
     config = _classification_config(supernet_steps=2, ranking_num=3, finetune_steps=2)
 
@@ -235,9 +284,11 @@ def test_classification_vqa_qas_smoke_runs_small_config():
 
     assert np.isfinite(result.best_score)
     assert result.best_circuit.n_qubits == 3
+    assert isinstance(result.best_supernet_id, int)
     assert len(result.supernet_log) == 2
     assert len(result.ranking_records) == 3
     assert "test_accuracy" in result.final_metrics
+    assert "best_supernet_validation_accuracy" in result.final_metrics
 
 
 def test_h2_vqe_qas_smoke_runs_small_config():
@@ -247,6 +298,7 @@ def test_h2_vqe_qas_smoke_runs_small_config():
 
     assert np.isfinite(result.best_score)
     assert result.best_circuit.n_qubits == 4
+    assert isinstance(result.best_supernet_id, int)
     assert len(result.supernet_log) == 2
     assert len(result.ranking_records) == 3
     assert "baseline_vqe_energy" in result.final_metrics
