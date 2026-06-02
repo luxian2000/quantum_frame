@@ -196,6 +196,12 @@ progressive 粗筛 -> reflective evolution zero-cost 结构搜索 -> task_feedba
 from nexq.qas import run_hybrid_qas_validation_experiment
 ```
 
+在把 random-parameter objective 用作 VQE/任务搜索 fitness 之前，先运行 proxy validation，检查随机参数分布是否和短步优化结果有区分度：
+
+```bash
+python -m nexq.qas.demo.random_proxy_validation
+```
+
 ## 5. 使用方法：PPO_RB
 
 `PPO_RB` 的输入是目标密度矩阵，输出是策略参数 `theta` 与搜索得到的 `Circuit`。
