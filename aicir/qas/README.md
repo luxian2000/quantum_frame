@@ -34,14 +34,14 @@
 
 统一入口支持的方法和参数：
 
-| `method`               | 必要参数                                        | 可选参数                                 | 返回值               |
-| ------------------------ | ----------------------------------------------- | ---------------------------------------- | -------------------- |
+| `method`               | 必要参数                                     | 可选参数                                 | 返回值               |
+| ------------------------ | -------------------------------------------- | ---------------------------------------- | -------------------- |
 | `"vqa_qas"`            | `objective` 或在 `config` 中指定内置任务 | `config`、`dataset`、`hamiltonian` | `VQAQASResult`     |
-| `"vqa_classification"` | 无                                              | `config`                               | `VQAQASResult`     |
-| `"vqa_h2"`             | 无                                              | `config`                               | `VQAQASResult`     |
-| `"ppo_rb"`             | `target_density_matrix`、`epsilon`          | `config`                               | `(theta, circuit)` |
-| `"ppr_dql"`            | `target_state`                                | `config`、`policy_library`           | `PPRDQLResult`     |
-| `"crlqas"`             | `hamiltonian`                                 | `config`                               | `CRLQASResult`     |
+| `"vqa_classification"` | 无                                           | `config`                               | `VQAQASResult`     |
+| `"vqa_h2"`             | 无                                           | `config`                               | `VQAQASResult`     |
+| `"ppo_rb"`             | `target_density_matrix`、`epsilon`       | `config`                               | `(theta, circuit)` |
+| `"ppr_dql"`            | `target_state`                             | `config`、`policy_library`           | `PPRDQLResult`     |
+| `"crlqas"`             | `hamiltonian`                              | `config`                               | `CRLQASResult`     |
 
 方法名大小写不敏感，也支持常见别名，例如 `"VQA_QAS"`、`"h2_vqe"`、`"ppr"`。
 
@@ -91,7 +91,7 @@ from aicir.qas import config, run
 
 当前实现使用 `aicir.core.Circuit`、aicir 门构造器、`TorchBackend` 和 aicir 态向量/矩阵演化能力，不依赖 PennyLane、Qiskit、Cirq 或其他量子 SDK。当前实现以无噪声仿真为主；`NoiseConfig` 仅作为 noisy QAS 的占位配置，启用时会抛出 `NotImplementedError`。
 
-补充材料中的默认 supernet assignment 规则已作为默认实现：每个采样 ansatz 会先在全部 `W=supernet_num` 个 supernet 上计算 objective，然后分配给 loss 最小的 supernet，并只更新该 supernet 的活跃参数。补充材料中的 evolutionary ranking 和 noisy differentiable QAS 目前保留为显式扩展点，开启时会抛出 `NotImplementedError`。
+Supernet assignment 规则作为默认实现：每个采样 ansatz 会先在全部 `W=supernet_num` 个 supernet 上计算 objective，然后分配给 loss 最小的 supernet，并只更新该 supernet 的活跃参数。补充材料中的 evolutionary ranking 和 noisy differentiable QAS 目前保留为显式扩展点，开启时会抛出 `NotImplementedError`。
 
 ### 3.1 输入参数（`train_vqa_qas` / `vqa_qas`）
 
@@ -102,12 +102,12 @@ from aicir.qas import config, run
 - `classification_vqa_qas(config=None)`
 - `h2_vqe_qas(config=None)`
 
-| 参数             | 类型                                               | 必填 | 说明                                                                                            |
-| ---------------- | -------------------------------------------------- | ---- | ----------------------------------------------------------------------------------------------- |
-| `objective` | `Callable \| str \| None`                          | 否   | 自定义目标函数，或内置任务名。`classification_vqa_qas` 和 `h2_vqe_qas` 会自动选择内置目标。 |
-| `config`       | `VQAQASConfig \| None`                            | 否   | 搜索空间、训练步数、学习率和随机种子等配置；传 `None` 使用默认值。                            |
-| `dataset`      | `Mapping \| None`                                 | 否   | 分类任务数据集。为 `None` 时，内置分类任务会生成 3 维合成二分类数据。                         |
-| `hamiltonian`  | `Hamiltonian \| np.ndarray \| torch.Tensor \| None` | 否   | VQE 任务哈密顿量。为 `None` 时，`h2_vqe_qas` 使用内置 4 量子比特 H2 哈密顿量。              |
+| 参数            | 类型                                               | 必填 | 说明                                                                                            |
+| --------------- | -------------------------------------------------- | ---- | ----------------------------------------------------------------------------------------------- |
+| `objective`   | `Callable \| str \| None`                          | 否   | 自定义目标函数，或内置任务名。`classification_vqa_qas` 和 `h2_vqe_qas` 会自动选择内置目标。 |
+| `config`      | `VQAQASConfig \| None`                            | 否   | 搜索空间、训练步数、学习率和随机种子等配置；传 `None` 使用默认值。                            |
+| `dataset`     | `Mapping \| None`                                 | 否   | 分类任务数据集。为 `None` 时，内置分类任务会生成 3 维合成二分类数据。                         |
+| `hamiltonian` | `Hamiltonian \| np.ndarray \| torch.Tensor \| None` | 否   | VQE 任务哈密顿量。为 `None` 时，`h2_vqe_qas` 使用内置 4 量子比特 H2 哈密顿量。              |
 
 返回值：
 
@@ -123,29 +123,29 @@ from aicir.qas import config, run
 
 ### 3.2 超参数（`VQAQASConfig`）
 
-| 字段                          |                       默认值 | 说明                                                                           |
-| ----------------------------- | ---------------------------: | ------------------------------------------------------------------------------ |
-| `n_qubits`                  |                        `3` | 量子比特数。                                                                   |
-| `layers`                    |                        `3` | ansatz 层数。                                                                  |
-| `single_qubit_gates`        |                  `("ry",)` | 单量子比特候选旋转门，目前支持 `rx`、`ry`、`rz`。                        |
-| `two_qubit_pairs`           | `((0, 1), (0, 2), (1, 2))` | 允许搜索 CNOT/无 CNOT 的连接对，格式为 `(control, target)`。                 |
-| `search_single_qubit_gates` |                     `True` | 是否搜索单量子比特门布局；关闭时每层使用第一个候选门。                         |
-| `search_two_qubit_gates`    |                     `True` | 是否搜索双量子比特门 mask；关闭时默认启用所有给定连接对。                      |
-| `supernet_num`              |                        `1` | 超网络数量 `W`。每个采样架构会在所有超网络上评估，并只更新损失最小的超网络。 |
-| `supernet_steps`            |                      `100` | 一阶段超网络优化步数。                                                         |
-| `ranking_num`               |                       `50` | 排序阶段采样的候选架构数量。                                                   |
-| `finetune_steps`            |                       `20` | 对选中固定架构执行独立参数微调的步数。                                         |
-| `learning_rate`             |                     `0.05` | 超网络共享参数学习率。                                                         |
-| `finetune_learning_rate`    |                     `0.03` | 固定架构微调学习率。                                                           |
-| `seed`                      |                       `42` | 随机种子。                                                                     |
-| `device`                    |                    `"cpu"` | `TorchBackend` 使用的设备。                                                  |
-| `task`                      |         `"classification"` | 内置任务类型，如 `classification` 或 `h2_vqe`。                            |
-| `log_interval`              |                        `0` | 日志打印间隔；`0` 表示关闭。                                                 |
-| `use_parameter_shift`       |                    `False` | 是否使用参数位移法更新梯度；默认使用 PyTorch autograd。                        |
-| `track_best_validation`     |                     `True` | 分类任务中按补充材料记录验证准确率最优的 supernet 参数，并在 ranking 前恢复。    |
-| `ranking_strategy`          |                 `"random"` | 排序阶段采样策略。默认随机采样；`"evolutionary"` 为补充材料扩展点，尚未实现。 |
+| 字段                          |                       默认值 | 说明                                                                                 |
+| ----------------------------- | ---------------------------: | ------------------------------------------------------------------------------------ |
+| `n_qubits`                  |                        `3` | 量子比特数。                                                                         |
+| `layers`                    |                        `3` | ansatz 层数。                                                                        |
+| `single_qubit_gates`        |                  `("ry",)` | 单量子比特候选旋转门，目前支持 `rx`、`ry`、`rz`。                              |
+| `two_qubit_pairs`           | `((0, 1), (0, 2), (1, 2))` | 允许搜索 CNOT/无 CNOT 的连接对，格式为 `(control, target)`。                       |
+| `search_single_qubit_gates` |                     `True` | 是否搜索单量子比特门布局；关闭时每层使用第一个候选门。                               |
+| `search_two_qubit_gates`    |                     `True` | 是否搜索双量子比特门 mask；关闭时默认启用所有给定连接对。                            |
+| `supernet_num`              |                        `1` | 超网络数量 `W`。每个采样架构会在所有超网络上评估，并只更新损失最小的超网络。       |
+| `supernet_steps`            |                      `100` | 一阶段超网络优化步数。                                                               |
+| `ranking_num`               |                       `50` | 排序阶段采样的候选架构数量。                                                         |
+| `finetune_steps`            |                       `20` | 对选中固定架构执行独立参数微调的步数。                                               |
+| `learning_rate`             |                     `0.05` | 超网络共享参数学习率。                                                               |
+| `finetune_learning_rate`    |                     `0.03` | 固定架构微调学习率。                                                                 |
+| `seed`                      |                       `42` | 随机种子。                                                                           |
+| `device`                    |                    `"cpu"` | `TorchBackend` 使用的设备。                                                        |
+| `task`                      |         `"classification"` | 内置任务类型，如 `classification` 或 `h2_vqe`。                                  |
+| `log_interval`              |                        `0` | 日志打印间隔；`0` 表示关闭。                                                       |
+| `use_parameter_shift`       |                    `False` | 是否使用参数位移法更新梯度；默认使用 PyTorch autograd。                              |
+| `track_best_validation`     |                     `True` | 分类任务中按补充材料记录验证准确率最优的 supernet 参数，并在 ranking 前恢复。        |
+| `ranking_strategy`          |                 `"random"` | 排序阶段采样策略。默认随机采样；`"evolutionary"` 为补充材料扩展点，尚未实现。      |
 | `use_evolutionary_ranking`  |                    `False` | 是否启用 evolutionary ranking 扩展点；启用时当前实现会抛出 `NotImplementedError`。 |
-| `noise_mode`                |                   `"none"` | 噪声模式。当前仅支持无噪声；其他值会抛出 `NotImplementedError`。               |
+| `noise_mode`                |                   `"none"` | 噪声模式。当前仅支持无噪声；其他值会抛出 `NotImplementedError`。                   |
 
 实践建议：
 
