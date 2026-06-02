@@ -326,6 +326,116 @@ def mutate_supercircuit_mask(
     return tuple(values)
 
 
+def _choice_index(block: SuperCircuitBlock, choice: str) -> Optional[int]:
+    try:
+        return list(block.choices).index(choice)
+    except ValueError:
+        return None
+
+
+def _weighted_choice(
+    block: SuperCircuitBlock,
+    preferred: Sequence[str],
+    rng: np.random.Generator,
+    strength: float,
+) -> int:
+    choices = list(block.choices)
+    weights = np.ones(len(choices), dtype=float)
+    preferred_set = set(preferred)
+    for index, choice in enumerate(choices):
+        if choice in preferred_set:
+            weights[index] += max(0.0, float(strength)) * 4.0
+    weights /= weights.sum()
+    return int(rng.choice(np.arange(len(choices)), p=weights))
+
+
+def reflection_from_architecture_score(score: Any) -> Dict[str, Any]:
+    """Create rule-based zero-cost reflection from one ArchitectureScore."""
+    groups = score.groups()
+    group_scores = {name: float(group.score) for name, group in groups.items()}
+    weakest = min(group_scores, key=group_scores.get)
+    notes: List[str] = []
+    preferred_rotations = ("ry", "ry_rz", "rx_ry_rz")
+    preferred_entanglers = ("cx_linear", "cz_linear", "rzz_linear")
+    avoid_entanglers: tuple[str, ...] = ()
+
+    train = group_scores.get("trainability", 1.0)
+    noise = group_scores.get("noise_robustness", 1.0)
+    hardware = group_scores.get("hardware_efficiency", 1.0)
+    express = group_scores.get("expressibility", 1.0)
+
+    if weakest == "hardware_efficiency" or hardware < 0.55:
+        preferred_entanglers = ("skip", "cx_linear", "cz_linear", "rzz_linear")
+        avoid_entanglers = ("cx_ring", "rzz_ring")
+        notes.append("hardware_efficiency is weak; prefer topology-local linear entanglers.")
+    if weakest == "trainability" or train < 0.45:
+        preferred_rotations = ("rx", "ry", "ry_rz", "rx_ry_rz")
+        preferred_entanglers = ("skip", "cx_linear", "cz_linear")
+        notes.append("trainability is weak; add trainable rotations and reduce heavy entangling choices.")
+    if weakest == "noise_robustness" or noise < 0.45:
+        preferred_rotations = ("rx", "ry", "ry_rz")
+        preferred_entanglers = ("skip", "cx_linear", "cz_linear")
+        avoid_entanglers = tuple(sorted(set(avoid_entanglers) | {"rzz_ring", "cx_ring", "rzz_linear"}))
+        notes.append("noise_robustness is weak; prefer shallower local entanglers.")
+    if weakest == "expressibility" and express < 0.45 and min(train, noise) > 0.45:
+        preferred_rotations = ("ry_rz", "rx_ry_rz")
+        preferred_entanglers = ("cx_linear", "cz_linear", "rzz_linear", "cx_ring", "rzz_ring")
+        notes.append("expressibility is weak while trainability/noise are acceptable; allow richer entanglers.")
+    if express > 0.75 and (train < 0.45 or noise < 0.45):
+        preferred_entanglers = ("skip", "cx_linear", "cz_linear")
+        notes.append("expressibility is already high but trainability/noise is weak; simplify the circuit.")
+
+    return {
+        "weakest_metric": weakest,
+        "group_scores": group_scores,
+        "preferred_rotations": preferred_rotations,
+        "preferred_entanglers": preferred_entanglers,
+        "avoid_entanglers": avoid_entanglers,
+        "notes": notes,
+    }
+
+
+def reflective_mutate_supercircuit_mask(
+    mask: Sequence[int],
+    blocks: Sequence[SuperCircuitBlock],
+    rng: np.random.Generator,
+    reflection: Dict[str, Any],
+    mutation_rate: float = 0.25,
+    strength: float = 0.7,
+) -> tuple[int, ...]:
+    """Mutate a mask with preferences generated from zero-cost reflection."""
+    values = [int(value) for value in mask]
+    rate = min(1.0, max(0.0, float(mutation_rate) * (1.0 + 0.5 * max(0.0, float(strength)))))
+    changed = False
+    for index, block in enumerate(blocks):
+        if rng.random() >= rate:
+            continue
+        if block.name.startswith("rot") or block.name == "final_rot":
+            values[index] = _weighted_choice(
+                block,
+                tuple(reflection.get("preferred_rotations", ())),
+                rng,
+                strength,
+            )
+            changed = True
+        elif block.name.startswith("ent"):
+            preferred = tuple(reflection.get("preferred_entanglers", ()))
+            avoid = set(reflection.get("avoid_entanglers", ()))
+            choice = _weighted_choice(block, preferred, rng, strength)
+            if block.choices[choice] in avoid and rng.random() < strength:
+                safe_choices = [item for item in preferred if item in block.choices and item not in avoid]
+                if safe_choices:
+                    replacement = safe_choices[int(rng.integers(0, len(safe_choices)))]
+                    choice_index = _choice_index(block, replacement)
+                    if choice_index is not None:
+                        choice = choice_index
+            values[index] = choice
+            changed = True
+    if not changed:
+        return mutate_supercircuit_mask(mask, blocks, rng, mutation_rate=max(mutation_rate, 0.5))
+    return tuple(values)
+
+
 def crossover_supercircuit_masks(
     left: Sequence[int],
     right: Sequence[int],
@@ -410,6 +520,8 @@ __all__ = [
     "mutate_supercircuit_mask",
     "progressive_structure_score",
     "random_supercircuit_mask",
+    "reflection_from_architecture_score",
+    "reflective_mutate_supercircuit_mask",
     "sample_supercircuit_masks",
     "subcircuit_from_mask",
     "supercircuit_blocks",

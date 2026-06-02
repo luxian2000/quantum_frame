@@ -21,6 +21,8 @@ from ..search_strategies import (
     is_valid_supercircuit_mask,
     mutate_supercircuit_mask,
     random_supercircuit_mask,
+    reflection_from_architecture_score,
+    reflective_mutate_supercircuit_mask,
     sample_supercircuit_masks,
     supercircuit_blocks,
 )
@@ -382,8 +384,10 @@ def _zero_cost_evolve_from_masks(
     generations = max(1, int(search_cfg.search_generations))
     elite_count = max(1, min(population_size, int(search_cfg.beam_width)))
     search = ArchitectureSearch(backend=backend, noise_model=noise_model, hardware_profile=hardware_profile)
+    reflective = search_cfg.search_strategy == "supercircuit_reflective" or bool(search_cfg.reflective_mutation)
     current_masks = _unique_masks(seed_masks)[:population_size]
     seen = set(current_masks)
+    reflection_by_mask: Dict[tuple[int, ...], dict] = {}
     while len(current_masks) < population_size:
         mask = random_supercircuit_mask(blocks, rng)
         if mask in seen:
@@ -403,6 +407,10 @@ def _zero_cost_evolve_from_masks(
             )
             for mask in current_masks
         ]
+        for candidate in candidates:
+            mask = tuple(candidate.metadata["supercircuit_mask"])
+            if mask in reflection_by_mask:
+                candidate.metadata["reflection"] = reflection_by_mask[mask]
         scores = search.evaluate_candidates(candidates, search_cfg)
         for rank, score in enumerate(scores, start=1):
             score.architecture.metadata["hybrid_evolution_generation_rank"] = rank
@@ -411,7 +419,8 @@ def _zero_cost_evolve_from_masks(
             previous = all_scores.get(mask)
             if previous is None or score.weighted_score > previous.weighted_score:
                 all_scores[mask] = score
-        elites = [tuple(score.architecture.metadata["supercircuit_mask"]) for score in scores[:elite_count]]
+        elite_scores = scores[:elite_count]
+        elites = [tuple(score.architecture.metadata["supercircuit_mask"]) for score in elite_scores]
         if generation == generations - 1:
             break
 
@@ -419,16 +428,31 @@ def _zero_cost_evolve_from_masks(
         attempts = 0
         while len(next_masks) < population_size and attempts < max(100, population_size * 30):
             attempts += 1
-            parent = elites[int(rng.integers(0, len(elites)))]
+            parent_index = int(rng.integers(0, len(elites)))
+            parent = elites[parent_index]
             if len(elites) > 1 and rng.random() < 0.5:
                 other = elites[int(rng.integers(0, len(elites)))]
                 child = crossover_supercircuit_masks(parent, other, rng)
             else:
                 child = parent
-            child = mutate_supercircuit_mask(child, blocks, rng, mutation_rate=search_cfg.mutation_rate)
+            if reflective:
+                reflection = reflection_from_architecture_score(elite_scores[parent_index])
+                child = reflective_mutate_supercircuit_mask(
+                    child,
+                    blocks,
+                    rng,
+                    reflection,
+                    mutation_rate=search_cfg.mutation_rate,
+                    strength=search_cfg.reflection_strength,
+                )
+            else:
+                reflection = None
+                child = mutate_supercircuit_mask(child, blocks, rng, mutation_rate=search_cfg.mutation_rate)
             if child in seen or not is_valid_supercircuit_mask(child, blocks):
                 continue
             seen.add(child)
+            if reflection is not None:
+                reflection_by_mask[child] = reflection
             next_masks.append(child)
         current_masks = next_masks
 
@@ -691,7 +715,12 @@ def run_hybrid_qas_validation_experiment(
         if "supercircuit_mask" in score.architecture.metadata
     ]
 
-    evolution_cfg = replace(base_cfg, search_strategy="supercircuit_evolution", include_common_candidates=False)
+    evolution_cfg = replace(
+        base_cfg,
+        search_strategy="supercircuit_reflective",
+        include_common_candidates=False,
+        reflective_mutation=True,
+    )
     evolved_scores = _zero_cost_evolve_from_masks(
         progressive_masks,
         evolution_cfg,
@@ -733,7 +762,7 @@ def run_hybrid_qas_validation_experiment(
             "n_prior_candidates": len(evolved_scores),
             "search_config": base_cfg.__dict__.copy(),
             "optimizer_config": optimizer_cfg.__dict__.copy(),
-            "hybrid_pipeline": "progressive->evolution->task_feedback",
+            "hybrid_pipeline": "progressive->reflective_evolution->task_feedback",
             "progressive_candidates": len(progressive_masks),
             "feedback_generations": feedback_generations,
             "feedback_population_size": feedback_population_size,
@@ -750,7 +779,13 @@ def run_search_strategy_comparison(
     search_config: Optional[SearchConfig] = None,
     optimizer_config: Optional[OptimizerConfig] = None,
     qas_top_k: int = 3,
-    strategies: Sequence[str] = ("supercircuit_progressive", "supercircuit_evolution", "task_feedback", "hybrid"),
+    strategies: Sequence[str] = (
+        "supercircuit_progressive",
+        "supercircuit_evolution",
+        "supercircuit_reflective",
+        "task_feedback",
+        "hybrid",
+    ),
     feedback_generations: int = 2,
     feedback_population_size: Optional[int] = None,
     feedback_elite_count: Optional[int] = None,
