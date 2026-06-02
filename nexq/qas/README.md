@@ -102,6 +102,14 @@ print("\n".join(multi_seed_report.summary_lines()))
 - P1.3 已完成第一版：`run_task_feedback_validation_experiment` 用 zero-cost 搜索得到父代，再以小预算任务调参后的分数作为反馈，突变出下一代。它是任务相关精搜路线，不属于 zero-cost 主评估。
 - P2/P3 待做：更多实例、噪声/硬件 profile、统计胜率与消融。
 
+当前 demo 优先级已调整为 VQE 最小闭环：
+
+- D0 已完成：2-qubit H2 toy Hamiltonian + HEAMask 搜索空间 + zero-cost guardrail + SA short-step VQE 搜索 + final multi-start validation。
+- D1 待做：在云端 NPU/torch 环境运行 `python -m nexq.qas.demo.vqe_h2_hea_search`，记录输出表和耗时。
+- D2 待做：把 H2 demo 从单 seed 扩展为 3-5 seed 汇总，报告 `sa_best`、Stage 1 top、baselines 的平均能量和胜率。
+- D3 待做：扩大 HEA 搜索空间到更多 qubit/layer 或更真实的 VQE Hamiltonian，验证 Stage 1 guardrail 是否能稳定压缩候选池。
+- D4 待做：若 SA 结果稳定，再加入 GA/reflective mutation；ADAPT-VQE / operator-pool 搜索先作为 future work，不进入当前最小 demo 主线。
+
 SuperCircuit/SubCircuit zero-cost 搜索已提供第一版，不训练 SuperCircuit、不做参数继承，只把 SuperCircuit 作为结构搜索空间，每个 SubCircuit mask 作为一个候选架构：
 
 ```python
@@ -202,11 +210,41 @@ from nexq.qas import run_hybrid_qas_validation_experiment
 python -m nexq.qas.demo.random_proxy_validation
 ```
 
-## 5. 使用方法：PPO_RB
+## 5. Minimal H2 VQE-QAS Demo
+
+当前最小可跑 VQE-QAS demo 使用硬编码 2-qubit H2 toy Hamiltonian 和 HEA 搜索空间，目标是展示两阶段闭环，而不是追求化学精度：
+
+```text
+Stage 1: 四个 zero-cost metrics 做 guardrail/filter
+Stage 2: simulated annealing 在 HEAMask 邻域里搜索，fitness 只用 short-step VQE energy
+Final: SA best + Stage 1 top candidates + baselines 做 multi-start VQE validation
+```
+
+运行：
+
+```bash
+python -m nexq.qas.demo.vqe_h2_hea_search
+```
+
+HEA mask 的搜索维度固定为：
+
+- `layers`: `1 / 2 / 3`
+- `rotation_block`: `ry / ry_rz / rx_ry_rz`
+- `entangler`: `cx / cz / rzz`
+- `final_rotation`: `ry / ry_rz`
+- `entangle_pattern`: `linear / ring`
+
+注意：
+
+- 2-qubit H2 的候选空间很小，Stage 1 在这个 demo 中主要展示流程；更大 qubit/layer 搜索空间下才会体现明显压缩价值。
+- SA fitness 不叠加 zero-cost penalty，避免引入额外权重超参数；zero-cost 只负责先验过滤，任务性能负责搜索方向。
+- short-step VQE budget 按参数量缩放，使用 `min(n_params * evals_per_param, max_evaluations)`，避免参数多的线路被固定预算不公平惩罚。
+
+## 6. 使用方法：PPO_RB
 
 `PPO_RB` 的输入是目标密度矩阵，输出是策略参数 `theta` 与搜索得到的 `Circuit`。
 
-### 5.1 输入参数（`ppo_rb_qas`）
+### 6.1 输入参数（`ppo_rb_qas`）
 
 函数签名：`ppo_rb_qas(target_density_matrix, epsilon, config=None)`
 
@@ -221,7 +259,7 @@ python -m nexq.qas.demo.random_proxy_validation
 - `theta: Dict[str, torch.Tensor]`：策略网络参数快照。
 - `circuit: Circuit`：训练过程中发现的最优线路（若未记录到，则回退到当前策略贪婪推演得到的线路）。
 
-### 5.2 超参数（`PPORollbackConfig`）
+### 6.2 超参数（`PPORollbackConfig`）
 
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
