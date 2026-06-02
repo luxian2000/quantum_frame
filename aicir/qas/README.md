@@ -19,9 +19,9 @@
 - 输出对象：各方法最终都返回或包含 aicir `Circuit`，可继续使用 `Circuit.show()` 展示，并可导出为 OpenQASM 2.0 / 3.0。
 - 约束：核心线路构建和仿真使用 aicir；动作门或搜索门需要是 `aicir/core/gates.py` 支持的门。
 
-## 2. 主要接口
+## 2. 接口
 
-面向打包发布后的使用者，推荐优先使用统一入口 `run_qas` 和统一配置工厂 `config`。用户只需要记住 QAS 方法名，例如 `VQA_QAS` 对应 `config.vqa_qas(...)`，不需要导入 `VQAQASConfig`、`PPRDQLConfig` 等具体配置类。
+使用统一入口 `run_qas` 和统一配置工厂 `config`。用户只需要记住 QAS 方法名，例如 `VQA_QAS` 对应 `config.vqa_qas(...)`，不需要导入 `VQAQASConfig`、`PPRDQLConfig` 等具体配置类。
 
 推荐入口：
 
@@ -34,14 +34,14 @@
 
 统一入口支持的方法和参数：
 
-| `method`               | 必要参数                               | 可选参数                                 | 返回值               |
-| ------------------------ | -------------------------------------- | ---------------------------------------- | -------------------- |
+| `method`               | 必要参数                                        | 可选参数                                 | 返回值               |
+| ------------------------ | ----------------------------------------------- | ---------------------------------------- | -------------------- |
 | `"vqa_qas"`            | `objective_fn` 或在 `config` 中指定内置任务 | `config`、`dataset`、`hamiltonian` | `VQAQASResult`     |
-| `"vqa_classification"` | 无                                     | `config`                               | `VQAQASResult`     |
-| `"vqa_h2"`             | 无                                     | `config`                               | `VQAQASResult`     |
-| `"ppo_rb"`             | `target_density_matrix`、`epsilon` | `config`                               | `(theta, circuit)` |
-| `"ppr_dql"`            | `target_state`                       | `config`、`policy_library`           | `PPRDQLResult`     |
-| `"crlqas"`             | `hamiltonian`                        | `config`                               | `CRLQASResult`     |
+| `"vqa_classification"` | 无                                              | `config`                               | `VQAQASResult`     |
+| `"vqa_h2"`             | 无                                              | `config`                               | `VQAQASResult`     |
+| `"ppo_rb"`             | `target_density_matrix`、`epsilon`          | `config`                               | `(theta, circuit)` |
+| `"ppr_dql"`            | `target_state`                                | `config`、`policy_library`           | `PPRDQLResult`     |
+| `"crlqas"`             | `hamiltonian`                                 | `config`                               | `CRLQASResult`     |
 
 方法名大小写不敏感，也支持常见别名，例如 `"VQA_QAS"`、`"h2_vqe"`、`"ppr"`。
 
