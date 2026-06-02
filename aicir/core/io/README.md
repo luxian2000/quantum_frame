@@ -34,4 +34,4 @@
 
 ## 与 Demo 的关系
 
-`aicir/encoder/demo/encode_1234_demo.py` 直接调用 `circuit_to_qasm3`。若 BasisEncoder 生成了多控旋转门，导出结果会自动包含 `anc` 辅助寄存器与 `ccx` 分解序列，这是预期行为。
+`aicir/encoder/demos/encode_1234_demo.py` 直接调用 `circuit_to_qasm3`。若 BasisEncoder 生成了多控旋转门，导出结果会自动包含 `anc` 辅助寄存器与 `ccx` 分解序列，这是预期行为。

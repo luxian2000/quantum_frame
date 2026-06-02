@@ -249,14 +249,14 @@ for each outer layer:
 展示 demo：
 
 ```powershell
-C:/ProgramData/anaconda3/python.exe aicir/qas/demo/architecture_scoring_demo.py
+C:/ProgramData/anaconda3/python.exe aicir/qas/demos/architecture_scoring_demo.py
 ```
 
 每次运行会同时：
 
 ```text
 1. 在终端输出候选架构排名表和 Top 架构细节
-2. 将同样内容保存到 aicir/qas/demo/architecture_scoring_results.txt
+2. 将同样内容保存到 aicir/qas/demos/architecture_scoring_results.txt
 ```
 
 输出字段包括：

@@ -11,7 +11,7 @@ in (N-1)^2 = 9 qubits. Expected solution energy is 0, recovering the cycle
 0 -> 1 -> 2 -> 3 -> 0 (or an equivalent rotation/reflection).
 
 Run:
-    python -m aicir.qas.demo.VQA_QAS_demo_hamiltonian_cycle
+    python -m aicir.qas.demos.VQA_QAS_demo_hamiltonian_cycle
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from aicir.core.io.qasm import save_circuit_qasm3
-from aicir.qas.demo._np_ising_utils import (
+from aicir.qas.demos._np_ising_utils import (
     assignment_to_order,
     bitstring_to_assignment,
     format_order,

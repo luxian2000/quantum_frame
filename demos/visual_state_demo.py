@@ -1,7 +1,7 @@
 """Demo: visualize a quantum state vector.
 
 Run from the repository root:
-    python -m demo.visual_state_demo
+    python -m demos.visual_state_demo
 """
 
 from __future__ import annotations

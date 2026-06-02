@@ -64,7 +64,7 @@ rx(0.3) q[0];
 ## 与导出/演示的交互
 
 - 由于 `aicir/core/io/qasm` 导出器在处理 `control_states=0` 时会在导出层面插入前后 `x` 门，导致导出后文本中可能产生新的相邻合并或消去机会（例如相邻 `x; x;` 可以被消去、`rz` 合并等）。
-- 因此推荐在导出前对 `Circuit` 做一轮优化（电路级），并在导出后对生成的 QASM 文本再做一轮 qasm 优化（文本级）。当前 `aicir/encoder/demo/encode_1234_demo.py` 已采用此流程。
+- 因此推荐在导出前对 `Circuit` 做一轮优化（电路级），并在导出后对生成的 QASM 文本再做一轮 qasm 优化（文本级）。当前 `aicir/encoder/demos/encode_1234_demo.py` 已采用此流程。
 
 ## 测试
 
