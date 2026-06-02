@@ -9,6 +9,7 @@ from nexq.qas import (
     ising4_demo_problem,
     mutate_hea_mask,
     run_ising4_budget_sweep,
+    run_ising4_multistart_sa,
     run_vqe_hea_demo,
     run_vqe_ising4_demo,
 )
@@ -84,6 +85,27 @@ class TestVQEHEADemo(unittest.TestCase):
         self.assertTrue(report.fair_results)
         self.assertIn("SA budget sweep", summary)
         self.assertIn("Final validation: per-param fair budget", summary)
+
+    def test_ising4_multistart_sa_uses_diverse_seeds(self):
+        report = run_ising4_multistart_sa(
+            seed=17,
+            n_starts=3,
+            steps_per_start=2,
+            candidate_limit=12,
+            stage1_keep_top=8,
+            search_max_evaluations=6,
+            final_n_starts=1,
+            capped_max_evaluations=8,
+            fair_evals_per_param=2,
+            fair_min_evaluations=4,
+        )
+        summary = "\n".join(report.summary_lines())
+        start_keys = {row.start_mask.key() for row in report.restart_rows}
+
+        self.assertGreaterEqual(len(start_keys), 2)
+        self.assertTrue(report.capped_results)
+        self.assertTrue(report.fair_results)
+        self.assertIn("Multi-start SA", summary)
 
 
 if __name__ == "__main__":
