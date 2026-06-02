@@ -1,7 +1,7 @@
 """Demo: visualize a density matrix.
 
 Run from the repository root:
-    python -m aicir.demos.visual_density_demo
+    python -m demo.visual_density_demo
 """
 
 from __future__ import annotations
