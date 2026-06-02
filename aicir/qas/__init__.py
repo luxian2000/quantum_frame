@@ -45,7 +45,7 @@ try:
     from .CRLQAS import AdamSPSAConfig, CRLQASConfig, CRLQASResult, crlqas, train_crlqas
     from .PPR_DQL import PPRDQLConfig, PPRDQLPolicy, PPRDQLResult, ppr_dql_state_to_circuit, train_ppr_dql
     from .PPO_RB import PPORollbackConfig, ppo_rb_qas
-    from .runner import QASRunConfig, available_qas_methods, default_qas_config, run_qas
+    from .runner import QASRunConfig, available_qas_methods, default_qas_config, run
     from .VQA_QAS import (
         Architecture,
         LayerArchitecture,
@@ -84,7 +84,7 @@ else:
             "h2_vqe_qas",
             "ppr_dql_state_to_circuit",
             "ppo_rb_qas",
-            "run_qas",
+            "run",
             "train_crlqas",
             "train_ppr_dql",
             "train_vqa_qas",

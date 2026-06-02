@@ -7,7 +7,7 @@ from aicir.qas import (
     available_qas_methods,
     config,
     default_qas_config,
-    run_qas,
+    run,
 )
 
 
@@ -66,30 +66,57 @@ def test_default_qas_config_remains_method_name_wrapper():
     assert default_qas_config("VQA_QAS", supernet_steps=0).supernet_steps == 0
 
 
-def test_run_qas_dispatches_vqa_classification():
-    result = run_qas("VQA_QAS", config=_tiny_vqa_config())
+def test_run_dispatches_vqa_classification():
+    result = run("VQA_QAS", config=_tiny_vqa_config())
 
     assert result.best_circuit.n_qubits == 3
     assert result.best_architecture is not None
     assert len(result.ranking_records) == 3
 
 
-def test_run_qas_accepts_request_object_for_ppr_dql():
+def test_run_accepts_custom_vqa_objective_keyword():
+    cfg = config.vqa_qas(
+        n_qubits=1,
+        layers=1,
+        single_qubit_gates=("ry",),
+        two_qubit_pairs=(),
+        supernet_steps=0,
+        ranking_num=2,
+        finetune_steps=0,
+        seed=7,
+        device="cpu",
+        task="custom",
+    )
+
+    result = run("VQA_QAS", objective=lambda circuit, **_: 0.0, config=cfg)
+
+    assert result.best_circuit.n_qubits == 1
+    assert result.best_score == 0.0
+
+
+def test_run_accepts_request_object_for_ppr_dql():
     target_state = State.from_array(
         np.array([0.0, 1.0], dtype=np.complex64),
         n_qubits=1,
         backend=NumpyBackend(),
     )
 
-    result = run_qas(QASRunConfig(method="ppr", target_state=target_state, config=_tiny_ppr_config()))
+    result = run(QASRunConfig(method="ppr", target_state=target_state, config=_tiny_ppr_config()))
 
     assert result.circuit.n_qubits == 1
     assert result.best_fidelity >= 0.99
 
 
-def test_run_qas_reports_required_inputs():
+def test_legacy_runner_alias_is_not_exported():
+    import aicir.qas as qas
+
+    legacy_name = "run" + "_qas"
+    assert not hasattr(qas, legacy_name)
+
+
+def test_run_reports_required_inputs():
     with pytest.raises(ValueError, match="ppr_dql requires target_state"):
-        run_qas("ppr_dql", config=_tiny_ppr_config())
+        run("ppr_dql", config=_tiny_ppr_config())
 
     with pytest.raises(ValueError, match="Available methods"):
-        run_qas("not_a_method")
+        run("not_a_method")

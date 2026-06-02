@@ -18,13 +18,13 @@ QASMethod = str
 class QASRunConfig:
     """Method-agnostic request object for running a QAS implementation.
 
-    Users can pass this object to :func:`run_qas`, or pass the same fields as
-    keyword arguments directly to ``run_qas(method, ...)``.
+    Users can pass this object to :func:`run`, or pass the same fields as
+    keyword arguments directly to ``run(method, ...)``.
     """
 
     method: QASMethod
     config: Any = None
-    objective_fn: Any = None
+    objective: Any = None
     dataset: Any = None
     hamiltonian: Any = None
     target_state: Any = None
@@ -34,7 +34,7 @@ class QASRunConfig:
 
 
 def available_qas_methods() -> tuple[str, ...]:
-    """Return canonical method names accepted by :func:`run_qas`."""
+    """Return canonical method names accepted by :func:`run`."""
 
     return qas_config.method_names()
 
@@ -49,12 +49,12 @@ def default_qas_config(method: QASMethod, **kwargs: Any) -> Any:
     return qas_config.create(method, **kwargs)
 
 
-def run_qas(request: QASRunConfig | QASMethod, **kwargs: Any) -> Any:
+def run(request: QASRunConfig | QASMethod, **kwargs: Any) -> Any:
     """Run a QAS implementation with a common packaged-user interface.
 
     Examples:
-        ``run_qas("VQA_QAS", config=config.vqa_qas(...))``
-        ``run_qas(QASRunConfig(method="ppr_dql", target_state=state))``
+        ``run("VQA_QAS", config=config.vqa_qas(...))``
+        ``run(QASRunConfig(method="ppr_dql", target_state=state))``
     """
 
     run_config = _as_run_config(request, kwargs)
@@ -62,7 +62,7 @@ def run_qas(request: QASRunConfig | QASMethod, **kwargs: Any) -> Any:
 
     if method == "vqa_qas":
         return train_vqa_qas(
-            objective_fn=run_config.objective_fn,
+            objective=run_config.objective,
             config=run_config.config,
             dataset=run_config.dataset,
             hamiltonian=run_config.hamiltonian,
@@ -111,5 +111,5 @@ __all__ = [
     "QASRunConfig",
     "available_qas_methods",
     "default_qas_config",
-    "run_qas",
+    "run",
 ]
