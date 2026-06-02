@@ -91,6 +91,8 @@ from aicir.qas import config, run
 
 当前实现使用 `aicir.core.Circuit`、aicir 门构造器、`TorchBackend` 和 aicir 态向量/矩阵演化能力，不依赖 PennyLane、Qiskit、Cirq 或其他量子 SDK。当前实现以无噪声仿真为主；`NoiseConfig` 仅作为 noisy QAS 的占位配置，启用时会抛出 `NotImplementedError`。
 
+补充材料中的默认 supernet assignment 规则已作为默认实现：每个采样 ansatz 会先在全部 `W=supernet_num` 个 supernet 上计算 objective，然后分配给 loss 最小的 supernet，并只更新该 supernet 的活跃参数。补充材料中的 evolutionary ranking 和 noisy differentiable QAS 目前保留为显式扩展点，开启时会抛出 `NotImplementedError`。
+
 ### 3.1 输入参数（`train_vqa_qas` / `vqa_qas`）
 
 函数签名：
@@ -113,6 +115,7 @@ from aicir.qas import config, run
   - `best_architecture`：排序和微调后选中的 `Architecture`
   - `best_circuit`：选中架构对应的 aicir `Circuit`
   - `best_score`：分类任务为验证损失，H2 VQE 任务为微调后能量
+  - `best_supernet_id`：排序阶段选中 ansatz 所属的 supernet 编号
   - `ranking_records`：候选架构排序记录
   - `supernet_log`：超网络训练日志
   - `finetune_log`：固定架构微调日志
@@ -139,6 +142,10 @@ from aicir.qas import config, run
 | `task`                      |         `"classification"` | 内置任务类型，如 `classification` 或 `h2_vqe`。                            |
 | `log_interval`              |                        `0` | 日志打印间隔；`0` 表示关闭。                                                 |
 | `use_parameter_shift`       |                    `False` | 是否使用参数位移法更新梯度；默认使用 PyTorch autograd。                        |
+| `track_best_validation`     |                     `True` | 分类任务中按补充材料记录验证准确率最优的 supernet 参数，并在 ranking 前恢复。    |
+| `ranking_strategy`          |                 `"random"` | 排序阶段采样策略。默认随机采样；`"evolutionary"` 为补充材料扩展点，尚未实现。 |
+| `use_evolutionary_ranking`  |                    `False` | 是否启用 evolutionary ranking 扩展点；启用时当前实现会抛出 `NotImplementedError`。 |
+| `noise_mode`                |                   `"none"` | 噪声模式。当前仅支持无噪声；其他值会抛出 `NotImplementedError`。               |
 
 实践建议：
 
@@ -168,7 +175,7 @@ print(result.best_score)
 print(result.best_circuit.show())
 ```
 
-内置分类任务使用 3 维特征的合成二分类数据集，并划分为训练集、验证集和测试集。默认搜索空间固定单量子比特门为 `RY`，并在 `(0, 1)`、`(0, 2)`、`(1, 2)` 上搜索是否添加 CNOT；当 `layers=3` 时，逻辑搜索空间大小为 `8^3`。
+内置分类任务按补充材料构造 300 个 3 维样本，并划分为 100 个训练样本、100 个验证样本和 100 个测试样本。输入编码为 `RY(x1) ⊗ RY(x2) ⊗ RY(x3)`；默认标签由一个固定随机 `U*(theta*)` 量子核生成，测量量为最后一个量子比特处于 `|0>` 的概率：概率大于等于 `0.75` 标为 `1`，小于等于 `0.25` 标为 `0`，中间样本丢弃并重采样。训练 loss 使用 MSE，预测阈值为 `0.5`。默认搜索空间固定单量子比特门为 `RY`，并在 `(0, 1)`、`(0, 2)`、`(1, 2)` 上搜索是否添加 CNOT；当 `layers=3` 时，逻辑搜索空间大小为 `8^3`。
 
 ### 3.4 H2 VQE 示例
 
@@ -192,7 +199,16 @@ print(result.final_metrics)
 print(result.best_circuit.show())
 ```
 
-内置 H2 任务使用一组固定 H-H 键长下的 4 量子比特 Pauli 哈密顿量系数，搜索 `RY`/`RZ` 单量子比特门布局，以及链式连接对上的 CNOT/无 CNOT 选择。结果会报告 QAS 排序阶段最优能量、微调后能量、固定硬件高效 VQE baseline、选中线路和 CNOT 数量。当 `layers=3` 时，逻辑搜索空间大小为 `128^3`。
+内置 H2 任务使用补充材料 Eq. (19) 的 4 量子比特 Pauli 哈密顿量：
+
+```text
+H = -0.042 + 0.178(Z0 + Z1) - 0.243(Z2 + Z3)
+    + 0.171 Z0Z1 + 0.123(Z0Z2 + Z1Z3)
+    + 0.168(Z0Z3 + Z1Z2) + 0.176 Z2Z3
+    + 0.045(Y0X1X2Y3 - Y0Y1X2X3 - X0X1Y2Y3 + X0Y1Y2X3)
+```
+
+默认搜索 `RY`/`RZ` 单量子比特门布局，以及链式连接对 `(0, 1)`、`(1, 2)`、`(2, 3)` 上的 CNOT/无 CNOT 选择。结果会报告 QAS 排序阶段最优能量、微调后能量、固定硬件高效 VQE baseline、选中线路和 CNOT 数量。当 `layers=3` 时，逻辑搜索空间大小为 `128^3`。
 
 ## 4. PPO_RB：基于真正近端策略优化的量子架构搜索
 

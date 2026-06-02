@@ -64,6 +64,10 @@ class VQAQASConfig:
     task: str = "classification"
     log_interval: int = 0
     use_parameter_shift: bool = False
+    track_best_validation: bool = True
+    ranking_strategy: str = "random"
+    use_evolutionary_ranking: bool = False
+    noise_mode: str = "none"
     noise_config: NoiseConfig | None = None
 
 
@@ -83,6 +87,7 @@ class VQAQASResult:
     best_architecture: Architecture
     best_circuit: Circuit
     best_score: float
+    best_supernet_id: int
     ranking_records: list[dict[str, Any]]
     supernet_log: list[dict[str, Any]]
     finetune_log: list[dict[str, Any]]
@@ -158,6 +163,9 @@ class VQAQAS:
 
         self.shared_parameters: dict[ParameterKey, torch.nn.Parameter] = {}
         self._supernet_parameter_lists: list[list[torch.nn.Parameter]] = []
+        self._best_shared_parameter_values: dict[ParameterKey, torch.Tensor] | None = None
+        self._best_validation_accuracy = -math.inf
+        self._best_validation_loss = math.inf
         self._initialize_shared_parameters()
         self._optimizers = [
             torch.optim.Adam(parameters, lr=config.learning_rate)
@@ -166,8 +174,13 @@ class VQAQAS:
 
     def _validate_config(self) -> None:
         cfg = self.config
+        if str(cfg.noise_mode).strip().lower() != "none":
+            raise NotImplementedError("Noisy differentiable VQA_QAS is not implemented yet; use noise_mode='none'.")
         if cfg.noise_config is not None and cfg.noise_config.enabled:
             raise NotImplementedError("Noisy differentiable VQA_QAS is not implemented yet.")
+        ranking_strategy = str(cfg.ranking_strategy).strip().lower()
+        if ranking_strategy not in {"random", "evolutionary"}:
+            raise ValueError("ranking_strategy must be 'random' or 'evolutionary'")
         if cfg.n_qubits <= 0:
             raise ValueError("n_qubits must be positive")
         if cfg.layers <= 0:
@@ -344,6 +357,9 @@ class VQAQAS:
         probs = self.backend.measure_probs(state)
         return probs.index_select(0, self._readout_indices(qubit)).sum()
 
+    def _probability_qubit_zero(self, state: torch.Tensor, qubit: int = 0) -> torch.Tensor:
+        return torch.as_tensor(1.0, dtype=torch.float32, device=self.device) - self._probability_qubit_one(state, qubit)
+
     def _classification_predictions(self, circuit: Circuit, dataset: dict[str, tuple[torch.Tensor, torch.Tensor]], split: str) -> torch.Tensor:
         features, _ = dataset.get(split, dataset["train"])
         outputs: list[torch.Tensor] = []
@@ -351,7 +367,7 @@ class VQAQAS:
             encoding = [ry(row[qubit], target_qubit=qubit) for qubit in range(self.config.n_qubits)]
             state = self._simulate_gates(encoding)
             state = self.simulate_state(circuit, initial_state=state)
-            outputs.append(self._probability_qubit_one(state, qubit=0))
+            outputs.append(self._probability_qubit_zero(state, qubit=self.config.n_qubits - 1))
         return torch.stack(outputs)
 
     def _classification_loss(self, circuit: Circuit, dataset: dict[str, tuple[torch.Tensor, torch.Tensor]], split: str) -> torch.Tensor:
@@ -496,6 +512,49 @@ class VQAQAS:
         selected = min(range(len(losses)), key=losses.__getitem__)
         return selected, losses
 
+    def _snapshot_shared_parameters(self) -> dict[ParameterKey, torch.Tensor]:
+        return {key: value.detach().clone() for key, value in self.shared_parameters.items()}
+
+    def _restore_shared_parameters(self, values: Mapping[ParameterKey, torch.Tensor]) -> None:
+        with torch.no_grad():
+            for key, value in values.items():
+                self.shared_parameters[key].copy_(value)
+
+    def _track_validation_best(
+        self,
+        architecture: Architecture,
+        supernet_id: int,
+        objective: ObjectiveFn | str | None,
+        dataset: Any,
+        hamiltonian: Any,
+    ) -> dict[str, float]:
+        loss, circuit, _, _ = self._loss(
+            architecture,
+            supernet_id,
+            objective,
+            dataset,
+            hamiltonian,
+            split="validation",
+        )
+        validation_loss = _float_value(loss)
+        validation_accuracy = self._classification_accuracy(circuit, dataset, "validation")
+        if (
+            validation_accuracy > self._best_validation_accuracy
+            or (
+                math.isclose(validation_accuracy, self._best_validation_accuracy)
+                and validation_loss < self._best_validation_loss
+            )
+        ):
+            self._best_validation_accuracy = validation_accuracy
+            self._best_validation_loss = validation_loss
+            self._best_shared_parameter_values = self._snapshot_shared_parameters()
+        return {
+            "validation_loss": validation_loss,
+            "validation_accuracy": validation_accuracy,
+            "best_validation_loss": self._best_validation_loss,
+            "best_validation_accuracy": self._best_validation_accuracy,
+        }
+
     def _grad_norm(self, parameters: Sequence[torch.Tensor]) -> float:
         total = 0.0
         for parameter in parameters:
@@ -584,6 +643,8 @@ class VQAQAS:
                 "active_parameter_count": len(active_keys),
                 "cnot_count": self.cnot_count(architecture),
             }
+            if self.config.track_best_validation and self.config.task.lower() in {"classification", "binary_classification"}:
+                record.update(self._track_validation_best(architecture, selected_id, objective, dataset, hamiltonian))
             log.append(record)
             if self.config.log_interval and (step + 1) % self.config.log_interval == 0:
                 print(
@@ -601,6 +662,14 @@ class VQAQAS:
         candidates: Sequence[Architecture] | None = None,
         split: str = "validation",
     ) -> list[dict[str, Any]]:
+        strategy = "evolutionary" if self.config.use_evolutionary_ranking else self.config.ranking_strategy.lower()
+        if strategy == "evolutionary":
+            raise NotImplementedError(
+                "Evolutionary ranking from the Supplementary Information is not implemented yet; "
+                "use ranking_strategy='random'."
+            )
+        if strategy != "random":
+            raise ValueError("ranking_strategy must be 'random' or 'evolutionary'")
         if candidates is None:
             candidates = [self.sample_architecture() for _ in range(self.config.ranking_num)]
         if not candidates:
@@ -804,6 +873,12 @@ class VQAQAS:
             ranking_split = "validation"
 
         supernet_log = self.optimize_supernet(objective, dataset=dataset, hamiltonian=hamiltonian)
+        if (
+            self.config.track_best_validation
+            and task in {"classification", "binary_classification"}
+            and self._best_shared_parameter_values is not None
+        ):
+            self._restore_shared_parameters(self._best_shared_parameter_values)
         ranking_records = self.rank_architectures(
             objective,
             dataset=dataset,
@@ -830,6 +905,10 @@ class VQAQAS:
             hamiltonian,
             ranking_best_score=float(best_record["score"]),
         )
+        final_metrics["ranking_score_distribution"] = [float(record["score"]) for record in ranking_records]
+        if task in {"classification", "binary_classification"} and self._best_validation_accuracy > -math.inf:
+            final_metrics["best_supernet_validation_accuracy"] = float(self._best_validation_accuracy)
+            final_metrics["best_supernet_validation_loss"] = float(self._best_validation_loss)
 
         if task in {"classification", "binary_classification"}:
             best_score = float(final_metrics["validation_loss"])
@@ -842,6 +921,7 @@ class VQAQAS:
             best_architecture=best_architecture,
             best_circuit=best_circuit,
             best_score=best_score,
+            best_supernet_id=selected_supernet_id,
             ranking_records=ranking_records,
             supernet_log=supernet_log,
             finetune_log=finetune_log,
@@ -856,15 +936,7 @@ def prepare_classification_dataset(
     device: torch.device,
 ) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
     if dataset is None:
-        rng = np.random.default_rng(config.seed)
-        total = 300
-        x = rng.uniform(-math.pi, math.pi, size=(total, config.n_qubits)).astype(np.float32)
-        signal = np.sin(x[:, 0])
-        if config.n_qubits > 1:
-            signal = signal + 0.5 * np.cos(x[:, 1])
-        if config.n_qubits > 2:
-            signal = signal - 0.25 * x[:, 2]
-        y = (signal > np.median(signal)).astype(np.float32)
+        x, y = _synthetic_quantum_kernel_dataset(config.seed, config.n_qubits)
         return {
             "train": _to_torch_pair(x[:100], y[:100], device),
             "validation": _to_torch_pair(x[100:200], y[100:200], device),
@@ -890,6 +962,68 @@ def prepare_classification_dataset(
     raise ValueError("dataset must provide train/validation/test pairs or x_*/y_* arrays")
 
 
+def _ry_matrix(theta: float) -> np.ndarray:
+    half = float(theta) / 2.0
+    return np.array(
+        [[math.cos(half), -math.sin(half)], [math.sin(half), math.cos(half)]],
+        dtype=np.complex64,
+    )
+
+
+def _apply_single_qubit_matrix_numpy(state: np.ndarray, matrix: np.ndarray, n_qubits: int, qubit: int) -> np.ndarray:
+    tensor = state.reshape((2,) * n_qubits)
+    moved = np.moveaxis(tensor, qubit, 0).reshape(2, -1)
+    updated = matrix @ moved
+    return np.moveaxis(updated.reshape((2,) + (2,) * (n_qubits - 1)), 0, qubit).reshape(-1)
+
+
+def _apply_cnot_numpy(state: np.ndarray, n_qubits: int, control: int, target: int) -> np.ndarray:
+    updated = np.zeros_like(state)
+    for index, amplitude in enumerate(state):
+        if ((index >> (n_qubits - control - 1)) & 1) == 1:
+            index ^= 1 << (n_qubits - target - 1)
+        updated[index] += amplitude
+    return updated
+
+
+def _synthetic_quantum_kernel_dataset(seed: int, n_qubits: int) -> tuple[np.ndarray, np.ndarray]:
+    if n_qubits != 3:
+        raise ValueError("The built-in Supplementary synthetic classification dataset requires n_qubits=3.")
+
+    rng = np.random.default_rng(seed)
+    theta_star = rng.uniform(0.0, 2.0 * math.pi, size=(3, 3))
+    features: list[np.ndarray] = []
+    labels: list[float] = []
+    max_trials = 200_000
+
+    for _ in range(max_trials):
+        x = rng.uniform(-math.pi, math.pi, size=3).astype(np.float32)
+        state = np.zeros(8, dtype=np.complex64)
+        state[0] = 1.0
+        for qubit in range(3):
+            state = _apply_single_qubit_matrix_numpy(state, _ry_matrix(float(x[qubit])), 3, qubit)
+        for layer in range(3):
+            for qubit in range(3):
+                state = _apply_single_qubit_matrix_numpy(state, _ry_matrix(float(theta_star[layer, qubit])), 3, qubit)
+            state = _apply_cnot_numpy(state, 3, control=0, target=1)
+            state = _apply_cnot_numpy(state, 3, control=1, target=2)
+
+        prob_last_qubit_zero = 0.0
+        for index, amplitude in enumerate(state):
+            if ((index >> 0) & 1) == 0:
+                prob_last_qubit_zero += float(np.real(np.conj(amplitude) * amplitude))
+        if prob_last_qubit_zero >= 0.75:
+            features.append(x)
+            labels.append(1.0)
+        elif prob_last_qubit_zero <= 0.25:
+            features.append(x)
+            labels.append(0.0)
+        if len(features) == 300:
+            return np.stack(features).astype(np.float32), np.asarray(labels, dtype=np.float32)
+
+    raise RuntimeError("Could not generate 300 accepted synthetic classification samples.")
+
+
 def _to_torch_pair(features: Any, labels: Any, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     x = torch.as_tensor(features, dtype=torch.float32, device=device)
     y = torch.as_tensor(labels, dtype=torch.float32, device=device).reshape(-1)
@@ -901,32 +1035,28 @@ def _to_torch_pair(features: Any, labels: Any, device: torch.device) -> tuple[to
 
 
 def h2_hamiltonian() -> Hamiltonian:
-    """Return a fixed four-qubit H2 Hamiltonian at about 0.735 A bond length.
+    """Return the four-qubit molecular hydrogen Hamiltonian from Supplementary Eq. (19)."""
 
-    Coefficients follow the common O'Malley et al. four-qubit Pauli expansion
-    used in VQE examples. The term layout matches Eq. (6) in Du et al. 2022.
-    """
-
-    g = -0.810547980537326
+    g = -0.042
     z = {
-        0: 0.172183932619155,
-        1: 0.172183932619155,
-        2: -0.225753492224024,
-        3: -0.225753492224024,
+        0: 0.178,
+        1: 0.178,
+        2: -0.243,
+        3: -0.243,
     }
     zz = {
-        (0, 1): 0.168927538700879,
-        (0, 2): 0.120546027942558,
-        (0, 3): 0.165868975685246,
-        (1, 2): 0.165868975685246,
-        (1, 3): 0.120546027942558,
-        (2, 3): 0.174349027774017,
+        (0, 1): 0.171,
+        (0, 2): 0.123,
+        (0, 3): 0.168,
+        (1, 2): 0.168,
+        (1, 3): 0.123,
+        (2, 3): 0.176,
     }
     quartic = {
-        "YXXY": 0.0452327999460578,
-        "YYXX": -0.0452327999460578,
-        "XXYY": -0.0452327999460578,
-        "XYYX": 0.0452327999460578,
+        "YXXY": 0.045,
+        "YYXX": -0.045,
+        "XXYY": -0.045,
+        "XYYX": 0.045,
     }
 
     hamiltonian = Hamiltonian(n_qubits=4).term(g, {"I": [0]})
