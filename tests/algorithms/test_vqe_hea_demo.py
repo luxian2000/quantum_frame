@@ -12,6 +12,7 @@ from nexq.qas import (
     run_ising4_fitness_budget_sweep,
     run_ising4_fitness_correlation,
     run_ising4_multistart_sa,
+    run_ising4_trainability_prior_demo,
     run_vqe_hea_demo,
     run_vqe_ising4_demo,
 )
@@ -147,6 +148,26 @@ class TestVQEHEADemo(unittest.TestCase):
         self.assertIn("weighted", report.zero_cost_correlations())
         self.assertIn("Short-budget correlation", summary)
         self.assertIn("Zero-cost vs fair", summary)
+
+    def test_ising4_trainability_prior_demo_runs(self):
+        report = run_ising4_trainability_prior_demo(
+            seed=29,
+            candidate_limit=8,
+            stage1_keep_top=6,
+            trainability_top_k=3,
+            sa_steps=2,
+            search_max_evaluations=6,
+            final_n_starts=1,
+            fair_evals_per_param=2,
+            fair_min_evaluations=4,
+        )
+        summary = "\n".join(report.summary_lines())
+
+        self.assertTrue(report.trainability_top_results)
+        self.assertTrue(report.sa_trace)
+        self.assertTrue(report.baseline_results)
+        self.assertIn("Trainability top fair final", summary)
+        self.assertIn("SA final vs baselines", summary)
 
 
 if __name__ == "__main__":

@@ -450,6 +450,59 @@ class VQEFitnessBudgetSweepReport:
         return lines
 
 
+@dataclass
+class VQETrainabilityPriorReport:
+    stage1_rows: List[Stage1Row]
+    trainability_top_results: List[VQEOptimizationResult]
+    sa_trace: List[SAStep]
+    sa_final_result: VQEOptimizationResult
+    baseline_results: List[VQEOptimizationResult]
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def summary_lines(self) -> List[str]:
+        problem_name = str(self.metadata.get("problem_name", "unknown"))
+        reference_energy = float(self.metadata.get("reference_energy", 0.0))
+        kept_count = sum(1 for row in self.stage1_rows if row.kept)
+        lines = [
+            f"VQE-QAS trainability-prior demo: {problem_name}",
+            f"reference_energy: {reference_energy:.6f}",
+            f"stage1 candidates: {len(self.stage1_rows)} | kept: {kept_count} | filtered: {len(self.stage1_rows) - kept_count}",
+            "",
+            "Trainability-ranked Stage1 rows",
+            "rank | train | weighted | expr | noise | hardware | name",
+        ]
+        for rank, row in enumerate(_rank_stage1_rows(self.stage1_rows, "trainability")[:10], start=1):
+            score = row.score
+            lines.append(
+                f"{rank} | {score.trainability.score:.4f} | {score.weighted_score:.4f} | "
+                f"{score.expressibility.score:.4f} | {score.noise_robustness.score:.4f} | "
+                f"{score.hardware_efficiency.score:.4f} | {row.architecture.name}"
+            )
+        lines.extend(["", "Trainability top fair final", "name | energy | delta_ref | evals | n_params | source"])
+        for result in self.trainability_top_results:
+            n_params = parameter_count(result.architecture.circuit)
+            lines.append(
+                f"{result.architecture.name} | {result.energy:.6f} | {result.energy - reference_energy:.6f} | "
+                f"{result.evaluations} | {n_params} | {result.metadata.get('source', '-')}"
+            )
+        lines.extend(["", "Trainability-seeded SA trace", "step | T | candidate | current | best | accepted | mask"])
+        for item in _trace_digest(self.sa_trace):
+            lines.append(
+                f"{item.step} | {item.temperature:.5f} | {item.candidate_energy:.6f} | "
+                f"{item.current_energy:.6f} | {item.best_energy:.6f} | {item.accepted} | {item.mask.label()}"
+            )
+        lines.extend(["", "SA final vs baselines", "name | energy | delta_ref | evals | n_params | source"])
+        combined = [self.sa_final_result] + list(self.baseline_results)
+        combined.sort(key=lambda result: result.energy)
+        for result in combined:
+            n_params = parameter_count(result.architecture.circuit)
+            lines.append(
+                f"{result.architecture.name} | {result.energy:.6f} | {result.energy - reference_energy:.6f} | "
+                f"{result.evaluations} | {n_params} | {result.metadata.get('source', '-')}"
+            )
+        return lines
+
+
 def _pearson(left: Sequence[float], right: Sequence[float]) -> float:
     if len(left) < 2 or len(right) < 2:
         return 0.0
@@ -887,6 +940,23 @@ def _rescue_diverse_rows(rejected: Sequence[Stage1Row], kept_keys: set[tuple[Any
         kept_keys.add(key)
         rescued.append(chosen)
     return rescued
+
+
+def _rank_stage1_rows(rows: Sequence[Stage1Row], rank_by: str = "weighted") -> List[Stage1Row]:
+    candidates = [row for row in rows if row.kept]
+    if rank_by == "weighted":
+        key = lambda row: row.score.weighted_score
+    elif rank_by == "trainability":
+        key = lambda row: row.score.trainability.score
+    elif rank_by == "expressibility":
+        key = lambda row: row.score.expressibility.score
+    elif rank_by == "noise":
+        key = lambda row: row.score.noise_robustness.score
+    elif rank_by == "hardware":
+        key = lambda row: row.score.hardware_efficiency.score
+    else:
+        raise ValueError(f"Unsupported Stage1 rank key: {rank_by}")
+    return sorted(candidates, key=key, reverse=True)
 
 
 def _select_diverse_stage1_seeds(rows: Sequence[Stage1Row], n_seeds: int) -> List[Stage1Row]:
@@ -1533,6 +1603,114 @@ def run_ising4_fitness_budget_sweep(
     )
 
 
+def run_ising4_trainability_prior_demo(
+    seed: int = 2026,
+    candidate_limit: int = 72,
+    stage1_keep_top: int = 16,
+    trainability_top_k: int = 5,
+    sa_steps: int = 40,
+    t_init: float = 0.30,
+    t_final: float = 0.001,
+    search_evals_per_param: int = 8,
+    search_max_evaluations: int = 40,
+    final_n_starts: int = 3,
+    fair_evals_per_param: int = 20,
+    fair_min_evaluations: int = 40,
+    backend: Optional[NumpyBackend] = None,
+) -> VQETrainabilityPriorReport:
+    problem = ising4_demo_problem()
+    backend = backend or NumpyBackend()
+    masks = _sample_masks(enumerate_hea_masks(problem.n_qubits), candidate_limit, seed)
+    candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
+    stage1_rows = zero_cost_guardrail(candidates, backend=backend)
+    ranked = _rank_stage1_rows(stage1_rows, "trainability")[: max(1, int(stage1_keep_top))]
+
+    trainability_candidates: List[ArchitectureSpec] = []
+    for index, row in enumerate(ranked[: max(1, int(trainability_top_k))], start=1):
+        row.architecture.metadata["source"] = f"trainability_top_{index}"
+        trainability_candidates.append(row.architecture)
+
+    trainability_top_results = []
+    for index, architecture in enumerate(_dedupe_architectures(trainability_candidates)):
+        fair_budget = max(int(fair_min_evaluations), parameter_count(architecture.circuit) * int(fair_evals_per_param))
+        result = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=seed + 3000 + index,
+            n_starts=final_n_starts,
+            evals_per_param=fair_evals_per_param,
+            max_evaluations=fair_budget,
+            backend=backend,
+        )
+        result.metadata["source"] = architecture.metadata.get("source", "trainability_top")
+        trainability_top_results.append(result)
+    trainability_top_results.sort(key=lambda result: result.energy)
+
+    seed_mask = HEAMask(*ranked[0].architecture.metadata["hea_mask"])
+    sa_best, trace = run_sa_search(
+        seed_mask,
+        n_steps=sa_steps,
+        seed=seed,
+        evals_per_param=search_evals_per_param,
+        max_evaluations=search_max_evaluations,
+        t_init=t_init,
+        t_final=t_final,
+        problem=problem,
+        backend=backend,
+    )
+    fair_budget = max(int(fair_min_evaluations), parameter_count(sa_best.architecture.circuit) * int(fair_evals_per_param))
+    sa_final = optimize_vqe_energy(
+        sa_best.architecture,
+        problem,
+        seed=seed + 4000,
+        n_starts=final_n_starts,
+        evals_per_param=fair_evals_per_param,
+        max_evaluations=fair_budget,
+        backend=backend,
+    )
+    sa_final.metadata["source"] = "trainability_seeded_sa"
+
+    baseline_results = []
+    for index, architecture in enumerate(_baseline_architectures(problem.n_qubits, backend)):
+        fair_budget = max(int(fair_min_evaluations), parameter_count(architecture.circuit) * int(fair_evals_per_param))
+        result = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=seed + 5000 + index,
+            n_starts=final_n_starts,
+            evals_per_param=fair_evals_per_param,
+            max_evaluations=fair_budget,
+            backend=backend,
+        )
+        result.metadata["source"] = architecture.metadata.get("source", "baseline")
+        baseline_results.append(result)
+    baseline_results.sort(key=lambda result: result.energy)
+
+    return VQETrainabilityPriorReport(
+        stage1_rows=stage1_rows,
+        trainability_top_results=trainability_top_results,
+        sa_trace=trace,
+        sa_final_result=sa_final,
+        baseline_results=baseline_results,
+        metadata={
+            "problem_name": problem.name,
+            "reference_energy": problem.reference_energy,
+            "seed": seed,
+            "candidate_limit": candidate_limit,
+            "stage1_keep_top": stage1_keep_top,
+            "trainability_top_k": trainability_top_k,
+            "sa_steps": sa_steps,
+            "t_init": t_init,
+            "t_final": t_final,
+            "search_evals_per_param": search_evals_per_param,
+            "search_max_evaluations": search_max_evaluations,
+            "final_n_starts": final_n_starts,
+            "fair_evals_per_param": fair_evals_per_param,
+            "fair_min_evaluations": fair_min_evaluations,
+        },
+    )
+
+
 __all__ = [
     "ENTANGLE_PATTERNS",
     "ENTANGLERS",
@@ -1555,6 +1733,7 @@ __all__ = [
     "VQEFitnessCorrelationRow",
     "VQEHEADemoReport",
     "VQEMultiStartSAReport",
+    "VQETrainabilityPriorReport",
     "VQEOptimizationResult",
     "architecture_from_hea_mask",
     "enumerate_hea_masks",
@@ -1572,6 +1751,7 @@ __all__ = [
     "run_ising4_fitness_budget_sweep",
     "run_ising4_fitness_correlation",
     "run_ising4_multistart_sa",
+    "run_ising4_trainability_prior_demo",
     "run_sa_search",
     "run_vqe_hea_demo",
     "run_vqe_ising4_demo",

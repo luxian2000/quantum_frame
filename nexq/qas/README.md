@@ -265,6 +265,14 @@ python -m nexq.qas.demo.vqe_ising4_fitness_budget_sweep
 
 该 runner 固定同一批 Stage1 top candidates 和同一套 fair final VQE energy，只改变 short-step budget（默认 `40/100/200/400`），同时报告 `weighted / expressibility / trainability / noise / hardware` 与 fair VQE 的相关性。
 
+如果上面的结果显示 `trainability` 是最稳定的正相关 zero-cost 信号，可以直接验证 trainability-prior Stage1：
+
+```bash
+python -m nexq.qas.demo.vqe_ising4_trainability_prior
+```
+
+该 runner 会用 trainability 主导 Stage1 排序，一方面直接对 trainability top candidates 跑 fair final VQE，另一方面以 trainability top-1 作为 SA 起点再跑 Stage2。
+
 HEA mask 的搜索维度固定为：
 
 - `layers`: `1 / 2 / 3`
