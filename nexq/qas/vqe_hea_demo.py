@@ -35,12 +35,31 @@ H2_HAMILTONIAN = (
     (0.1809312, "XX"),
 )
 H2_REFERENCE_ENERGY = -1.8572
+ISING4_HAMILTONIAN = (
+    (-1.0, "ZZII"),
+    (-1.0, "IZZI"),
+    (-1.0, "IIZZ"),
+    (-0.5, "XIII"),
+    (-0.5, "IXII"),
+    (-0.5, "IIXI"),
+    (-0.5, "IIIX"),
+)
 
 ROTATION_BLOCKS = ("ry", "ry_rz", "rx_ry_rz")
 ENTANGLERS = ("cx", "cz", "rzz")
 FINAL_ROTATIONS = ("ry", "ry_rz")
 ENTANGLE_PATTERNS = ("linear", "ring")
 LAYER_CHOICES = (1, 2, 3)
+
+
+@dataclass(frozen=True)
+class VQEDemoProblem:
+    """Small Pauli-Hamiltonian VQE task used by the demo pipeline."""
+
+    name: str
+    n_qubits: int
+    hamiltonian: Sequence[tuple[float, str]]
+    reference_energy: float
 
 
 @dataclass(frozen=True)
@@ -108,14 +127,28 @@ class VQEHEADemoReport:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def summary_lines(self) -> List[str]:
+        reference_energy = float(self.metadata.get("reference_energy", H2_REFERENCE_ENERGY))
+        problem_name = str(self.metadata.get("problem_name", "h2_toy_2q"))
+        kept_count = sum(1 for row in self.stage1_rows if row.kept)
+        filtered_count = len(self.stage1_rows) - kept_count
         lines = [
-            "VQE-QAS HEA demo: H2 toy Hamiltonian",
-            f"reference_energy: {H2_REFERENCE_ENERGY:.6f}",
+            f"VQE-QAS HEA demo: {problem_name}",
+            f"reference_energy: {reference_energy:.6f}",
             "",
             "Stage 1 zero-cost guardrail",
-            "name | kept | reason | weighted | expr | train | noise | hardware",
+            f"candidates: {len(self.stage1_rows)} | kept: {kept_count} | filtered: {filtered_count}",
+            "metric | min | p25 | max",
         ]
-        for row in self.stage1_rows[:12]:
+        for name, values in _stage1_metric_summary(self.stage1_rows).items():
+            lines.append(f"{name} | {values['min']:.4f} | {values['p25']:.4f} | {values['max']:.4f}")
+        lines.extend(
+            [
+                "",
+                "Stage 1 rows",
+            "name | kept | reason | weighted | expr | train | noise | hardware",
+            ]
+        )
+        for row in _stage1_digest(self.stage1_rows):
             score = row.score
             lines.append(
                 f"{row.architecture.name} | {row.kept} | {row.reason} | "
@@ -132,13 +165,39 @@ class VQEHEADemoReport:
         lines.extend(["", "Final VQE validation", "name | energy | delta_ref | evals | starts | n_params | source"])
         for result in self.final_results:
             source = result.metadata.get("source", "-")
-            delta = result.energy - H2_REFERENCE_ENERGY
+            delta = result.energy - reference_energy
             n_params = parameter_count(result.architecture.circuit)
             lines.append(
                 f"{result.architecture.name} | {result.energy:.6f} | {delta:.6f} | "
                 f"{result.evaluations} | {result.n_starts} | {n_params} | {source}"
             )
         return lines
+
+
+def _stage1_metric_summary(rows: Sequence[Stage1Row]) -> Dict[str, Dict[str, float]]:
+    groups = {
+        "expressibility": [row.score.expressibility.score for row in rows],
+        "trainability": [row.score.trainability.score for row in rows],
+        "noise": [row.score.noise_robustness.score for row in rows],
+        "hardware": [row.score.hardware_efficiency.score for row in rows],
+    }
+    summary = {}
+    for name, values in groups.items():
+        array = np.asarray(values, dtype=float)
+        summary[name] = {
+            "min": float(np.min(array)),
+            "p25": float(np.quantile(array, 0.25)),
+            "max": float(np.max(array)),
+        }
+    return summary
+
+
+def _stage1_digest(rows: Sequence[Stage1Row]) -> List[Stage1Row]:
+    if len(rows) <= 14:
+        return list(rows)
+    kept = [row for row in rows if row.kept][:10]
+    filtered = [row for row in rows if not row.kept][:4]
+    return kept + filtered
 
 
 def _trace_digest(trace: Sequence[SAStep]) -> List[SAStep]:
@@ -258,18 +317,52 @@ def _pauli_matrix(label: str) -> np.ndarray:
     return result
 
 
-def h2_hamiltonian_matrix() -> np.ndarray:
-    matrix = np.zeros((4, 4), dtype=np.complex128)
-    for coeff, pauli in H2_HAMILTONIAN:
+def hamiltonian_matrix(hamiltonian: Sequence[tuple[float, str]]) -> np.ndarray:
+    if not hamiltonian:
+        raise ValueError("Hamiltonian must contain at least one Pauli term")
+    n_qubits = len(hamiltonian[0][1])
+    matrix = np.zeros((2**n_qubits, 2**n_qubits), dtype=np.complex128)
+    for coeff, pauli in hamiltonian:
+        if len(pauli) != n_qubits:
+            raise ValueError("All Pauli labels must have the same length")
         matrix += float(coeff) * _pauli_matrix(pauli)
     return matrix
 
 
-def evaluate_h2_energy(
+def exact_ground_energy(hamiltonian: Sequence[tuple[float, str]]) -> float:
+    return float(np.min(np.linalg.eigvalsh(hamiltonian_matrix(hamiltonian))))
+
+
+def h2_demo_problem() -> VQEDemoProblem:
+    return VQEDemoProblem(
+        name="h2_toy_2q",
+        n_qubits=2,
+        hamiltonian=H2_HAMILTONIAN,
+        reference_energy=H2_REFERENCE_ENERGY,
+    )
+
+
+def ising4_demo_problem() -> VQEDemoProblem:
+    return VQEDemoProblem(
+        name="tfim_chain_4q_J1_h0.5",
+        n_qubits=4,
+        hamiltonian=ISING4_HAMILTONIAN,
+        reference_energy=exact_ground_energy(ISING4_HAMILTONIAN),
+    )
+
+
+def h2_hamiltonian_matrix() -> np.ndarray:
+    return hamiltonian_matrix(H2_HAMILTONIAN)
+
+
+def evaluate_vqe_energy(
     architecture: ArchitectureSpec,
+    problem: VQEDemoProblem,
     parameters: Optional[Sequence[float]] = None,
     backend: Optional[NumpyBackend] = None,
 ) -> float:
+    if architecture.n_qubits != problem.n_qubits:
+        raise ValueError("architecture and VQE problem must use the same number of qubits")
     backend = backend or NumpyBackend()
     n_params = parameter_count(architecture.circuit)
     params = [0.0] * n_params if parameters is None else list(parameters)
@@ -279,8 +372,16 @@ def evaluate_h2_energy(
     circuit.bind_backend(backend)
     result = Measure(backend).run(circuit, return_state=True)
     state = np.asarray(result.final_state, dtype=np.complex128).reshape(-1, 1)
-    energy = (np.conj(state).T @ h2_hamiltonian_matrix() @ state)[0, 0]
+    energy = (np.conj(state).T @ hamiltonian_matrix(problem.hamiltonian) @ state)[0, 0]
     return float(np.real(energy))
+
+
+def evaluate_h2_energy(
+    architecture: ArchitectureSpec,
+    parameters: Optional[Sequence[float]] = None,
+    backend: Optional[NumpyBackend] = None,
+) -> float:
+    return evaluate_vqe_energy(architecture, h2_demo_problem(), parameters=parameters, backend=backend)
 
 
 def _evaluation_budget(architecture: ArchitectureSpec, evals_per_param: int, max_evaluations: int) -> int:
@@ -288,14 +389,17 @@ def _evaluation_budget(architecture: ArchitectureSpec, evals_per_param: int, max
     return max(1, min(int(n_params * evals_per_param), int(max_evaluations)))
 
 
-def optimize_h2_energy(
+def optimize_vqe_energy(
     architecture: ArchitectureSpec,
+    problem: VQEDemoProblem,
     seed: int = 1234,
     n_starts: int = 1,
     evals_per_param: int = 10,
     max_evaluations: int = 80,
     backend: Optional[NumpyBackend] = None,
 ) -> VQEOptimizationResult:
+    if architecture.n_qubits != problem.n_qubits:
+        raise ValueError("architecture and VQE problem must use the same number of qubits")
     backend = backend or NumpyBackend()
     n_params = parameter_count(architecture.circuit)
     rng = np.random.default_rng(int(seed))
@@ -305,7 +409,7 @@ def optimize_h2_energy(
     total_evals = 0
 
     def objective(params: np.ndarray) -> float:
-        return evaluate_h2_energy(architecture, params, backend=backend)
+        return evaluate_vqe_energy(architecture, problem, params, backend=backend)
 
     starts = [np.zeros(n_params, dtype=float)]
     for _ in range(max(0, int(n_starts) - 1)):
@@ -343,6 +447,25 @@ def optimize_h2_energy(
     )
 
 
+def optimize_h2_energy(
+    architecture: ArchitectureSpec,
+    seed: int = 1234,
+    n_starts: int = 1,
+    evals_per_param: int = 10,
+    max_evaluations: int = 80,
+    backend: Optional[NumpyBackend] = None,
+) -> VQEOptimizationResult:
+    return optimize_vqe_energy(
+        architecture,
+        h2_demo_problem(),
+        seed=seed,
+        n_starts=n_starts,
+        evals_per_param=evals_per_param,
+        max_evaluations=max_evaluations,
+        backend=backend,
+    )
+
+
 def _sample_masks(masks: Sequence[HEAMask], limit: int, seed: int) -> List[HEAMask]:
     masks = list(masks)
     if len(masks) <= limit:
@@ -369,26 +492,29 @@ def zero_cost_guardrail(
             "hardware_efficiency": "topology_mapping_efficiency",
         },
     )
-    train_threshold = float(np.quantile([score.trainability.score for score in scores], quantile))
-    noise_threshold = float(np.quantile([score.noise_robustness.score for score in scores], quantile))
-    hardware_threshold = float(np.quantile([score.hardware_efficiency.score for score in scores], quantile))
+    metric_bottom_keys = {
+        "trainability": _bottom_metric_keys(scores, lambda score: score.trainability.score, quantile),
+        "noise": _bottom_metric_keys(scores, lambda score: score.noise_robustness.score, quantile),
+        "hardware": _bottom_metric_keys(scores, lambda score: score.hardware_efficiency.score, quantile),
+    }
     rows: List[Stage1Row] = []
     rejected: List[Stage1Row] = []
     kept_keys = set()
     for score in scores:
+        key = tuple(score.architecture.metadata.get("hea_mask", ()))
         failures = []
-        if score.trainability.score < train_threshold:
+        if key in metric_bottom_keys["trainability"]:
             failures.append("trainability")
-        if score.noise_robustness.score < noise_threshold:
+        if key in metric_bottom_keys["noise"]:
             failures.append("noise")
-        if score.hardware_efficiency.score < hardware_threshold:
+        if key in metric_bottom_keys["hardware"]:
             failures.append("hardware")
         kept = not failures
         reason = "pass" if kept else "filtered:" + ",".join(failures)
         row = Stage1Row(score.architecture, score, kept, reason)
         rows.append(row)
         if kept:
-            kept_keys.add(tuple(score.architecture.metadata.get("hea_mask", ())))
+            kept_keys.add(key)
         else:
             rejected.append(row)
 
@@ -397,6 +523,22 @@ def zero_cost_guardrail(
         row.kept = True
         row.reason = "diversity_rescue"
     return sorted(rows, key=lambda row: (not row.kept, -row.score.weighted_score))
+
+
+def _bottom_metric_keys(
+    scores: Sequence[ArchitectureScore],
+    metric: Any,
+    quantile: float,
+) -> set[tuple[Any, ...]]:
+    values = [(tuple(score.architecture.metadata.get("hea_mask", ())), float(metric(score))) for score in scores]
+    if not values:
+        return set()
+    raw = np.asarray([value for _, value in values], dtype=float)
+    if float(np.max(raw) - np.min(raw)) <= 1e-12:
+        return set()
+    n_reject = max(1, int(np.floor(len(values) * float(quantile))))
+    ranked = sorted(values, key=lambda item: (item[1], item[0]))
+    return {key for key, _ in ranked[:n_reject]}
 
 
 def _mask_distance(left: Sequence[Any], right: Sequence[Any]) -> int:
@@ -431,13 +573,16 @@ def run_sa_search(
     evals_per_param: int = 8,
     max_evaluations: int = 40,
     early_stop_delta: Optional[float] = None,
+    problem: Optional[VQEDemoProblem] = None,
     backend: Optional[NumpyBackend] = None,
 ) -> tuple[VQEOptimizationResult, List[SAStep]]:
+    problem = problem or h2_demo_problem()
     backend = backend or NumpyBackend()
     rng = np.random.default_rng(int(seed))
     current_mask = seed_mask
-    current = optimize_h2_energy(
+    current = optimize_vqe_energy(
         architecture_from_hea_mask(current_mask, backend=backend),
+        problem,
         seed=seed,
         n_starts=1,
         evals_per_param=evals_per_param,
@@ -452,8 +597,9 @@ def run_sa_search(
         exponent = step / max(1, int(n_steps))
         temperature = t_init * ((t_final / t_init) ** exponent)
         next_mask = mutate_hea_mask(current_mask, rng)
-        candidate = optimize_h2_energy(
+        candidate = optimize_vqe_energy(
             architecture_from_hea_mask(next_mask, backend=backend),
+            problem,
             seed=seed + step,
             n_starts=1,
             evals_per_param=evals_per_param,
@@ -478,7 +624,7 @@ def run_sa_search(
                 mask=next_mask,
             )
         )
-        if early_stop_delta is not None and best.energy <= H2_REFERENCE_ENERGY + float(early_stop_delta):
+        if early_stop_delta is not None and best.energy <= problem.reference_energy + float(early_stop_delta):
             break
     best.metadata["source"] = "sa_best"
     best.architecture.metadata["source"] = "sa_best"
@@ -498,20 +644,21 @@ def _dedupe_architectures(architectures: Iterable[ArchitectureSpec]) -> List[Arc
     return unique
 
 
-def _baseline_architectures(backend: NumpyBackend) -> List[ArchitectureSpec]:
+def _baseline_architectures(n_qubits: int, backend: NumpyBackend) -> List[ArchitectureSpec]:
     baselines = build_common_architectures(
-        n_qubits=2,
+        n_qubits=n_qubits,
         layers=2,
         backend=backend,
         names=["hea_linear", "real_amplitudes_linear", "efficient_su2_ring", "brickwork_cx"],
     )
-    baselines.append(qaoa_ansatz(2, layers=2, topology="linear", backend=backend))
+    baselines.append(qaoa_ansatz(n_qubits, layers=2, topology="linear", backend=backend))
     for architecture in baselines:
         architecture.metadata["source"] = "baseline"
     return baselines
 
 
 def run_vqe_hea_demo(
+    problem: Optional[VQEDemoProblem] = None,
     seed: int = 2026,
     candidate_limit: int = 48,
     stage1_keep_top: int = 12,
@@ -519,8 +666,9 @@ def run_vqe_hea_demo(
     early_stop_delta: Optional[float] = None,
     backend: Optional[NumpyBackend] = None,
 ) -> VQEHEADemoReport:
+    problem = problem or h2_demo_problem()
     backend = backend or NumpyBackend()
-    masks = _sample_masks(enumerate_hea_masks(2), candidate_limit, seed)
+    masks = _sample_masks(enumerate_hea_masks(problem.n_qubits), candidate_limit, seed)
     candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
     stage1_rows = zero_cost_guardrail(candidates, backend=backend)
     kept = [row for row in stage1_rows if row.kept][: max(1, int(stage1_keep_top))]
@@ -528,6 +676,7 @@ def run_vqe_hea_demo(
     seed_mask = HEAMask(*seed_row.architecture.metadata["hea_mask"])
     sa_best, trace = run_sa_search(
         seed_mask,
+        problem=problem,
         n_steps=sa_steps,
         seed=seed,
         early_stop_delta=early_stop_delta,
@@ -538,11 +687,12 @@ def run_vqe_hea_demo(
     for row in kept[:3]:
         row.architecture.metadata["source"] = "stage1_top"
         final_candidates.append(row.architecture)
-    final_candidates.extend(_baseline_architectures(backend))
+    final_candidates.extend(_baseline_architectures(problem.n_qubits, backend))
     final_results = []
     for index, architecture in enumerate(_dedupe_architectures(final_candidates)):
-        result = optimize_h2_energy(
+        result = optimize_vqe_energy(
             architecture,
+            problem,
             seed=seed + 100 + index,
             n_starts=3,
             evals_per_param=12,
@@ -557,13 +707,33 @@ def run_vqe_hea_demo(
         sa_trace=trace,
         final_results=final_results,
         metadata={
-            "hamiltonian": list(H2_HAMILTONIAN),
-            "reference_energy": H2_REFERENCE_ENERGY,
+            "problem_name": problem.name,
+            "hamiltonian": list(problem.hamiltonian),
+            "reference_energy": problem.reference_energy,
             "candidate_limit": candidate_limit,
             "stage1_keep_top": stage1_keep_top,
             "sa_steps": sa_steps,
             "seed": seed,
         },
+    )
+
+
+def run_vqe_ising4_demo(
+    seed: int = 2026,
+    candidate_limit: int = 72,
+    stage1_keep_top: int = 16,
+    sa_steps: int = 36,
+    early_stop_delta: Optional[float] = None,
+    backend: Optional[NumpyBackend] = None,
+) -> VQEHEADemoReport:
+    return run_vqe_hea_demo(
+        problem=ising4_demo_problem(),
+        seed=seed,
+        candidate_limit=candidate_limit,
+        stage1_keep_top=stage1_keep_top,
+        sa_steps=sa_steps,
+        early_stop_delta=early_stop_delta,
+        backend=backend,
     )
 
 
@@ -574,19 +744,28 @@ __all__ = [
     "H2_HAMILTONIAN",
     "H2_REFERENCE_ENERGY",
     "HEAMask",
+    "ISING4_HAMILTONIAN",
     "LAYER_CHOICES",
     "ROTATION_BLOCKS",
     "SAStep",
     "Stage1Row",
+    "VQEDemoProblem",
     "VQEHEADemoReport",
     "VQEOptimizationResult",
     "architecture_from_hea_mask",
     "enumerate_hea_masks",
     "evaluate_h2_energy",
+    "evaluate_vqe_energy",
+    "exact_ground_energy",
+    "h2_demo_problem",
+    "hamiltonian_matrix",
     "h2_hamiltonian_matrix",
+    "ising4_demo_problem",
     "mutate_hea_mask",
     "optimize_h2_energy",
+    "optimize_vqe_energy",
     "run_sa_search",
     "run_vqe_hea_demo",
+    "run_vqe_ising4_demo",
     "zero_cost_guardrail",
 ]

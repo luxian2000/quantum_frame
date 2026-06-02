@@ -5,8 +5,11 @@ from nexq.qas import (
     HEAMask,
     architecture_from_hea_mask,
     evaluate_h2_energy,
+    exact_ground_energy,
+    ising4_demo_problem,
     mutate_hea_mask,
     run_vqe_hea_demo,
+    run_vqe_ising4_demo,
 )
 from nexq.qas.task_evaluation import parameter_count
 
@@ -41,9 +44,25 @@ class TestVQEHEADemo(unittest.TestCase):
 
         self.assertTrue(report.stage1_rows)
         self.assertTrue(any(row.kept for row in report.stage1_rows))
+        self.assertTrue(any(not row.kept for row in report.stage1_rows))
         self.assertTrue(report.sa_trace)
         self.assertTrue(report.final_results)
+        self.assertIn("metric | min | p25 | max", "\n".join(report.summary_lines()))
         self.assertIn("Final VQE validation", "\n".join(report.summary_lines()))
+
+    def test_ising4_problem_has_exact_reference(self):
+        problem = ising4_demo_problem()
+
+        self.assertEqual(problem.n_qubits, 4)
+        self.assertAlmostEqual(problem.reference_energy, exact_ground_energy(problem.hamiltonian), places=10)
+
+    def test_vqe_ising4_demo_runs_small_pipeline(self):
+        report = run_vqe_ising4_demo(candidate_limit=8, stage1_keep_top=4, sa_steps=2, seed=11)
+
+        self.assertIn("tfim_chain_4q", "\n".join(report.summary_lines()))
+        self.assertTrue(report.stage1_rows)
+        self.assertTrue(report.sa_trace)
+        self.assertTrue(report.final_results)
 
 
 if __name__ == "__main__":

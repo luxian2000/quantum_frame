@@ -212,7 +212,7 @@ python -m nexq.qas.demo.random_proxy_validation
 
 ## 5. Minimal H2 VQE-QAS Demo
 
-当前最小可跑 VQE-QAS demo 使用硬编码 2-qubit H2 toy Hamiltonian 和 HEA 搜索空间，目标是展示两阶段闭环，而不是追求化学精度：
+当前最小可跑 VQE-QAS demo 使用硬编码 Pauli Hamiltonian 和 HEA 搜索空间，目标是展示两阶段闭环，而不是追求化学精度：
 
 ```text
 Stage 1: 四个 zero-cost metrics 做 guardrail/filter
@@ -226,6 +226,12 @@ Final: SA best + Stage 1 top candidates + baselines 做 multi-start VQE validati
 python -m nexq.qas.demo.vqe_h2_hea_search
 ```
 
+H2 toy 问题太小，很多合理 HEA baseline 都能接近参考能量，因此它主要证明 pipeline 可运行。为了看到更明显的结构差异，可以运行 4-qubit transverse-field Ising/TFIM demo：
+
+```bash
+python -m nexq.qas.demo.vqe_ising4_hea_search
+```
+
 HEA mask 的搜索维度固定为：
 
 - `layers`: `1 / 2 / 3`
@@ -237,6 +243,7 @@ HEA mask 的搜索维度固定为：
 注意：
 
 - 2-qubit H2 的候选空间很小，Stage 1 在这个 demo 中主要展示流程；更大 qubit/layer 搜索空间下才会体现明显压缩价值。
+- Stage 1 summary 会打印 `candidates / kept / filtered` 和四项指标的 `min / p25 / max`，用于判断 guardrail 是否真的产生过滤，而不是只看前几条 top rows。
 - SA fitness 不叠加 zero-cost penalty，避免引入额外权重超参数；zero-cost 只负责先验过滤，任务性能负责搜索方向。
 - short-step VQE budget 按参数量缩放，使用 `min(n_params * evals_per_param, max_evaluations)`，避免参数多的线路被固定预算不公平惩罚。
 
