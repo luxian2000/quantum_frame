@@ -3,7 +3,7 @@ from unittest import mock
 
 import numpy as np
 
-from nexq import NumpyBackend, State, StateVector, TorchBackend
+from aicir import NumpyBackend, State, StateVector, TorchBackend
 
 
 class TestState(unittest.TestCase):

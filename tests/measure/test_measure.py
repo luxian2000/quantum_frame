@@ -3,12 +3,12 @@ import unittest
 import numpy as np
 import torch
 
-from nexq import Circuit, Measure, TorchBackend, cnot, hadamard, ry
-from nexq.channel.backends import NumpyBackend
-from nexq.channel.operators import Hamiltonian
-from nexq.core.circuit import crx, swap, toffoli
-from nexq.core.gates import apply_gate_to_state, gate_to_matrix
-from nexq.measure.result import Result
+from aicir import Circuit, Measure, TorchBackend, cnot, hadamard, ry
+from aicir.channel.backends import NumpyBackend
+from aicir.channel.operators import Hamiltonian
+from aicir.core.circuit import crx, swap, toffoli
+from aicir.core.gates import apply_gate_to_state, gate_to_matrix
+from aicir.measure.result import Result
 
 
 class TestMeasure(unittest.TestCase):

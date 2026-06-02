@@ -1,4 +1,4 @@
-"""Ascend NPU verification demo for nexq.
+"""Ascend NPU verification demo for aicir.
 
 Single-process strict NPU check:
     python demo_npu.py
@@ -21,7 +21,7 @@ from typing import Iterable
 
 import numpy as np
 
-from nexq import Circuit, Measure, NPUBackend, cnot, hadamard, ry, rz
+from aicir import Circuit, Measure, NPUBackend, cnot, hadamard, ry, rz
 
 
 def build_bell_phase_circuit(theta: float = 0.3, backend=None) -> Circuit:
@@ -104,7 +104,7 @@ def run_batch_circuits(measure: Measure, backend: NPUBackend, shots: int, batch_
 
 def main() -> None:
 	parser = argparse.ArgumentParser(
-		description="Run nexq NPU backend verification on Ascend NPU.",
+		description="Run aicir NPU backend verification on Ascend NPU.",
 	)
 	parser.add_argument("--shots", type=int, default=1024, help="Sampling shots per circuit.")
 	parser.add_argument("--batch-size", type=int, default=4, help="Number of circuits for batch/distributed check.")
@@ -137,7 +137,7 @@ def main() -> None:
 	measure = Measure(backend)
 	rank = backend.distributed_rank
 
-	print_rank("=== nexq Ascend NPU Backend Verification ===", rank)
+	print_rank("=== aicir Ascend NPU Backend Verification ===", rank)
 	print_rank(f"pid: {os.getpid()}", rank)
 	print_rank(f"backend: {backend.name}", rank)
 	print_rank(f"runtime_context: {backend.runtime_context}", rank)

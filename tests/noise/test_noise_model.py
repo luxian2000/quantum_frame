@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from nexq import (
+from aicir import (
     AmplitudeDampingChannel,
     BitFlipChannel,
     Circuit,

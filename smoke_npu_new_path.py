@@ -1,4 +1,4 @@
-"""Smoke tests for nexq new backend-bound circuit path on NPU.
+"""Smoke tests for aicir new backend-bound circuit path on NPU.
 
 This script focuses on the new path:
 - Circuit(..., backend=backend)
@@ -18,7 +18,7 @@ from typing import Callable, List, Tuple
 
 import numpy as np
 
-from nexq import Circuit, Measure, NPUBackend, cnot, crz, hadamard, rx, ry, rz
+from aicir import Circuit, Measure, NPUBackend, cnot, crz, hadamard, rx, ry, rz
 
 
 Case = Tuple[str, Callable[[Measure, NPUBackend, int], None]]
@@ -69,7 +69,7 @@ def case_density_matrix(measure: Measure, backend: NPUBackend, shots: int) -> No
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Smoke-test nexq new backend-bound NPU path")
+    parser = argparse.ArgumentParser(description="Smoke-test aicir new backend-bound NPU path")
     parser.add_argument("--shots", type=int, default=512, help="Sampling shots for each case")
     parser.add_argument(
         "--allow-cpu-fallback",

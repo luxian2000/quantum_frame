@@ -1,7 +1,7 @@
 import unittest
 
-from nexq.qas import build_common_architectures, common_architecture_names, evaluate_architectures
-from nexq.channel.backends.numpy_backend import NumpyBackend
+from aicir.qas import build_common_architectures, common_architecture_names, evaluate_architectures
+from aicir.channel.backends.numpy_backend import NumpyBackend
 
 
 class TestArchitectureCandidates(unittest.TestCase):
