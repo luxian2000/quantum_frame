@@ -26,7 +26,13 @@ from ..search_strategies import (
     sample_supercircuit_masks,
     supercircuit_blocks,
 )
-from ..task_evaluation import OptimizerConfig, TaskEvaluationResult, optimize_task_parameters
+from ..task_evaluation import (
+    OptimizerConfig,
+    TaskEvaluationResult,
+    evaluate_task_objective,
+    optimize_task_parameters,
+    parameter_count,
+)
 
 
 @dataclass
@@ -223,6 +229,132 @@ class StrategyComparisonReport:
         return lines
 
 
+@dataclass
+class RandomProxyValidationRow:
+    """Random-parameter task proxy statistics for one architecture."""
+
+    architecture_name: str
+    n_parameters: int
+    n_random_samples: int
+    random_mean: float
+    random_std: float
+    random_best: float
+    random_worst: float
+    random_p10: float
+    random_p90: float
+    short_optimized: float
+    short_evaluations: int
+    approximation_ratio: Optional[float]
+    normalized_gap: Optional[float]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "architecture_name": self.architecture_name,
+            "n_parameters": self.n_parameters,
+            "n_random_samples": self.n_random_samples,
+            "random_mean": self.random_mean,
+            "random_std": self.random_std,
+            "random_best": self.random_best,
+            "random_worst": self.random_worst,
+            "random_p10": self.random_p10,
+            "random_p90": self.random_p90,
+            "short_optimized": self.short_optimized,
+            "short_evaluations": self.short_evaluations,
+            "approximation_ratio": self.approximation_ratio,
+            "normalized_gap": self.normalized_gap,
+        }
+
+
+@dataclass
+class RandomProxyValidationReport:
+    """Report for checking whether random-parameter objective is a useful proxy."""
+
+    problem: ProblemInstance
+    rows: List[RandomProxyValidationRow]
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "problem": self.problem.to_dict(),
+            "rows": [row.to_dict() for row in self.rows],
+            "metadata": dict(self.metadata),
+            "correlations": self.correlations(),
+        }
+
+    def correlations(self) -> Dict[str, Optional[float]]:
+        if len(self.rows) < 2:
+            return {"pearson_best": None, "spearman_best": None, "pearson_mean": None}
+        sign = 1.0 if self.problem.maximize else -1.0
+        optimized = [sign * row.short_optimized for row in self.rows]
+        best = [sign * row.random_best for row in self.rows]
+        mean = [sign * row.random_mean for row in self.rows]
+        return {
+            "pearson_best": _pearson(best, optimized),
+            "spearman_best": _spearman(best, optimized),
+            "pearson_mean": _pearson(mean, optimized),
+        }
+
+    def summary_lines(self) -> List[str]:
+        corr = self.correlations()
+        lines = [
+            f"problem: {self.problem.name}",
+            f"n_architectures: {len(self.rows)}",
+            (
+                "correlation | pearson_random_best_vs_short | "
+                "spearman_random_best_vs_short | pearson_random_mean_vs_short"
+            ),
+            (
+                f"values | {_format_optional(corr['pearson_best'])} | "
+                f"{_format_optional(corr['spearman_best'])} | {_format_optional(corr['pearson_mean'])}"
+            ),
+            "name | n_params | random_best | random_mean | random_std | short_optimized | ratio | gap",
+        ]
+        for row in self.rows:
+            ratio = "-" if row.approximation_ratio is None else f"{row.approximation_ratio:.4f}"
+            gap = "-" if row.normalized_gap is None else f"{row.normalized_gap:.4f}"
+            lines.append(
+                f"{row.architecture_name} | {row.n_parameters} | {row.random_best:.6f} | "
+                f"{row.random_mean:.6f} | {row.random_std:.6f} | {row.short_optimized:.6f} | {ratio} | {gap}"
+            )
+        return lines
+
+
+def _format_optional(value: Optional[float]) -> str:
+    return "-" if value is None else f"{value:.4f}"
+
+
+def _pearson(left: Sequence[float], right: Sequence[float]) -> Optional[float]:
+    x = np.asarray(left, dtype=float)
+    y = np.asarray(right, dtype=float)
+    if x.size != y.size or x.size < 2:
+        return None
+    x = x - float(x.mean())
+    y = y - float(y.mean())
+    denom = float(np.sqrt(np.dot(x, x) * np.dot(y, y)))
+    if denom <= 1e-12:
+        return None
+    return float(np.dot(x, y) / denom)
+
+
+def _rankdata(values: Sequence[float]) -> List[float]:
+    indexed = sorted(enumerate(float(value) for value in values), key=lambda item: item[1])
+    ranks = [0.0] * len(indexed)
+    start = 0
+    while start < len(indexed):
+        end = start + 1
+        while end < len(indexed) and abs(indexed[end][1] - indexed[start][1]) <= 1e-12:
+            end += 1
+        rank = (start + end - 1) / 2.0
+        for index in range(start, end):
+            ranks[indexed[index][0]] = rank
+        start = end
+    return ranks
+
+
+def _spearman(left: Sequence[float], right: Sequence[float]) -> Optional[float]:
+    return _pearson(_rankdata(left), _rankdata(right))
+
+
 def _baseline_architectures(problem: ProblemInstance, layers: int, backend: NumpyBackend) -> List[ArchitectureSpec]:
     return build_common_architectures(
         n_qubits=problem.n_qubits,
@@ -350,6 +482,100 @@ def run_multi_seed_validation_experiment(
             "optimizer_config": optimizer_cfg.__dict__.copy(),
             "noise_model": type(noise_model).__name__ if noise_model is not None else None,
             "hardware_profile": None if hardware_profile is None else hardware_profile.__dict__.copy(),
+        },
+    )
+
+
+def run_random_proxy_validation_experiment(
+    problem: ProblemInstance,
+    architectures: Optional[Sequence[ArchitectureSpec]] = None,
+    n_random_samples: int = 100,
+    optimizer_config: Optional[OptimizerConfig] = None,
+    random_seed: int = 1234,
+    parameter_scale: float = 2.0 * np.pi,
+    backend: Optional[NumpyBackend] = None,
+    noise_model: Optional[NoiseModel] = None,
+) -> RandomProxyValidationReport:
+    """Check whether random-parameter task objective separates candidate architectures."""
+    backend = backend or NumpyBackend()
+    optimizer_cfg = optimizer_config or OptimizerConfig(max_evaluations=32, seed=random_seed)
+    candidates = list(architectures) if architectures is not None else build_common_architectures(
+        n_qubits=problem.n_qubits,
+        layers=2,
+        backend=backend,
+        names=[
+            "hea_linear",
+            "real_amplitudes_linear",
+            "efficient_su2_ring",
+            "qaoa_chain",
+            "brickwork_cx",
+            "mera_like",
+        ],
+    )
+    rng = np.random.default_rng(int(random_seed))
+    rows: List[RandomProxyValidationRow] = []
+    for architecture in candidates:
+        n_params = parameter_count(architecture.circuit)
+        values: List[float] = []
+        if n_params == 0:
+            values.append(
+                evaluate_task_objective(
+                    architecture,
+                    problem,
+                    [],
+                    backend=backend,
+                    noise_model=noise_model,
+                )
+            )
+        else:
+            for _ in range(max(1, int(n_random_samples))):
+                params = rng.uniform(-parameter_scale, parameter_scale, size=n_params)
+                values.append(
+                    evaluate_task_objective(
+                        architecture,
+                        problem,
+                        params,
+                        backend=backend,
+                        noise_model=noise_model,
+                    )
+                )
+        array = np.asarray(values, dtype=float)
+        random_best = float(array.max() if problem.maximize else array.min())
+        random_worst = float(array.min() if problem.maximize else array.max())
+        short_result = optimize_task_parameters(
+            architecture,
+            problem,
+            config=optimizer_cfg,
+            backend=backend,
+            noise_model=noise_model,
+        )
+        rows.append(
+            RandomProxyValidationRow(
+                architecture_name=architecture.name,
+                n_parameters=n_params,
+                n_random_samples=len(values),
+                random_mean=float(array.mean()),
+                random_std=float(array.std()),
+                random_best=random_best,
+                random_worst=random_worst,
+                random_p10=float(np.percentile(array, 10)),
+                random_p90=float(np.percentile(array, 90)),
+                short_optimized=float(short_result.optimized_value),
+                short_evaluations=int(short_result.evaluations),
+                approximation_ratio=short_result.approximation_ratio,
+                normalized_gap=short_result.normalized_gap,
+            )
+        )
+    rows = sorted(rows, key=lambda row: row.short_optimized, reverse=problem.maximize)
+    return RandomProxyValidationReport(
+        problem=problem,
+        rows=rows,
+        metadata={
+            "n_random_samples": n_random_samples,
+            "random_seed": random_seed,
+            "parameter_scale": parameter_scale,
+            "optimizer_config": optimizer_cfg.__dict__.copy(),
+            "noise_model": type(noise_model).__name__ if noise_model is not None else None,
         },
     )
 
@@ -857,10 +1083,13 @@ def run_search_strategy_comparison(
 
 __all__ = [
     "MultiSeedValidationReport",
+    "RandomProxyValidationReport",
+    "RandomProxyValidationRow",
     "StrategyComparisonReport",
     "ValidationReport",
     "run_hybrid_qas_validation_experiment",
     "run_multi_seed_validation_experiment",
+    "run_random_proxy_validation_experiment",
     "run_search_strategy_comparison",
     "run_task_feedback_validation_experiment",
     "run_validation_experiment",

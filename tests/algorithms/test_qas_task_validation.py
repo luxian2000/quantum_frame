@@ -7,6 +7,7 @@ from nexq.qas import (
     maxcut_line,
     run_hybrid_qas_validation_experiment,
     run_multi_seed_validation_experiment,
+    run_random_proxy_validation_experiment,
     run_search_strategy_comparison,
     run_task_feedback_validation_experiment,
     run_validation_experiment,
@@ -72,6 +73,20 @@ class TestQASTaskValidation(unittest.TestCase):
         self.assertIn("win_rate", summary[0])
         self.assertIn("group | name | runs | mean", "\n".join(report.summary_lines()))
         self.assertTrue(all("result_group" in row for row in summary))
+
+    def test_random_proxy_validation_reports_correlation(self):
+        report = run_random_proxy_validation_experiment(
+            maxcut_line(n_qubits=3),
+            n_random_samples=5,
+            optimizer_config=OptimizerConfig(max_evaluations=3, seed=19),
+            random_seed=19,
+        )
+
+        self.assertTrue(report.rows)
+        self.assertIn("pearson_best", report.correlations())
+        self.assertIn("random_best", report.rows[0].to_dict())
+        self.assertIn("short_optimized", report.rows[0].to_dict())
+        self.assertIn("correlation | pearson_random_best_vs_short", "\n".join(report.summary_lines()))
 
     def test_task_feedback_validation_mutates_supercircuit_masks(self):
         report = run_task_feedback_validation_experiment(
