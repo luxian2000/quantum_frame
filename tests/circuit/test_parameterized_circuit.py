@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from nexq import Circuit, Parameter, crz, rx, ry, u3
+from aicir import Circuit, Parameter, crz, rx, ry, u3
 
 
 def test_parameter_validates_name():

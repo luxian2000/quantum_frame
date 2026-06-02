@@ -2,7 +2,7 @@ import io
 import unittest
 from contextlib import redirect_stdout
 
-from nexq import Circuit, cnot, hadamard, rz, swap
+from aicir import Circuit, cnot, hadamard, rz, swap
 
 
 class TestCircuitShow(unittest.TestCase):

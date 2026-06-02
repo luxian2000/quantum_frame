@@ -1,8 +1,8 @@
 import numpy as np
 
-from nexq.core.circuit import Circuit
-from nexq.core.io.dag import circuit_to_dag
-from nexq.optimizer import optimize_basic
+from aicir.core.circuit import Circuit
+from aicir.core.io.dag import circuit_to_dag
+from aicir.optimizer import optimize_basic
 
 
 def test_optimize_basic_dict_cancellations():

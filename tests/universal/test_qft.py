@@ -3,9 +3,9 @@ import math
 import numpy as np
 import pytest
 
-from nexq.channel.backends.numpy_backend import NumpyBackend
-from nexq.core.circuit import Circuit
-from nexq.universal import qft, qft_circuit
+from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.core.circuit import Circuit
+from aicir.universal import qft, qft_circuit
 
 
 def test_qft_builds_default_gate_sequence():

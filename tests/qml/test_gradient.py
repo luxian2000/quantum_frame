@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from nexq import Circuit, NumpyBackend, Parameter, State, ry
-from nexq.qml import multipsr, psr, spsr
+from aicir import Circuit, NumpyBackend, Parameter, State, ry
+from aicir.qml import multipsr, psr, spsr
 
 
 def test_psr_matches_analytic_gradient_for_vector_params():

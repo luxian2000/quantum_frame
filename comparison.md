@@ -1,9 +1,9 @@
-# WuYueSDK 与 quantum_frame/nexq 功能对比（基于当前源码）
+# WuYueSDK 与 quantum_frame/aicir 功能对比（基于当前源码）
 
 > 对比范围：
 >
 > - WuYueSDK：`/Users/luxian/GitSpace/WuYueSDK/wuyue`
-> - quantum_frame：`/Users/luxian/GitSpace/quantum_frame/nexq`
+> - quantum_frame：`/Users/luxian/GitSpace/quantum_frame/aicir`
 >
 > 统计口径：仅按当前仓库已实现代码统计，不按规划或 README 愿景统计。
 
@@ -13,13 +13,13 @@
 - WuYueSDK 的特点：
   - 电路/程序层功能更“工程化”，含 `QuantumProg`、`qif/qwhile`、受控子电路、读出噪声、批处理参数绑定、本地后端 + 作业接口。
   - 门与噪声种类更偏“类定义式”（每个门/噪声是类）。
-- quantum_frame/nexq 的特点：
+- quantum_frame/aicir 的特点：
   - 计算后端抽象更清晰（`Numpy/Torch/NPU` 统一接口），测量与结果对象更现代化（`Result`、`run_batch`）。
   - 明确提供数据编码器（Amplitude/Angle/Basis）与 JSON/DAG/QASM 多种电路表示。
 
 ## 2. 能力矩阵（核心维度）
 
-| 维度                      | WuYueSDK                                                                                                                                                                                                 | nexq                                                                                                                                                         |
+| 维度                      | WuYueSDK                                                                                                                                                                                                 | aicir                                                                                                                                                         |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 量子门（公开构建能力）    | 丰富：`H/X/Y/Z/T/S/RX/RY/RZ/P/U1/U2/U3/CNOT/CX/CZ/CCX/TOFFOLI/SWAP/IsingZZ/IZZ/MEASURE`，含 `BARRIER/RESET`                                                                                          | 丰富：`pauli_x/y/z, hadamard, rx/ry/rz, s/t, cx/cnot/cy/cz, crx/cry/crz, swap, toffoli/ccnot, u2/u3`；底层还支持 `unitary`、`identity`、`rzz` 字典门 |
 | 门表示方式                | 面向对象门类（类 + matrix 属性）                                                                                                                                                                         | 门字典（`{"type": ...}`）+ `gate_to_matrix`                                                                                                              |
@@ -45,11 +45,11 @@
 - `QuantumCircuit.gate_list` 与 `QuantumProg.gate_list` 都纳入了常用门集合，并支持 `BARRIER/RESET`。
 - `IsingZZ` 与 `IZZ` 同时出现：前者在电路接口中使用，后者在 `gate.py` 中也有门类定义。
 
-### nexq
+### aicir
 
-- `nexq/core/circuit.py` 对外暴露门构造函数（返回 gate dict）。
-- `nexq/core/gates.py` 的 `gate_to_matrix` 支持别名（如 `pauli_x` 与 `X`），也支持高级字典门：`unitary`、`identity`、`rzz`。
-- 顶层 `nexq/__init__.py` 当前未把 `rzz` 作为便捷函数导出（但底层矩阵映射已支持）。
+- `aicir/core/circuit.py` 对外暴露门构造函数（返回 gate dict）。
+- `aicir/core/gates.py` 的 `gate_to_matrix` 支持别名（如 `pauli_x` 与 `X`），也支持高级字典门：`unitary`、`identity`、`rzz`。
+- 顶层 `aicir/__init__.py` 当前未把 `rzz` 作为便捷函数导出（但底层矩阵映射已支持）。
 
 ## 3.2 后端与执行模型
 
@@ -60,7 +60,7 @@
 - 密度矩阵后端提供：`apply_noise` 与 `run/get_density_matrix/get_probs/expval_pauli`。
 - 量子比特规模限制：文档与代码中对不同路径有上限检查（如全振幅应用时 30 比特、密度矩阵后端 15 比特）。
 
-### nexq
+### aicir
 
 - `Backend` 抽象定义统一的张量、线代、测量、采样、期望值接口。
 - 实现有 `NumpyBackend`、`TorchBackend`、`NPUBackend`，上层 `StateVector/DensityMatrix/Measure` 不感知底层框架。
@@ -77,7 +77,7 @@
   - 指定门 + 全比特（`add_all_qubit_error`）
 - 支持 `Readout_Noise`（测量读出噪声）插入。
 
-### nexq
+### aicir
 
 - 当前实现的是单比特噪声通道集合（4 种）。
 - `NoiseModel` 通过规则匹配 `after_gates` 在门后逐步作用到密度矩阵。
@@ -90,7 +90,7 @@
 - 未发现独立编码器目录或统一 `encode/decode` 抽象。
 - 主要通过电路构建、参数绑定、状态设定（`set_state`）完成输入表达。
 
-### nexq
+### aicir
 
 - 明确提供编码器体系：
   - `AmplitudeEncoder`
@@ -105,7 +105,7 @@
 - 测量主要由后端 `run(shots)` 完成，返回计数字典。
 - 分析类接口散落在后端方法中（概率、相位、振幅、期望等）。
 
-### nexq
+### aicir
 
 - `Measure` 统一测量入口，支持：
   - 态矢量路径 `run`
@@ -121,7 +121,7 @@
 - 还支持自定义伪代码导入 `from_compiler`。
 - `QuantumProg` 额外支持控制流结构（if/while）并能体现在程序绘图中。
 
-### nexq
+### aicir
 
 - I/O 侧更模块化：
   - QASM 2.0/3.0 导入导出
@@ -131,7 +131,7 @@
 
 ## 3.7 QAS 与线路优化模块专项检查
 
-### quantum_frame/nexq
+### quantum_frame/aicir
 
 - `qas` 为实装模块，不是纯占位：
   - `CRLQAS.py`：DDQN + Adam-SPSA + curriculum 机制做架构搜索。
@@ -150,21 +150,21 @@
   - `wuyue` 目录下无独立 `optimizer` 目录/文件。
   - 电路相关代码以构建、导入导出、绘制、参数绑定为主。
 
-结论：在“QAS（量子架构搜索）”与“线路自动优化器”这两个点上，当前 `nexq` 明显领先于 `wuyue` 的模块化实现深度。
+结论：在“QAS（量子架构搜索）”与“线路自动优化器”这两个点上，当前 `aicir` 明显领先于 `wuyue` 的模块化实现深度。
 
 ## 4. “已实现”与“占位”观察
 
 - WuYueSDK：模块相对集中在模拟器、电路/程序、噪声、可视化、作业接口，偏“功能完整型 SDK”。
-- nexq：核心模拟/测量/编码较完善；同时在 `qas` 与 `optimizer/basic` 上已有实装。提升后的算法子包中除 `qas` 外，多数子目录当前仍以 `__init__.py` 占位为主。
+- aicir：核心模拟/测量/编码较完善；同时在 `qas` 与 `optimizer/basic` 上已有实装。提升后的算法子包中除 `qas` 外，多数子目录当前仍以 `__init__.py` 占位为主。
 
 ## 5. 结论建议（按选型场景）
 
 - 如果你要：
   - 直接做量子程序控制流（if/while）、读出噪声、QCOS 作业流集成：WuYueSDK 更合适。
 - 如果你要：
-  - 统一多后端（NumPy/Torch/NPU）、结构化测量结果、编码器与多表示互转（QASM/JSON/DAG）：nexq 更合适。
+  - 统一多后端（NumPy/Torch/NPU）、结构化测量结果、编码器与多表示互转（QASM/JSON/DAG）：aicir 更合适。
 - 如果你要统一两者：
-  - 可考虑以 nexq 的后端与测量抽象为主干，逐步吸收 WuYueSDK 的 `QuantumProg` 控制流与更丰富噪声库。
+  - 可考虑以 aicir 的后端与测量抽象为主干，逐步吸收 WuYueSDK 的 `QuantumProg` 控制流与更丰富噪声库。
 
 ## 6. 关键证据文件
 
@@ -179,24 +179,24 @@
   - `wuyue/backend/backend_density_matrix.py`
   - `wuyue/job/job.py`
   - `wuyue/example/algorithm.py`
-- quantum_frame/nexq
-  - `nexq/core/circuit.py`
-  - `nexq/core/gates.py`
-  - `nexq/channel/backends/base.py`
-  - `nexq/channel/backends/numpy_backend.py`
-  - `nexq/channel/backends/torch_backend.py`
-  - `nexq/channel/backends/npu_backend.py`
-  - `nexq/channel/noise/base.py`
-  - `nexq/channel/noise/channels.py`
-  - `nexq/channel/noise/model.py`
-  - `nexq/measure/measure.py`
-  - `nexq/encoder/amplitude.py`
-  - `nexq/encoder/angle.py`
-  - `nexq/encoder/basis.py`
-  - `nexq/qas/CRLQAS.py`
-  - `nexq/qas/PPR_DQL.py`
-  - `nexq/qas/PPO_RB.py`
-  - `nexq/optimizer/basic.py`
-  - `nexq/core/io/qasm.py`
-  - `nexq/core/io/json_io.py`
-  - `nexq/core/io/dag.py`
+- quantum_frame/aicir
+  - `aicir/core/circuit.py`
+  - `aicir/core/gates.py`
+  - `aicir/channel/backends/base.py`
+  - `aicir/channel/backends/numpy_backend.py`
+  - `aicir/channel/backends/torch_backend.py`
+  - `aicir/channel/backends/npu_backend.py`
+  - `aicir/channel/noise/base.py`
+  - `aicir/channel/noise/channels.py`
+  - `aicir/channel/noise/model.py`
+  - `aicir/measure/measure.py`
+  - `aicir/encoder/amplitude.py`
+  - `aicir/encoder/angle.py`
+  - `aicir/encoder/basis.py`
+  - `aicir/qas/CRLQAS.py`
+  - `aicir/qas/PPR_DQL.py`
+  - `aicir/qas/PPO_RB.py`
+  - `aicir/optimizer/basic.py`
+  - `aicir/core/io/qasm.py`
+  - `aicir/core/io/json_io.py`
+  - `aicir/core/io/dag.py`

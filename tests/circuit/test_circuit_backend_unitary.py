@@ -3,9 +3,9 @@ import unittest
 import numpy as np
 import torch
 
-from nexq import Circuit, TorchBackend, cnot, crz, hadamard, rx, rzz
-from nexq.core.gates import apply_gate_to_state
-from nexq.channel.backends.numpy_backend import NumpyBackend
+from aicir import Circuit, TorchBackend, cnot, crz, hadamard, rx, rzz
+from aicir.core.gates import apply_gate_to_state
+from aicir.channel.backends.numpy_backend import NumpyBackend
 
 
 class TestCircuitBackendUnitary(unittest.TestCase):
