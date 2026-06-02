@@ -3,9 +3,9 @@ import unittest
 
 import numpy as np
 
-from nexq.channel.backends.numpy_backend import NumpyBackend
-from nexq.channel.noise.model import NoiseModel
-from nexq.qas import load_default_ion_trap_noise_config, load_ion_trap_noise_config
+from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.channel.noise.model import NoiseModel
+from aicir.qas import load_default_ion_trap_noise_config, load_ion_trap_noise_config
 
 
 class _CountingIdentityChannel:

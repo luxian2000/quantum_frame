@@ -1,8 +1,8 @@
 import unittest
 
-from nexq.core import Circuit
-from nexq.metrics.hardware import native_depth_twoq_efficiency_details
-from nexq.metrics._utils import depth_proxy
+from aicir.core import Circuit
+from aicir.metrics.hardware import native_depth_twoq_efficiency_details
+from aicir.metrics._utils import depth_proxy
 
 
 class TestHardwareMetrics(unittest.TestCase):

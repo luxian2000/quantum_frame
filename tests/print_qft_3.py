@@ -8,10 +8,10 @@
 import sys
 from pathlib import Path
 
-# 确保直接运行此脚本时能导入项目中的 nexq 包
+# 确保直接运行此脚本时能导入项目中的 aicir 包
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nexq.universal import qft_circuit
+from aicir.universal import qft_circuit
 
 
 def build_qft_3():

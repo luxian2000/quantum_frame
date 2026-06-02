@@ -1,9 +1,9 @@
 import numpy as np
 
-import nexq.vqc.SSVQE as ssvqe_module
-import nexq.vqc.VQD as vqd_module
-import nexq.vqc.VQE as vqe_module
-from nexq.vqc import BasicSSVQE, BasicVQD, BasicVQE
+import aicir.vqc.SSVQE as ssvqe_module
+import aicir.vqc.VQD as vqd_module
+import aicir.vqc.VQE as vqe_module
+from aicir.vqc import BasicSSVQE, BasicVQD, BasicVQE
 
 
 def _z_hamiltonian():

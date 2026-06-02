@@ -9,7 +9,7 @@
 ├── demo_npu.py
 ├── docs/
 ├── smoke_npu_new_path.py
-├── nexq/
+├── aicir/
 │   ├── __init__.py
 │   ├── channel/
 │   │   ├── __init__.py
