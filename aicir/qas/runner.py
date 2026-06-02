@@ -5,28 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .CRLQAS import CRLQASConfig, train_crlqas
-from .PPO_RB import PPORollbackConfig, ppo_rb_qas
-from .PPR_DQL import PPRDQLConfig, train_ppr_dql
-from .VQA_QAS import VQAQASConfig, classification_vqa_qas, h2_vqe_qas, train_vqa_qas
+from . import config as qas_config
+from .CRLQAS import train_crlqas
+from .PPO_RB import ppo_rb_qas
+from .PPR_DQL import train_ppr_dql
+from .VQA_QAS import classification_vqa_qas, h2_vqe_qas, train_vqa_qas
 
 QASMethod = str
-
-_METHOD_ALIASES = {
-    "vqa": "vqa",
-    "vqa_qas": "vqa",
-    "vqa_classification": "vqa_classification",
-    "classification": "vqa_classification",
-    "vqa_h2": "vqa_h2",
-    "h2": "vqa_h2",
-    "h2_vqe": "vqa_h2",
-    "ppo": "ppo_rb",
-    "ppo_rb": "ppo_rb",
-    "ppr": "ppr_dql",
-    "ppr_dql": "ppr_dql",
-    "crl": "crlqas",
-    "crlqas": "crlqas",
-}
 
 
 @dataclass
@@ -51,46 +36,31 @@ class QASRunConfig:
 def available_qas_methods() -> tuple[str, ...]:
     """Return canonical method names accepted by :func:`run_qas`."""
 
-    return ("vqa", "vqa_classification", "vqa_h2", "ppo_rb", "ppr_dql", "crlqas")
+    return qas_config.method_names()
 
 
-def default_qas_config(method: QASMethod) -> Any:
-    """Return the default config object for a QAS method."""
+def default_qas_config(method: QASMethod, **kwargs: Any) -> Any:
+    """Return a config object for a QAS method.
 
-    canonical = _canonical_method(method)
-    if canonical == "vqa":
-        return VQAQASConfig()
-    if canonical == "vqa_classification":
-        return VQAQASConfig(task="classification")
-    if canonical == "vqa_h2":
-        return VQAQASConfig(
-            n_qubits=4,
-            layers=3,
-            single_qubit_gates=("ry", "rz"),
-            two_qubit_pairs=((0, 1), (1, 2), (2, 3)),
-            task="h2_vqe",
-        )
-    if canonical == "ppo_rb":
-        return PPORollbackConfig()
-    if canonical == "ppr_dql":
-        return PPRDQLConfig()
-    if canonical == "crlqas":
-        return CRLQASConfig()
-    raise ValueError(f"Unsupported QAS method: {method!r}")
+    Prefer ``aicir.qas.config.<method>(...)`` in user-facing code. This helper
+    remains as a method-name based compatibility wrapper.
+    """
+
+    return qas_config.create(method, **kwargs)
 
 
 def run_qas(request: QASRunConfig | QASMethod, **kwargs: Any) -> Any:
     """Run a QAS implementation with a common packaged-user interface.
 
     Examples:
-        ``run_qas("vqa_classification", config=VQAQASConfig(...))``
+        ``run_qas("VQA_QAS", config=config.vqa_qas(...))``
         ``run_qas(QASRunConfig(method="ppr_dql", target_state=state))``
     """
 
     run_config = _as_run_config(request, kwargs)
-    method = _canonical_method(run_config.method)
+    method = qas_config.canonical_method(run_config.method)
 
-    if method == "vqa":
+    if method == "vqa_qas":
         return train_vqa_qas(
             objective_fn=run_config.objective_fn,
             config=run_config.config,
@@ -130,15 +100,6 @@ def _as_run_config(request: QASRunConfig | QASMethod, kwargs: dict[str, Any]) ->
             raise TypeError(f"Do not pass keyword overrides with QASRunConfig: {names}")
         return request
     return QASRunConfig(method=request, **kwargs)
-
-
-def _canonical_method(method: QASMethod) -> str:
-    key = str(method).strip().lower().replace("-", "_")
-    try:
-        return _METHOD_ALIASES[key]
-    except KeyError as exc:
-        methods = ", ".join(available_qas_methods())
-        raise ValueError(f"Unsupported QAS method {method!r}. Available methods: {methods}.") from exc
 
 
 def _require(condition: bool, message: str) -> None:

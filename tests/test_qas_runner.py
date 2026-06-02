@@ -3,17 +3,16 @@ import pytest
 
 from aicir import NumpyBackend, State
 from aicir.qas import (
-    PPRDQLConfig,
     QASRunConfig,
-    VQAQASConfig,
     available_qas_methods,
+    config,
     default_qas_config,
     run_qas,
 )
 
 
 def _tiny_vqa_config():
-    return VQAQASConfig(
+    return config.vqa_qas(
         n_qubits=3,
         layers=3,
         single_qubit_gates=("ry",),
@@ -28,7 +27,7 @@ def _tiny_vqa_config():
 
 
 def _tiny_ppr_config():
-    return PPRDQLConfig(
+    return config.ppr_dql(
         episode_num=3,
         max_steps_per_episode=1,
         batch_size=1,
@@ -47,16 +46,28 @@ def _tiny_ppr_config():
 
 
 def test_available_qas_methods_contains_public_names():
-    assert available_qas_methods() == ("vqa", "vqa_classification", "vqa_h2", "ppo_rb", "ppr_dql", "crlqas")
+    assert available_qas_methods() == ("vqa_qas", "vqa_classification", "vqa_h2", "ppo_rb", "ppr_dql", "crlqas")
 
 
-def test_default_qas_config_uses_method_specific_config_types():
-    assert isinstance(default_qas_config("classification"), VQAQASConfig)
-    assert isinstance(default_qas_config("ppr_dql"), PPRDQLConfig)
+def test_config_factory_uses_method_names_without_config_class_imports():
+    vqa_config = config.vqa_qas(supernet_steps=0)
+    ppr_config = config.create("PPR_DQL", episode_num=1)
+    crl_config = config.crlqas(adam_spsa={"iterations": 2})
+
+    assert vqa_config.__class__.__name__ == "VQAQASConfig"
+    assert vqa_config.supernet_steps == 0
+    assert ppr_config.__class__.__name__ == "PPRDQLConfig"
+    assert ppr_config.episode_num == 1
+    assert crl_config.adam_spsa.iterations == 2
+
+
+def test_default_qas_config_remains_method_name_wrapper():
+    assert default_qas_config("classification").__class__.__name__ == "VQAQASConfig"
+    assert default_qas_config("VQA_QAS", supernet_steps=0).supernet_steps == 0
 
 
 def test_run_qas_dispatches_vqa_classification():
-    result = run_qas("vqa_classification", config=_tiny_vqa_config())
+    result = run_qas("VQA_QAS", config=_tiny_vqa_config())
 
     assert result.best_circuit.n_qubits == 3
     assert result.best_architecture is not None
