@@ -303,6 +303,94 @@ class VQEMultiStartSAReport:
         return lines
 
 
+@dataclass
+class VQEFitnessCorrelationRow:
+    rank: int
+    architecture: ArchitectureSpec
+    short_energy: float
+    fair_energy: float
+    n_params: int
+    short_evaluations: int
+    fair_evaluations: int
+
+
+@dataclass
+class VQEFitnessCorrelationReport:
+    stage1_rows: List[Stage1Row]
+    rows: List[VQEFitnessCorrelationRow]
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def correlations(self) -> Dict[str, float]:
+        short = [row.short_energy for row in self.rows]
+        fair = [row.fair_energy for row in self.rows]
+        overlap_k = min(int(self.metadata.get("overlap_k", 5)), len(self.rows))
+        return {
+            "pearson_short_vs_fair": _pearson(short, fair),
+            "spearman_short_vs_fair": _spearman(short, fair),
+            f"top{overlap_k}_overlap": float(_topk_overlap(self.rows, overlap_k)),
+        }
+
+    def summary_lines(self) -> List[str]:
+        problem_name = str(self.metadata.get("problem_name", "unknown"))
+        reference_energy = float(self.metadata.get("reference_energy", 0.0))
+        correlations = self.correlations()
+        lines = [
+            f"VQE-QAS short/fair fitness validation: {problem_name}",
+            f"reference_energy: {reference_energy:.6f}",
+            f"n_candidates: {len(self.rows)}",
+            "correlation | value",
+        ]
+        for name, value in correlations.items():
+            lines.append(f"{name} | {value:.4f}")
+        lines.extend(["", "rows", "rank | short | fair | delta_ref | n_params | short_evals | fair_evals | name"])
+        for row in self.rows:
+            lines.append(
+                f"{row.rank} | {row.short_energy:.6f} | {row.fair_energy:.6f} | "
+                f"{row.fair_energy - reference_energy:.6f} | {row.n_params} | "
+                f"{row.short_evaluations} | {row.fair_evaluations} | {row.architecture.name}"
+            )
+        return lines
+
+
+def _pearson(left: Sequence[float], right: Sequence[float]) -> float:
+    if len(left) < 2 or len(right) < 2:
+        return 0.0
+    x = np.asarray(left, dtype=float)
+    y = np.asarray(right, dtype=float)
+    if float(np.std(x)) <= 1e-12 or float(np.std(y)) <= 1e-12:
+        return 0.0
+    return float(np.corrcoef(x, y)[0, 1])
+
+
+def _rankdata(values: Sequence[float]) -> np.ndarray:
+    array = np.asarray(values, dtype=float)
+    order = np.argsort(array, kind="mergesort")
+    ranks = np.empty(len(array), dtype=float)
+    cursor = 0
+    while cursor < len(array):
+        end = cursor + 1
+        while end < len(array) and abs(array[order[end]] - array[order[cursor]]) <= 1e-12:
+            end += 1
+        avg_rank = 0.5 * (cursor + end - 1) + 1.0
+        ranks[order[cursor:end]] = avg_rank
+        cursor = end
+    return ranks
+
+
+def _spearman(left: Sequence[float], right: Sequence[float]) -> float:
+    if len(left) < 2 or len(right) < 2:
+        return 0.0
+    return _pearson(_rankdata(left), _rankdata(right))
+
+
+def _topk_overlap(rows: Sequence[VQEFitnessCorrelationRow], k: int) -> int:
+    if k <= 0:
+        return 0
+    short_top = {id(row) for row in sorted(rows, key=lambda item: item.short_energy)[:k]}
+    fair_top = {id(row) for row in sorted(rows, key=lambda item: item.fair_energy)[:k]}
+    return len(short_top & fair_top)
+
+
 def _stage1_metric_summary(rows: Sequence[Stage1Row]) -> Dict[str, Dict[str, float]]:
     groups = {
         "expressibility": [row.score.expressibility.score for row in rows],
@@ -1179,6 +1267,83 @@ def run_ising4_multistart_sa(
     )
 
 
+def run_ising4_fitness_correlation(
+    seed: int = 2026,
+    top_k: int = 10,
+    candidate_limit: int = 72,
+    stage1_keep_top: int = 16,
+    short_n_starts: int = 1,
+    short_evals_per_param: int = 8,
+    short_max_evaluations: int = 40,
+    fair_n_starts: int = 3,
+    fair_evals_per_param: int = 20,
+    fair_min_evaluations: int = 40,
+    overlap_k: int = 5,
+    backend: Optional[NumpyBackend] = None,
+) -> VQEFitnessCorrelationReport:
+    problem = ising4_demo_problem()
+    backend = backend or NumpyBackend()
+    masks = _sample_masks(enumerate_hea_masks(problem.n_qubits), candidate_limit, seed)
+    candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
+    stage1_rows = zero_cost_guardrail(candidates, backend=backend)
+    kept = [row for row in stage1_rows if row.kept][: max(1, int(stage1_keep_top))]
+    selected = kept[: max(1, int(top_k))]
+
+    rows: List[VQEFitnessCorrelationRow] = []
+    for index, row in enumerate(selected, start=1):
+        architecture = row.architecture
+        short = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=seed + 1000 + index,
+            n_starts=short_n_starts,
+            evals_per_param=short_evals_per_param,
+            max_evaluations=short_max_evaluations,
+            backend=backend,
+        )
+        fair_budget = max(int(fair_min_evaluations), parameter_count(architecture.circuit) * int(fair_evals_per_param))
+        fair = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=seed + 2000 + index,
+            n_starts=fair_n_starts,
+            evals_per_param=fair_evals_per_param,
+            max_evaluations=fair_budget,
+            backend=backend,
+        )
+        rows.append(
+            VQEFitnessCorrelationRow(
+                rank=index,
+                architecture=architecture,
+                short_energy=short.energy,
+                fair_energy=fair.energy,
+                n_params=parameter_count(architecture.circuit),
+                short_evaluations=short.evaluations,
+                fair_evaluations=fair.evaluations,
+            )
+        )
+
+    return VQEFitnessCorrelationReport(
+        stage1_rows=stage1_rows,
+        rows=rows,
+        metadata={
+            "problem_name": problem.name,
+            "reference_energy": problem.reference_energy,
+            "seed": seed,
+            "top_k": top_k,
+            "candidate_limit": candidate_limit,
+            "stage1_keep_top": stage1_keep_top,
+            "short_n_starts": short_n_starts,
+            "short_evals_per_param": short_evals_per_param,
+            "short_max_evaluations": short_max_evaluations,
+            "fair_n_starts": fair_n_starts,
+            "fair_evals_per_param": fair_evals_per_param,
+            "fair_min_evaluations": fair_min_evaluations,
+            "overlap_k": min(int(overlap_k), len(rows)),
+        },
+    )
+
+
 __all__ = [
     "ENTANGLE_PATTERNS",
     "ENTANGLERS",
@@ -1195,6 +1360,8 @@ __all__ = [
     "Stage1Row",
     "VQEBudgetSweepReport",
     "VQEDemoProblem",
+    "VQEFitnessCorrelationReport",
+    "VQEFitnessCorrelationRow",
     "VQEHEADemoReport",
     "VQEMultiStartSAReport",
     "VQEOptimizationResult",
@@ -1211,6 +1378,7 @@ __all__ = [
     "optimize_h2_energy",
     "optimize_vqe_energy",
     "run_ising4_budget_sweep",
+    "run_ising4_fitness_correlation",
     "run_ising4_multistart_sa",
     "run_sa_search",
     "run_vqe_hea_demo",
