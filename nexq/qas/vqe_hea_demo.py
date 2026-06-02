@@ -174,6 +174,76 @@ class VQEHEADemoReport:
         return lines
 
 
+@dataclass
+class SABudgetSweepRow:
+    steps: int
+    short_best_energy: float
+    final_capped_energy: float
+    final_fair_energy: float
+    mask: HEAMask
+    n_params: int
+    capped_evaluations: int
+    fair_evaluations: int
+
+
+@dataclass
+class VQEBudgetSweepReport:
+    stage1_rows: List[Stage1Row]
+    sweep_rows: List[SABudgetSweepRow]
+    capped_results: List[VQEOptimizationResult]
+    fair_results: List[VQEOptimizationResult]
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def summary_lines(self) -> List[str]:
+        problem_name = str(self.metadata.get("problem_name", "unknown"))
+        reference_energy = float(self.metadata.get("reference_energy", 0.0))
+        kept_count = sum(1 for row in self.stage1_rows if row.kept)
+        lines = [
+            f"VQE-QAS SA budget sweep: {problem_name}",
+            f"reference_energy: {reference_energy:.6f}",
+            f"stage1 candidates: {len(self.stage1_rows)} | kept: {kept_count} | filtered: {len(self.stage1_rows) - kept_count}",
+            f"T_init: {self.metadata.get('t_init')} | T_final: {self.metadata.get('t_final')}",
+            "",
+            "SA budget sweep",
+            "steps | short_best | final_capped | final_fair | n_params | capped_evals | fair_evals | mask",
+        ]
+        for row in self.sweep_rows:
+            lines.append(
+                f"{row.steps} | {row.short_best_energy:.6f} | {row.final_capped_energy:.6f} | "
+                f"{row.final_fair_energy:.6f} | {row.n_params} | {row.capped_evaluations} | "
+                f"{row.fair_evaluations} | {row.mask.label()}"
+            )
+        lines.extend(
+            [
+                "",
+                "Final validation: capped budget",
+                "name | energy | delta_ref | evals | n_params | source",
+            ]
+        )
+        for result in self.capped_results:
+            source = result.metadata.get("source", "-")
+            n_params = parameter_count(result.architecture.circuit)
+            lines.append(
+                f"{result.architecture.name} | {result.energy:.6f} | {result.energy - reference_energy:.6f} | "
+                f"{result.evaluations} | {n_params} | {source}"
+            )
+        lines.extend(
+            [
+                "",
+                "Final validation: per-param fair budget",
+                "name | energy | delta_ref | evals | n_params | source",
+            ]
+        )
+        for result in self.fair_results:
+            source = result.metadata.get("source", "-")
+            n_params = parameter_count(result.architecture.circuit)
+            lines.append(
+                f"{result.architecture.name} | {result.energy:.6f} | {result.energy - reference_energy:.6f} | "
+                f"{result.evaluations} | {n_params} | {source}"
+            )
+        return lines
+
+
 def _stage1_metric_summary(rows: Sequence[Stage1Row]) -> Dict[str, Dict[str, float]]:
     groups = {
         "expressibility": [row.score.expressibility.score for row in rows],
@@ -573,6 +643,8 @@ def run_sa_search(
     evals_per_param: int = 8,
     max_evaluations: int = 40,
     early_stop_delta: Optional[float] = None,
+    t_init: Optional[float] = None,
+    t_final: Optional[float] = None,
     problem: Optional[VQEDemoProblem] = None,
     backend: Optional[NumpyBackend] = None,
 ) -> tuple[VQEOptimizationResult, List[SAStep]]:
@@ -591,11 +663,11 @@ def run_sa_search(
     )
     best = current
     trace: List[SAStep] = []
-    t_init = max(abs(current.energy) * 0.1, 1e-3)
-    t_final = max(abs(current.energy) * 0.001, 1e-5)
+    start_temperature = max(abs(current.energy) * 0.1, 1e-3) if t_init is None else max(float(t_init), 1e-12)
+    end_temperature = max(abs(current.energy) * 0.001, 1e-5) if t_final is None else max(float(t_final), 1e-12)
     for step in range(1, int(n_steps) + 1):
         exponent = step / max(1, int(n_steps))
-        temperature = t_init * ((t_final / t_init) ** exponent)
+        temperature = start_temperature * ((end_temperature / start_temperature) ** exponent)
         next_mask = mutate_hea_mask(current_mask, rng)
         candidate = optimize_vqe_energy(
             architecture_from_hea_mask(next_mask, backend=backend),
@@ -657,6 +729,32 @@ def _baseline_architectures(n_qubits: int, backend: NumpyBackend) -> List[Archit
     return baselines
 
 
+def _validate_candidates(
+    candidates: Sequence[ArchitectureSpec],
+    problem: VQEDemoProblem,
+    seed: int,
+    n_starts: int,
+    evals_per_param: int,
+    max_evaluations: int,
+    backend: NumpyBackend,
+) -> List[VQEOptimizationResult]:
+    results = []
+    for index, architecture in enumerate(_dedupe_architectures(candidates)):
+        result = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=seed + index,
+            n_starts=n_starts,
+            evals_per_param=evals_per_param,
+            max_evaluations=max_evaluations,
+            backend=backend,
+        )
+        result.metadata["source"] = architecture.metadata.get("source", "candidate")
+        results.append(result)
+    results.sort(key=lambda result: result.energy)
+    return results
+
+
 def run_vqe_hea_demo(
     problem: Optional[VQEDemoProblem] = None,
     seed: int = 2026,
@@ -688,20 +786,15 @@ def run_vqe_hea_demo(
         row.architecture.metadata["source"] = "stage1_top"
         final_candidates.append(row.architecture)
     final_candidates.extend(_baseline_architectures(problem.n_qubits, backend))
-    final_results = []
-    for index, architecture in enumerate(_dedupe_architectures(final_candidates)):
-        result = optimize_vqe_energy(
-            architecture,
-            problem,
-            seed=seed + 100 + index,
-            n_starts=3,
-            evals_per_param=12,
-            max_evaluations=120,
-            backend=backend,
-        )
-        result.metadata["source"] = architecture.metadata.get("source", "stage1_or_sa")
-        final_results.append(result)
-    final_results.sort(key=lambda result: result.energy)
+    final_results = _validate_candidates(
+        final_candidates,
+        problem,
+        seed=seed + 100,
+        n_starts=3,
+        evals_per_param=12,
+        max_evaluations=120,
+        backend=backend,
+    )
     return VQEHEADemoReport(
         stage1_rows=stage1_rows,
         sa_trace=trace,
@@ -737,6 +830,136 @@ def run_vqe_ising4_demo(
     )
 
 
+def run_ising4_budget_sweep(
+    seed: int = 2026,
+    steps: Sequence[int] = (36, 80, 120),
+    candidate_limit: int = 72,
+    stage1_keep_top: int = 16,
+    t_init: float = 0.30,
+    t_final: float = 0.001,
+    search_evals_per_param: int = 8,
+    search_max_evaluations: int = 40,
+    final_n_starts: int = 3,
+    capped_evals_per_param: int = 12,
+    capped_max_evaluations: int = 120,
+    fair_evals_per_param: int = 20,
+    fair_min_evaluations: int = 40,
+    backend: Optional[NumpyBackend] = None,
+) -> VQEBudgetSweepReport:
+    problem = ising4_demo_problem()
+    backend = backend or NumpyBackend()
+    masks = _sample_masks(enumerate_hea_masks(problem.n_qubits), candidate_limit, seed)
+    candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
+    stage1_rows = zero_cost_guardrail(candidates, backend=backend)
+    kept = [row for row in stage1_rows if row.kept][: max(1, int(stage1_keep_top))]
+    seed_row = max(kept, key=lambda row: row.score.weighted_score)
+    seed_mask = HEAMask(*seed_row.architecture.metadata["hea_mask"])
+
+    sa_results: List[VQEOptimizationResult] = []
+    sweep_rows: List[SABudgetSweepRow] = []
+    for item_index, n_steps in enumerate(steps):
+        sa_best, _trace = run_sa_search(
+            seed_mask,
+            n_steps=int(n_steps),
+            seed=seed + item_index * 1000,
+            evals_per_param=search_evals_per_param,
+            max_evaluations=search_max_evaluations,
+            t_init=t_init,
+            t_final=t_final,
+            problem=problem,
+            backend=backend,
+        )
+        sa_best.architecture.metadata["source"] = f"sa_steps_{int(n_steps)}"
+        sa_results.append(sa_best)
+
+        capped = optimize_vqe_energy(
+            sa_best.architecture,
+            problem,
+            seed=seed + 5000 + item_index,
+            n_starts=final_n_starts,
+            evals_per_param=capped_evals_per_param,
+            max_evaluations=capped_max_evaluations,
+            backend=backend,
+        )
+        fair_budget = max(int(fair_min_evaluations), parameter_count(sa_best.architecture.circuit) * int(fair_evals_per_param))
+        fair = optimize_vqe_energy(
+            sa_best.architecture,
+            problem,
+            seed=seed + 6000 + item_index,
+            n_starts=final_n_starts,
+            evals_per_param=fair_evals_per_param,
+            max_evaluations=fair_budget,
+            backend=backend,
+        )
+        mask = HEAMask(*sa_best.architecture.metadata["hea_mask"])
+        sweep_rows.append(
+            SABudgetSweepRow(
+                steps=int(n_steps),
+                short_best_energy=sa_best.energy,
+                final_capped_energy=capped.energy,
+                final_fair_energy=fair.energy,
+                mask=mask,
+                n_params=parameter_count(sa_best.architecture.circuit),
+                capped_evaluations=capped.evaluations,
+                fair_evaluations=fair.evaluations,
+            )
+        )
+
+    validation_candidates: List[ArchitectureSpec] = []
+    validation_candidates.extend(result.architecture for result in sa_results)
+    for row in kept[:3]:
+        row.architecture.metadata["source"] = "stage1_top"
+        validation_candidates.append(row.architecture)
+    validation_candidates.extend(_baseline_architectures(problem.n_qubits, backend))
+
+    capped_results = _validate_candidates(
+        validation_candidates,
+        problem,
+        seed=seed + 7000,
+        n_starts=final_n_starts,
+        evals_per_param=capped_evals_per_param,
+        max_evaluations=capped_max_evaluations,
+        backend=backend,
+    )
+    fair_results = []
+    for index, architecture in enumerate(_dedupe_architectures(validation_candidates)):
+        fair_budget = max(int(fair_min_evaluations), parameter_count(architecture.circuit) * int(fair_evals_per_param))
+        result = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=seed + 8000 + index,
+            n_starts=final_n_starts,
+            evals_per_param=fair_evals_per_param,
+            max_evaluations=fair_budget,
+            backend=backend,
+        )
+        result.metadata["source"] = architecture.metadata.get("source", "candidate")
+        fair_results.append(result)
+    fair_results.sort(key=lambda result: result.energy)
+
+    return VQEBudgetSweepReport(
+        stage1_rows=stage1_rows,
+        sweep_rows=sweep_rows,
+        capped_results=capped_results,
+        fair_results=fair_results,
+        metadata={
+            "problem_name": problem.name,
+            "reference_energy": problem.reference_energy,
+            "seed": seed,
+            "steps": list(steps),
+            "t_init": t_init,
+            "t_final": t_final,
+            "search_evals_per_param": search_evals_per_param,
+            "search_max_evaluations": search_max_evaluations,
+            "final_n_starts": final_n_starts,
+            "capped_evals_per_param": capped_evals_per_param,
+            "capped_max_evaluations": capped_max_evaluations,
+            "fair_evals_per_param": fair_evals_per_param,
+            "fair_min_evaluations": fair_min_evaluations,
+        },
+    )
+
+
 __all__ = [
     "ENTANGLE_PATTERNS",
     "ENTANGLERS",
@@ -747,8 +970,10 @@ __all__ = [
     "ISING4_HAMILTONIAN",
     "LAYER_CHOICES",
     "ROTATION_BLOCKS",
+    "SABudgetSweepRow",
     "SAStep",
     "Stage1Row",
+    "VQEBudgetSweepReport",
     "VQEDemoProblem",
     "VQEHEADemoReport",
     "VQEOptimizationResult",
@@ -764,6 +989,7 @@ __all__ = [
     "mutate_hea_mask",
     "optimize_h2_energy",
     "optimize_vqe_energy",
+    "run_ising4_budget_sweep",
     "run_sa_search",
     "run_vqe_hea_demo",
     "run_vqe_ising4_demo",

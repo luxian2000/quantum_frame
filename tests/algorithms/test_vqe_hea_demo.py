@@ -8,6 +8,7 @@ from nexq.qas import (
     exact_ground_energy,
     ising4_demo_problem,
     mutate_hea_mask,
+    run_ising4_budget_sweep,
     run_vqe_hea_demo,
     run_vqe_ising4_demo,
 )
@@ -63,6 +64,26 @@ class TestVQEHEADemo(unittest.TestCase):
         self.assertTrue(report.stage1_rows)
         self.assertTrue(report.sa_trace)
         self.assertTrue(report.final_results)
+
+    def test_ising4_budget_sweep_reports_capped_and_fair_validation(self):
+        report = run_ising4_budget_sweep(
+            seed=13,
+            steps=(2, 3),
+            candidate_limit=8,
+            stage1_keep_top=4,
+            search_max_evaluations=6,
+            final_n_starts=1,
+            capped_max_evaluations=8,
+            fair_evals_per_param=2,
+            fair_min_evaluations=4,
+        )
+        summary = "\n".join(report.summary_lines())
+
+        self.assertEqual(len(report.sweep_rows), 2)
+        self.assertTrue(report.capped_results)
+        self.assertTrue(report.fair_results)
+        self.assertIn("SA budget sweep", summary)
+        self.assertIn("Final validation: per-param fair budget", summary)
 
 
 if __name__ == "__main__":
