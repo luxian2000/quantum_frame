@@ -1,7 +1,7 @@
 """Demo: visualize QAS candidates and metric scores.
 
 Run from the repository root:
-    python -m demo.visual_qas_demo
+    python -m demos.visual_qas_demo
 """
 
 from __future__ import annotations

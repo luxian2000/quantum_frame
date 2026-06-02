@@ -519,12 +519,12 @@ print(result.circuit.show())
 ## 7. 示例脚本
 
 - `PPO_RB_demo_ghz4.py`：使用 PPO-RB 搜索 4 比特 GHZ 线路
-- `PPR_DQL_demo_ghz3.py`：使用 PPR-DQL 搜索 3 比特 GHZ 线路，并导出 OpenQASM 3.0 到 `demo/ppr_dql_ghz3_circuit.qasm`
-- `CRLQAS_demo_h2.py`：使用 CRLQAS 搜索小分子 H2 的低能量线路，并导出 OpenQASM 3.0 到 `demo/crlqas_h2_circuit.qasm`
+- `PPR_DQL_demo_ghz3.py`：使用 PPR-DQL 搜索 3 比特 GHZ 线路，并导出 OpenQASM 3.0 到 `demos/ppr_dql_ghz3_circuit.qasm`
+- `CRLQAS_demo_h2.py`：使用 CRLQAS 搜索小分子 H2 的低能量线路，并导出 OpenQASM 3.0 到 `demos/crlqas_h2_circuit.qasm`
 
 运行示例：
 
 ```bash
-python aicir/qas/demo/PPR_DQL_demo_ghz3.py
-python aicir/qas/demo/CRLQAS_demo_h2.py
+python aicir/qas/demos/PPR_DQL_demo_ghz3.py
+python aicir/qas/demos/CRLQAS_demo_h2.py
 ```

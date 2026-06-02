@@ -1,7 +1,7 @@
 """Demo: visualize a aicir quantum circuit.
 
 Run from the repository root:
-    python -m demo.visual_circuit_demo
+    python -m demos.visual_circuit_demo
 """
 
 from __future__ import annotations

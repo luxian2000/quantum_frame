@@ -1,7 +1,7 @@
 """Small PPR-DQL demo with the default ion-trap noise model.
 
 Run from the repository root:
-    C:/ProgramData/anaconda3/python.exe aicir/qas/demo/PPR_DQL_noise_adaptive_demo.py
+    C:/ProgramData/anaconda3/python.exe aicir/qas/demos/PPR_DQL_noise_adaptive_demo.py
 """
 
 from __future__ import annotations
