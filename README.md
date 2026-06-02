@@ -1,22 +1,22 @@
-# nexq 使用手册
+# aicir 使用手册
 
 ---
 
 ## 1. 模块导入
 
-所有常用类与函数均可从顶层 `nexq` 包一次性导入。
+所有常用类与函数均可从顶层 `aicir` 包一次性导入。
 
-状态类 `StateVector`、`DensityMatrix` 的规范模块路径为 `nexq.core`，同时也可从顶层 `nexq` 导入。
+状态类 `StateVector`、`DensityMatrix` 的规范模块路径为 `aicir.core`，同时也可从顶层 `aicir` 导入。
 
 ```python
 # 后端
-from nexq import TorchBackend, NumpyBackend, NPUBackend
+from aicir import TorchBackend, NumpyBackend, NPUBackend
 
 # 量子态（规范路径）
-from nexq.core import StateVector, DensityMatrix
+from aicir.core import StateVector, DensityMatrix
 
 # 量子门（构造函数，返回门字典）
-from nexq import (
+from aicir import (
     pauli_x, pauli_y, pauli_z,
     hadamard,
     rx, ry, rz,
@@ -29,16 +29,16 @@ from nexq import (
 )
 
 # 电路与参数占位符
-from nexq import Circuit, Parameter
+from aicir import Circuit, Parameter
 
 # 测量
-from nexq import Measure, Result
+from aicir import Measure, Result
 
 # 哈密顿量
-from nexq import PauliOp, PauliString, Hamiltonian
+from aicir import PauliOp, PauliString, Hamiltonian
 
 # 噪声
-from nexq import (
+from aicir import (
     NoiseChannel, NoiseModel,
     DepolarizingChannel,
     BitFlipChannel,
@@ -47,7 +47,7 @@ from nexq import (
 )
 
 # OpenQASM 互转
-from nexq import (
+from aicir import (
     circuit_to_qasm, circuit_to_qasm3,
     circuit_from_qasm,
     load_circuit_qasm, save_circuit_qasm,
@@ -55,7 +55,7 @@ from nexq import (
 )
 
 # QML 梯度工具
-from nexq.qml import psr, spsr, multipsr
+from aicir.qml import psr, spsr, multipsr
 ```
 
 ---
@@ -94,7 +94,7 @@ from nexq.qml import psr, spsr, multipsr
 ### 2.2 构建电路
 
 ```python
-from nexq import Circuit, hadamard, cnot, cx, ry, rz
+from aicir import Circuit, hadamard, cnot, cx, ry, rz
 
 # 方式一：构造时直接传入门列表（自动推断 n_qubits）
 cir = Circuit(
@@ -123,7 +123,7 @@ print(U.shape)   # (4, 4)
 
 ```python
 import math
-from nexq import Circuit, rx, ry, rz, u2, u3, crx, rzz, swap, toffoli
+from aicir import Circuit, rx, ry, rz, u2, u3, crx, rzz, swap, toffoli
 
 cir = Circuit(
     rx(math.pi / 2, 0),             # Rx(π/2) 作用在 qubit 0
@@ -143,7 +143,7 @@ cir = Circuit(
 `Parameter` 可作为旋转门参数的符号占位符，用于构建量子神经网络、VQE、QAOA 等可训练线路模板。模板电路在绑定参数前只保存门字典，不会生成数值矩阵。
 
 ```python
-from nexq import Circuit, Parameter, rx, ry, crz, cnot
+from aicir import Circuit, Parameter, rx, ry, crz, cnot
 
 theta0 = Parameter("theta0")
 theta1 = Parameter("theta1")
@@ -194,7 +194,7 @@ template.bind_parameters({"theta0": 0.2, "theta1": 0.5}, inplace=True)
 
 ```python
 import numpy as np
-from nexq import Circuit
+from aicir import Circuit
 
 custom = {
     "type": "unitary",
@@ -212,7 +212,7 @@ Torch 参数示例：
 
 ```python
 import torch
-from nexq import Circuit, TorchBackend, rx, rzz
+from aicir import Circuit, TorchBackend, rx, rzz
 
 backend = TorchBackend(device="cpu")
 theta = torch.tensor(0.2, requires_grad=True)
@@ -238,7 +238,7 @@ print(theta.grad)
 ### 3.1 基本用法：概率 + 采样计数
 
 ```python
-from nexq import Circuit, Measure, TorchBackend, hadamard, cnot
+from aicir import Circuit, Measure, TorchBackend, hadamard, cnot
 
 backend = TorchBackend()
 measure = Measure(backend)
@@ -265,7 +265,7 @@ print(result.probabilities)     # 仅概率，counts 为 None
 
 ```python
 import numpy as np
-from nexq import Circuit, Measure, TorchBackend, hadamard
+from aicir import Circuit, Measure, TorchBackend, hadamard
 
 backend = TorchBackend()
 # Z 算符矩阵
@@ -283,8 +283,8 @@ print(result.expectation_variances)
 ### 3.4 从 StateVector 直接测量
 
 ```python
-from nexq.core import StateVector
-from nexq import TorchBackend
+from aicir.core import StateVector
+from aicir import TorchBackend
 import numpy as np
 
 backend = TorchBackend()
@@ -315,12 +315,12 @@ print(counts)   # {'|00>': 512}
 
 ## 4. 构建哈密顿量
 
-nexq 提供三个层次的算符构建工具：`PauliOp`、`PauliString`、`Hamiltonian`。
+aicir 提供三个层次的算符构建工具：`PauliOp`、`PauliString`、`Hamiltonian`。
 
 ### 4.1 单算符 PauliOp
 
 ```python
-from nexq import PauliOp, TorchBackend
+from aicir import PauliOp, TorchBackend
 
 backend = TorchBackend()
 
@@ -333,7 +333,7 @@ print(mat.shape)   # torch.Size([4, 4])
 ### 4.2 多体泡利串 PauliString
 
 ```python
-from nexq import PauliString, TorchBackend
+from aicir import PauliString, TorchBackend
 
 backend = TorchBackend()
 
@@ -350,7 +350,7 @@ print(ps_auto)
 ### 4.3 哈密顿量 Hamiltonian
 
 ```python
-from nexq import Hamiltonian, TorchBackend, Circuit, Measure, hadamard
+from aicir import Hamiltonian, TorchBackend, Circuit, Measure, hadamard
 
 backend = TorchBackend()
 
@@ -365,7 +365,7 @@ H_mat = H.to_matrix(backend)
 print(H_mat.shape)   # torch.Size([4, 4])
 
 # 计算期望值（通过 StateVector）
-from nexq.core import StateVector
+from aicir.core import StateVector
 sv = StateVector.zero_state(2, backend)
 print(H.expectation(sv, backend))   # 实数期望值
 
@@ -379,7 +379,7 @@ print(result.expectation_values["H"])
 ### 4.4 噪声通道（开放量子系统）
 
 ```python
-from nexq import (
+from aicir import (
     NoiseModel,
     DepolarizingChannel,
     BitFlipChannel,
@@ -387,7 +387,7 @@ from nexq import (
     AmplitudeDampingChannel,
     TorchBackend,
 )
-from nexq.core import DensityMatrix
+from aicir.core import DensityMatrix
 
 backend = TorchBackend()
 model = (NoiseModel()
@@ -404,14 +404,14 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 
 ## 5. NPU 后端的使用
 
-nexq 通过 `NPUBackend` 支持 Ascend NPU（依赖 `torch_npu`）。
+aicir 通过 `NPUBackend` 支持 Ascend NPU（依赖 `torch_npu`）。
 
 说明：Ascend NPU 在不同版本的 `torch_npu` 组合下，对 `complex64` 的内核支持并不完整。某些复数算子会直接报错，例如：
 
 - `aclnnEye ... DT_COMPLEX64 not implemented`
 - `aclnnAdd ... DT_COMPLEX64 not implemented`
 
-因此，nexq 在后端层提供了 NPU 专用兼容路径（workaround），核心思路是：
+因此，aicir 在后端层提供了 NPU 专用兼容路径（workaround），核心思路是：
 
 - 优先走后端抽象接口（`matmul/kron/trace/...`），避免业务层直接做 torch 复数运算。
 - 在 NPU 且输入为复数时，将计算拆成实部/虚部后重组，绕过缺失内核。
@@ -460,7 +460,7 @@ nexq 通过 `NPUBackend` 支持 Ascend NPU（依赖 `torch_npu`）。
 示例：
 
 ```python
-from nexq import Circuit, Measure, NPUBackend, hadamard, cnot
+from aicir import Circuit, Measure, NPUBackend, hadamard, cnot
 
 backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 cir = Circuit(
@@ -520,7 +520,7 @@ cir.bind_backend(backend)
 ### 5.4 严格 NPU 模式（不允许回退）
 
 ```python
-from nexq import NPUBackend
+from aicir import NPUBackend
 
 # NPU 不可用时直接抛 RuntimeError，用于验证平台
 backend = NPUBackend(device="npu:0", fallback_to_cpu=False)
@@ -540,7 +540,7 @@ python demo_npu.py --shots 2048 --allow-cpu-fallback
 使用环境变量 `WORLD_SIZE`、`RANK`、`LOCAL_RANK` 自动绑定对应卡：
 
 ```python
-from nexq import NPUBackend
+from aicir import NPUBackend
 
 # 自动读取 LOCAL_RANK 决定 npu:LOCAL_RANK
 backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
@@ -565,7 +565,7 @@ torchrun --nproc_per_node=4 your_script.py
 
 ```python
 import math
-from nexq import NPUBackend, Circuit, Measure, hadamard, cnot, rz
+from aicir import NPUBackend, Circuit, Measure, hadamard, cnot, rz
 
 # 1. 构建后端
 backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
@@ -626,7 +626,7 @@ Summary: PASS
 ### 6.1 Circuit → QASM 字符串
 
 ```python
-from nexq import Circuit, hadamard, cnot, rz, circuit_to_qasm, circuit_to_qasm3
+from aicir import Circuit, hadamard, cnot, rz, circuit_to_qasm, circuit_to_qasm3
 import math
 
 cir = Circuit(
@@ -654,7 +654,7 @@ print(qasm3)
 ### 6.2 QASM 字符串 → Circuit
 
 ```python
-from nexq import circuit_from_qasm
+from aicir import circuit_from_qasm
 
 qasm_str = """
 OPENQASM 2.0;
@@ -673,7 +673,7 @@ print(cir.unitary().shape)  # (4, 4)
 ### 6.3 读写 QASM 文件
 
 ```python
-from nexq import (
+from aicir import (
     save_circuit_qasm, load_circuit_qasm,
     save_circuit_qasm3,
 )
@@ -690,7 +690,7 @@ cir2 = load_circuit_qasm("my_circuit.qasm")
 
 ### 6.4 OpenQASM 3.0 格式差异
 
-nexq 在 3.0 模式下的主要差异：
+aicir 在 3.0 模式下的主要差异：
 
 | 项目           | 2.0                       | 3.0                         |
 | -------------- | ------------------------- | --------------------------- |
@@ -701,7 +701,7 @@ nexq 在 3.0 模式下的主要差异：
 
 ### 6.5 支持的 QASM 门集
 
-| QASM 门名                          | nexq 对应函数                         |
+| QASM 门名                          | aicir 对应函数                         |
 | ---------------------------------- | ------------------------------------- |
 | `x`, `y`, `z`                | `pauli_x`, `pauli_y`, `pauli_z` |
 | `h`                              | `hadamard`                          |
@@ -723,10 +723,10 @@ nexq 在 3.0 模式下的主要差异：
 
 ## 7. QML 梯度工具
 
-`nexq.qml.grad` 提供面向量子机器学习和变分量子线路的梯度工具。常用函数可直接从 `nexq.qml` 导入：
+`aicir.qml.grad` 提供面向量子机器学习和变分量子线路的梯度工具。常用函数可直接从 `aicir.qml` 导入：
 
 ```python
-from nexq.qml import psr, spsr, multipsr
+from aicir.qml import psr, spsr, multipsr
 ```
 
 这些函数都假设目标函数 `fn(params)` 返回标量，`params` 可以是标量或任意形状的 NumPy 数组。
@@ -743,7 +743,7 @@ from nexq.qml import psr, spsr, multipsr
 
 ```python
 import numpy as np
-from nexq.qml import psr
+from aicir.qml import psr
 
 params = np.array([0.3, -0.4])
 
@@ -758,8 +758,8 @@ print(grad)  # [-sin(0.3), cos(-0.4)]
 
 ```python
 import numpy as np
-from nexq import Circuit, NumpyBackend, Parameter, State, ry
-from nexq.qml import psr
+from aicir import Circuit, NumpyBackend, Parameter, State, ry
+from aicir.qml import psr
 
 theta = Parameter("theta")
 template = Circuit(ry(theta, 0), n_qubits=1)
@@ -779,7 +779,7 @@ grad = psr(expectation, np.array([0.5]))
 `spsr` 随机抽样部分参数坐标，只对抽中的参数做 shift 评估。默认 `unbiased=True`，会按参数总数和采样数缩放，使估计量在期望上等于完整 `psr` 梯度。
 
 ```python
-from nexq.qml import spsr
+from aicir.qml import spsr
 
 grad_est = spsr(
     loss,
@@ -809,7 +809,7 @@ d² fn / d theta[0] d theta[1]
 ```
 
 ```python
-from nexq.qml import multipsr
+from aicir.qml import multipsr
 
 def objective(theta):
     return np.cos(theta[0]) * np.sin(theta[1])
@@ -833,18 +833,18 @@ mixed = multipsr(objective_2d, params, parameter_indices=[(0, 0), (1, 0)])
 
 ### 7.4 VQC 中的使用
 
-`nexq.vqc` 中已有的 `BasicVQE.parameter_shift_gradient()`、`BasicSSVQE.parameter_shift_gradient()` 和 `BasicVQD.parameter_shift_gradient()` 已统一调用 `nexq.qml.grad.psr`。因此自定义 QNN/VQC 模型时也建议复用 `psr`、`spsr` 和 `multipsr`，避免各模块重复实现 parameter-shift 逻辑。
+`aicir.vqc` 中已有的 `BasicVQE.parameter_shift_gradient()`、`BasicSSVQE.parameter_shift_gradient()` 和 `BasicVQD.parameter_shift_gradient()` 已统一调用 `aicir.qml.grad.psr`。因此自定义 QNN/VQC 模型时也建议复用 `psr`、`spsr` 和 `multipsr`，避免各模块重复实现 parameter-shift 逻辑。
 
 ---
 
 ## 8. 可视化模块
 
-`nexq.visual` 提供第一阶段的轻量可视化工具，用于查看量子线路、量子态概率/振幅和密度矩阵。文本线路图与门统计不依赖额外图形库；绘图函数会在调用时按需导入 `matplotlib`。
+`aicir.visual` 提供第一阶段的轻量可视化工具，用于查看量子线路、量子态概率/振幅和密度矩阵。文本线路图与门统计不依赖额外图形库；绘图函数会在调用时按需导入 `matplotlib`。
 
 ```python
 import numpy as np
-from nexq import Circuit, hadamard, cnot, rzz
-from nexq.visual import (
+from aicir import Circuit, hadamard, cnot, rzz
+from aicir.visual import (
     circuit_to_text,
     draw_circuit,
     gate_histogram,
@@ -890,12 +890,12 @@ fig, ax = plot_density_matrix(rho, part="abs")
 
 ### 8.1 QAS 与 metrics 可视化
 
-`nexq.visual` 也可以直接消费 `nexq.qas` 的 `SearchResult`、`ArchitectureScore`、`ArchitectureSpec`，用于对比架构搜索候选、查看四类 objective group 分数，以及把线路图和指标放在一个 summary 图中。
+`aicir.visual` 也可以直接消费 `aicir.qas` 的 `SearchResult`、`ArchitectureScore`、`ArchitectureSpec`，用于对比架构搜索候选、查看四类 objective group 分数，以及把线路图和指标放在一个 summary 图中。
 
 ```python
-from nexq.channel.backends.numpy_backend import NumpyBackend
-from nexq.qas import ArchitectureSearch, SearchConfig
-from nexq.visual import (
+from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.qas import ArchitectureSearch, SearchConfig
+from aicir.visual import (
     qas_scores_to_rows,
     plot_search_history,
     plot_architecture_metrics,

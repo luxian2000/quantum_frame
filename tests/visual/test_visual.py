@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from nexq import Circuit, cnot, hadamard, rzz, rx
-from nexq.visual import (
+from aicir import Circuit, cnot, hadamard, rzz, rx
+from aicir.visual import (
     circuit_to_text,
     draw_circuit,
     gate_histogram,

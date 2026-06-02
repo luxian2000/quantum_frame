@@ -5,14 +5,14 @@ import unittest
 import numpy as np
 import torch
 
-from nexq import Circuit, Parameter, cnot, crx, cry, crz, hadamard, rx, rzz, swap, toffoli, u2, u3
-from nexq.core.io.json_io import (
+from aicir import Circuit, Parameter, cnot, crx, cry, crz, hadamard, rx, rzz, swap, toffoli, u2, u3
+from aicir.core.io.json_io import (
     circuit_from_json,
     circuit_to_json,
     load_circuit_json,
     save_circuit_json,
 )
-from nexq.core.io.qasm import (
+from aicir.core.io.qasm import (
     circuit_from_qasm,
     circuit_to_qasm,
     circuit_to_qasm3,
