@@ -176,6 +176,8 @@ class SearchConfig:
     mutation_rate: float = 0.25
     beam_width: int = 4
     progressive_keep: Optional[int] = None
+    reflective_mutation: bool = False
+    reflection_strength: float = 0.7
 
 
 @dataclass

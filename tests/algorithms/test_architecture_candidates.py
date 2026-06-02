@@ -117,6 +117,31 @@ class TestArchitectureCandidates(unittest.TestCase):
         self.assertTrue(generations <= {0, 1})
         self.assertTrue(all("evolution_weighted_score" in score.architecture.metadata for score in result.scores))
 
+    def test_reflective_supercircuit_records_metric_feedback(self):
+        search = ArchitectureSearch(backend=self.backend)
+        result = search.run(
+            SearchConfig(
+                n_qubits=3,
+                candidate_layers=2,
+                n_samples=4,
+                include_common_candidates=False,
+                search_strategy="supercircuit_reflective",
+                population_size=5,
+                search_generations=2,
+                beam_width=2,
+                mutation_rate=0.5,
+                reflection_strength=0.8,
+                top_k=5,
+            )
+        )
+
+        self.assertEqual(result.metadata["search_strategy"], "supercircuit_reflective")
+        self.assertTrue(result.metadata["reflective_mutation"])
+        self.assertTrue(any("reflection" in candidate.metadata for candidate in result.candidates))
+        reflected = [candidate.metadata["reflection"] for candidate in result.candidates if "reflection" in candidate.metadata]
+        self.assertTrue(all("weakest_metric" in item for item in reflected))
+        self.assertTrue(all("preferred_rotations" in item for item in reflected))
+
 
 if __name__ == "__main__":
     unittest.main()

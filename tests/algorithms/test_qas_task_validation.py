@@ -118,15 +118,24 @@ class TestQASTaskValidation(unittest.TestCase):
             ),
             optimizer_config=OptimizerConfig(max_evaluations=3, seed=13),
             qas_top_k=1,
-            strategies=("supercircuit_progressive", "supercircuit_evolution", "task_feedback", "hybrid"),
+            strategies=(
+                "supercircuit_progressive",
+                "supercircuit_evolution",
+                "supercircuit_reflective",
+                "task_feedback",
+                "hybrid",
+            ),
             feedback_generations=1,
             feedback_population_size=3,
             feedback_elite_count=1,
         )
 
         rows = report.strategy_summary()
-        self.assertEqual(set(report.reports), {"supercircuit_progressive", "supercircuit_evolution", "task_feedback", "hybrid"})
-        self.assertEqual(len(rows), 4)
+        self.assertEqual(
+            set(report.reports),
+            {"supercircuit_progressive", "supercircuit_evolution", "supercircuit_reflective", "task_feedback", "hybrid"},
+        )
+        self.assertEqual(len(rows), 5)
         self.assertIn("strategy | baseline_best | qas_best", "\n".join(report.summary_lines()))
         self.assertTrue(all("strategy" in row for row in rows))
 
@@ -151,7 +160,7 @@ class TestQASTaskValidation(unittest.TestCase):
             feedback_elite_count=1,
         )
 
-        self.assertEqual(report.metadata["hybrid_pipeline"], "progressive->evolution->task_feedback")
+        self.assertEqual(report.metadata["hybrid_pipeline"], "progressive->reflective_evolution->task_feedback")
         self.assertEqual(len(report.baseline_results), 3)
         self.assertEqual(len(report.qas_results), 2)
         self.assertTrue(all(result.metadata["result_group"] == "qas_hybrid" for result in report.qas_results))

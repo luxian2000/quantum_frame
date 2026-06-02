@@ -187,7 +187,7 @@ python -m nexq.qas.demo.qas_strategy_comparison
 正式组合链路是：
 
 ```text
-progressive 粗筛 -> evolution zero-cost 结构搜索 -> task_feedback 小预算任务精修
+progressive 粗筛 -> reflective evolution zero-cost 结构搜索 -> task_feedback 小预算任务精修
 ```
 
 对应接口：

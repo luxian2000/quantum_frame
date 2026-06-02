@@ -21,6 +21,8 @@ from .search_strategies import (
     is_valid_supercircuit_mask,
     mutate_supercircuit_mask,
     random_supercircuit_mask,
+    reflection_from_architecture_score,
+    reflective_mutate_supercircuit_mask,
     sample_supercircuit_masks,
     supercircuit_blocks,
 )
@@ -131,7 +133,7 @@ class ArchitectureSearch:
         extra_candidates: Optional[Sequence[ArchitectureSpec]] = None,
     ) -> SearchResult:
         cfg = config or SearchConfig()
-        if cfg.search_strategy == "supercircuit_evolution":
+        if cfg.search_strategy in {"supercircuit_evolution", "supercircuit_reflective"}:
             return self._run_supercircuit_evolution(cfg, extra_candidates=extra_candidates)
         candidates = self.generate_candidates(cfg, extra_candidates=extra_candidates)
         scores = self.evaluate_candidates(candidates, cfg)
@@ -159,11 +161,13 @@ class ArchitectureSearch:
         population_size = max(1, int(cfg.population_size))
         generations = max(1, int(cfg.search_generations))
         elite_count = max(1, min(population_size, int(cfg.beam_width)))
+        reflective = cfg.search_strategy == "supercircuit_reflective" or bool(cfg.reflective_mutation)
         seen: set[tuple[int, ...]] = set()
         masks = sample_supercircuit_masks(cfg, sample_count=population_size)
         seen.update(masks)
         all_scores = []
         all_candidates_by_mask: Dict[tuple[int, ...], ArchitectureSpec] = {}
+        reflection_by_mask: Dict[tuple[int, ...], dict] = {}
 
         for generation in range(generations):
             candidates = [
@@ -176,6 +180,10 @@ class ArchitectureSearch:
                 )
                 for mask in masks
             ]
+            for candidate in candidates:
+                mask = tuple(candidate.metadata["supercircuit_mask"])
+                if mask in reflection_by_mask:
+                    candidate.metadata["reflection"] = reflection_by_mask[mask]
             scores = self.evaluate_candidates(candidates, cfg)
             for rank, score in enumerate(scores, start=1):
                 score.architecture.metadata["evolution_generation_rank"] = rank
@@ -183,7 +191,8 @@ class ArchitectureSearch:
                 mask = tuple(score.architecture.metadata["supercircuit_mask"])
                 all_candidates_by_mask[mask] = score.architecture
             all_scores.extend(scores)
-            elites = [tuple(score.architecture.metadata["supercircuit_mask"]) for score in scores[:elite_count]]
+            elite_scores = scores[:elite_count]
+            elites = [tuple(score.architecture.metadata["supercircuit_mask"]) for score in elite_scores]
             if generation == generations - 1:
                 break
 
@@ -192,16 +201,31 @@ class ArchitectureSearch:
             max_attempts = max(100, population_size * 30)
             while len(next_masks) < population_size and attempts < max_attempts:
                 attempts += 1
-                parent = elites[int(rng.integers(0, len(elites)))]
+                parent_index = int(rng.integers(0, len(elites)))
+                parent = elites[parent_index]
                 if len(elites) > 1 and rng.random() < 0.5:
                     other = elites[int(rng.integers(0, len(elites)))]
                     child = crossover_supercircuit_masks(parent, other, rng)
                 else:
                     child = parent
-                child = mutate_supercircuit_mask(child, blocks, rng, mutation_rate=cfg.mutation_rate)
+                if reflective:
+                    reflection = reflection_from_architecture_score(elite_scores[parent_index])
+                    child = reflective_mutate_supercircuit_mask(
+                        child,
+                        blocks,
+                        rng,
+                        reflection,
+                        mutation_rate=cfg.mutation_rate,
+                        strength=cfg.reflection_strength,
+                    )
+                else:
+                    reflection = None
+                    child = mutate_supercircuit_mask(child, blocks, rng, mutation_rate=cfg.mutation_rate)
                 if child in seen or not is_valid_supercircuit_mask(child, blocks):
                     continue
                 seen.add(child)
+                if reflection is not None:
+                    reflection_by_mask[child] = reflection
                 next_masks.append(child)
             while len(next_masks) < population_size:
                 mask = random_supercircuit_mask(blocks, rng)
@@ -239,6 +263,8 @@ class ArchitectureSearch:
                 "search_generations": generations,
                 "population_size": population_size,
                 "elite_count": elite_count,
+                "reflective_mutation": reflective,
+                "reflection_strength": cfg.reflection_strength,
             },
         )
 
