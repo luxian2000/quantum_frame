@@ -48,13 +48,21 @@ class DensityMatrix:
         self._backend = backend
         self._n_qubits = n_qubits
 
-        np_data = backend.to_numpy(data)
+        # Cast once on the backend device, then validate shape via tensor
+        # metadata. Avoid `to_numpy` here: on accelerator backends (e.g. NPU)
+        # it forces a device→host→device round-trip on every construction —
+        # and therefore on every `evolve` call — and its `.detach()` also
+        # severs autograd. `.shape` is host-side metadata and needs no copy.
+        casted = backend.cast(data)
+        if casted is None:
+            raise TypeError("backend.cast 返回了 None，无法构造 DensityMatrix")
         dim = 1 << n_qubits
-        if np_data.shape != (dim, dim):
+        shape = tuple(int(axis) for axis in casted.shape)
+        if shape != (dim, dim):
             raise ValueError(
-                f"密度矩阵形状 {np_data.shape} 与 n_qubits={n_qubits} 不符（期望 ({dim},{dim})）"
+                f"密度矩阵形状 {shape} 与 n_qubits={n_qubits} 不符（期望 ({dim},{dim})）"
             )
-        self._data = backend.cast(np_data)
+        self._data = casted
 
     @classmethod
     def zero_state(cls, n_qubits: int, backend: "Backend") -> "DensityMatrix":
