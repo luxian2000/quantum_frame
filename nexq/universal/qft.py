@@ -6,7 +6,7 @@ import math
 import operator
 from typing import List
 
-from ..core.circuit import Circuit, crz, hadamard, swap
+from ..core.circuit import Circuit, crz, hadamard, rz, swap
 
 
 def _validate_qubit_range(n_qubits: int, start_qubit: int) -> tuple[int, int]:
@@ -41,6 +41,12 @@ def qft(n_qubits: int, start_qubit: int = 0) -> List[dict]:
         gates.append(hadamard(target))
         for control in range(target + 1, stop):
             angle = math.pi / (2 ** (control - target))
+            # The QFT requires a controlled-phase gate CP(angle) =
+            # diag(1, 1, 1, e^{i·angle}). ``crz`` alone is NOT equivalent: it
+            # halves the |11> phase and adds a spurious phase on the control.
+            # CP(angle) = rz(angle/2 on control) · crz(angle, target, control)
+            # up to an (unobservable) global phase, so emit both.
+            gates.append(rz(angle / 2, control))
             gates.append(crz(angle, target, [control]))
 
     for offset in range(n // 2):
