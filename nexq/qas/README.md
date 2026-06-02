@@ -243,6 +243,12 @@ python -m nexq.qas.demo.vqe_ising4_budget_sweep
 - capped budget：沿用 smoke demo 的固定上限，便于和已有结果对齐。
 - per-param fair budget：按 `max(40, n_params * 20)` 设置每个 start 的评估预算，用于检查参数更多的搜索结构是否被固定 cap 低估。
 
+如果 budget sweep 显示单链 SA 很快陷入同一个局部区域，可以运行 diverse multi-start SA。它不是简单取 Stage 1 top-5，而是从 top-1 开始，用 mask 汉明距离贪心选择结构差异更大的起点：
+
+```bash
+python -m nexq.qas.demo.vqe_ising4_multistart_sa
+```
+
 HEA mask 的搜索维度固定为：
 
 - `layers`: `1 / 2 / 3`
