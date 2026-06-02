@@ -352,6 +352,104 @@ class VQEFitnessCorrelationReport:
         return lines
 
 
+@dataclass
+class VQEFitnessBudgetRow:
+    rank: int
+    architecture: ArchitectureSpec
+    fair_energy: float
+    n_params: int
+    fair_evaluations: int
+    short_by_budget: Dict[int, float] = field(default_factory=dict)
+    short_evals_by_budget: Dict[int, int] = field(default_factory=dict)
+    weighted_score: float = 0.0
+    expressibility: float = 0.0
+    trainability: float = 0.0
+    noise: float = 0.0
+    hardware: float = 0.0
+
+
+@dataclass
+class VQEFitnessBudgetSweepReport:
+    stage1_rows: List[Stage1Row]
+    rows: List[VQEFitnessBudgetRow]
+    budgets: List[int]
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def budget_correlations(self) -> Dict[int, Dict[str, float]]:
+        fair = [row.fair_energy for row in self.rows]
+        result: Dict[int, Dict[str, float]] = {}
+        for budget in self.budgets:
+            short = [row.short_by_budget[int(budget)] for row in self.rows]
+            overlap_k = min(int(self.metadata.get("overlap_k", 5)), len(self.rows))
+            result[int(budget)] = {
+                "pearson": _pearson(short, fair),
+                "spearman": _spearman(short, fair),
+                "topk_overlap": float(_topk_overlap_pairs(short, fair, overlap_k)),
+            }
+        return result
+
+    def zero_cost_correlations(self) -> Dict[str, Dict[str, float]]:
+        fair = [row.fair_energy for row in self.rows]
+        metrics = {
+            "weighted": [row.weighted_score for row in self.rows],
+            "expressibility": [row.expressibility for row in self.rows],
+            "trainability": [row.trainability for row in self.rows],
+            "noise": [row.noise for row in self.rows],
+            "hardware": [row.hardware for row in self.rows],
+        }
+        overlap_k = min(int(self.metadata.get("overlap_k", 5)), len(self.rows))
+        # zero-cost scores are larger-is-better, while energy is smaller-is-better.
+        return {
+            name: {
+                "pearson": _pearson([-value for value in values], fair),
+                "spearman": _spearman([-value for value in values], fair),
+                "topk_overlap": float(_topk_overlap_pairs([-value for value in values], fair, overlap_k)),
+            }
+            for name, values in metrics.items()
+        }
+
+    def summary_lines(self) -> List[str]:
+        problem_name = str(self.metadata.get("problem_name", "unknown"))
+        reference_energy = float(self.metadata.get("reference_energy", 0.0))
+        overlap_k = min(int(self.metadata.get("overlap_k", 5)), len(self.rows))
+        lines = [
+            f"VQE-QAS fitness budget sweep: {problem_name}",
+            f"reference_energy: {reference_energy:.6f}",
+            f"n_candidates: {len(self.rows)} | topk_overlap_k: {overlap_k}",
+            "",
+            "Improvement diagnostics",
+            "rank | fair | n_params | improvement_from_short40 | name",
+        ]
+        first_budget = int(self.budgets[0])
+        for row in self.rows:
+            improvement = row.short_by_budget[first_budget] - row.fair_energy
+            lines.append(
+                f"{row.rank} | {row.fair_energy:.6f} | {row.n_params} | "
+                f"{improvement:.6f} | {row.architecture.name}"
+            )
+        lines.extend(["", "Short-budget correlation", "budget | pearson | spearman | topk_overlap"])
+        for budget, values in self.budget_correlations().items():
+            lines.append(
+                f"{budget} | {values['pearson']:.4f} | {values['spearman']:.4f} | "
+                f"{int(values['topk_overlap'])}/{overlap_k}"
+            )
+        lines.extend(["", "Zero-cost vs fair", "metric | pearson | spearman | topk_overlap"])
+        for name, values in self.zero_cost_correlations().items():
+            lines.append(
+                f"{name} | {values['pearson']:.4f} | {values['spearman']:.4f} | "
+                f"{int(values['topk_overlap'])}/{overlap_k}"
+            )
+        lines.extend(["", "Rows", "rank | fair | " + " | ".join(f"short_{budget}" for budget in self.budgets) + " | weighted | expr | train | noise | hardware | name"])
+        for row in self.rows:
+            short_values = " | ".join(f"{row.short_by_budget[int(budget)]:.6f}" for budget in self.budgets)
+            lines.append(
+                f"{row.rank} | {row.fair_energy:.6f} | {short_values} | "
+                f"{row.weighted_score:.4f} | {row.expressibility:.4f} | {row.trainability:.4f} | "
+                f"{row.noise:.4f} | {row.hardware:.4f} | {row.architecture.name}"
+            )
+        return lines
+
+
 def _pearson(left: Sequence[float], right: Sequence[float]) -> float:
     if len(left) < 2 or len(right) < 2:
         return 0.0
@@ -389,6 +487,14 @@ def _topk_overlap(rows: Sequence[VQEFitnessCorrelationRow], k: int) -> int:
     short_top = {id(row) for row in sorted(rows, key=lambda item: item.short_energy)[:k]}
     fair_top = {id(row) for row in sorted(rows, key=lambda item: item.fair_energy)[:k]}
     return len(short_top & fair_top)
+
+
+def _topk_overlap_pairs(left: Sequence[float], right: Sequence[float], k: int) -> int:
+    if k <= 0:
+        return 0
+    left_order = np.argsort(np.asarray(left, dtype=float), kind="mergesort")[:k]
+    right_order = np.argsort(np.asarray(right, dtype=float), kind="mergesort")[:k]
+    return len(set(int(value) for value in left_order) & set(int(value) for value in right_order))
 
 
 def _stage1_metric_summary(rows: Sequence[Stage1Row]) -> Dict[str, Dict[str, float]]:
@@ -1344,6 +1450,89 @@ def run_ising4_fitness_correlation(
     )
 
 
+def run_ising4_fitness_budget_sweep(
+    seed: int = 2026,
+    top_k: int = 10,
+    budgets: Sequence[int] = (40, 100, 200, 400),
+    candidate_limit: int = 72,
+    stage1_keep_top: int = 16,
+    short_n_starts: int = 1,
+    short_evals_per_param: int = 1000,
+    fair_n_starts: int = 3,
+    fair_evals_per_param: int = 20,
+    fair_min_evaluations: int = 40,
+    overlap_k: int = 5,
+    backend: Optional[NumpyBackend] = None,
+) -> VQEFitnessBudgetSweepReport:
+    problem = ising4_demo_problem()
+    backend = backend or NumpyBackend()
+    budgets = [int(budget) for budget in budgets]
+    masks = _sample_masks(enumerate_hea_masks(problem.n_qubits), candidate_limit, seed)
+    candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
+    stage1_rows = zero_cost_guardrail(candidates, backend=backend)
+    kept = [row for row in stage1_rows if row.kept][: max(1, int(stage1_keep_top))]
+    selected = kept[: max(1, int(top_k))]
+
+    rows: List[VQEFitnessBudgetRow] = []
+    for index, row in enumerate(selected, start=1):
+        architecture = row.architecture
+        fair_budget = max(int(fair_min_evaluations), parameter_count(architecture.circuit) * int(fair_evals_per_param))
+        fair = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=seed + 2000 + index,
+            n_starts=fair_n_starts,
+            evals_per_param=fair_evals_per_param,
+            max_evaluations=fair_budget,
+            backend=backend,
+        )
+        item = VQEFitnessBudgetRow(
+            rank=index,
+            architecture=architecture,
+            fair_energy=fair.energy,
+            n_params=parameter_count(architecture.circuit),
+            fair_evaluations=fair.evaluations,
+            weighted_score=row.score.weighted_score,
+            expressibility=row.score.expressibility.score,
+            trainability=row.score.trainability.score,
+            noise=row.score.noise_robustness.score,
+            hardware=row.score.hardware_efficiency.score,
+        )
+        for budget in budgets:
+            short = optimize_vqe_energy(
+                architecture,
+                problem,
+                seed=seed + int(budget) * 100 + index,
+                n_starts=short_n_starts,
+                evals_per_param=short_evals_per_param,
+                max_evaluations=int(budget),
+                backend=backend,
+            )
+            item.short_by_budget[int(budget)] = short.energy
+            item.short_evals_by_budget[int(budget)] = short.evaluations
+        rows.append(item)
+
+    return VQEFitnessBudgetSweepReport(
+        stage1_rows=stage1_rows,
+        rows=rows,
+        budgets=budgets,
+        metadata={
+            "problem_name": problem.name,
+            "reference_energy": problem.reference_energy,
+            "seed": seed,
+            "top_k": top_k,
+            "candidate_limit": candidate_limit,
+            "stage1_keep_top": stage1_keep_top,
+            "short_n_starts": short_n_starts,
+            "short_evals_per_param": short_evals_per_param,
+            "fair_n_starts": fair_n_starts,
+            "fair_evals_per_param": fair_evals_per_param,
+            "fair_min_evaluations": fair_min_evaluations,
+            "overlap_k": min(int(overlap_k), len(rows)),
+        },
+    )
+
+
 __all__ = [
     "ENTANGLE_PATTERNS",
     "ENTANGLERS",
@@ -1360,6 +1549,8 @@ __all__ = [
     "Stage1Row",
     "VQEBudgetSweepReport",
     "VQEDemoProblem",
+    "VQEFitnessBudgetRow",
+    "VQEFitnessBudgetSweepReport",
     "VQEFitnessCorrelationReport",
     "VQEFitnessCorrelationRow",
     "VQEHEADemoReport",
@@ -1378,6 +1569,7 @@ __all__ = [
     "optimize_h2_energy",
     "optimize_vqe_energy",
     "run_ising4_budget_sweep",
+    "run_ising4_fitness_budget_sweep",
     "run_ising4_fitness_correlation",
     "run_ising4_multistart_sa",
     "run_sa_search",

@@ -257,6 +257,14 @@ python -m nexq.qas.demo.vqe_ising4_fitness_correlation
 
 如果 `spearman_short_vs_fair` 较低，说明搜索失败主要来自 fitness 信号不可靠，而不是 SA 步数或起点不足。
 
+进一步定位最小可用 short-step 预算，并比较 zero-cost 分数和 fair VQE 的相关性：
+
+```bash
+python -m nexq.qas.demo.vqe_ising4_fitness_budget_sweep
+```
+
+该 runner 固定同一批 Stage1 top candidates 和同一套 fair final VQE energy，只改变 short-step budget（默认 `40/100/200/400`），同时报告 `weighted / expressibility / trainability / noise / hardware` 与 fair VQE 的相关性。
+
 HEA mask 的搜索维度固定为：
 
 - `layers`: `1 / 2 / 3`
