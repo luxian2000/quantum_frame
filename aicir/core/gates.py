@@ -93,7 +93,7 @@ def _toffoli_backend(target_qubit=2, control_qubits=(0, 1), control_states=None,
 
 
 def _unitary_parameter_matrix(value, backend=None):
-    if isinstance(value, torch.Tensor):
+    if torch is not None and isinstance(value, torch.Tensor):
         if backend is not None and hasattr(backend, "_device"):
             return backend.cast(value)
         return value.detach().cpu().numpy().astype(_CDTYPE)
@@ -320,6 +320,8 @@ def _rzz(theta, qubit_1=0, qubit_2=1):
 
 
 def _contains_torch_tensor(value) -> bool:
+    if torch is None:
+        return False
     if isinstance(value, torch.Tensor):
         return True
     if isinstance(value, (list, tuple)):
@@ -328,6 +330,8 @@ def _contains_torch_tensor(value) -> bool:
 
 
 def _first_torch_tensor(value):
+    if torch is None:
+        return None
     if isinstance(value, torch.Tensor):
         return value
     if isinstance(value, (list, tuple)):
@@ -511,7 +515,7 @@ def _expand_local_matrix_to_full(local_matrix, axes, n_qubits: int, backend=None
             f"局部门矩阵维度 {tuple(local_matrix.shape)} 与作用量子比特数量 {len(axes)} 不一致"
         )
 
-    if isinstance(local_matrix, torch.Tensor):
+    if torch is not None and isinstance(local_matrix, torch.Tensor):
         zero = local_matrix.new_tensor(0.0 + 0.0j)
         rows = []
         for row_index in range(dim):
@@ -676,7 +680,7 @@ def _controlled_local_from_base(base_single, control_states):
     control_states = [int(state) for state in control_states]
     n_controls = len(control_states)
     dim = 1 << (n_controls + 1)
-    if isinstance(base_single, torch.Tensor):
+    if torch is not None and isinstance(base_single, torch.Tensor):
         rows = []
         control_index = 0
         for state in control_states:
