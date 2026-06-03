@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from aicir import Circuit, NumpyBackend, Parameter, State, cx, ry
-from aicir.qml import auto, psr, spsr, mpsr, fd, ad, qng, bdqng, dqng
+from aicir.qml import auto, psr, spsr, mpsr, fd, ad, qng, bdqng, kqng, dqng
 
 
 def test_psr_matches_analytic_gradient_for_vector_params():
@@ -553,6 +553,88 @@ def test_bdqng_rejects_blocks_that_do_not_cover_all_parameters():
             grad=np.array([1.0, 1.0]),
             qfim_blocks=[np.array([[1.0]])],
         )
+
+
+def test_kqng_preconditions_with_supplied_kfac_factors():
+    left = np.diag([2.0, 4.0])
+    right = np.diag([3.0, 5.0])
+    grad = np.array([[6.0, 10.0], [12.0, 20.0]])
+
+    natural_grad = kqng(
+        None,
+        None,
+        np.zeros((2, 2)),
+        grad=grad,
+        kfac_factors=[(left, right)],
+        damping=0.0,
+    )
+
+    assert np.allclose(natural_grad, np.ones((2, 2)))
+
+
+def test_kqng_single_column_factorization_matches_full_qng():
+    backend = NumpyBackend()
+    z = np.diag([1.0, -1.0, -1.0, 1.0]).astype(np.complex64)
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), ry(theta[1], 1), n_qubits=2)
+        return State.zero_state(2, backend).evolve(circuit.unitary(backend=backend))
+
+    def objective(theta):
+        state = state_fn(theta)
+        return backend.expectation_sv(state.data, backend.cast(z))
+
+    theta = np.array([0.4, -0.2])
+    natural_full = qng(objective, state_fn, theta, damping=0.0)
+    natural_kfac, factors = kqng(
+        objective,
+        state_fn,
+        theta,
+        factor_shapes=(2, 1),
+        damping=0.0,
+        return_kfac_factors=True,
+    )
+
+    assert len(factors) == 1
+    assert factors[0][0].shape == (2, 2)
+    assert factors[0][1].shape == (1, 1)
+    assert np.allclose(natural_kfac, natural_full, atol=1e-5)
+
+
+def test_kqng_npu_backend_path_does_not_move_tensors_to_cpu(monkeypatch):
+    torch = pytest.importorskip("torch")
+    from aicir.channel.backends.npu_backend import NPUBackend
+
+    backend = NPUBackend(device="cpu")
+    z = backend.cast(np.diag([1.0, -1.0]).astype(np.complex64))
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), n_qubits=1)
+        state = State.zero_state(1, backend).evolve(circuit.unitary(backend=backend))
+        return state.data
+
+    def objective(theta):
+        return backend.expectation_sv(state_fn(theta), z)
+
+    def fail_cpu(self):
+        raise AssertionError("kqng NPU path must not move tensors to CPU")
+
+    monkeypatch.setattr(torch.Tensor, "cpu", fail_cpu)
+
+    theta = np.array([0.5])
+    natural_grad, factors = kqng(
+        objective,
+        state_fn,
+        theta,
+        backend=backend,
+        return_kfac_factors=True,
+    )
+
+    assert isinstance(natural_grad, torch.Tensor)
+    assert len(factors) == 1
+    assert isinstance(factors[0][0], torch.Tensor)
+    assert isinstance(factors[0][1], torch.Tensor)
+    assert tuple(natural_grad.shape) == (1,)
 
 
 def test_dqng_preconditions_with_supplied_qfim_diag():

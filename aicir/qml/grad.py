@@ -1127,6 +1127,322 @@ def _ordinary_gradient_for_dqng_torch(
     raise ValueError("gradient_method must be 'psr', 'fd', or 'auto'")
 
 
+def _contains_torch_tensor(value: Any) -> bool:
+    if _is_torch_tensor(value):
+        return True
+    if isinstance(value, (list, tuple)):
+        return any(_contains_torch_tensor(item) for item in value)
+    return False
+
+
+def _normalize_kfac_factor_shapes(factor_shapes: Any, block_count: int) -> list[tuple[int, int]] | None:
+    if factor_shapes is None:
+        return None
+    if (
+        isinstance(factor_shapes, (list, tuple))
+        and len(factor_shapes) == 2
+        and all(isinstance(item, numbers.Integral) for item in factor_shapes)
+    ):
+        shapes = [tuple(int(item) for item in factor_shapes)]
+    else:
+        shapes = [tuple(int(item) for item in shape) for shape in factor_shapes]
+    if len(shapes) != block_count:
+        raise ValueError(f"factor_shapes must contain {block_count} shape(s), got {len(shapes)}")
+    for shape in shapes:
+        if len(shape) != 2 or shape[0] <= 0 or shape[1] <= 0:
+            raise ValueError("each factor shape must be a pair of positive integers")
+    return shapes
+
+
+def _normalize_kfac_blocks(
+    params: np.ndarray,
+    blocks: Any,
+    factor_shapes: Any,
+    block_size: int | None,
+) -> tuple[list[list[tuple[int, ...]]], list[tuple[int, int]]]:
+    if params.size == 0:
+        raise ValueError("params must contain at least one parameter")
+
+    if blocks is None:
+        preliminary_shapes = None
+        if factor_shapes is not None:
+            if (
+                isinstance(factor_shapes, (list, tuple))
+                and len(factor_shapes) == 2
+                and all(isinstance(item, numbers.Integral) for item in factor_shapes)
+            ):
+                preliminary_shapes = [tuple(int(item) for item in factor_shapes)]
+            else:
+                preliminary_shapes = [tuple(int(item) for item in shape) for shape in factor_shapes]
+            products = [shape[0] * shape[1] for shape in preliminary_shapes]
+            if sum(products) != params.size:
+                raise ValueError("factor_shapes products must sum to the number of parameters")
+            normalized_blocks = []
+            start = 0
+            for size in products:
+                normalized_blocks.append([
+                    _flat_to_index(params, flat_index)
+                    for flat_index in range(start, start + size)
+                ])
+                start += size
+            return normalized_blocks, _normalize_kfac_factor_shapes(preliminary_shapes, len(normalized_blocks))
+
+        if block_size is not None:
+            normalized_blocks = _normalize_qng_blocks(params, None, int(block_size))
+            return normalized_blocks, [(len(block), 1) for block in normalized_blocks]
+
+        if params.shape != () and params.ndim == 2:
+            normalized_blocks = [list(np.ndindex(params.shape))]
+            return normalized_blocks, [tuple(int(dim) for dim in params.shape)]
+
+        normalized_blocks = [list(np.ndindex(params.shape))]
+        return normalized_blocks, [(params.size, 1)]
+
+    normalized_blocks = _normalize_qng_blocks(params, blocks, block_size or 1)
+    shapes = _normalize_kfac_factor_shapes(factor_shapes, len(normalized_blocks))
+    if shapes is None:
+        shapes = [(len(block), 1) for block in normalized_blocks]
+    for block, shape in zip(normalized_blocks, shapes):
+        if shape[0] * shape[1] != len(block):
+            raise ValueError(
+                f"factor shape {shape} is incompatible with block of size {len(block)}"
+            )
+    return normalized_blocks, shapes
+
+
+def _kfac_factors_from_qfim_block(metric: np.ndarray, factor_shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    rows, cols = factor_shape
+    expected = rows * cols
+    if metric.shape != (expected, expected):
+        raise ValueError(f"qfim block must have shape {(expected, expected)}, got {metric.shape}")
+
+    block = np.asarray(metric, dtype=float).reshape(rows, cols, rows, cols)
+    left = np.zeros((rows, rows), dtype=float)
+    right = np.zeros((cols, cols), dtype=float)
+    for col in range(cols):
+        left += block[:, col, :, col]
+    for row in range(rows):
+        right += block[row, :, row, :]
+
+    trace = float(np.trace(metric))
+    scale = float(np.sqrt(abs(trace))) if abs(trace) > 1e-15 else 1.0
+    left = 0.5 * (left / scale + (left / scale).T)
+    right = 0.5 * (right / scale + (right / scale).T)
+    return left, right
+
+
+def _qfim_kfac_factors_from_state_fd(
+    state_fn: Callable[[np.ndarray], Any],
+    theta: np.ndarray,
+    blocks: list[list[tuple[int, ...]]],
+    factor_shapes: list[tuple[int, int]],
+    *,
+    eps: float,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    qfim_blocks = _qfim_blocks_from_state_fd(state_fn, theta, blocks, eps=eps)
+    return [
+        _kfac_factors_from_qfim_block(metric, shape)
+        for metric, shape in zip(qfim_blocks, factor_shapes)
+    ]
+
+
+def _validate_kfac_factors(
+    factors: Any,
+    factor_shapes: list[tuple[int, int]],
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    pairs = list(factors)
+    if len(pairs) != len(factor_shapes):
+        raise ValueError(f"kfac_factors must contain {len(factor_shapes)} pair(s), got {len(pairs)}")
+
+    normalized = []
+    for pair, (rows, cols) in zip(pairs, factor_shapes):
+        if len(pair) != 2:
+            raise ValueError("each KFAC factor entry must be a pair (left, right)")
+        left = np.asarray(pair[0], dtype=float)
+        right = np.asarray(pair[1], dtype=float)
+        if left.shape != (rows, rows):
+            raise ValueError(f"left KFAC factor must have shape {(rows, rows)}, got {left.shape}")
+        if right.shape != (cols, cols):
+            raise ValueError(f"right KFAC factor must have shape {(cols, cols)}, got {right.shape}")
+        normalized.append((0.5 * (left + left.T), 0.5 * (right + right.T)))
+    return normalized
+
+
+def _solve_linear_matrix(matrix: np.ndarray, rhs: np.ndarray) -> np.ndarray:
+    try:
+        return np.linalg.solve(matrix, rhs)
+    except np.linalg.LinAlgError:
+        return np.linalg.pinv(matrix) @ rhs
+
+
+def _solve_kfac_factor_block(
+    left: np.ndarray,
+    right: np.ndarray,
+    gradient: np.ndarray,
+    factor_shape: tuple[int, int],
+    damping: float,
+) -> np.ndarray:
+    damping_value = float(damping)
+    if damping_value < 0.0:
+        raise ValueError("damping must be non-negative")
+    factor_damping = float(np.sqrt(damping_value))
+    left_reg = left + factor_damping * np.eye(left.shape[0], dtype=float)
+    right_reg = right + factor_damping * np.eye(right.shape[0], dtype=float)
+
+    grad_matrix = np.asarray(gradient, dtype=float).reshape(factor_shape)
+    tmp = _solve_linear_matrix(left_reg, grad_matrix)
+    solved = _solve_linear_matrix(right_reg, tmp.T).T
+    return solved.reshape(-1)
+
+
+def _qfim_from_derivatives_torch(base_state: Any, derivatives: list[Any], backend: Any = None):
+    torch = _torch_or_none()
+    rows = []
+    for left_derivative in derivatives:
+        row = []
+        for right_derivative in derivatives:
+            overlap = _torch_inner_product(left_derivative, right_derivative, backend)
+            projection = (
+                _torch_inner_product(left_derivative, base_state, backend)
+                * _torch_inner_product(base_state, right_derivative, backend)
+            )
+            row.append(4.0 * torch.real(overlap - projection))
+        rows.append(torch.stack(row))
+    metric = torch.stack(rows)
+    return 0.5 * (metric + metric.transpose(-2, -1))
+
+
+def _state_derivatives_fd_torch(
+    state_fn: Callable[[np.ndarray], Any],
+    theta: np.ndarray,
+    block: list[tuple[int, ...]],
+    *,
+    base_state: Any,
+    eps: float,
+    backend: Any = None,
+) -> tuple[list[Any], Any]:
+    derivatives = []
+    resolved_backend = backend
+    for index in block:
+        plus = theta.copy()
+        minus = theta.copy()
+        plus[index] += eps
+        minus[index] -= eps
+
+        state_plus, resolved_backend = _as_torch_state_vector(
+            state_fn(plus),
+            label="state_fn(params + metric_eps)",
+            backend=resolved_backend,
+        )
+        state_minus, resolved_backend = _as_torch_state_vector(
+            state_fn(minus),
+            label="state_fn(params - metric_eps)",
+            backend=resolved_backend,
+        )
+        if state_plus.shape != base_state.shape or state_minus.shape != base_state.shape:
+            raise ValueError("state_fn must return state vectors with a consistent shape")
+        derivatives.append((state_plus - state_minus) / (2.0 * eps))
+    return derivatives, resolved_backend
+
+
+def _kfac_factors_from_qfim_block_torch(metric: Any, factor_shape: tuple[int, int]):
+    torch = _torch_or_none()
+    rows, cols = factor_shape
+    expected = rows * cols
+    if tuple(metric.shape) != (expected, expected):
+        raise ValueError(f"qfim block must have shape {(expected, expected)}, got {tuple(metric.shape)}")
+
+    block = metric.reshape(rows, cols, rows, cols)
+    left = sum(block[:, col, :, col] for col in range(cols))
+    right = sum(block[row, :, row, :] for row in range(rows))
+    trace = torch.real(torch.trace(metric))
+    eps = torch.finfo(trace.dtype).eps
+    scale = torch.sqrt(torch.clamp(torch.abs(trace), min=eps))
+    left = left / scale
+    right = right / scale
+    left = 0.5 * (left + left.transpose(-2, -1))
+    right = 0.5 * (right + right.transpose(-2, -1))
+    return left, right
+
+
+def _qfim_kfac_factors_from_state_fd_torch(
+    state_fn: Callable[[np.ndarray], Any],
+    theta: np.ndarray,
+    blocks: list[list[tuple[int, ...]]],
+    factor_shapes: list[tuple[int, int]],
+    *,
+    eps: float,
+    backend: Any = None,
+):
+    eps_value = float(eps)
+    if not eps_value > 0.0:
+        raise ValueError("metric_eps must be a positive number")
+
+    base_state, resolved_backend = _as_torch_state_vector(
+        state_fn(theta),
+        label="state_fn(params)",
+        backend=backend,
+    )
+    factors = []
+    for block, factor_shape in zip(blocks, factor_shapes):
+        derivatives, resolved_backend = _state_derivatives_fd_torch(
+            state_fn,
+            theta,
+            block,
+            base_state=base_state,
+            eps=eps_value,
+            backend=resolved_backend,
+        )
+        metric = _qfim_from_derivatives_torch(base_state, derivatives, resolved_backend)
+        factors.append(_kfac_factors_from_qfim_block_torch(metric, factor_shape))
+    return factors, resolved_backend
+
+
+def _validate_kfac_factors_torch(
+    factors: Any,
+    factor_shapes: list[tuple[int, int]],
+    *,
+    backend: Any = None,
+    reference: Any = None,
+) -> list[tuple[Any, Any]]:
+    pairs = list(factors)
+    if len(pairs) != len(factor_shapes):
+        raise ValueError(f"kfac_factors must contain {len(factor_shapes)} pair(s), got {len(pairs)}")
+
+    normalized = []
+    for pair, (rows, cols) in zip(pairs, factor_shapes):
+        if len(pair) != 2:
+            raise ValueError("each KFAC factor entry must be a pair (left, right)")
+        left = _torch_real_tensor(pair[0], backend=backend, shape=(rows, rows), reference=reference)
+        right = _torch_real_tensor(pair[1], backend=backend, shape=(cols, cols), reference=left)
+        normalized.append((
+            0.5 * (left + left.transpose(-2, -1)),
+            0.5 * (right + right.transpose(-2, -1)),
+        ))
+    return normalized
+
+
+def _solve_kfac_factor_block_torch(
+    left: Any,
+    right: Any,
+    gradient: Any,
+    factor_shape: tuple[int, int],
+    damping: float,
+):
+    torch = _torch_or_none()
+    damping_value = float(damping)
+    if damping_value < 0.0:
+        raise ValueError("damping must be non-negative")
+    factor_damping = torch.sqrt(torch.as_tensor(damping_value, dtype=left.dtype, device=left.device))
+    left_reg = left + factor_damping * torch.eye(left.shape[0], dtype=left.dtype, device=left.device)
+    right_reg = right + factor_damping * torch.eye(right.shape[0], dtype=right.dtype, device=right.device)
+
+    grad_matrix = gradient.reshape(factor_shape)
+    tmp = torch.linalg.solve(left_reg, grad_matrix)
+    solved = torch.linalg.solve(right_reg, tmp.transpose(-2, -1)).transpose(-2, -1)
+    return solved.reshape(-1)
+
+
 def qng(
     fn: Callable[[Any], Any] | None,
     state_fn: Callable[[np.ndarray], Any] | None,
@@ -1354,6 +1670,175 @@ def bdqng(
     return natural
 
 
+def kqng(
+    fn: Callable[[Any], Any] | None,
+    state_fn: Callable[[np.ndarray], Any] | None,
+    params: Any,
+    *,
+    blocks: Any = None,
+    factor_shapes: Any = None,
+    block_size: int | None = None,
+    grad: Any = None,
+    kfac_factors: Any = None,
+    gradient_method: str = "psr",
+    gradient_kwargs: dict[str, Any] | None = None,
+    shift: float = np.pi / 2.0,
+    coefficient: float = 0.5,
+    metric_eps: float = 1e-3,
+    damping: float = 1e-6,
+    backend: Any = None,
+    return_gradient: bool = False,
+    return_kfac_factors: bool = False,
+) -> Any:
+    """Compute a KFAC-style Quantum Natural Gradient direction.
+
+    KFAC-style QNG approximates each selected QFIM block as a Kronecker
+    product ``A ⊗ B``. A block gradient is reshaped to ``(A_dim, B_dim)`` and
+    preconditioned by solving two smaller systems:
+
+        A_damped @ X @ B_damped.T = grad_block
+
+    For NPU-family backends (or Torch/NPU tensor factors/gradients), all
+    ordinary-gradient, factor-estimation, and Kronecker-factor solves stay as
+    Torch/NPU tensors. That path intentionally avoids ``.cpu()`` and
+    ``to_numpy()``.
+    """
+    theta = np.asarray(params, dtype=float)
+    if theta.size == 0:
+        raise ValueError("params must contain at least one parameter")
+
+    normalized_blocks, normalized_shapes = _normalize_kfac_blocks(
+        theta,
+        blocks,
+        factor_shapes,
+        block_size,
+    )
+    kwargs = {} if gradient_kwargs is None else gradient_kwargs
+    use_torch_path = (
+        _is_npu_family_backend(backend)
+        or _is_torch_tensor(grad)
+        or _contains_torch_tensor(kfac_factors)
+    )
+
+    if use_torch_path:
+        tensor_reference = (
+            grad if _is_torch_tensor(grad)
+            else kfac_factors[0][0] if _contains_torch_tensor(kfac_factors) else None
+        )
+        if grad is None:
+            gradient = _ordinary_gradient_for_dqng_torch(
+                fn,
+                theta,
+                method=gradient_method,
+                shift=float(shift),
+                coefficient=float(coefficient),
+                backend=backend,
+                gradient_kwargs=kwargs,
+            )
+        else:
+            gradient = _torch_real_tensor(grad, backend=backend, shape=theta.shape, reference=tensor_reference)
+
+        if kfac_factors is None:
+            if state_fn is None:
+                raise ValueError("state_fn is required when kfac_factors is not provided")
+            factors, resolved_backend = _qfim_kfac_factors_from_state_fd_torch(
+                state_fn,
+                theta,
+                normalized_blocks,
+                normalized_shapes,
+                eps=metric_eps,
+                backend=backend,
+            )
+            if backend is None:
+                backend = resolved_backend
+        else:
+            factors = _validate_kfac_factors_torch(
+                kfac_factors,
+                normalized_shapes,
+                backend=backend,
+                reference=gradient,
+            )
+
+        natural_flat = gradient.reshape(-1).new_zeros(theta.size)
+        flat_grad = gradient.reshape(-1)
+        for block, factor_shape, (left, right) in zip(normalized_blocks, normalized_shapes, factors):
+            flat_indices = [_index_to_flat(theta, index) for index in block]
+            index_tensor = _torch_or_none().as_tensor(flat_indices, dtype=_torch_or_none().long, device=gradient.device)
+            block_grad = flat_grad.index_select(0, index_tensor)
+            natural_flat.index_copy_(
+                0,
+                index_tensor,
+                _solve_kfac_factor_block_torch(left, right, block_grad, factor_shape, damping),
+            )
+
+        natural = natural_flat.reshape(theta.shape)
+        extras: list[Any] = []
+        if return_gradient:
+            extras.append(gradient)
+        if return_kfac_factors:
+            extras.append(factors)
+        if extras:
+            return (natural, *extras)
+        return natural
+
+    if grad is None:
+        gradient = _ordinary_gradient_for_qng(
+            fn,
+            theta,
+            method=gradient_method,
+            shift=float(shift),
+            coefficient=float(coefficient),
+            backend=backend,
+            gradient_kwargs=kwargs,
+        )
+    else:
+        gradient = np.asarray(grad, dtype=float)
+
+    if gradient.shape != theta.shape:
+        try:
+            gradient = gradient.reshape(theta.shape)
+        except ValueError as exc:
+            raise ValueError(
+                f"grad must have shape {theta.shape}, got {gradient.shape}"
+            ) from exc
+
+    if kfac_factors is None:
+        if state_fn is None:
+            raise ValueError("state_fn is required when kfac_factors is not provided")
+        factors = _qfim_kfac_factors_from_state_fd(
+            state_fn,
+            theta,
+            normalized_blocks,
+            normalized_shapes,
+            eps=metric_eps,
+        )
+    else:
+        factors = _validate_kfac_factors(kfac_factors, normalized_shapes)
+
+    natural_flat = np.zeros(theta.size, dtype=float)
+    flat_grad = gradient.reshape(-1)
+    for block, factor_shape, (left, right) in zip(normalized_blocks, normalized_shapes, factors):
+        flat_indices = [_index_to_flat(theta, index) for index in block]
+        block_grad = flat_grad[flat_indices]
+        natural_flat[flat_indices] = _solve_kfac_factor_block(
+            left,
+            right,
+            block_grad,
+            factor_shape,
+            damping,
+        )
+
+    natural = natural_flat.reshape(theta.shape)
+    extras: list[Any] = []
+    if return_gradient:
+        extras.append(gradient)
+    if return_kfac_factors:
+        extras.append(factors)
+    if extras:
+        return (natural, *extras)
+    return natural
+
+
 def dqng(
     fn: Callable[[Any], Any] | None,
     state_fn: Callable[[np.ndarray], Any] | None,
@@ -1486,4 +1971,4 @@ def dqng(
     return natural
 
 
-__all__ = ["auto", "psr", "spsr", "mpsr", "fd", "ad", "qng", "bdqng", "dqng"]
+__all__ = ["auto", "psr", "spsr", "mpsr", "fd", "ad", "qng", "bdqng", "kqng", "dqng"]
