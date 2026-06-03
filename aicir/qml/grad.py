@@ -109,7 +109,7 @@ def auto(
         import torch
     except ModuleNotFoundError as exc:  # pragma: no cover - torch always present in tests
         raise ModuleNotFoundError(
-            "auto (automatic differentiation) requires PyTorch; install torch or use psr/fd."
+            "auto (automatic differentiation) requires PyTorch; install torch or use psr/fd/spsa."
         ) from exc
 
     if backend is None:
@@ -275,6 +275,86 @@ def spsr(
         index = _flat_to_index(theta, int(flat_index))
         grad[index] += scale * _shifted_difference(fn, theta, index, shift_value, coeff)
     return grad
+
+
+def _spsa_perturbation_matrix(
+    theta: np.ndarray,
+    *,
+    n_samples: int,
+    rng: Any,
+    perturbations: Any,
+) -> np.ndarray:
+    sample_count = int(n_samples)
+    if sample_count <= 0:
+        raise ValueError("n_samples must be a positive integer")
+
+    if perturbations is None:
+        generator = np.random.default_rng(rng)
+        return generator.choice((-1.0, 1.0), size=(sample_count, theta.size)).astype(float)
+
+    raw = np.asarray(perturbations, dtype=float)
+    if raw.shape == theta.shape or raw.shape == (theta.size,):
+        deltas = raw.reshape(1, theta.size)
+    elif raw.ndim >= 1 and raw.shape[0] > 0 and raw.shape[1:] == theta.shape:
+        deltas = raw.reshape(raw.shape[0], theta.size)
+    elif raw.ndim == 2 and raw.shape[1] == theta.size:
+        deltas = raw.reshape(raw.shape[0], theta.size)
+    else:
+        expected = f"{theta.shape}, {(theta.size,)}, (K, *{theta.shape}), or (K, {theta.size})"
+        raise ValueError(f"perturbations must have shape {expected}")
+
+    if deltas.shape[0] == 0:
+        raise ValueError("perturbations must contain at least one sample")
+    if np.any(deltas == 0.0):
+        raise ValueError("perturbations must not contain zero entries")
+    return deltas.astype(float, copy=False)
+
+
+def spsa(
+    fn: Callable[[np.ndarray], float],
+    params: Any,
+    *,
+    eps: float = 1e-3,
+    n_samples: int = 1,
+    rng: Any = None,
+    perturbations: Any = None,
+) -> np.ndarray:
+    """Estimate a gradient by simultaneous perturbation stochastic approximation.
+
+    SPSA evaluates the objective at two points per random perturbation vector:
+
+        g_hat = (f(theta + eps * delta) - f(theta - eps * delta)) / (2 eps) * delta^{-1}
+
+    By default ``delta`` is sampled entrywise from the Rademacher distribution
+    ``{-1, +1}``, so ``delta^{-1} == delta``. Multiple samples are averaged to
+    reduce estimator variance. When ``perturbations`` is supplied, the number
+    of samples is inferred from it and ``n_samples`` is used only for generated
+    perturbations.
+    """
+    theta = np.asarray(params, dtype=float)
+    if theta.size == 0:
+        raise ValueError("params must contain at least one parameter")
+    eps_value = float(eps)
+    if not eps_value > 0.0:
+        raise ValueError("eps must be a positive number")
+
+    deltas = _spsa_perturbation_matrix(
+        theta,
+        n_samples=n_samples,
+        rng=rng,
+        perturbations=perturbations,
+    )
+
+    base = theta.reshape(-1)
+    grad = np.zeros(theta.size, dtype=float)
+    for delta in deltas:
+        plus = (base + eps_value * delta).reshape(theta.shape)
+        minus = (base - eps_value * delta).reshape(theta.shape)
+        forward = _as_scalar(fn(plus), label="fn(params + eps * perturbation)")
+        backward = _as_scalar(fn(minus), label="fn(params - eps * perturbation)")
+        grad += ((forward - backward) / (2.0 * eps_value)) / delta
+
+    return (grad / deltas.shape[0]).reshape(theta.shape)
 
 
 def mpsr(
@@ -977,10 +1057,12 @@ def _ordinary_gradient_for_qng(
         return psr(fn, theta, **kwargs)
     if method_norm == "fd":
         return fd(fn, theta, **kwargs)
+    if method_norm == "spsa":
+        return spsa(fn, theta, **kwargs)
     if method_norm == "auto":
         kwargs.setdefault("backend", backend)
         return auto(fn, theta, **kwargs)
-    raise ValueError("gradient_method must be 'psr', 'fd', or 'auto'")
+    raise ValueError("gradient_method must be 'psr', 'fd', 'spsa', or 'auto'")
 
 
 def _torch_shifted_difference(
@@ -1058,6 +1140,50 @@ def _fd_torch(
     return values[0].reshape(()) if theta.shape == () else _torch_or_none().stack(values).reshape(theta.shape)
 
 
+def _spsa_torch(
+    fn: Callable[[np.ndarray], Any],
+    theta: np.ndarray,
+    *,
+    eps: float,
+    n_samples: int,
+    rng: Any,
+    perturbations: Any,
+    backend: Any,
+):
+    torch = _torch_or_none()
+    eps_value = float(eps)
+    if not eps_value > 0.0:
+        raise ValueError("eps must be a positive number")
+
+    deltas = _spsa_perturbation_matrix(
+        theta,
+        n_samples=n_samples,
+        rng=rng,
+        perturbations=perturbations,
+    )
+
+    base = theta.reshape(-1)
+    estimates = []
+    for delta in deltas:
+        plus = (base + eps_value * delta).reshape(theta.shape)
+        minus = (base - eps_value * delta).reshape(theta.shape)
+        forward = _as_torch_scalar(
+            fn(plus),
+            label="fn(params + eps * perturbation)",
+            backend=backend,
+        )
+        backward = _as_torch_scalar(
+            fn(minus),
+            label="fn(params - eps * perturbation)",
+            backend=backend,
+        )
+        inverse_delta = torch.as_tensor(1.0 / delta, dtype=forward.dtype, device=forward.device)
+        estimates.append(((forward - backward) / (2.0 * eps_value)) * inverse_delta)
+
+    averaged = torch.stack(estimates).mean(dim=0)
+    return averaged.reshape(theta.shape)
+
+
 def _auto_torch_device(
     fn: Callable[[Any], Any],
     params: np.ndarray,
@@ -1067,7 +1193,7 @@ def _auto_torch_device(
     torch = _torch_or_none()
     if torch is None:
         raise ModuleNotFoundError(
-            "auto (automatic differentiation) requires PyTorch; install torch or use psr/fd."
+            "auto (automatic differentiation) requires PyTorch; install torch or use psr/fd/spsa."
         )
     if backend is None:
         from aicir.channel.backends.torch_backend import TorchBackend
@@ -1121,10 +1247,20 @@ def _ordinary_gradient_for_dqng_torch(
             mode=kwargs.pop("mode", "central"),
             backend=backend,
         )
+    if method_norm == "spsa":
+        return _spsa_torch(
+            fn,
+            theta,
+            eps=float(kwargs.pop("eps", 1e-3)),
+            n_samples=int(kwargs.pop("n_samples", 1)),
+            rng=kwargs.pop("rng", None),
+            perturbations=kwargs.pop("perturbations", None),
+            backend=backend,
+        )
     if method_norm == "auto":
         kwargs.setdefault("backend", backend)
         return _auto_torch_device(fn, theta, **kwargs)
-    raise ValueError("gradient_method must be 'psr', 'fd', or 'auto'")
+    raise ValueError("gradient_method must be 'psr', 'fd', 'spsa', or 'auto'")
 
 
 def _contains_torch_tensor(value: Any) -> bool:
@@ -1487,7 +1623,7 @@ def qng(
         grad: Optional precomputed ordinary gradient.
         qfim: Optional precomputed QFIM.
         gradient_method: Ordinary-gradient method when ``grad`` is omitted:
-            ``"psr"`` (default), ``"fd"``, or ``"auto"``.
+            ``"psr"`` (default), ``"fd"``, ``"spsa"``, or ``"auto"``.
         gradient_kwargs: Extra keyword arguments forwarded to the selected
             ordinary-gradient method.
         shift: Parameter-shift amount used by ``gradient_method="psr"``.
@@ -1595,7 +1731,7 @@ def bdqng(
         grad: Optional precomputed ordinary gradient.
         qfim_blocks: Optional precomputed QFIM block matrices, one per block.
         gradient_method: Ordinary-gradient method when ``grad`` is omitted:
-            ``"psr"`` (default), ``"fd"``, or ``"auto"``.
+            ``"psr"`` (default), ``"fd"``, ``"spsa"``, or ``"auto"``.
         gradient_kwargs: Extra keyword arguments forwarded to the selected
             ordinary-gradient method.
         shift: Parameter-shift amount used by ``gradient_method="psr"``.
@@ -1971,4 +2107,4 @@ def dqng(
     return natural
 
 
-__all__ = ["auto", "psr", "spsr", "mpsr", "fd", "ad", "qng", "bdqng", "kqng", "dqng"]
+__all__ = ["auto", "psr", "spsr", "spsa", "mpsr", "fd", "ad", "qng", "bdqng", "kqng", "dqng"]
