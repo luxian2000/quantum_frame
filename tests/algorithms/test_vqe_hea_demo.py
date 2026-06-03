@@ -167,7 +167,7 @@ class TestVQEHEADemo(unittest.TestCase):
         self.assertTrue(report.sa_trace)
         self.assertTrue(report.baseline_results)
         self.assertIn("Trainability top fair final", summary)
-        self.assertIn("SA final vs baselines", summary)
+        self.assertIn("Diagnostic: SA final vs baselines", summary)
 
 
 if __name__ == "__main__":

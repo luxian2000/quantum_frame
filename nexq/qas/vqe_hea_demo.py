@@ -485,13 +485,13 @@ class VQETrainabilityPriorReport:
                 f"{result.architecture.name} | {result.energy:.6f} | {result.energy - reference_energy:.6f} | "
                 f"{result.evaluations} | {n_params} | {result.metadata.get('source', '-')}"
             )
-        lines.extend(["", "Trainability-seeded SA trace", "step | T | candidate | current | best | accepted | mask"])
+        lines.extend(["", "Diagnostic: trainability-seeded SA trace", "step | T | candidate | current | best | accepted | mask"])
         for item in _trace_digest(self.sa_trace):
             lines.append(
                 f"{item.step} | {item.temperature:.5f} | {item.candidate_energy:.6f} | "
                 f"{item.current_energy:.6f} | {item.best_energy:.6f} | {item.accepted} | {item.mask.label()}"
             )
-        lines.extend(["", "SA final vs baselines", "name | energy | delta_ref | evals | n_params | source"])
+        lines.extend(["", "Diagnostic: SA final vs baselines", "name | energy | delta_ref | evals | n_params | source"])
         combined = [self.sa_final_result] + list(self.baseline_results)
         combined.sort(key=lambda result: result.energy)
         for result in combined:
