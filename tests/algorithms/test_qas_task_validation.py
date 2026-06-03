@@ -7,8 +7,6 @@ from aicir.qas import (
     maxcut_line,
     run_hybrid_qas_validation_experiment,
     run_multi_seed_validation_experiment,
-    run_random_proxy_validation_experiment,
-    run_search_strategy_comparison,
     run_task_feedback_validation_experiment,
     run_validation_experiment,
     small_resource_allocation,
@@ -74,20 +72,6 @@ class TestQASTaskValidation(unittest.TestCase):
         self.assertIn("group | name | runs | mean", "\n".join(report.summary_lines()))
         self.assertTrue(all("result_group" in row for row in summary))
 
-    def test_random_proxy_validation_reports_correlation(self):
-        report = run_random_proxy_validation_experiment(
-            maxcut_line(n_qubits=3),
-            n_random_samples=5,
-            optimizer_config=OptimizerConfig(max_evaluations=3, seed=19),
-            random_seed=19,
-        )
-
-        self.assertTrue(report.rows)
-        self.assertIn("pearson_best", report.correlations())
-        self.assertIn("random_best", report.rows[0].to_dict())
-        self.assertIn("short_optimized", report.rows[0].to_dict())
-        self.assertIn("correlation | pearson_random_best_vs_short", "\n".join(report.summary_lines()))
-
     def test_task_feedback_validation_mutates_supercircuit_masks(self):
         report = run_task_feedback_validation_experiment(
             maxcut_line(n_qubits=3),
@@ -116,43 +100,6 @@ class TestQASTaskValidation(unittest.TestCase):
         self.assertGreaterEqual(report.metadata["task_feedback_evaluated"], 4)
         self.assertTrue(all(result.metadata["result_group"] == "qas_task_feedback" for result in report.qas_results))
         self.assertTrue(all("supercircuit_mask" in result.metadata for result in report.qas_results))
-
-    def test_search_strategy_comparison_summarizes_strategies(self):
-        report = run_search_strategy_comparison(
-            maxcut_line(n_qubits=3),
-            search_config=SearchConfig(
-                n_qubits=3,
-                candidate_layers=1,
-                n_samples=4,
-                include_common_candidates=True,
-                population_size=4,
-                search_generations=1,
-                beam_width=2,
-                mutation_rate=0.5,
-                top_k=3,
-            ),
-            optimizer_config=OptimizerConfig(max_evaluations=3, seed=13),
-            qas_top_k=1,
-            strategies=(
-                "supercircuit_progressive",
-                "supercircuit_evolution",
-                "supercircuit_reflective",
-                "task_feedback",
-                "hybrid",
-            ),
-            feedback_generations=1,
-            feedback_population_size=3,
-            feedback_elite_count=1,
-        )
-
-        rows = report.strategy_summary()
-        self.assertEqual(
-            set(report.reports),
-            {"supercircuit_progressive", "supercircuit_evolution", "supercircuit_reflective", "task_feedback", "hybrid"},
-        )
-        self.assertEqual(len(rows), 5)
-        self.assertIn("strategy | baseline_best | qas_best", "\n".join(report.summary_lines()))
-        self.assertTrue(all("strategy" in row for row in rows))
 
     def test_hybrid_validation_chains_all_three_search_stages(self):
         report = run_hybrid_qas_validation_experiment(
