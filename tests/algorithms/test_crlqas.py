@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 try:
-    from nexq.qas import AdamSPSAConfig, CRLQASConfig, crlqas, train_crlqas
+    from aicir.qas import AdamSPSAConfig, CRLQASConfig, crlqas, train_crlqas
 except ImportError as exc:
     if "AdamSPSAConfig" not in str(exc):
         raise

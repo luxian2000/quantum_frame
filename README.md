@@ -1,44 +1,44 @@
-# nexq 使用手册
+# aicir 使用手册
 
 ---
 
 ## 1. 模块导入
 
-所有常用类与函数均可从顶层 `nexq` 包一次性导入。
+所有常用类与函数均可从顶层 `aicir` 包一次性导入。
 
-状态类 `StateVector`、`DensityMatrix` 的规范模块路径为 `nexq.circuit`，同时也可从顶层 `nexq` 导入。
+状态类 `StateVector`、`DensityMatrix` 的规范模块路径为 `aicir.core`，同时也可从顶层 `aicir` 导入。
 
 ```python
 # 后端
-from nexq import TorchBackend, NumpyBackend, NPUBackend
+from aicir import TorchBackend, NumpyBackend, NPUBackend
 
 # 量子态（规范路径）
-from nexq.core import StateVector, DensityMatrix
+from aicir.core import StateVector, DensityMatrix
 
 # 量子门（构造函数，返回门字典）
-from nexq import (
+from aicir import (
     pauli_x, pauli_y, pauli_z,
     hadamard,
     rx, ry, rz,
     s_gate, t_gate,
     cx, cnot, cy, cz,
     crx, cry, crz,
-    swap,
+    swap, rzz,
     toffoli, ccnot,
     u2, u3,
 )
 
-# 电路
-from nexq import Circuit
+# 电路与参数占位符
+from aicir import Circuit, Parameter
 
 # 测量
-from nexq import Measure, Result
+from aicir import Measure, Result
 
 # 哈密顿量
-from nexq import PauliOp, PauliString, Hamiltonian
+from aicir import PauliOp, PauliString, Hamiltonian
 
 # 噪声
-from nexq import (
+from aicir import (
     NoiseChannel, NoiseModel,
     DepolarizingChannel,
     BitFlipChannel,
@@ -47,12 +47,15 @@ from nexq import (
 )
 
 # OpenQASM 互转
-from nexq import (
+from aicir import (
     circuit_to_qasm, circuit_to_qasm3,
     circuit_from_qasm,
     load_circuit_qasm, save_circuit_qasm,
     save_circuit_qasm3,
 )
+
+# QML 梯度工具
+from aicir.qml import psr, spsr, multipsr
 ```
 
 ---
@@ -82,13 +85,16 @@ from nexq import (
 | `cry(θ, t, [c])`     | 角度, target, control_list       | 受控 Ry         |
 | `crz(θ, t, [c])`     | 角度, target, control_list       | 受控 Rz         |
 | `swap(q1, q2)`        | qubit_1, qubit_2                 | SWAP 门         |
-| `toffoli(t, [c0,c1])` | target, control_list             | Toffoli (CCX)   |
-| `ccnot(t, [c0,c1])`   | target, control_list             | 同 toffoli      |
+| `rzz(θ, q1, q2)`      | 角度, qubit_1, qubit_2           | ZZ 旋转门       |
+| `toffoli(t, [c0,c1,...])` | target, control_list         | 多控制 X 门     |
+| `ccnot(t, [c0,c1,...])`   | target, control_list         | 同 toffoli      |
+
+`toffoli` / `ccnot` 的矩阵构造与逐门执行路径支持任意数量控制位，也支持门字典中的 `control_states`；导出为 OpenQASM `ccx` 时仍只适用于两个控制位。
 
 ### 2.2 构建电路
 
 ```python
-from nexq import Circuit, hadamard, cnot, rz, rx, pauli_x, swap, toffoli
+from aicir import Circuit, hadamard, cnot, cx, ry, rz
 
 # 方式一：构造时直接传入门列表（自动推断 n_qubits）
 cir = Circuit(
@@ -117,17 +123,110 @@ print(U.shape)   # (4, 4)
 
 ```python
 import math
-from nexq import Circuit, rx, ry, rz, u3, crx, swap, toffoli
+from aicir import Circuit, rx, ry, rz, u2, u3, crx, rzz, swap, toffoli
 
 cir = Circuit(
     rx(math.pi / 2, 0),             # Rx(π/2) 作用在 qubit 0
     ry(math.pi / 4, 1),             # Ry(π/4) 作用在 qubit 1
+    u2(math.pi / 3, math.pi / 5, 0), # U2 门，保留 type="u2"
     u3(math.pi, 0, math.pi, 2),     # U3(π, 0, π) ≡ X 门，作用在 qubit 2
     crx(math.pi / 2, 2, [1]),       # 受控 Rx，控制=qubit1，目标=qubit2
+    rzz(math.pi / 3, 0, 2),         # RZZ 作用在 qubit0 和 qubit2
     swap(0, 1),                     # SWAP qubit0 和 qubit1
     toffoli(2, [0, 1]),             # Toffoli，控制=[0,1]，目标=qubit2
     n_qubits=3,
 )
+```
+
+### 2.4 参数化量子线路
+
+`Parameter` 可作为旋转门参数的符号占位符，用于构建量子神经网络、VQE、QAOA 等可训练线路模板。模板电路在绑定参数前只保存门字典，不会生成数值矩阵。
+
+```python
+from aicir import Circuit, Parameter, rx, ry, crz, cnot
+
+theta0 = Parameter("theta0")
+theta1 = Parameter("theta1")
+
+template = Circuit(
+    ry(theta0, 0),
+    crz(theta1, target_qubit=1, control_qubits=[0]),
+    cnot(1, [0]),
+    n_qubits=2,
+)
+
+print(template.parameters)
+# (Parameter(name='theta0'), Parameter(name='theta1'))
+
+# 默认返回绑定后的新 Circuit，不修改模板
+bound = template.bind_parameters({
+    "theta0": 0.2,
+    theta1: 0.5,   # key 也可以直接使用 Parameter 对象
+})
+
+U = bound.unitary()
+print(U.shape)    # (4, 4)
+```
+
+也可以按 `template.parameters` 的顺序传入序列：
+
+```python
+bound = template.bind_parameters([0.2, 0.5])
+```
+
+如果希望原地更新模板，可使用：
+
+```python
+template.bind_parameters({"theta0": 0.2, "theta1": 0.5}, inplace=True)
+```
+
+注意事项：
+
+- 未绑定参数的电路调用 `unitary()` 会报错，需要先 `bind_parameters(...)`。
+- `allow_partial=True` 可做部分绑定，返回仍含未绑定参数的电路。
+- `Parameter` 是符号占位符，不是自动微分张量；训练梯度可使用第 7 节的 parameter-shift 工具。
+- 如果要使用 PyTorch autograd，可直接把 Torch 标量张量作为门参数，并调用 `Circuit.unitary(backend=TorchBackend(...))`。当前 `rx`/`ry`/`rz`/`u2`/`u3`、受控旋转门、`rzz` 和自定义 `unitary` 的 Torch 参数会保留计算图。
+- 导出 QASM 前应先把所有符号参数绑定为数值。JSON 导出支持 `Parameter`、NumPy 标量/数组、复数和 Torch 张量数值；Torch 张量在 JSON 读回后会恢复为普通数值或列表，不会恢复为带计算图的 Tensor。
+
+### 2.5 自定义 unitary、identity 与 Torch 自动微分
+
+可以用门字典直接加入自定义酉矩阵：
+
+```python
+import numpy as np
+from aicir import Circuit
+
+custom = {
+    "type": "unitary",
+    "parameter": np.eye(4, dtype=np.complex64),
+    "n_qubits": 2,
+}
+
+cir = Circuit(custom, n_qubits=3)
+U = cir.unitary()   # 自定义 2-qubit unitary 会扩展到 3-qubit 电路宽度
+```
+
+`identity` 门也会按电路总宽度扩展；`Circuit.show()` 与 DAG 转换都能识别 `unitary` 门。
+
+Torch 参数示例：
+
+```python
+import torch
+from aicir import Circuit, TorchBackend, rx, rzz
+
+backend = TorchBackend(device="cpu")
+theta = torch.tensor(0.2, requires_grad=True)
+
+cir = Circuit(
+    rx(theta, 0),
+    rzz(theta, 0, 1),
+    n_qubits=2,
+)
+
+U = cir.unitary(backend=backend)
+loss = torch.real(U[0, 0])
+loss.backward()
+print(theta.grad)
 ```
 
 ---
@@ -139,7 +238,7 @@ cir = Circuit(
 ### 3.1 基本用法：概率 + 采样计数
 
 ```python
-from nexq import Circuit, Measure, TorchBackend, hadamard, cnot
+from aicir import Circuit, Measure, TorchBackend, hadamard, cnot
 
 backend = TorchBackend()
 measure = Measure(backend)
@@ -166,7 +265,7 @@ print(result.probabilities)     # 仅概率，counts 为 None
 
 ```python
 import numpy as np
-from nexq import Circuit, Measure, TorchBackend, hadamard
+from aicir import Circuit, Measure, TorchBackend, hadamard
 
 backend = TorchBackend()
 # Z 算符矩阵
@@ -184,8 +283,8 @@ print(result.expectation_variances)
 ### 3.4 从 StateVector 直接测量
 
 ```python
-from nexq.core import StateVector
-from nexq import TorchBackend
+from aicir.core import StateVector
+from aicir import TorchBackend
 import numpy as np
 
 backend = TorchBackend()
@@ -216,12 +315,12 @@ print(counts)   # {'|00>': 512}
 
 ## 4. 构建哈密顿量
 
-nexq 提供三个层次的算符构建工具：`PauliOp`、`PauliString`、`Hamiltonian`。
+aicir 提供三个层次的算符构建工具：`PauliOp`、`PauliString`、`Hamiltonian`。
 
 ### 4.1 单算符 PauliOp
 
 ```python
-from nexq import PauliOp, TorchBackend
+from aicir import PauliOp, TorchBackend
 
 backend = TorchBackend()
 
@@ -234,7 +333,7 @@ print(mat.shape)   # torch.Size([4, 4])
 ### 4.2 多体泡利串 PauliString
 
 ```python
-from nexq import PauliString, TorchBackend
+from aicir import PauliString, TorchBackend
 
 backend = TorchBackend()
 
@@ -251,7 +350,7 @@ print(ps_auto)
 ### 4.3 哈密顿量 Hamiltonian
 
 ```python
-from nexq import Hamiltonian, TorchBackend, Circuit, Measure, hadamard
+from aicir import Hamiltonian, TorchBackend, Circuit, Measure, hadamard
 
 backend = TorchBackend()
 
@@ -266,7 +365,7 @@ H_mat = H.to_matrix(backend)
 print(H_mat.shape)   # torch.Size([4, 4])
 
 # 计算期望值（通过 StateVector）
-from nexq.core import StateVector
+from aicir.core import StateVector
 sv = StateVector.zero_state(2, backend)
 print(H.expectation(sv, backend))   # 实数期望值
 
@@ -280,7 +379,7 @@ print(result.expectation_values["H"])
 ### 4.4 噪声通道（开放量子系统）
 
 ```python
-from nexq import (
+from aicir import (
     NoiseModel,
     DepolarizingChannel,
     BitFlipChannel,
@@ -288,7 +387,7 @@ from nexq import (
     AmplitudeDampingChannel,
     TorchBackend,
 )
-from nexq.core import DensityMatrix
+from aicir.core import DensityMatrix
 
 backend = TorchBackend()
 model = (NoiseModel()
@@ -305,14 +404,14 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 
 ## 5. NPU 后端的使用
 
-nexq 通过 `NPUBackend` 支持 Ascend NPU（依赖 `torch_npu`）。
+aicir 通过 `NPUBackend` 支持 Ascend NPU（依赖 `torch_npu`）。
 
 说明：Ascend NPU 在不同版本的 `torch_npu` 组合下，对 `complex64` 的内核支持并不完整。某些复数算子会直接报错，例如：
 
 - `aclnnEye ... DT_COMPLEX64 not implemented`
 - `aclnnAdd ... DT_COMPLEX64 not implemented`
 
-因此，nexq 在后端层提供了 NPU 专用兼容路径（workaround），核心思路是：
+因此，aicir 在后端层提供了 NPU 专用兼容路径（workaround），核心思路是：
 
 - 优先走后端抽象接口（`matmul/kron/trace/...`），避免业务层直接做 torch 复数运算。
 - 在 NPU 且输入为复数时，将计算拆成实部/虚部后重组，绕过缺失内核。
@@ -361,7 +460,7 @@ nexq 通过 `NPUBackend` 支持 Ascend NPU（依赖 `torch_npu`）。
 示例：
 
 ```python
-from nexq import Circuit, Measure, NPUBackend, hadamard, cnot
+from aicir import Circuit, Measure, NPUBackend, hadamard, cnot
 
 backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 cir = Circuit(
@@ -380,7 +479,7 @@ print(result.backend_name)
 
 - **可以在两处指定 backend**：`Circuit` 或 `Measure` 都支持传入后端。
 - **优先级**：`Measure` 会优先使用 `circuit.backend`（若存在），否则使用 `Measure` 自身的后端（见 `Measure._resolve_backend` 的实现）。因此将后端绑定到 `Circuit` 能避免回退到主机端拼装或与 Measure 中传入后端的混淆。
-- **为什么推荐绑定到 `Circuit`**：当电路具有 `gates` 时，`Measure` 会逐门调用 `gate_to_matrix(..., backend=resolved_backend)` 在目标设备上构造并作用门矩阵，从而减少构造完整 2^n×2^n 矩阵的内存与主机→设备搬运；若 `unitary(backend=...)` 不被支持则会回退到无 backend 的 `unitary()`（在 CPU 上用 numpy 拼装整矩阵），然后再 `backend.cast` 到设备，这会引起大规模数据搬运。
+- **为什么推荐绑定到 `Circuit`**：当电路具有 `gates` 时，`Measure` 会逐门调用 `gate_to_matrix(..., backend=resolved_backend)` 在目标设备上构造并作用门矩阵，从而减少构造完整 2^n×2^n 矩阵的内存与主机→设备搬运；若 `unitary(backend=...)` 不被支持则会回退到无 backend 的 `unitary()`（在 CPU 上用 numpy 拼装整矩阵），然后再 `backend.cast` 到设备，这会引起大规模数据搬运。对于 `TorchBackend`，参数化门的 Torch 标量张量会通过 torch 运算构造矩阵，从而保留 autograd 计算图。
 
 关于将多个电路合并（拼接）时的 backend 确定：
 
@@ -401,7 +500,7 @@ result = Measure(common_backend).run(full)
 - 构建阶段只保存门描述: 调用 `hadamard(0)` 等构造的是门的描述字典（例如 `{"type": "hadamard", "target_qubit": 0}`），`Circuit.__init__` 只是把这些描述存起来，并不会在构建时把门转换成数值矩阵。
 - 当前执行策略: `Measure.run`/`run_density_matrix` 在电路对象具备 `gates` 序列时，会优先走“逐门演化”路径（按门依次作用到态/密度矩阵），而不是先组装整条电路的全局矩阵后再一次性作用。
 - 矩阵在组装时生成: 真正把门变为 2^n×2^n 的数值矩阵发生在调用 `Circuit.unitary(backend=...)` 或 `Measure` 等需要数值矩阵的地方。此时会调用 `gate_to_matrix(gate, cir_qubits, backend)` 来生成每个门的矩阵。
-- backend 参数的作用: 当 `backend=None` 时，`gate_to_matrix` 会走 numpy 路径（例如调用 `_hadamard()` 等函数，在 CPU 上生成矩阵）；当传入 `backend` 时，`gate_to_matrix` 会使用后端分支（先构造 2×2 的 base 矩阵再通过 `_single_qubit_from_base_backend`/`_controlled_from_base_backend` 调用 `backend.cast`、`backend.kron`、`backend.matmul` 等接口），从而在目标后端（CPU/GPU/NPU）上构造和组合张量。
+- backend 参数的作用: 当 `backend=None` 时，`gate_to_matrix` 会走 numpy 路径（例如调用 `_hadamard()` 等函数，在 CPU 上生成矩阵）；当传入 `backend` 时，`gate_to_matrix` 会使用后端分支（先构造 base 矩阵再通过 `_single_qubit_from_base_backend`/`_controlled_from_base_backend` 等路径调用 `backend.cast`、`backend.kron`、`backend.matmul` 等接口），从而在目标后端（CPU/GPU/NPU）上构造和组合张量。`rx`/`ry`/`rz`/`u2`/`u3`、受控旋转、`rzz` 和自定义 `unitary` 可在 `TorchBackend` 下保留 Torch 参数的梯度链路。
 - 兼容回退路径: 若电路对象不提供 `gates` 序列，`Measure` 仍会回退到 `unitary()` 路径以兼容外部实现。
 - 可能的设备搬运: 在 `unitary()` 回退路径中，`Measure` 现在优先直接 `backend.cast(unitary_raw)`，避免无必要的 `to_numpy` 主机往返。
 - 性能建议: 对大 qubit 数，显式组装全矩阵会占用大量内存并产生迁移成本。若要最小化搬运，优先在构建时绑定后端（本节方式 B），或改为按门逐步在态上直接作用（逐门 apply），避免生成完整 2^n×2^n 矩阵；若需要彻底避免中间拷贝，可考虑修改 `Measure` 中的 `to_numpy` 使用点或直接在后端上逐门演化。
@@ -421,7 +520,7 @@ cir.bind_backend(backend)
 ### 5.4 严格 NPU 模式（不允许回退）
 
 ```python
-from nexq import NPUBackend
+from aicir import NPUBackend
 
 # NPU 不可用时直接抛 RuntimeError，用于验证平台
 backend = NPUBackend(device="npu:0", fallback_to_cpu=False)
@@ -441,7 +540,7 @@ python demo_npu.py --shots 2048 --allow-cpu-fallback
 使用环境变量 `WORLD_SIZE`、`RANK`、`LOCAL_RANK` 自动绑定对应卡：
 
 ```python
-from nexq import NPUBackend
+from aicir import NPUBackend
 
 # 自动读取 LOCAL_RANK 决定 npu:LOCAL_RANK
 backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
@@ -466,7 +565,7 @@ torchrun --nproc_per_node=4 your_script.py
 
 ```python
 import math
-from nexq import NPUBackend, Circuit, Measure, hadamard, cnot, rz
+from aicir import NPUBackend, Circuit, Measure, hadamard, cnot, rz
 
 # 1. 构建后端
 backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
@@ -527,7 +626,7 @@ Summary: PASS
 ### 6.1 Circuit → QASM 字符串
 
 ```python
-from nexq import Circuit, hadamard, cnot, rz, circuit_to_qasm, circuit_to_qasm3
+from aicir import Circuit, hadamard, cnot, rz, circuit_to_qasm, circuit_to_qasm3
 import math
 
 cir = Circuit(
@@ -555,7 +654,7 @@ print(qasm3)
 ### 6.2 QASM 字符串 → Circuit
 
 ```python
-from nexq import circuit_from_qasm
+from aicir import circuit_from_qasm
 
 qasm_str = """
 OPENQASM 2.0;
@@ -574,7 +673,7 @@ print(cir.unitary().shape)  # (4, 4)
 ### 6.3 读写 QASM 文件
 
 ```python
-from nexq import (
+from aicir import (
     save_circuit_qasm, load_circuit_qasm,
     save_circuit_qasm3,
 )
@@ -591,7 +690,7 @@ cir2 = load_circuit_qasm("my_circuit.qasm")
 
 ### 6.4 OpenQASM 3.0 格式差异
 
-nexq 在 3.0 模式下的主要差异：
+aicir 在 3.0 模式下的主要差异：
 
 | 项目           | 2.0                       | 3.0                         |
 | -------------- | ------------------------- | --------------------------- |
@@ -602,12 +701,13 @@ nexq 在 3.0 模式下的主要差异：
 
 ### 6.5 支持的 QASM 门集
 
-| QASM 门名                          | nexq 对应函数                         |
+| QASM 门名                          | aicir 对应函数                         |
 | ---------------------------------- | ------------------------------------- |
 | `x`, `y`, `z`                | `pauli_x`, `pauli_y`, `pauli_z` |
 | `h`                              | `hadamard`                          |
 | `s`, `t`                       | `s_gate`, `t_gate`                |
 | `rx`, `ry`, `rz`             | `rx`, `ry`, `rz`                |
+| `rzz(θ)`                         | `rzz`                               |
 | `u2(φ,λ)`                      | `u2`                                |
 | `u3(θ,φ,λ)` / `u(θ,φ,λ)` | `u3`                                |
 | `cx`                             | `cx` / `cnot`                     |
@@ -618,3 +718,221 @@ nexq 在 3.0 模式下的主要差异：
 
 > **当前不支持**：`if`、`reset`、`opaque`、自定义 `gate`、`cp`/`cu` 系列门。
 > `measure` 和 `barrier` 语句在导入时会被跳过。
+
+---
+
+## 7. QML 梯度工具
+
+`aicir.qml.grad` 提供面向量子机器学习和变分量子线路的梯度工具。常用函数可直接从 `aicir.qml` 导入：
+
+```python
+from aicir.qml import psr, spsr, multipsr
+```
+
+这些函数都假设目标函数 `fn(params)` 返回标量，`params` 可以是标量或任意形状的 NumPy 数组。
+
+### 7.1 标准 parameter-shift rule：`psr`
+
+`psr(fn, params)` 对每个参数计算：
+
+```text
+0.5 * [fn(theta + pi/2) - fn(theta - pi/2)]
+```
+
+默认系数 `0.5` 和位移 `pi/2` 适用于常见 Pauli 旋转生成元。
+
+```python
+import numpy as np
+from aicir.qml import psr
+
+params = np.array([0.3, -0.4])
+
+def loss(theta):
+    return np.cos(theta[0]) + np.sin(theta[1])
+
+grad = psr(loss, params)
+print(grad)  # [-sin(0.3), cos(-0.4)]
+```
+
+结合参数化电路使用：
+
+```python
+import numpy as np
+from aicir import Circuit, NumpyBackend, Parameter, State, ry
+from aicir.qml import psr
+
+theta = Parameter("theta")
+template = Circuit(ry(theta, 0), n_qubits=1)
+backend = NumpyBackend()
+Z = np.diag([1.0, -1.0])
+
+def expectation(values):
+    circuit = template.bind_parameters({"theta": values[0]})
+    state = State.zero_state(1, backend).evolve(circuit.unitary()).to_numpy().reshape(-1)
+    return np.real(np.vdot(state, Z @ state))
+
+grad = psr(expectation, np.array([0.5]))
+```
+
+### 7.2 stochastic parameter-shift rule：`spsr`
+
+`spsr` 随机抽样部分参数坐标，只对抽中的参数做 shift 评估。默认 `unbiased=True`，会按参数总数和采样数缩放，使估计量在期望上等于完整 `psr` 梯度。
+
+```python
+from aicir.qml import spsr
+
+grad_est = spsr(
+    loss,
+    params,
+    n_samples=1,
+    rng=42,
+)
+```
+
+常用参数：
+
+| 参数          | 说明                                                        |
+| ------------- | ----------------------------------------------------------- |
+| `n_samples` | 每次估计抽样的参数坐标数量                                  |
+| `rng`       | 随机种子或 NumPy generator                                  |
+| `replace`   | 是否允许重复抽样；默认 `False`                            |
+| `unbiased`  | 是否缩放为无偏估计；默认 `True`                            |
+| `shift`     | 参数位移；默认 `np.pi / 2`                                |
+| `coefficient` | shifted difference 系数；默认 `0.5`                     |
+
+### 7.3 multivariate parameter-shift rule：`multipsr`
+
+`multipsr` 用多参数符号求和公式计算选定参数的混合偏导。例如 `parameter_indices=[0, 1]` 表示计算：
+
+```text
+d² fn / d theta[0] d theta[1]
+```
+
+```python
+from aicir.qml import multipsr
+
+def objective(theta):
+    return np.cos(theta[0]) * np.sin(theta[1])
+
+mixed = multipsr(objective, np.array([0.4, -0.2]), parameter_indices=[0, 1])
+print(mixed)  # -sin(theta[0]) * cos(theta[1])
+```
+
+对于多维参数数组，可使用 tuple index：
+
+```python
+params = np.array([[0.4, 0.1], [-0.2, 0.3]])
+
+def objective_2d(theta):
+    return np.cos(theta[0, 0]) * np.sin(theta[1, 0])
+
+mixed = multipsr(objective_2d, params, parameter_indices=[(0, 0), (1, 0)])
+```
+
+如果省略 `parameter_indices`，`multipsr` 会对所有参数计算一个全参数混合偏导，此时需要 `2 ** params.size` 次函数调用，参数数量较大时成本会很高。
+
+### 7.4 VQC 中的使用
+
+`aicir.vqc` 中已有的 `BasicVQE.parameter_shift_gradient()`、`BasicSSVQE.parameter_shift_gradient()` 和 `BasicVQD.parameter_shift_gradient()` 已统一调用 `aicir.qml.grad.psr`。因此自定义 QNN/VQC 模型时也建议复用 `psr`、`spsr` 和 `multipsr`，避免各模块重复实现 parameter-shift 逻辑。
+
+---
+
+## 8. 可视化模块
+
+`aicir.visual` 提供第一阶段的轻量可视化工具，用于查看量子线路、量子态概率/振幅和密度矩阵。文本线路图与门统计不依赖额外图形库；绘图函数会在调用时按需导入 `matplotlib`。
+
+```python
+import numpy as np
+from aicir import Circuit, hadamard, cnot, rzz
+from aicir.visual import (
+    circuit_to_text,
+    draw_circuit,
+    gate_histogram,
+    plot_state_probs,
+    plot_state_amplitudes,
+    plot_density_matrix,
+)
+
+cir = Circuit(
+    hadamard(0),
+    cnot(1, [0]),
+    rzz(np.pi / 2, 0, 1),
+    n_qubits=2,
+)
+
+print(circuit_to_text(cir))
+print(gate_histogram(cir))  # {'cx': 1, 'hadamard': 1, 'rzz': 1}
+
+# draw_circuit 默认返回文本；output="mpl" 时返回 matplotlib 的 (fig, ax)
+diagram = draw_circuit(cir)
+fig, ax = draw_circuit(cir, output="mpl")
+
+# 态向量或概率向量均可输入
+state = np.array([1 / np.sqrt(2), 0, 0, 1 / np.sqrt(2)], dtype=np.complex64)
+fig, ax = plot_state_probs(state)
+fig, ax = plot_state_amplitudes(state)
+
+# 密度矩阵热力图，part 可取 "abs"、"real"、"imag"、"phase"
+rho = np.outer(state, np.conjugate(state))
+fig, ax = plot_density_matrix(rho, part="abs")
+```
+
+当前已实现的公共函数：
+
+- `circuit_to_text(circuit)`：返回 ASCII 线路图
+- `draw_circuit(circuit, output="text" | "mpl")`：统一线路图入口
+- `gate_histogram(circuit)`：按门 `type` 统计数量
+- `plot_state_probs(state_or_probs)`：绘制计算基概率柱状图
+- `plot_state_amplitudes(state)`：绘制振幅实部、虚部和模长
+- `plot_state_phase(state)`：绘制振幅相位
+- `plot_density_matrix(rho, part=...)`：绘制密度矩阵热力图
+- `plot_density_real_imag(rho)`：并排绘制密度矩阵实部和虚部
+
+### 8.1 QAS 与 metrics 可视化
+
+`aicir.visual` 也可以直接消费 `aicir.qas` 的 `SearchResult`、`ArchitectureScore`、`ArchitectureSpec`，用于对比架构搜索候选、查看四类 objective group 分数，以及把线路图和指标放在一个 summary 图中。
+
+```python
+from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.qas import ArchitectureSearch, SearchConfig
+from aicir.visual import (
+    qas_scores_to_rows,
+    plot_search_history,
+    plot_architecture_metrics,
+    compare_architectures,
+    plot_qas_summary,
+)
+
+backend = NumpyBackend()
+search = ArchitectureSearch(backend=backend)
+result = search.run(SearchConfig(n_qubits=3, candidate_layers=1, n_samples=8))
+
+# 转成扁平行，便于打印、保存或接入其它分析流程
+rows = qas_scores_to_rows(result)
+print(rows[0])
+
+# 按 rank 展示候选架构的 weighted score 和分组指标
+fig, ax = plot_search_history(
+    result,
+    metrics=["weighted_score", "expressibility", "trainability", "hardware_efficiency"],
+)
+
+# 对比多个候选
+fig, ax = compare_architectures(
+    result.scores[:5],
+    metrics=["weighted_score", "n_gates", "two_qubit_gate_count"],
+)
+
+# 查看单个候选的指标，或生成带线路图的 summary
+best = result.best
+fig, ax = plot_architecture_metrics(best)
+fig, axes = plot_qas_summary(best, metrics=["weighted_score", "trainability", "hardware_efficiency"])
+```
+
+QAS/metrics 相关公共函数：
+
+- `qas_scores_to_rows(data)`：将 `SearchResult`、`ArchitectureScore`、`ArchitectureSpec` 或 dict 记录转为扁平行
+- `plot_search_history(history, metrics=None, x=None)`：绘制搜索过程或候选 ranking 的指标曲线
+- `plot_architecture_metrics(item, metrics=None)`：绘制单个候选的指标条形图
+- `compare_architectures(data, metrics=None)`：对比多个候选架构或评分
+- `plot_qas_summary(item, metrics=None)`：左侧线路图、右侧指标图的组合视图

@@ -1,8 +1,8 @@
 import unittest
 
-from nexq.qas import ArchitectureSearch, SearchConfig, build_common_architectures, common_architecture_names, evaluate_architectures
-from nexq.channel.backends.numpy_backend import NumpyBackend
-from nexq.metrics.hardware import HardwareProfile
+from aicir.qas import ArchitectureSearch, SearchConfig, build_common_architectures, common_architecture_names, evaluate_architectures
+from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.metrics.hardware import HardwareProfile
 
 
 class TestArchitectureCandidates(unittest.TestCase):

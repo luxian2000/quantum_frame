@@ -7,8 +7,8 @@ try:
 except ModuleNotFoundError as exc:
     raise unittest.SkipTest("NPU backend tests require torch") from exc
 
-from nexq import NPUBackend, StateVector, npu_runtime_context_from_env
-from nexq.channel.backends.npu_backend import is_npu_available
+from aicir import NPUBackend, StateVector, npu_runtime_context_from_env
+from aicir.channel.backends.npu_backend import is_npu_available
 
 
 class TestNPUBackend(unittest.TestCase):
@@ -155,7 +155,7 @@ class TestNPUBackend(unittest.TestCase):
         self.assertTrue(torch.allclose(result, expected, atol=1e-5))
 
     def test_measure_probs_workaround_matches_parent(self):
-        from nexq.channel.backends.torch_backend import TorchBackend
+        from aicir.channel.backends.torch_backend import TorchBackend
 
         ref_backend = TorchBackend()
         state = ref_backend.zeros_state(2)
@@ -266,7 +266,7 @@ class TestNPUBackend(unittest.TestCase):
         self.assertTrue(torch.allclose(result.unsqueeze(0), expected.unsqueeze(0), atol=1e-5))
 
     def test_partial_trace_workaround_matches_parent(self):
-        from nexq.channel.backends.torch_backend import TorchBackend
+        from aicir.channel.backends.torch_backend import TorchBackend
         ref = TorchBackend()
         # 2-qubit density matrix for |00><00|
         rho = ref.zeros_state(2)
@@ -281,7 +281,7 @@ class TestNPUBackend(unittest.TestCase):
         self.assertTrue(np.allclose(result, expected, atol=1e-5))
 
     def test_expectation_sv_workaround_matches_parent(self):
-        from nexq.channel.backends.torch_backend import TorchBackend
+        from aicir.channel.backends.torch_backend import TorchBackend
         ref = TorchBackend()
         state = ref.zeros_state(1)
         # Z operator: [[1,0],[0,-1]]
@@ -298,7 +298,7 @@ class TestNPUBackend(unittest.TestCase):
         self.assertAlmostEqual(result, expected, places=5)
 
     def test_expectation_dm_workaround_matches_parent(self):
-        from nexq.channel.backends.torch_backend import TorchBackend
+        from aicir.channel.backends.torch_backend import TorchBackend
         ref = TorchBackend()
         state = ref.zeros_state(1)
         rho = torch.matmul(state, ref.dagger(state))

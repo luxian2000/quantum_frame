@@ -4,14 +4,14 @@ import unittest
 
 import numpy as np
 
-from nexq import Circuit, cnot, crx, cry, crz, hadamard, rx, swap, toffoli, u3
-from nexq.core.io.json_io import (
+from aicir import Circuit, Parameter, cnot, crx, cry, crz, hadamard, rx, rzz, swap, toffoli, u2, u3
+from aicir.core.io.json_io import (
     circuit_from_json,
     circuit_to_json,
     load_circuit_json,
     save_circuit_json,
 )
-from nexq.core.io.qasm import (
+from aicir.core.io.qasm import (
     circuit_from_qasm,
     circuit_to_qasm,
     circuit_to_qasm3,
@@ -45,6 +45,31 @@ class TestJsonQasmIO(unittest.TestCase):
             rebuilt = load_circuit_json(path)
             self.assertEqual(rebuilt.n_qubits, 2)
             self.assertEqual(rebuilt.gates, self.circ.gates)
+
+    def test_json_roundtrip_parameter_and_unitary_values(self):
+        theta = Parameter("theta")
+        matrix = np.array([[1.0, 0.0], [0.0, 1j]], dtype=np.complex64)
+        circ = Circuit(
+            rx(theta, 0),
+            {"type": "unitary", "parameter": matrix, "n_qubits": 1},
+            n_qubits=1,
+        )
+
+        rebuilt = circuit_from_json(circuit_to_json(circ))
+
+        self.assertEqual(rebuilt.gates[0], rx(theta, 0))
+        self.assertEqual(rebuilt.gates[1]["type"], "unitary")
+        self.assertEqual(rebuilt.gates[1]["parameter"].dtype, matrix.dtype)
+        np.testing.assert_allclose(rebuilt.gates[1]["parameter"], matrix)
+
+    def test_json_serializes_torch_tensor_parameters_as_numeric_values(self):
+        circ = Circuit(rx(torch.tensor(np.pi / 7), 0), u3(0.1, torch.tensor(0.2), 0.3, 0), n_qubits=1)
+
+        rebuilt = circuit_from_json(circuit_to_json(circ))
+
+        self.assertAlmostEqual(rebuilt.gates[0]["parameter"], np.pi / 7)
+        self.assertEqual(rebuilt.gates[1]["type"], "u3")
+        self.assertAlmostEqual(rebuilt.gates[1]["parameter"][1], 0.2, places=6)
 
     def test_qasm_roundtrip_text(self):
         qasm = circuit_to_qasm(self.circ)
@@ -123,6 +148,28 @@ class TestJsonQasmIO(unittest.TestCase):
         self.assertEqual(rebuilt.n_qubits, 3)
         self.assertEqual(len(rebuilt.gates), 6)
         self.assertEqual(rebuilt.gates[-1]["type"], "toffoli")
+
+    def test_u2_constructor_preserves_gate_type(self):
+        gate = u2(np.pi / 7, np.pi / 9, target_qubit=0)
+
+        self.assertEqual(gate["type"], "u2")
+        self.assertEqual(gate["parameter"], [np.pi / 7, np.pi / 9])
+
+        qasm2 = circuit_to_qasm(Circuit(gate, n_qubits=1), version="2.0")
+        self.assertIn("u2(", qasm2)
+
+    def test_public_rzz_constructor_builds_unitary(self):
+        circ = Circuit(rzz(np.pi / 5, qubit_1=0, qubit_2=2), n_qubits=3)
+
+        unitary = circ.unitary()
+        rebuilt = circuit_from_qasm(circuit_to_qasm(circ, version="2.0"))
+
+        self.assertEqual(circ.gates[0]["type"], "rzz")
+        self.assertEqual(unitary.shape, (8, 8))
+        self.assertEqual(rebuilt.gates[0]["type"], "rzz")
+        self.assertEqual(rebuilt.gates[0]["qubit_1"], 0)
+        self.assertEqual(rebuilt.gates[0]["qubit_2"], 2)
+        self.assertAlmostEqual(rebuilt.gates[0]["parameter"], np.pi / 5)
 
     def test_qasm3_multi_register_and_u_alias(self):
         qasm3 = """OPENQASM 3.0;
