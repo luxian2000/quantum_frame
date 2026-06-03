@@ -9,7 +9,7 @@
 ├── demo_npu.py
 ├── docs/
 ├── smoke_npu_new_path.py
-├── nexq/
+├── aicir/
 │   ├── __init__.py
 │   ├── channel/
 │   │   ├── __init__.py
@@ -50,7 +50,7 @@
 │   │   ├── amplitude.py
 │   │   ├── angle.py
 │   │   ├── basis.py
-│   │   └── demo/
+│   │   └── demos/
 │   │       ├── encode_1234_demo.py
 │   │       ├── encode_1234_demo_redundant_false.qasm
 │   │       └── encode_1234_demo_redundant_true.qasm
@@ -93,7 +93,7 @@
 │   │   ├── multi_objective_reward.py
 │   │   ├── reward.py
 │   │   ├── search_env.py
-│   │   └── demo/
+│   │   └── demos/
 │   │       ├── CRLQAS_demo_h2.py
 │   │       ├── PPO_RB_demo_dicke3.py
 │   │       ├── PPO_RB_demo_ghz4.py
@@ -109,7 +109,8 @@
 │   │       ├── ppo_rb_w3_circuit.qasm
 │   │       └── ppr_dql_ghz3_circuit.qasm
 │   ├── qml/
-│   │   └── __init__.py
+│   │   ├── __init__.py
+│   │   └── grad.py
 │   ├── universal/
 │   │   ├── __init__.py
 │   │   └── qft.py
@@ -141,6 +142,7 @@
     │   ├── test_circuit_backend_unitary.py
     │   ├── test_circuit_show.py
     │   ├── test_optimizer_basic.py
+    │   ├── test_parameterized_circuit.py
     │   ├── test_state.py
     │   └── io/
     │       ├── __init__.py
@@ -151,6 +153,10 @@
     ├── noise/
     │   ├── __init__.py
     │   └── test_noise_model.py
-    └── universal/
-        └── test_qft.py
+    ├── qml/
+    │   └── test_gradient.py
+    ├── universal/
+    │   └── test_qft.py
+    └── vqc/
+        └── test_parameter_shift_uses_qml.py
 ```

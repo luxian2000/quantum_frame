@@ -1,6 +1,6 @@
 import unittest
 
-from nexq.qas import (
+from aicir.qas import (
     ArchitectureSearch,
     OptimizerConfig,
     SearchConfig,

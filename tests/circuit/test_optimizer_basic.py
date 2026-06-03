@@ -1,8 +1,8 @@
 import numpy as np
 
-from nexq.core.circuit import Circuit
-from nexq.core.io.dag import circuit_to_dag
-from nexq.optimizer import optimize_basic
+from aicir.core.circuit import Circuit
+from aicir.core.io.dag import circuit_to_dag
+from aicir.optimizer import optimize_basic
 
 
 def test_optimize_basic_dict_cancellations():
@@ -69,6 +69,34 @@ def test_optimize_basic_dag_tuple_output_type_same():
     assert X.shape[0] == 3
     assert A.shape == (3, 3)
     assert T.shape[0] == 3
+
+
+def test_circuit_to_dag_marks_qubit_pair_gate_fields():
+    circuit = Circuit(
+        {"type": "swap", "qubit_1": 0, "qubit_2": 2},
+        {"type": "rzz", "qubit_1": 1, "qubit_2": 2, "parameter": 0.5},
+        n_qubits=3,
+    )
+    gate_types = ["swap", "rzz"]
+
+    X, _, _ = circuit_to_dag(circuit, gate_types)
+    qubit_features = X[:, len(gate_types) :]
+
+    np.testing.assert_array_equal(qubit_features[1], np.array([1.0, 0.0, 1.0], dtype=np.float32))
+    np.testing.assert_array_equal(qubit_features[2], np.array([0.0, 1.0, 1.0], dtype=np.float32))
+
+
+def test_circuit_to_dag_marks_unitary_gate_width():
+    circuit = Circuit(
+        {"type": "unitary", "n_qubits": 2, "parameter": np.eye(4, dtype=np.complex64)},
+        n_qubits=3,
+    )
+    gate_types = ["unitary"]
+
+    X, _, _ = circuit_to_dag(circuit, gate_types)
+    qubit_features = X[:, len(gate_types) :]
+
+    np.testing.assert_array_equal(qubit_features[1], np.array([1.0, 1.0, 0.0], dtype=np.float32))
 
 
 def test_optimize_basic_dict_merges_adjacent_rotations():

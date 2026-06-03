@@ -2,9 +2,9 @@ import unittest
 
 import numpy as np
 
-from nexq import NumpyBackend, State
+from aicir import NumpyBackend, State
 try:
-    from nexq.qas import PPRDQLConfig, ppr_dql_state_to_circuit, train_ppr_dql
+    from aicir.qas import PPRDQLConfig, ppr_dql_state_to_circuit, train_ppr_dql
 except ImportError as exc:
     if "PPRDQLConfig" not in str(exc):
         raise

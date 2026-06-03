@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from nexq.qas import (
+from aicir.qas import (
     HEAMask,
     architecture_from_hea_mask,
     evaluate_h2_energy,
@@ -16,7 +16,7 @@ from nexq.qas import (
     run_vqe_hea_demo,
     run_vqe_ising4_demo,
 )
-from nexq.qas.task_evaluation import parameter_count
+from aicir.qas.task_evaluation import parameter_count
 
 
 class TestVQEHEADemo(unittest.TestCase):

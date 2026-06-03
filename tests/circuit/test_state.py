@@ -3,9 +3,9 @@ from unittest import mock
 
 import numpy as np
 
-from nexq import NumpyBackend, State, StateVector
+from aicir import NumpyBackend, State, StateVector
 try:
-    from nexq import TorchBackend
+    from aicir import TorchBackend
 except ImportError:
     TorchBackend = None
 

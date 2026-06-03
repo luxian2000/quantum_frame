@@ -1,8 +1,8 @@
 import unittest
 
-from nexq.qas import ArchitectureSpec, HardwareProfile, evaluate_architectures
-from nexq.channel.backends.numpy_backend import NumpyBackend
-from nexq.metrics.trainability import local_probe_gradient_statistics
+from aicir.qas import ArchitectureSpec, HardwareProfile, evaluate_architectures
+from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.metrics.trainability import local_probe_gradient_statistics
 
 
 class TestArchitectureEvaluation(unittest.TestCase):
