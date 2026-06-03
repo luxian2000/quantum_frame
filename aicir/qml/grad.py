@@ -630,6 +630,109 @@ def _validate_qfim(qfim: Any, parameter_count: int) -> np.ndarray:
     return 0.5 * (matrix + matrix.T)
 
 
+def _torch_or_none():
+    try:
+        import torch
+    except ModuleNotFoundError:
+        return None
+    return torch
+
+
+def _is_torch_tensor(value: Any) -> bool:
+    torch = _torch_or_none()
+    return bool(torch is not None and isinstance(value, torch.Tensor))
+
+
+def _is_npu_family_backend(backend: Any) -> bool:
+    if backend is None:
+        return False
+    device = getattr(backend, "_device", None)
+    device_type = getattr(device, "type", None)
+    return device_type == "npu" or type(backend).__name__ == "NPUBackend"
+
+
+def _real_torch_dtype_from_backend(backend: Any, torch):
+    complex_dtype = getattr(backend, "_dtype", torch.complex64)
+    return torch.float64 if complex_dtype == torch.complex128 else torch.float32
+
+
+def _state_tensor_and_backend(value: Any, backend: Any = None) -> tuple[Any, Any]:
+    if all(hasattr(value, attr) for attr in ("data", "backend", "n_qubits")):
+        return value.data, backend if backend is not None else value.backend
+    return value, backend
+
+
+def _as_torch_scalar(value: Any, *, label: str, backend: Any = None):
+    torch = _torch_or_none()
+    if torch is None:
+        raise ModuleNotFoundError("Torch/NPU gradient path requires PyTorch")
+
+    if not isinstance(value, torch.Tensor):
+        dtype = _real_torch_dtype_from_backend(backend, torch)
+        device = getattr(backend, "_device", None)
+        value = torch.as_tensor(value, dtype=dtype, device=device)
+    if value.numel() != 1:
+        raise ValueError(f"{label} must return a scalar value")
+    value = value.reshape(())
+    if torch.is_complex(value):
+        value = torch.real(value)
+    return value
+
+
+def _as_torch_state_vector(value: Any, *, label: str, backend: Any = None):
+    torch = _torch_or_none()
+    if torch is None:
+        raise ModuleNotFoundError("Torch/NPU QFIM path requires PyTorch")
+
+    raw, resolved_backend = _state_tensor_and_backend(value, backend)
+    if not isinstance(raw, torch.Tensor):
+        raise TypeError(f"{label} must return a Torch/NPU tensor or a State backed by Torch/NPU")
+    if raw.ndim > 2 or (raw.ndim == 2 and 1 not in raw.shape):
+        raise ValueError(f"{label} must return a pure state vector, not a density matrix/operator")
+
+    if resolved_backend is not None and hasattr(resolved_backend, "_device"):
+        raw = raw.to(device=resolved_backend._device)
+    flat = raw.reshape(-1)
+    if resolved_backend is not None and hasattr(resolved_backend, "abs_sq"):
+        norm_sq = resolved_backend.abs_sq(flat).sum()
+    elif torch.is_complex(flat):
+        norm_sq = (torch.real(flat) ** 2 + torch.imag(flat) ** 2).sum()
+    else:
+        norm_sq = (flat ** 2).sum()
+    norm = torch.sqrt(torch.real(norm_sq))
+    return flat / norm, resolved_backend
+
+
+def _torch_inner_product(bra, ket, backend: Any = None):
+    torch = _torch_or_none()
+    if backend is not None and hasattr(backend, "inner_product"):
+        return backend.inner_product(bra.reshape(-1, 1), ket.reshape(-1, 1))
+    return torch.sum(torch.conj(bra.reshape(-1)) * ket.reshape(-1))
+
+
+def _torch_real_tensor(value: Any, *, backend: Any, shape: tuple[int, ...], reference: Any = None):
+    torch = _torch_or_none()
+    if torch is None:
+        raise ModuleNotFoundError("Torch/NPU gradient path requires PyTorch")
+
+    if backend is None and isinstance(reference, torch.Tensor):
+        dtype = reference.dtype if not torch.is_complex(reference) else torch.float64 if reference.dtype == torch.complex128 else torch.float32
+        device = reference.device
+    else:
+        dtype = _real_torch_dtype_from_backend(backend, torch)
+        device = getattr(backend, "_device", None)
+    if isinstance(value, torch.Tensor):
+        tensor = value.to(dtype=dtype, device=device)
+    else:
+        tensor = torch.as_tensor(value, dtype=dtype, device=device)
+    if tuple(tensor.shape) != shape:
+        try:
+            tensor = tensor.reshape(shape)
+        except RuntimeError as exc:
+            raise ValueError(f"tensor must have shape {shape}, got {tuple(tensor.shape)}") from exc
+    return tensor
+
+
 def _index_to_flat(theta: np.ndarray, index: tuple[int, ...]) -> int:
     if theta.shape == ():
         if index == ():
@@ -756,6 +859,69 @@ def _qfim_blocks_from_state_fd(
     return qfim_blocks
 
 
+def _qfim_diag_from_state_fd(
+    state_fn: Callable[[np.ndarray], Any],
+    theta: np.ndarray,
+    *,
+    eps: float,
+) -> np.ndarray:
+    blocks = [[_flat_to_index(theta, flat_index)] for flat_index in range(theta.size)]
+    qfim_blocks = _qfim_blocks_from_state_fd(state_fn, theta, blocks, eps=eps)
+    return np.array([block[0, 0] for block in qfim_blocks], dtype=float)
+
+
+def _qfim_diag_from_state_fd_torch(
+    state_fn: Callable[[np.ndarray], Any],
+    theta: np.ndarray,
+    *,
+    eps: float,
+    backend: Any = None,
+):
+    torch = _torch_or_none()
+    if torch is None:
+        raise ModuleNotFoundError("Torch/NPU QFIM path requires PyTorch")
+
+    eps_value = float(eps)
+    if not eps_value > 0.0:
+        raise ValueError("metric_eps must be a positive number")
+
+    base_state, resolved_backend = _as_torch_state_vector(
+        state_fn(theta),
+        label="state_fn(params)",
+        backend=backend,
+    )
+    values = []
+    for flat_index in range(theta.size):
+        index = _flat_to_index(theta, flat_index)
+        plus = theta.copy()
+        minus = theta.copy()
+        plus[index] += eps_value
+        minus[index] -= eps_value
+
+        state_plus, resolved_backend = _as_torch_state_vector(
+            state_fn(plus),
+            label="state_fn(params + metric_eps)",
+            backend=resolved_backend,
+        )
+        state_minus, resolved_backend = _as_torch_state_vector(
+            state_fn(minus),
+            label="state_fn(params - metric_eps)",
+            backend=resolved_backend,
+        )
+        if state_plus.shape != base_state.shape or state_minus.shape != base_state.shape:
+            raise ValueError("state_fn must return state vectors with a consistent shape")
+
+        derivative = (state_plus - state_minus) / (2.0 * eps_value)
+        overlap = _torch_inner_product(derivative, derivative, resolved_backend)
+        projection = (
+            _torch_inner_product(derivative, base_state, resolved_backend)
+            * _torch_inner_product(base_state, derivative, resolved_backend)
+        )
+        values.append(4.0 * torch.real(overlap - projection))
+
+    return torch.stack(values), resolved_backend
+
+
 def _validate_qfim_blocks(qfim_blocks: Any, blocks: list[list[tuple[int, ...]]]) -> list[np.ndarray]:
     matrices = list(qfim_blocks)
     if len(matrices) != len(blocks):
@@ -783,6 +949,13 @@ def _solve_damped_system(metric: np.ndarray, gradient: np.ndarray, damping: floa
         return np.linalg.pinv(regularized) @ gradient
 
 
+def _validate_qfim_diag(qfim_diag: Any, parameter_count: int) -> np.ndarray:
+    diag = np.asarray(qfim_diag, dtype=float).reshape(-1)
+    if diag.shape != (parameter_count,):
+        raise ValueError(f"qfim_diag must have shape {(parameter_count,)}, got {diag.shape}")
+    return diag
+
+
 def _ordinary_gradient_for_qng(
     fn: Callable[[Any], Any] | None,
     theta: np.ndarray,
@@ -807,6 +980,150 @@ def _ordinary_gradient_for_qng(
     if method_norm == "auto":
         kwargs.setdefault("backend", backend)
         return auto(fn, theta, **kwargs)
+    raise ValueError("gradient_method must be 'psr', 'fd', or 'auto'")
+
+
+def _torch_shifted_difference(
+    fn: Callable[[np.ndarray], Any],
+    theta: np.ndarray,
+    index: tuple[int, ...],
+    shift: float,
+    coefficient: float,
+    backend: Any,
+):
+    plus = theta.copy()
+    minus = theta.copy()
+    plus[index] += shift
+    minus[index] -= shift
+    forward = _as_torch_scalar(fn(plus), label="fn(params + shift)", backend=backend)
+    backward = _as_torch_scalar(fn(minus), label="fn(params - shift)", backend=backend)
+    return coefficient * (forward - backward)
+
+
+def _psr_torch(
+    fn: Callable[[np.ndarray], Any],
+    theta: np.ndarray,
+    *,
+    shift: float,
+    coefficient: float,
+    backend: Any,
+):
+    values = [
+        _torch_shifted_difference(fn, theta, index, shift, coefficient, backend)
+        for index in np.ndindex(theta.shape)
+    ]
+    return values[0].reshape(()) if theta.shape == () else _torch_or_none().stack(values).reshape(theta.shape)
+
+
+def _fd_torch(
+    fn: Callable[[np.ndarray], Any],
+    theta: np.ndarray,
+    *,
+    eps: float,
+    mode: str,
+    backend: Any,
+):
+    mode_norm = str(mode).strip().lower()
+    if mode_norm not in {"central", "forward", "backward"}:
+        raise ValueError("mode must be 'central', 'forward', or 'backward'")
+    eps_value = float(eps)
+    if not eps_value > 0.0:
+        raise ValueError("eps must be a positive number")
+
+    base_value = None
+    if mode_norm in {"forward", "backward"}:
+        base_value = _as_torch_scalar(fn(theta), label="fn(params)", backend=backend)
+
+    values = []
+    for index in np.ndindex(theta.shape):
+        if mode_norm == "central":
+            plus = theta.copy()
+            minus = theta.copy()
+            plus[index] += eps_value
+            minus[index] -= eps_value
+            forward = _as_torch_scalar(fn(plus), label="fn(params + eps)", backend=backend)
+            backward = _as_torch_scalar(fn(minus), label="fn(params - eps)", backend=backend)
+            values.append((forward - backward) / (2.0 * eps_value))
+        elif mode_norm == "forward":
+            plus = theta.copy()
+            plus[index] += eps_value
+            forward = _as_torch_scalar(fn(plus), label="fn(params + eps)", backend=backend)
+            values.append((forward - base_value) / eps_value)
+        else:
+            minus = theta.copy()
+            minus[index] -= eps_value
+            backward = _as_torch_scalar(fn(minus), label="fn(params - eps)", backend=backend)
+            values.append((base_value - backward) / eps_value)
+
+    return values[0].reshape(()) if theta.shape == () else _torch_or_none().stack(values).reshape(theta.shape)
+
+
+def _auto_torch_device(
+    fn: Callable[[Any], Any],
+    params: np.ndarray,
+    *,
+    backend: Any,
+):
+    torch = _torch_or_none()
+    if torch is None:
+        raise ModuleNotFoundError(
+            "auto (automatic differentiation) requires PyTorch; install torch or use psr/fd."
+        )
+    if backend is None:
+        from aicir.channel.backends.torch_backend import TorchBackend
+
+        backend = TorchBackend(device="cpu")
+
+    real_dtype = _real_torch_dtype_from_backend(backend, torch)
+    device = getattr(backend, "_device", None)
+    theta = torch.tensor(params, dtype=real_dtype, device=device, requires_grad=True)
+    scalar = _to_real_torch_scalar(fn(theta), label="fn(params)")
+    if not scalar.requires_grad:
+        raise ValueError(
+            "auto objective is not connected to the autograd graph: ensure fn "
+            "uses a Torch-family backend and returns a differentiable tensor "
+            "without calling float()/.item()/.detach()/to_numpy()."
+        )
+    (gradient,) = torch.autograd.grad(scalar, theta, allow_unused=True)
+    if gradient is None:
+        gradient = torch.zeros_like(theta)
+    return gradient.detach()
+
+
+def _ordinary_gradient_for_dqng_torch(
+    fn: Callable[[Any], Any] | None,
+    theta: np.ndarray,
+    *,
+    method: str,
+    shift: float,
+    coefficient: float,
+    backend: Any,
+    gradient_kwargs: dict[str, Any],
+):
+    if fn is None:
+        raise ValueError("fn is required when grad is not provided")
+
+    method_norm = str(method).strip().lower()
+    kwargs = dict(gradient_kwargs)
+    if method_norm == "psr":
+        return _psr_torch(
+            fn,
+            theta,
+            shift=float(kwargs.pop("shift", shift)),
+            coefficient=float(kwargs.pop("coefficient", coefficient)),
+            backend=backend,
+        )
+    if method_norm == "fd":
+        return _fd_torch(
+            fn,
+            theta,
+            eps=float(kwargs.pop("eps", 1e-3)),
+            mode=kwargs.pop("mode", "central"),
+            backend=backend,
+        )
+    if method_norm == "auto":
+        kwargs.setdefault("backend", backend)
+        return _auto_torch_device(fn, theta, **kwargs)
     raise ValueError("gradient_method must be 'psr', 'fd', or 'auto'")
 
 
@@ -1037,4 +1354,136 @@ def bdqng(
     return natural
 
 
-__all__ = ["auto", "psr", "spsr", "mpsr", "fd", "ad", "qng", "bdqng"]
+def dqng(
+    fn: Callable[[Any], Any] | None,
+    state_fn: Callable[[np.ndarray], Any] | None,
+    params: Any,
+    *,
+    grad: Any = None,
+    qfim_diag: Any = None,
+    gradient_method: str = "psr",
+    gradient_kwargs: dict[str, Any] | None = None,
+    shift: float = np.pi / 2.0,
+    coefficient: float = 0.5,
+    metric_eps: float = 1e-3,
+    damping: float = 1e-6,
+    backend: Any = None,
+    return_gradient: bool = False,
+    return_qfim_diag: bool = False,
+) -> Any:
+    """Compute a diagonal Quantum Natural Gradient direction.
+
+    Diagonal QNG is the cheapest QNG approximation. It keeps only the diagonal
+    entries of the QFIM and preconditions each gradient coordinate
+    independently:
+
+        natural_grad_i = grad_i / (F_ii + damping)
+
+    For NumPy ansatzes this returns NumPy arrays. For NPU-family backends (or
+    when ``grad``/``qfim_diag`` are Torch tensors), all scalar gradients, state
+    derivatives, QFIM diagonal entries, and the final division stay as
+    Torch/NPU tensors. That path intentionally avoids ``.cpu()`` and
+    ``to_numpy()`` so device-resident ansatz execution does not move gradient
+    data back to host memory.
+    """
+    theta = np.asarray(params, dtype=float)
+    if theta.size == 0:
+        raise ValueError("params must contain at least one parameter")
+
+    use_torch_path = (
+        _is_npu_family_backend(backend)
+        or _is_torch_tensor(grad)
+        or _is_torch_tensor(qfim_diag)
+    )
+    kwargs = {} if gradient_kwargs is None else gradient_kwargs
+
+    if use_torch_path:
+        tensor_reference = qfim_diag if _is_torch_tensor(qfim_diag) else grad if _is_torch_tensor(grad) else None
+        if grad is None:
+            gradient = _ordinary_gradient_for_dqng_torch(
+                fn,
+                theta,
+                method=gradient_method,
+                shift=float(shift),
+                coefficient=float(coefficient),
+                backend=backend,
+                gradient_kwargs=kwargs,
+            )
+        else:
+            gradient = _torch_real_tensor(grad, backend=backend, shape=theta.shape, reference=tensor_reference)
+
+        if qfim_diag is None:
+            if state_fn is None:
+                raise ValueError("state_fn is required when qfim_diag is not provided")
+            diag, resolved_backend = _qfim_diag_from_state_fd_torch(
+                state_fn,
+                theta,
+                eps=metric_eps,
+                backend=backend,
+            )
+            if backend is None:
+                backend = resolved_backend
+        else:
+            diag = _torch_real_tensor(qfim_diag, backend=backend, shape=(theta.size,), reference=gradient)
+
+        torch = _torch_or_none()
+        damping_value = float(damping)
+        if damping_value < 0.0:
+            raise ValueError("damping must be non-negative")
+        damping_tensor = torch.as_tensor(damping_value, dtype=diag.dtype, device=diag.device)
+
+        natural_flat = gradient.reshape(-1) / (diag.reshape(-1) + damping_tensor)
+        natural = natural_flat.reshape(theta.shape)
+        extras: list[Any] = []
+        if return_gradient:
+            extras.append(gradient)
+        if return_qfim_diag:
+            extras.append(diag)
+        if extras:
+            return (natural, *extras)
+        return natural
+
+    if grad is None:
+        gradient = _ordinary_gradient_for_qng(
+            fn,
+            theta,
+            method=gradient_method,
+            shift=float(shift),
+            coefficient=float(coefficient),
+            backend=backend,
+            gradient_kwargs=kwargs,
+        )
+    else:
+        gradient = np.asarray(grad, dtype=float)
+
+    if gradient.shape != theta.shape:
+        try:
+            gradient = gradient.reshape(theta.shape)
+        except ValueError as exc:
+            raise ValueError(
+                f"grad must have shape {theta.shape}, got {gradient.shape}"
+            ) from exc
+
+    if qfim_diag is None:
+        if state_fn is None:
+            raise ValueError("state_fn is required when qfim_diag is not provided")
+        diag = _qfim_diag_from_state_fd(state_fn, theta, eps=metric_eps)
+    else:
+        diag = _validate_qfim_diag(qfim_diag, theta.size)
+
+    damping_value = float(damping)
+    if damping_value < 0.0:
+        raise ValueError("damping must be non-negative")
+    natural_flat = gradient.reshape(-1) / (diag.reshape(-1) + damping_value)
+    natural = natural_flat.reshape(theta.shape)
+    extras: list[Any] = []
+    if return_gradient:
+        extras.append(gradient)
+    if return_qfim_diag:
+        extras.append(diag)
+    if extras:
+        return (natural, *extras)
+    return natural
+
+
+__all__ = ["auto", "psr", "spsr", "mpsr", "fd", "ad", "qng", "bdqng", "dqng"]

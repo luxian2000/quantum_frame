@@ -1,6 +1,6 @@
 # aicir.qml.grad — 量子机器学习梯度工具包
 
-本模块 (`aicir/qml/grad.py`) 实现了八种用于量子电路参数梯度估计或预条件的方法，覆盖从黑盒数值近似到解析反向传播和量子自然梯度的完整谱系。所有方法均与 `NumpyBackend`、`TorchBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
+本模块 (`aicir/qml/grad.py`) 实现了九种用于量子电路参数梯度估计或预条件的方法，覆盖从黑盒数值近似到解析反向传播和量子自然梯度的完整谱系。所有方法均与 `NumpyBackend`、`TorchBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
 
 ---
 
@@ -16,6 +16,7 @@
 | `ad` | Adjoint Differentiation | $O(P)$ 次门作用，$O(1)$ 额外存储 | 无噪声态向量模拟，效率最高 |
 | `qng` | Quantum Natural Gradient | 梯度调用 + $2P+1$ 次态函数调用 | 用 QFIM 逆预条件梯度，加速 ansatz 优化 |
 | `bdqng` | Block-diagonal QNG | 梯度调用 + $2P+1$ 次态函数调用，分块求解 | 按参数块近似 QFIM，适合大参数 ansatz |
+| `dqng` | Diagonal QNG | 梯度调用 + $2P+1$ 次态函数调用，逐坐标除法 | QFIM 对角近似，最便宜但最粗糙 |
 
 $P$：可微参数数量。
 
@@ -392,6 +393,75 @@ direction, qfim_blocks = bdqng(
 
 ---
 
+## 9. 对角量子自然梯度 `dqng`
+
+```python
+from aicir.qml import dqng
+natural_grad = dqng(fn, state_fn, params, *, damping=1e-6, metric_eps=1e-3)
+```
+
+### 原理
+
+Diag QNG 是 QNG 最便宜的近似，只保留 QFIM 的对角线：
+
+$$F \approx \operatorname{diag}(F_{11}, F_{22}, \ldots, F_{PP})$$
+
+每个参数坐标独立预条件：
+
+$$\tilde{g}_i = \frac{\nabla_i L}{F_{ii} + \lambda}$$
+
+它比 `qng` 和 `bdqng` 更便宜，不需要矩阵求逆或分块线性求解；代价是完全忽略参数间耦合，因此近似更粗。
+
+### NPU 兼容设计
+
+当传入 `NPUBackend`，或 `grad` / `qfim_diag` 是 Torch/NPU 张量时，`dqng` 会走设备端路径：
+
+- `fn` 返回的标量保持为 Torch/NPU tensor
+- `state_fn` 返回的态向量保持为 Torch/NPU tensor
+- QFIM 对角线、阻尼项和最终除法均在设备端完成
+- 不调用 `.cpu()`、`to_numpy()` 或 NumPy 线性代数
+
+因此 NPU ansatz 的梯度预条件不会把中间数据搬回 CPU。若用户的 `fn` 或 `state_fn` 自己调用了 `.cpu()` / `to_numpy()`，则会由用户函数自身造成主机搬移，`dqng` 不会额外执行该操作。
+
+### 示例
+
+```python
+import numpy as np
+from aicir import Circuit, NumpyBackend, State, ry
+from aicir.qml import dqng
+
+bk = NumpyBackend()
+z = bk.cast(np.diag([1.0, -1.0]).astype(np.complex64))
+
+def state_fn(theta):
+    circuit = Circuit(ry(theta[0], 0), n_qubits=1)
+    return State.zero_state(1, bk).evolve(circuit.unitary(backend=bk))
+
+def objective(theta):
+    state = state_fn(theta)
+    return bk.expectation_sv(state.data, z)
+
+theta = np.array([0.5])
+direction, qfim_diag = dqng(objective, state_fn, theta, return_qfim_diag=True)
+# qfim_diag ≈ [1.0]
+# direction ≈ [-sin(0.5)]
+```
+
+也可以直接传入预计算的对角 QFIM：
+
+```python
+direction = dqng(
+    None,
+    None,
+    params,
+    grad=ordinary_grad,
+    qfim_diag=precomputed_diag,
+    damping=1e-5,
+)
+```
+
+---
+
 ## 方法选择指南
 
 ```
@@ -418,6 +488,9 @@ direction, qfim_blocks = bdqng(
 
 参数量较大，但仍希望利用量子态空间几何？
   → bdqng（按 block 近似 QFIM，默认 block_size=1）
+
+参数量很大，只能承受最便宜的几何预条件？
+  → dqng（只用 QFIM 对角线，便宜但粗糙）
 ```
 
 ---
@@ -506,3 +579,20 @@ direction, qfim_blocks = bdqng(
 | `backend` | `gradient_method="auto"` 时使用的 Torch/NPU 后端 |
 | `return_gradient` | 若为 `True`，额外返回普通梯度 |
 | `return_qfim_blocks` | 若为 `True`，额外返回 QFIM block 列表 |
+
+### `dqng(fn, state_fn, params, *, grad=None, qfim_diag=None, gradient_method="psr", gradient_kwargs=None, shift=π/2, coefficient=0.5, metric_eps=1e-3, damping=1e-6, backend=None, return_gradient=False, return_qfim_diag=False)`
+
+| 参数 | 说明 |
+|------|------|
+| `fn` | 接受完整参数数组、返回标量损失的目标函数；当 `grad` 已提供时可为 `None` |
+| `state_fn` | 接受完整参数数组、返回纯态 ansatz 终态；当 `qfim_diag` 已提供时可为 `None` |
+| `grad` | 可选的普通梯度；提供后跳过 `fn` 的梯度计算 |
+| `qfim_diag` | 可选的 QFIM 对角线；提供后跳过 `state_fn` 的 QFIM 对角估计 |
+| `gradient_method` | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"` 或 `"auto"` |
+| `gradient_kwargs` | 透传给普通梯度方法的额外参数 |
+| `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置 |
+| `metric_eps` | 用于 QFIM 对角态导数中心差分的步长 |
+| `damping` | 加到每个 QFIM 对角项上的非负阻尼项 |
+| `backend` | Torch/NPU 后端；传入 `NPUBackend` 时启用不搬回 CPU 的设备端路径 |
+| `return_gradient` | 若为 `True`，额外返回普通梯度 |
+| `return_qfim_diag` | 若为 `True`，额外返回 QFIM 对角线 |

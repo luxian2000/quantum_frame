@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from aicir import Circuit, NumpyBackend, Parameter, State, cx, ry
-from aicir.qml import auto, psr, spsr, mpsr, fd, ad, qng, bdqng
+from aicir.qml import auto, psr, spsr, mpsr, fd, ad, qng, bdqng, dqng
 
 
 def test_psr_matches_analytic_gradient_for_vector_params():
@@ -553,3 +553,71 @@ def test_bdqng_rejects_blocks_that_do_not_cover_all_parameters():
             grad=np.array([1.0, 1.0]),
             qfim_blocks=[np.array([[1.0]])],
         )
+
+
+def test_dqng_preconditions_with_supplied_qfim_diag():
+    natural_grad = dqng(
+        None,
+        None,
+        np.array([0.1, 0.2, 0.3]),
+        grad=np.array([2.0, 4.0, 6.0]),
+        qfim_diag=np.array([2.0, 4.0, 3.0]),
+        damping=0.0,
+    )
+
+    assert np.allclose(natural_grad, [1.0, 1.0, 2.0])
+
+
+def test_dqng_matches_bdqng_with_singleton_blocks():
+    backend = NumpyBackend()
+    z = np.diag([1.0, -1.0, -1.0, 1.0]).astype(np.complex64)
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), ry(theta[1], 1), n_qubits=2)
+        return State.zero_state(2, backend).evolve(circuit.unitary(backend=backend))
+
+    def objective(theta):
+        state = state_fn(theta)
+        return backend.expectation_sv(state.data, backend.cast(z))
+
+    theta = np.array([0.4, -0.2])
+    natural_diag, qfim_diag = dqng(objective, state_fn, theta, return_qfim_diag=True)
+    natural_blocks, qfim_blocks = bdqng(objective, state_fn, theta, block_size=1, return_qfim_blocks=True)
+
+    assert np.allclose(qfim_diag, [block[0, 0] for block in qfim_blocks], atol=1e-5)
+    assert np.allclose(natural_diag, natural_blocks, atol=1e-5)
+
+
+def test_dqng_npu_backend_path_does_not_move_tensors_to_cpu(monkeypatch):
+    torch = pytest.importorskip("torch")
+    from aicir.channel.backends.npu_backend import NPUBackend
+
+    backend = NPUBackend(device="cpu")
+    z = backend.cast(np.diag([1.0, -1.0]).astype(np.complex64))
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), n_qubits=1)
+        state = State.zero_state(1, backend).evolve(circuit.unitary(backend=backend))
+        return state.data
+
+    def objective(theta):
+        return backend.expectation_sv(state_fn(theta), z)
+
+    def fail_cpu(self):
+        raise AssertionError("dqng NPU path must not move tensors to CPU")
+
+    monkeypatch.setattr(torch.Tensor, "cpu", fail_cpu)
+
+    theta = np.array([0.5])
+    natural_grad, qfim_diag = dqng(
+        objective,
+        state_fn,
+        theta,
+        backend=backend,
+        return_qfim_diag=True,
+    )
+
+    assert isinstance(natural_grad, torch.Tensor)
+    assert isinstance(qfim_diag, torch.Tensor)
+    assert tuple(natural_grad.shape) == (1,)
+    assert tuple(qfim_diag.shape) == (1,)
