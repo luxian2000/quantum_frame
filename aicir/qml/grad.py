@@ -630,6 +630,159 @@ def _validate_qfim(qfim: Any, parameter_count: int) -> np.ndarray:
     return 0.5 * (matrix + matrix.T)
 
 
+def _index_to_flat(theta: np.ndarray, index: tuple[int, ...]) -> int:
+    if theta.shape == ():
+        if index == ():
+            return 0
+        raise IndexError("Scalar params only support parameter index ()")
+    return int(np.ravel_multi_index(index, theta.shape))
+
+
+def _normalize_qng_blocks(
+    params: np.ndarray,
+    blocks: Any,
+    block_size: int,
+) -> list[list[tuple[int, ...]]]:
+    if params.size == 0:
+        raise ValueError("params must contain at least one parameter")
+
+    if blocks is None:
+        size = int(block_size)
+        if size <= 0:
+            raise ValueError("block_size must be a positive integer")
+        flat_blocks = [
+            range(start, min(start + size, params.size))
+            for start in range(0, params.size, size)
+        ]
+        return [[_flat_to_index(params, flat_index) for flat_index in block] for block in flat_blocks]
+
+    if isinstance(blocks, numbers.Integral) or _is_multi_index(blocks, params.ndim):
+        raw_blocks = [blocks]
+    else:
+        raw_blocks = list(blocks)
+
+    if not raw_blocks:
+        raise ValueError("blocks must not be empty")
+
+    normalized = []
+    seen = set()
+    for block in raw_blocks:
+        indices = _normalize_parameter_indices(params, block)
+        normalized.append(indices)
+        for index in indices:
+            if index in seen:
+                raise ValueError("blocks must not contain duplicate parameter indices")
+            seen.add(index)
+
+    expected = set(np.ndindex(params.shape))
+    if seen != expected:
+        missing = sorted(_index_to_flat(params, index) for index in expected - seen)
+        extra = sorted(_index_to_flat(params, index) for index in seen - expected)
+        details = []
+        if missing:
+            details.append(f"missing flat indices {missing}")
+        if extra:
+            details.append(f"extra flat indices {extra}")
+        raise ValueError("blocks must cover every parameter exactly once" + (": " + ", ".join(details) if details else ""))
+    return normalized
+
+
+def _qfim_from_derivatives(base_state: np.ndarray, derivatives: np.ndarray) -> np.ndarray:
+    qfim = np.zeros((derivatives.shape[0], derivatives.shape[0]), dtype=float)
+    for i in range(derivatives.shape[0]):
+        for j in range(i, derivatives.shape[0]):
+            overlap = np.vdot(derivatives[i], derivatives[j])
+            projection = np.vdot(derivatives[i], base_state) * np.vdot(base_state, derivatives[j])
+            value = 4.0 * float(np.real(overlap - projection))
+            qfim[i, j] = value
+            qfim[j, i] = value
+
+    qfim = 0.5 * (qfim + qfim.T)
+    qfim[np.isclose(qfim, 0.0, atol=1e-12)] = 0.0
+    return qfim
+
+
+def _state_derivatives_fd(
+    state_fn: Callable[[np.ndarray], Any],
+    theta: np.ndarray,
+    block: list[tuple[int, ...]],
+    *,
+    base_state: np.ndarray,
+    eps: float,
+) -> np.ndarray:
+    derivatives = np.zeros((len(block), base_state.size), dtype=np.complex128)
+    for derivative_index, index in enumerate(block):
+        plus = theta.copy()
+        minus = theta.copy()
+        plus[index] += eps
+        minus[index] -= eps
+
+        state_plus = _as_state_vector(
+            state_fn(plus),
+            label="state_fn(params + metric_eps)",
+        )
+        state_minus = _as_state_vector(
+            state_fn(minus),
+            label="state_fn(params - metric_eps)",
+        )
+        if state_plus.shape != base_state.shape or state_minus.shape != base_state.shape:
+            raise ValueError("state_fn must return state vectors with a consistent shape")
+        derivatives[derivative_index] = (state_plus - state_minus) / (2.0 * eps)
+    return derivatives
+
+
+def _qfim_blocks_from_state_fd(
+    state_fn: Callable[[np.ndarray], Any],
+    theta: np.ndarray,
+    blocks: list[list[tuple[int, ...]]],
+    *,
+    eps: float,
+) -> list[np.ndarray]:
+    eps_value = float(eps)
+    if not eps_value > 0.0:
+        raise ValueError("metric_eps must be a positive number")
+
+    base_state = _as_state_vector(state_fn(theta), label="state_fn(params)")
+    qfim_blocks = []
+    for block in blocks:
+        derivatives = _state_derivatives_fd(
+            state_fn,
+            theta,
+            block,
+            base_state=base_state,
+            eps=eps_value,
+        )
+        qfim_blocks.append(_qfim_from_derivatives(base_state, derivatives))
+    return qfim_blocks
+
+
+def _validate_qfim_blocks(qfim_blocks: Any, blocks: list[list[tuple[int, ...]]]) -> list[np.ndarray]:
+    matrices = list(qfim_blocks)
+    if len(matrices) != len(blocks):
+        raise ValueError(f"qfim_blocks must contain {len(blocks)} block(s), got {len(matrices)}")
+
+    normalized = []
+    for matrix, block in zip(matrices, blocks):
+        array = np.asarray(matrix, dtype=float)
+        expected = (len(block), len(block))
+        if array.shape != expected:
+            raise ValueError(f"qfim block must have shape {expected}, got {array.shape}")
+        normalized.append(0.5 * (array + array.T))
+    return normalized
+
+
+def _solve_damped_system(metric: np.ndarray, gradient: np.ndarray, damping: float) -> np.ndarray:
+    damping_value = float(damping)
+    if damping_value < 0.0:
+        raise ValueError("damping must be non-negative")
+
+    regularized = metric + damping_value * np.eye(metric.shape[0], dtype=float)
+    try:
+        return np.linalg.solve(regularized, gradient)
+    except np.linalg.LinAlgError:
+        return np.linalg.pinv(regularized) @ gradient
+
+
 def _ordinary_gradient_for_qng(
     fn: Callable[[Any], Any] | None,
     theta: np.ndarray,
@@ -750,16 +903,8 @@ def qng(
     else:
         metric = _validate_qfim(qfim, theta.size)
 
-    damping_value = float(damping)
-    if damping_value < 0.0:
-        raise ValueError("damping must be non-negative")
-    regularized = metric + damping_value * np.eye(theta.size, dtype=float)
-
     flat_grad = gradient.reshape(-1)
-    try:
-        natural_flat = np.linalg.solve(regularized, flat_grad)
-    except np.linalg.LinAlgError:
-        natural_flat = np.linalg.pinv(regularized) @ flat_grad
+    natural_flat = _solve_damped_system(metric, flat_grad, damping)
 
     natural = np.asarray(natural_flat, dtype=float).reshape(theta.shape)
     extras: list[Any] = []
@@ -772,4 +917,124 @@ def qng(
     return natural
 
 
-__all__ = ["auto", "psr", "spsr", "mpsr", "fd", "ad", "qng"]
+def bdqng(
+    fn: Callable[[Any], Any] | None,
+    state_fn: Callable[[np.ndarray], Any] | None,
+    params: Any,
+    *,
+    blocks: Any = None,
+    block_size: int = 1,
+    grad: Any = None,
+    qfim_blocks: Any = None,
+    gradient_method: str = "psr",
+    gradient_kwargs: dict[str, Any] | None = None,
+    shift: float = np.pi / 2.0,
+    coefficient: float = 0.5,
+    metric_eps: float = 1e-3,
+    damping: float = 1e-6,
+    backend: Any = None,
+    return_gradient: bool = False,
+    return_qfim_blocks: bool = False,
+) -> np.ndarray | tuple[Any, ...]:
+    """Compute a block-diagonal Quantum Natural Gradient direction.
+
+    ``bdqng`` is the tractable block-diagonal approximation to :func:`qng`.
+    Instead of building and inverting the full ``P x P`` QFIM, it partitions
+    parameters into blocks and solves one natural-gradient system per block:
+
+        natural_grad_B = (F_B + damping * I)^(-1) @ grad_B
+
+    Cross-block QFIM entries are assumed to be zero. This reduces solve cost
+    from one dense ``P x P`` system to multiple smaller systems and lets large
+    ansatzes use QNG-style geometry with controllable block sizes.
+
+    Args:
+        fn: Scalar objective ``fn(params)``. Required unless ``grad`` is given.
+        state_fn: Pure-state ansatz function ``state_fn(params)``. Required
+            unless ``qfim_blocks`` is given.
+        params: Current parameter value(s). Scalars and arbitrary-shaped arrays
+            are supported; the returned natural gradient has the same shape.
+        blocks: Optional explicit parameter blocks. Each block contains flat
+            integer indices or tuple indices, e.g. ``[[0, 1], [2, 3]]``.
+            Blocks must cover every parameter exactly once.
+        block_size: Contiguous block size used when ``blocks`` is omitted.
+            Defaults to ``1`` (diagonal QNG).
+        grad: Optional precomputed ordinary gradient.
+        qfim_blocks: Optional precomputed QFIM block matrices, one per block.
+        gradient_method: Ordinary-gradient method when ``grad`` is omitted:
+            ``"psr"`` (default), ``"fd"``, or ``"auto"``.
+        gradient_kwargs: Extra keyword arguments forwarded to the selected
+            ordinary-gradient method.
+        shift: Parameter-shift amount used by ``gradient_method="psr"``.
+        coefficient: Parameter-shift coefficient used by
+            ``gradient_method="psr"``.
+        metric_eps: Central-difference step for block-QFIM state derivatives.
+        damping: Non-negative Tikhonov damping added to each QFIM block before
+            solving.
+        backend: Torch-family backend used only by ``gradient_method="auto"``.
+        return_gradient: If ``True``, include the ordinary gradient.
+        return_qfim_blocks: If ``True``, include the list of QFIM blocks.
+
+    Returns:
+        Block-diagonal natural gradient with the same shape as ``params``.
+        Optional returns are appended as ``(natural_grad, gradient,
+        qfim_blocks)`` according to the requested flags.
+    """
+    theta = np.asarray(params, dtype=float)
+    if theta.size == 0:
+        raise ValueError("params must contain at least one parameter")
+
+    normalized_blocks = _normalize_qng_blocks(theta, blocks, block_size)
+
+    if grad is None:
+        gradient = _ordinary_gradient_for_qng(
+            fn,
+            theta,
+            method=gradient_method,
+            shift=float(shift),
+            coefficient=float(coefficient),
+            backend=backend,
+            gradient_kwargs={} if gradient_kwargs is None else gradient_kwargs,
+        )
+    else:
+        gradient = np.asarray(grad, dtype=float)
+
+    if gradient.shape != theta.shape:
+        try:
+            gradient = gradient.reshape(theta.shape)
+        except ValueError as exc:
+            raise ValueError(
+                f"grad must have shape {theta.shape}, got {gradient.shape}"
+            ) from exc
+
+    if qfim_blocks is None:
+        if state_fn is None:
+            raise ValueError("state_fn is required when qfim_blocks is not provided")
+        metric_blocks = _qfim_blocks_from_state_fd(
+            state_fn,
+            theta,
+            normalized_blocks,
+            eps=metric_eps,
+        )
+    else:
+        metric_blocks = _validate_qfim_blocks(qfim_blocks, normalized_blocks)
+
+    flat_grad = gradient.reshape(-1)
+    natural_flat = np.zeros(theta.size, dtype=float)
+    for block, metric in zip(normalized_blocks, metric_blocks):
+        flat_indices = [_index_to_flat(theta, index) for index in block]
+        block_grad = flat_grad[flat_indices]
+        natural_flat[flat_indices] = _solve_damped_system(metric, block_grad, damping)
+
+    natural = natural_flat.reshape(theta.shape)
+    extras: list[Any] = []
+    if return_gradient:
+        extras.append(gradient)
+    if return_qfim_blocks:
+        extras.append(metric_blocks)
+    if extras:
+        return (natural, *extras)
+    return natural
+
+
+__all__ = ["auto", "psr", "spsr", "mpsr", "fd", "ad", "qng", "bdqng"]

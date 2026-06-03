@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from aicir import Circuit, NumpyBackend, Parameter, State, cx, ry
-from aicir.qml import auto, psr, spsr, mpsr, fd, ad, qng
+from aicir.qml import auto, psr, spsr, mpsr, fd, ad, qng, bdqng
 
 
 def test_psr_matches_analytic_gradient_for_vector_params():
@@ -477,3 +477,79 @@ def test_qng_accepts_npu_backend_state_tensor():
 
     assert np.allclose(qfim, [[1.0]], atol=1e-5)
     assert np.allclose(natural_grad, [-np.sin(theta[0])], atol=1e-5)
+
+
+def test_bdqng_preconditions_with_supplied_qfim_blocks():
+    natural_grad = bdqng(
+        None,
+        None,
+        np.array([0.1, 0.2, 0.3]),
+        blocks=[[0, 1], [2]],
+        grad=np.array([2.0, 4.0, 6.0]),
+        qfim_blocks=[np.diag([2.0, 4.0]), np.array([[3.0]])],
+        damping=0.0,
+    )
+
+    assert np.allclose(natural_grad, [1.0, 1.0, 2.0])
+
+
+def test_bdqng_single_block_matches_full_qng():
+    backend = NumpyBackend()
+    z = np.diag([1.0, -1.0, -1.0, 1.0]).astype(np.complex64)
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), ry(theta[1], 1), n_qubits=2)
+        return State.zero_state(2, backend).evolve(circuit.unitary(backend=backend))
+
+    def objective(theta):
+        state = state_fn(theta)
+        return backend.expectation_sv(state.data, backend.cast(z))
+
+    theta = np.array([0.4, -0.2])
+    natural_full, qfim_full = qng(objective, state_fn, theta, return_qfim=True)
+    natural_block, qfim_blocks = bdqng(
+        objective,
+        state_fn,
+        theta,
+        blocks=[[0, 1]],
+        return_qfim_blocks=True,
+    )
+
+    assert len(qfim_blocks) == 1
+    assert np.allclose(qfim_blocks[0], qfim_full, atol=1e-5)
+    assert np.allclose(natural_block, natural_full, atol=1e-5)
+
+
+def test_bdqng_accepts_npu_backend_state_tensor():
+    pytest.importorskip("torch")
+    from aicir.channel.backends.npu_backend import NPUBackend
+
+    backend = NPUBackend(device="cpu")
+    z = backend.cast(np.diag([1.0, -1.0]).astype(np.complex64))
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), n_qubits=1)
+        state = State.zero_state(1, backend).evolve(circuit.unitary(backend=backend))
+        return state.data
+
+    def objective(theta):
+        return backend.expectation_sv(state_fn(theta), z)
+
+    theta = np.array([0.5])
+    natural_grad, qfim_blocks = bdqng(objective, state_fn, theta, return_qfim_blocks=True)
+
+    assert len(qfim_blocks) == 1
+    assert np.allclose(qfim_blocks[0], [[1.0]], atol=1e-5)
+    assert np.allclose(natural_grad, [-np.sin(theta[0])], atol=1e-5)
+
+
+def test_bdqng_rejects_blocks_that_do_not_cover_all_parameters():
+    with pytest.raises(ValueError, match="cover every parameter"):
+        bdqng(
+            None,
+            None,
+            np.array([0.1, 0.2]),
+            blocks=[[0]],
+            grad=np.array([1.0, 1.0]),
+            qfim_blocks=[np.array([[1.0]])],
+        )

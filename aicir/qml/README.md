@@ -1,6 +1,6 @@
 # aicir.qml.grad — 量子机器学习梯度工具包
 
-本模块 (`aicir/qml/grad.py`) 实现了七种用于量子电路参数梯度估计或预条件的方法，覆盖从黑盒数值近似到解析反向传播和量子自然梯度的完整谱系。所有方法均与 `NumpyBackend`、`TorchBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
+本模块 (`aicir/qml/grad.py`) 实现了八种用于量子电路参数梯度估计或预条件的方法，覆盖从黑盒数值近似到解析反向传播和量子自然梯度的完整谱系。所有方法均与 `NumpyBackend`、`TorchBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
 
 ---
 
@@ -15,6 +15,7 @@
 | `fd` | Finite Difference | $2P$（中心差）或 $P+1$（单侧） | 任意可微目标，黑盒 |
 | `ad` | Adjoint Differentiation | $O(P)$ 次门作用，$O(1)$ 额外存储 | 无噪声态向量模拟，效率最高 |
 | `qng` | Quantum Natural Gradient | 梯度调用 + $2P+1$ 次态函数调用 | 用 QFIM 逆预条件梯度，加速 ansatz 优化 |
+| `bdqng` | Block-diagonal QNG | 梯度调用 + $2P+1$ 次态函数调用，分块求解 | 按参数块近似 QFIM，适合大参数 ansatz |
 
 $P$：可微参数数量。
 
@@ -328,6 +329,69 @@ direction = qng(
 
 ---
 
+## 8. 分块对角量子自然梯度 `bdqng`
+
+```python
+from aicir.qml import bdqng
+natural_grad = bdqng(fn, state_fn, params, *, blocks=None, block_size=1)
+```
+
+### 原理
+
+Block-diagonal QNG 是 QNG 的可扩展近似。它把参数划分为多个 block，只保留同一 block 内的 QFIM 项，并忽略跨 block 的耦合：
+
+$$F \approx \operatorname{blockdiag}(F_{B_1}, F_{B_2}, \ldots, F_{B_m})$$
+
+每个 block 独立求解：
+
+$$\tilde{g}_{B_k} = (F_{B_k} + \lambda I)^{-1}\nabla L_{B_k}$$
+
+与完整 `qng` 相比，`bdqng` 不需要求解一个大的 $P \times P$ 线性系统，而是求解多个小系统。默认 `block_size=1`，即 diagonal QNG；也可以通过 `blocks=[[0, 1], [2, 3]]` 指定更大的参数块。
+
+### 特点
+
+- `blocks=None` 时按 flat 参数顺序用 `block_size` 连续分块
+- `blocks` 可显式指定 flat 索引或多维 tuple 索引，且必须覆盖每个参数一次
+- 可传入 `qfim_blocks` 复用预计算的 block QFIM
+- 支持与 `qng` 相同的普通梯度来源：`psr`、`fd`、`auto` 或外部 `grad`
+- `state_fn` 同样可返回 numpy 态向量、Torch/NPU 张量或 aicir `State`
+
+### 示例
+
+```python
+import numpy as np
+from aicir import Circuit, NumpyBackend, State, ry
+from aicir.qml import bdqng
+
+bk = NumpyBackend()
+z = bk.cast(np.diag([1.0, -1.0, -1.0, 1.0]).astype(np.complex64))
+
+def state_fn(theta):
+    circuit = Circuit(ry(theta[0], 0), ry(theta[1], 1), n_qubits=2)
+    return State.zero_state(2, bk).evolve(circuit.unitary(backend=bk))
+
+def objective(theta):
+    state = state_fn(theta)
+    return bk.expectation_sv(state.data, z)
+
+theta = np.array([0.4, -0.2])
+direction = bdqng(objective, state_fn, theta, blocks=[[0], [1]])
+```
+
+若一个 ansatz 按 layer 排列参数，可按 layer 分块：
+
+```python
+direction, qfim_blocks = bdqng(
+    objective,
+    state_fn,
+    params,
+    blocks=[[0, 1, 2], [3, 4, 5]],
+    return_qfim_blocks=True,
+)
+```
+
+---
+
 ## 方法选择指南
 
 ```
@@ -351,6 +415,9 @@ direction = qng(
 
 希望优化步长适应量子态空间几何？
   → qng（用 QFIM 逆预条件 psr/fd/auto 或外部梯度）
+
+参数量较大，但仍希望利用量子态空间几何？
+  → bdqng（按 block 近似 QFIM，默认 block_size=1）
 ```
 
 ---
@@ -420,3 +487,22 @@ direction = qng(
 | `backend` | `gradient_method="auto"` 时使用的 Torch/NPU 后端 |
 | `return_gradient` | 若为 `True`，额外返回普通梯度 |
 | `return_qfim` | 若为 `True`，额外返回 QFIM |
+
+### `bdqng(fn, state_fn, params, *, blocks=None, block_size=1, grad=None, qfim_blocks=None, gradient_method="psr", gradient_kwargs=None, shift=π/2, coefficient=0.5, metric_eps=1e-3, damping=1e-6, backend=None, return_gradient=False, return_qfim_blocks=False)`
+
+| 参数 | 说明 |
+|------|------|
+| `fn` | 接受完整参数数组、返回标量损失的目标函数；当 `grad` 已提供时可为 `None` |
+| `state_fn` | 接受完整参数数组、返回纯态 ansatz 终态；当 `qfim_blocks` 已提供时可为 `None` |
+| `blocks` | 显式参数分块，例如 `[[0, 1], [2, 3]]`；每个参数必须出现且只出现一次 |
+| `block_size` | 未提供 `blocks` 时按 flat 参数顺序连续分块的大小，默认 `1` |
+| `grad` | 可选的普通梯度；提供后跳过 `fn` 的梯度计算 |
+| `qfim_blocks` | 可选的 block QFIM 列表；提供后跳过 `state_fn` 的 block QFIM 估计 |
+| `gradient_method` | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"` 或 `"auto"` |
+| `gradient_kwargs` | 透传给普通梯度方法的额外参数 |
+| `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置 |
+| `metric_eps` | 用于 block QFIM 态导数中心差分的步长 |
+| `damping` | 加到每个 QFIM block 对角线上的非负阻尼项 |
+| `backend` | `gradient_method="auto"` 时使用的 Torch/NPU 后端 |
+| `return_gradient` | 若为 `True`，额外返回普通梯度 |
+| `return_qfim_blocks` | 若为 `True`，额外返回 QFIM block 列表 |
