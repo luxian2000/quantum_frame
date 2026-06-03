@@ -244,7 +244,7 @@ def fd(
     return grad
 
 
-def multipsr(
+def mpsr(
     fn: Callable[[np.ndarray], float],
     params: Any,
     parameter_indices: Any = None,
@@ -453,4 +453,92 @@ def ad(circuit, observable, *, backend=None, return_value: bool = False):
     return grad
 
 
-__all__ = ["psr", "spsr", "multipsr", "fd", "ad"]
+# ─────────────────────────── automatic differentiation ──────────────────────────
+
+
+def _to_real_torch_scalar(value, *, label: str):
+    import torch
+
+    if not isinstance(value, torch.Tensor):
+        value = torch.as_tensor(value)
+    if value.numel() != 1:
+        raise ValueError(f"{label} must return a scalar value")
+    value = value.reshape(())
+    if torch.is_complex(value):
+        # Objectives (expectation values) are real-valued.
+        value = value.real
+    return value
+
+
+def auto(
+    fn: Callable[[Any], Any],
+    params: Any,
+    *,
+    backend: Any = None,
+) -> np.ndarray:
+    """Compute an ansatz gradient by reverse-mode automatic differentiation.
+
+    This is "backpropagation through the unitary": the objective is evaluated
+    with PyTorch tensor parameters, and the gradient is obtained by
+    backpropagating through every gate operation recorded on the autograd
+    tape. It is exact (no shift/step-size error) and computes the full
+    gradient in a single backward pass.
+
+    Because it relies on PyTorch autograd, it requires a Torch-family backend
+    (:class:`TorchBackend` or :class:`NPUBackend`) and an objective that stays
+    inside the autograd graph: ``fn`` must build/simulate the circuit using the
+    backend and return the expectation value as a differentiable tensor — it
+    must **not** call ``float(...)``, ``.item()``, ``.detach()`` or
+    ``to_numpy(...)`` on its result.
+
+    Args:
+        fn: Differentiable objective. Receives a ``torch.Tensor`` of parameters
+            (same shape as ``params``, ``requires_grad=True``, placed on the
+            backend device) and returns a scalar tensor.
+        params: Initial parameter value(s); scalars and arbitrary-shaped arrays
+            are supported. The returned gradient has the same shape.
+        backend: Torch-family backend used to pick the autograd dtype/device so
+            the parameters live where the simulation runs (important for NPU /
+            CUDA). Defaults to a CPU ``TorchBackend``.
+
+    Returns:
+        A NumPy array with the same shape as ``params``.
+    """
+    try:
+        import torch
+    except ModuleNotFoundError as exc:  # pragma: no cover - torch always present in tests
+        raise ModuleNotFoundError(
+            "auto (automatic differentiation) requires PyTorch; install torch or use psr/fd."
+        ) from exc
+
+    if backend is None:
+        from aicir.channel.backends.torch_backend import TorchBackend
+
+        backend = TorchBackend(device="cpu")
+
+    complex_dtype = getattr(backend, "_dtype", torch.complex64)
+    real_dtype = torch.float64 if complex_dtype == torch.complex128 else torch.float32
+    device = getattr(backend, "_device", None)
+
+    base = np.asarray(params, dtype=float)
+    theta = torch.tensor(base, dtype=real_dtype, device=device, requires_grad=True)
+
+    value = fn(theta)
+    scalar = _to_real_torch_scalar(value, label="fn(params)")
+
+    if not scalar.requires_grad:
+        raise ValueError(
+            "auto objective is not connected to the autograd graph: ensure fn "
+            "uses a Torch-family backend and returns a differentiable tensor "
+            "without calling float()/.item()/.detach()/to_numpy()."
+        )
+
+    (grad,) = torch.autograd.grad(scalar, theta, allow_unused=True)
+    if grad is None:
+        grad = torch.zeros_like(theta)
+
+    grad_np = grad.detach().cpu().numpy().astype(float)
+    return grad_np.reshape(base.shape)
+
+
+__all__ = ["psr", "spsr", "mpsr", "fd", "ad", "auto"]
