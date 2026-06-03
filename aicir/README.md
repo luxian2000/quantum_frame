@@ -936,3 +936,16 @@ QAS/metrics 相关公共函数：
 - `plot_architecture_metrics(item, metrics=None)`：绘制单个候选的指标条形图
 - `compare_architectures(data, metrics=None)`：对比多个候选架构或评分
 - `plot_qas_summary(item, metrics=None)`：左侧线路图、右侧指标图的组合视图
+
+---
+
+## 9. 子包说明索引
+
+`aicir` 子目录中还包含更具体的说明文档：
+
+| 子目录 | 说明文档 | 内容概要 |
+| --- | --- | --- |
+| `aicir/core/io` | [`core/io/README.md`](core/io/README.md) | OpenQASM 导出行为、受控旋转门和多控旋转门分解规则。 |
+| `aicir/optimizer` | [`optimizer/README.md`](optimizer/README.md) | `aicir.optimizer.basic` 的本地化简规则、旋转门合并和固定点优化策略。 |
+| `aicir/qas` | [`qas/README.md`](qas/README.md) | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。 |
+| `aicir/qml` | [`qml/README.md`](qml/README.md) | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。 |
