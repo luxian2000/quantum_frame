@@ -1,12 +1,18 @@
-"""Run the 4-qubit Ising/TFIM VQE-QAS HEA demo."""
+"""Run the main 4-qubit Ising/TFIM VQE-QAS HEA demo.
+
+The mainline uses trainability-prior Stage 1 ranking followed by fair final
+VQE validation. Short-step VQE/SA runners are kept as diagnostics because the
+4-qubit Ising sweep shows short-step fitness can be anti-correlated with fair
+final VQE performance under small budgets.
+"""
 
 from __future__ import annotations
 
-from nexq.qas.vqe_hea_demo import run_vqe_ising4_demo
+from nexq.qas.vqe_hea_demo import run_ising4_trainability_prior_demo
 
 
 def main() -> None:
-    report = run_vqe_ising4_demo()
+    report = run_ising4_trainability_prior_demo()
     print("\n".join(report.summary_lines()))
 
 

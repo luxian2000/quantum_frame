@@ -104,7 +104,7 @@ print("\n".join(multi_seed_report.summary_lines()))
 
 当前 demo 优先级已调整为 VQE 最小闭环：
 
-- D0 已完成：2-qubit H2 toy Hamiltonian + HEAMask 搜索空间 + zero-cost guardrail + SA short-step VQE 搜索 + final multi-start validation。
+- D0 已完成：2-qubit H2 toy Hamiltonian + HEAMask 搜索空间 + zero-cost guardrail + final multi-start validation；H2 只作为 smoke demo。
 - D1 待做：在云端 NPU/torch 环境运行 `python -m nexq.qas.demo.vqe_h2_hea_search`，记录输出表和耗时。
 - D2 待做：把 H2 demo 从单 seed 扩展为 3-5 seed 汇总，报告 `sa_best`、Stage 1 top、baselines 的平均能量和胜率。
 - D3 待做：扩大 HEA 搜索空间到更多 qubit/layer 或更真实的 VQE Hamiltonian，验证 Stage 1 guardrail 是否能稳定压缩候选池。
@@ -210,14 +210,14 @@ from nexq.qas import run_hybrid_qas_validation_experiment
 python -m nexq.qas.demo.random_proxy_validation
 ```
 
-## 5. Minimal H2 VQE-QAS Demo
+## 5. Minimal VQE-QAS Demo
 
 当前最小可跑 VQE-QAS demo 使用硬编码 Pauli Hamiltonian 和 HEA 搜索空间，目标是展示两阶段闭环，而不是追求化学精度：
 
 ```text
 Stage 1: 四个 zero-cost metrics 做 guardrail/filter
-Stage 2: simulated annealing 在 HEAMask 邻域里搜索，fitness 只用 short-step VQE energy
-Final: SA best + Stage 1 top candidates + baselines 做 multi-start VQE validation
+Stage 2: 用当前验证更可靠的 zero-cost signal 做候选排序/选种
+Final: Stage 1/2 选出的 candidates + baselines 做 fair multi-start VQE validation
 ```
 
 运行：
@@ -226,13 +226,21 @@ Final: SA best + Stage 1 top candidates + baselines 做 multi-start VQE validati
 python -m nexq.qas.demo.vqe_h2_hea_search
 ```
 
-H2 toy 问题太小，很多合理 HEA baseline 都能接近参考能量，因此它主要证明 pipeline 可运行。为了看到更明显的结构差异，可以运行 4-qubit transverse-field Ising/TFIM demo：
+H2 toy 问题太小，很多合理 HEA baseline 都能接近参考能量，因此它主要证明 pipeline 可运行。当前 4-qubit transverse-field Ising/TFIM 主 demo 已切换为 trainability-prior Stage1：先用四项 zero-cost metrics 做 guardrail，再用 `trainability` 主导排序，最后直接对 trainability top candidates 做 fair final VQE validation。
 
 ```bash
 python -m nexq.qas.demo.vqe_ising4_hea_search
 ```
 
-如果要判断 SA 步数是否足够、以及 final VQE 是否因为固定 cap 对多参数结构不公平，可以运行 budget sweep：
+等价的显式入口是：
+
+```bash
+python -m nexq.qas.demo.vqe_ising4_trainability_prior
+```
+
+这样改主线的原因是云端诊断显示 short-step VQE 在小预算下会误导搜索方向：`short_40` 和 fair final VQE 的 Spearman 约为 `-0.806`，即使增加到 `short_400` 也只有约 `0.333`；相反，`trainability` 是当前 top candidate 集合里最稳定的正相关 zero-cost signal，Spearman 约为 `0.491`、top-5 overlap 为 `3/5`。
+
+以下 runner 保留为诊断工具，不再作为当前主线。若要判断 SA 步数是否足够、以及 final VQE 是否因为固定 cap 对多参数结构不公平，可以运行 budget sweep：
 
 ```bash
 python -m nexq.qas.demo.vqe_ising4_budget_sweep
@@ -243,7 +251,7 @@ python -m nexq.qas.demo.vqe_ising4_budget_sweep
 - capped budget：沿用 smoke demo 的固定上限，便于和已有结果对齐。
 - per-param fair budget：按 `max(40, n_params * 20)` 设置每个 start 的评估预算，用于检查参数更多的搜索结构是否被固定 cap 低估。
 
-如果 budget sweep 显示单链 SA 很快陷入同一个局部区域，可以运行 diverse multi-start SA。它不是简单取 Stage 1 top-5，而是从 top-1 开始，用 mask 汉明距离贪心选择结构差异更大的起点：
+如果 budget sweep 显示单链 SA 很快陷入同一个局部区域，可以运行 diverse multi-start SA。它不是简单取 Stage 1 top-5，而是从 top-1 开始，用 mask 汉明距离贪心选择结构差异更大的起点；但该 runner 仍依赖 short-step VQE fitness，因此只用于诊断：
 
 ```bash
 python -m nexq.qas.demo.vqe_ising4_multistart_sa
@@ -265,13 +273,7 @@ python -m nexq.qas.demo.vqe_ising4_fitness_budget_sweep
 
 该 runner 固定同一批 Stage1 top candidates 和同一套 fair final VQE energy，只改变 short-step budget（默认 `40/100/200/400`），同时报告 `weighted / expressibility / trainability / noise / hardware` 与 fair VQE 的相关性。
 
-如果上面的结果显示 `trainability` 是最稳定的正相关 zero-cost 信号，可以直接验证 trainability-prior Stage1：
-
-```bash
-python -m nexq.qas.demo.vqe_ising4_trainability_prior
-```
-
-该 runner 会用 trainability 主导 Stage1 排序，一方面直接对 trainability top candidates 跑 fair final VQE，另一方面以 trainability top-1 作为 SA 起点再跑 Stage2。
+`vqe_ising4_trainability_prior` 会用 trainability 主导 Stage1 排序，一方面直接对 trainability top candidates 跑 fair final VQE，另一方面保留 trainability top-1 seeded SA trace 作为反例/诊断：如果 SA 被 short-step fitness 拉向更差结构，报告会把它和 baselines 一起列出来。
 
 HEA mask 的搜索维度固定为：
 
@@ -285,8 +287,8 @@ HEA mask 的搜索维度固定为：
 
 - 2-qubit H2 的候选空间很小，Stage 1 在这个 demo 中主要展示流程；更大 qubit/layer 搜索空间下才会体现明显压缩价值。
 - Stage 1 summary 会打印 `candidates / kept / filtered` 和四项指标的 `min / p25 / max`，用于判断 guardrail 是否真的产生过滤，而不是只看前几条 top rows。
-- SA fitness 不叠加 zero-cost penalty，避免引入额外权重超参数；zero-cost 只负责先验过滤，任务性能负责搜索方向。
-- short-step VQE budget 按参数量缩放，使用 `min(n_params * evals_per_param, max_evaluations)`，避免参数多的线路被固定预算不公平惩罚。
+- 当前 4q Ising 主线不再把 short-step VQE/SA 作为核心搜索结论；short-step VQE 只作为诊断，因为小预算下它和 fair VQE 排序负相关。
+- 若后续重新启用 SA/GA/beam search，必须先证明所用 fitness 与 fair final VQE 至少有稳定正相关和可接受的 top-k overlap。
 
 ## 6. 使用方法：PPO_RB
 
