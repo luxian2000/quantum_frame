@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from aicir import Circuit, NumpyBackend, Parameter, State, cx, ry
-from aicir.qml import ad, auto, fd, mpsr, psr, spsr
+from aicir.qml import auto, psr, spsr, mpsr, fd, ad, qng
 
 
 def test_psr_matches_analytic_gradient_for_vector_params():
@@ -416,3 +416,64 @@ def test_auto_rejects_non_differentiable_objective():
 
     with pytest.raises(ValueError, match="autograd graph"):
         auto(fn, np.array(0.5), backend=backend)
+
+
+def test_qng_matches_single_rotation_natural_gradient():
+    backend = NumpyBackend()
+    z = np.diag([1.0, -1.0]).astype(np.complex64)
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), n_qubits=1)
+        return State.zero_state(1, backend).evolve(circuit.unitary(backend=backend))
+
+    def objective(theta):
+        state = state_fn(theta)
+        return backend.expectation_sv(state.data, backend.cast(z))
+
+    theta = np.array([0.5])
+    natural_grad, grad, qfim = qng(
+        objective,
+        state_fn,
+        theta,
+        return_gradient=True,
+        return_qfim=True,
+    )
+
+    assert np.allclose(grad, [-np.sin(theta[0])], atol=1e-5)
+    assert np.allclose(qfim, [[1.0]], atol=1e-5)
+    assert np.allclose(natural_grad, grad, atol=1e-5)
+
+
+def test_qng_preconditions_with_supplied_qfim():
+    natural_grad = qng(
+        None,
+        None,
+        np.array([0.1, 0.2]),
+        grad=np.array([2.0, 4.0]),
+        qfim=np.diag([2.0, 4.0]),
+        damping=0.0,
+    )
+
+    assert np.allclose(natural_grad, [1.0, 1.0])
+
+
+def test_qng_accepts_npu_backend_state_tensor():
+    pytest.importorskip("torch")
+    from aicir.channel.backends.npu_backend import NPUBackend
+
+    backend = NPUBackend(device="cpu")
+    z = backend.cast(np.diag([1.0, -1.0]).astype(np.complex64))
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), n_qubits=1)
+        state = State.zero_state(1, backend).evolve(circuit.unitary(backend=backend))
+        return state.data
+
+    def objective(theta):
+        return backend.expectation_sv(state_fn(theta), z)
+
+    theta = np.array([0.5])
+    natural_grad, qfim = qng(objective, state_fn, theta, return_qfim=True)
+
+    assert np.allclose(qfim, [[1.0]], atol=1e-5)
+    assert np.allclose(natural_grad, [-np.sin(theta[0])], atol=1e-5)

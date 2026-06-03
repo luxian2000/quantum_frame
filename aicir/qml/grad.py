@@ -31,6 +31,117 @@ def _as_scalar(value: Any, *, label: str) -> float:
     return float(array)
 
 
+def _as_state_vector(value: Any, *, label: str) -> np.ndarray:
+    """Convert a backend-native pure state to a normalized 1-D NumPy vector."""
+    if hasattr(value, "to_numpy") and callable(value.to_numpy):
+        value = value.to_numpy()
+    else:
+        if hasattr(value, "detach"):
+            value = value.detach()
+        if hasattr(value, "cpu"):
+            value = value.cpu()
+
+    raw = np.asarray(value, dtype=np.complex128)
+    if raw.ndim > 2 or (raw.ndim == 2 and 1 not in raw.shape):
+        raise ValueError(f"{label} must return a pure state vector, not a density matrix/operator")
+
+    array = raw.reshape(-1)
+    if array.size == 0:
+        raise ValueError(f"{label} must return a non-empty state vector")
+    norm = float(np.linalg.norm(array))
+    if not norm > 0.0:
+        raise ValueError(f"{label} must return a state vector with non-zero norm")
+    return array / norm
+
+
+# ─────────────────────────── automatic differentiation ──────────────────────────
+
+
+def _to_real_torch_scalar(value, *, label: str):
+    import torch
+
+    if not isinstance(value, torch.Tensor):
+        value = torch.as_tensor(value)
+    if value.numel() != 1:
+        raise ValueError(f"{label} must return a scalar value")
+    value = value.reshape(())
+    if torch.is_complex(value):
+        # Objectives (expectation values) are real-valued.
+        value = value.real
+    return value
+
+
+def auto(
+    fn: Callable[[Any], Any],
+    params: Any,
+    *,
+    backend: Any = None,
+) -> np.ndarray:
+    """Compute an ansatz gradient by reverse-mode automatic differentiation.
+
+    This is "backpropagation through the unitary": the objective is evaluated
+    with PyTorch tensor parameters, and the gradient is obtained by
+    backpropagating through every gate operation recorded on the autograd
+    tape. It is exact (no shift/step-size error) and computes the full
+    gradient in a single backward pass.
+
+    Because it relies on PyTorch autograd, it requires a Torch-family backend
+    (:class:`TorchBackend` or :class:`NPUBackend`) and an objective that stays
+    inside the autograd graph: ``fn`` must build/simulate the circuit using the
+    backend and return the expectation value as a differentiable tensor — it
+    must **not** call ``float(...)``, ``.item()``, ``.detach()`` or
+    ``to_numpy(...)`` on its result.
+
+    Args:
+        fn: Differentiable objective. Receives a ``torch.Tensor`` of parameters
+            (same shape as ``params``, ``requires_grad=True``, placed on the
+            backend device) and returns a scalar tensor.
+        params: Initial parameter value(s); scalars and arbitrary-shaped arrays
+            are supported. The returned gradient has the same shape.
+        backend: Torch-family backend used to pick the autograd dtype/device so
+            the parameters live where the simulation runs (important for NPU /
+            CUDA). Defaults to a CPU ``TorchBackend``.
+
+    Returns:
+        A NumPy array with the same shape as ``params``.
+    """
+    try:
+        import torch
+    except ModuleNotFoundError as exc:  # pragma: no cover - torch always present in tests
+        raise ModuleNotFoundError(
+            "auto (automatic differentiation) requires PyTorch; install torch or use psr/fd."
+        ) from exc
+
+    if backend is None:
+        from aicir.channel.backends.torch_backend import TorchBackend
+
+        backend = TorchBackend(device="cpu")
+
+    complex_dtype = getattr(backend, "_dtype", torch.complex64)
+    real_dtype = torch.float64 if complex_dtype == torch.complex128 else torch.float32
+    device = getattr(backend, "_device", None)
+
+    base = np.asarray(params, dtype=float)
+    theta = torch.tensor(base, dtype=real_dtype, device=device, requires_grad=True)
+
+    value = fn(theta)
+    scalar = _to_real_torch_scalar(value, label="fn(params)")
+
+    if not scalar.requires_grad:
+        raise ValueError(
+            "auto objective is not connected to the autograd graph: ensure fn "
+            "uses a Torch-family backend and returns a differentiable tensor "
+            "without calling float()/.item()/.detach()/to_numpy()."
+        )
+
+    (grad,) = torch.autograd.grad(scalar, theta, allow_unused=True)
+    if grad is None:
+        grad = torch.zeros_like(theta)
+
+    grad_np = grad.detach().cpu().numpy().astype(float)
+    return grad_np.reshape(base.shape)
+
+
 def _shifted_difference(
     fn: Callable[[np.ndarray], float],
     theta: np.ndarray,
@@ -166,6 +277,36 @@ def spsr(
     return grad
 
 
+def mpsr(
+    fn: Callable[[np.ndarray], float],
+    params: Any,
+    parameter_indices: Any = None,
+    *,
+    shift: float = np.pi / 2.0,
+    coefficient: float = 0.5,
+) -> float:
+    """Compute a multi-parameter mixed derivative by parameter shifts.
+
+    ``parameter_indices`` selects the coordinates of the mixed derivative. Flat
+    integer indices and tuple indices are both supported. If omitted, all
+    parameters are used, which requires ``2 ** params.size`` function calls.
+    """
+    theta = np.asarray(params, dtype=float)
+    indices = _normalize_parameter_indices(theta, parameter_indices)
+    shift_value = float(shift)
+    coeff = float(coefficient)
+
+    total = 0.0
+    for signs in itertools.product((-1.0, 1.0), repeat=len(indices)):
+        shifted = theta.copy()
+        sign_product = 1.0
+        for index, sign in zip(indices, signs):
+            shifted[index] += sign * shift_value
+            sign_product *= sign
+        total += sign_product * _as_scalar(fn(shifted), label="fn(multivariate shifted params)")
+    return float((coeff ** len(indices)) * total)
+
+
 def _fd_at_index(
     fn: Callable[[np.ndarray], float],
     theta: np.ndarray,
@@ -242,36 +383,6 @@ def fd(
             fn, theta, index, eps_value, mode_norm, base_value
         )
     return grad
-
-
-def mpsr(
-    fn: Callable[[np.ndarray], float],
-    params: Any,
-    parameter_indices: Any = None,
-    *,
-    shift: float = np.pi / 2.0,
-    coefficient: float = 0.5,
-) -> float:
-    """Compute a multi-parameter mixed derivative by parameter shifts.
-
-    ``parameter_indices`` selects the coordinates of the mixed derivative. Flat
-    integer indices and tuple indices are both supported. If omitted, all
-    parameters are used, which requires ``2 ** params.size`` function calls.
-    """
-    theta = np.asarray(params, dtype=float)
-    indices = _normalize_parameter_indices(theta, parameter_indices)
-    shift_value = float(shift)
-    coeff = float(coefficient)
-
-    total = 0.0
-    for signs in itertools.product((-1.0, 1.0), repeat=len(indices)):
-        shifted = theta.copy()
-        sign_product = 1.0
-        for index, sign in zip(indices, signs):
-            shifted[index] += sign * shift_value
-            sign_product *= sign
-        total += sign_product * _as_scalar(fn(shifted), label="fn(multivariate shifted params)")
-    return float((coeff ** len(indices)) * total)
 
 
 # ─────────────────────────── adjoint differentiation ───────────────────────────
@@ -453,92 +564,212 @@ def ad(circuit, observable, *, backend=None, return_value: bool = False):
     return grad
 
 
-# ─────────────────────────── automatic differentiation ──────────────────────────
+# ─────────────────────────── quantum natural gradient ──────────────────────────
 
 
-def _to_real_torch_scalar(value, *, label: str):
-    import torch
+def _qfim_from_state_fd(
+    state_fn: Callable[[np.ndarray], Any],
+    theta: np.ndarray,
+    *,
+    eps: float,
+) -> np.ndarray:
+    """Estimate the pure-state Quantum Fisher Information Matrix.
 
-    if not isinstance(value, torch.Tensor):
-        value = torch.as_tensor(value)
-    if value.numel() != 1:
-        raise ValueError(f"{label} must return a scalar value")
-    value = value.reshape(())
-    if torch.is_complex(value):
-        # Objectives (expectation values) are real-valued.
-        value = value.real
-    return value
+    Uses the Fubini-Study metric
+
+        F_ij = 4 Re[<∂iψ|∂jψ> - <∂iψ|ψ><ψ|∂jψ>]
+
+    with central finite differences for the state derivatives.
+    """
+    eps_value = float(eps)
+    if not eps_value > 0.0:
+        raise ValueError("metric_eps must be a positive number")
+
+    base_state = _as_state_vector(state_fn(theta), label="state_fn(params)")
+    derivatives = np.zeros((theta.size, base_state.size), dtype=np.complex128)
+
+    for flat_index in range(theta.size):
+        index = _flat_to_index(theta, flat_index)
+        plus = theta.copy()
+        minus = theta.copy()
+        plus[index] += eps_value
+        minus[index] -= eps_value
+
+        state_plus = _as_state_vector(
+            state_fn(plus),
+            label="state_fn(params + metric_eps)",
+        )
+        state_minus = _as_state_vector(
+            state_fn(minus),
+            label="state_fn(params - metric_eps)",
+        )
+        if state_plus.shape != base_state.shape or state_minus.shape != base_state.shape:
+            raise ValueError("state_fn must return state vectors with a consistent shape")
+        derivatives[flat_index] = (state_plus - state_minus) / (2.0 * eps_value)
+
+    qfim = np.zeros((theta.size, theta.size), dtype=float)
+    for i in range(theta.size):
+        for j in range(i, theta.size):
+            overlap = np.vdot(derivatives[i], derivatives[j])
+            projection = np.vdot(derivatives[i], base_state) * np.vdot(base_state, derivatives[j])
+            value = 4.0 * float(np.real(overlap - projection))
+            qfim[i, j] = value
+            qfim[j, i] = value
+
+    # Remove finite-difference asymmetry and tiny negative numerical noise.
+    qfim = 0.5 * (qfim + qfim.T)
+    qfim[np.isclose(qfim, 0.0, atol=1e-12)] = 0.0
+    return qfim
 
 
-def auto(
-    fn: Callable[[Any], Any],
+def _validate_qfim(qfim: Any, parameter_count: int) -> np.ndarray:
+    matrix = np.asarray(qfim, dtype=float)
+    expected = (parameter_count, parameter_count)
+    if matrix.shape != expected:
+        raise ValueError(f"qfim must have shape {expected}, got {matrix.shape}")
+    return 0.5 * (matrix + matrix.T)
+
+
+def _ordinary_gradient_for_qng(
+    fn: Callable[[Any], Any] | None,
+    theta: np.ndarray,
+    *,
+    method: str,
+    shift: float,
+    coefficient: float,
+    backend: Any,
+    gradient_kwargs: dict[str, Any],
+) -> np.ndarray:
+    if fn is None:
+        raise ValueError("fn is required when grad is not provided")
+
+    method_norm = str(method).strip().lower()
+    kwargs = dict(gradient_kwargs)
+    if method_norm == "psr":
+        kwargs.setdefault("shift", shift)
+        kwargs.setdefault("coefficient", coefficient)
+        return psr(fn, theta, **kwargs)
+    if method_norm == "fd":
+        return fd(fn, theta, **kwargs)
+    if method_norm == "auto":
+        kwargs.setdefault("backend", backend)
+        return auto(fn, theta, **kwargs)
+    raise ValueError("gradient_method must be 'psr', 'fd', or 'auto'")
+
+
+def qng(
+    fn: Callable[[Any], Any] | None,
+    state_fn: Callable[[np.ndarray], Any] | None,
     params: Any,
     *,
+    grad: Any = None,
+    qfim: Any = None,
+    gradient_method: str = "psr",
+    gradient_kwargs: dict[str, Any] | None = None,
+    shift: float = np.pi / 2.0,
+    coefficient: float = 0.5,
+    metric_eps: float = 1e-3,
+    damping: float = 1e-6,
     backend: Any = None,
-) -> np.ndarray:
-    """Compute an ansatz gradient by reverse-mode automatic differentiation.
+    return_gradient: bool = False,
+    return_qfim: bool = False,
+) -> np.ndarray | tuple[Any, ...]:
+    """Compute a Quantum Natural Gradient (QNG) direction.
 
-    This is "backpropagation through the unitary": the objective is evaluated
-    with PyTorch tensor parameters, and the gradient is obtained by
-    backpropagating through every gate operation recorded on the autograd
-    tape. It is exact (no shift/step-size error) and computes the full
-    gradient in a single backward pass.
+    QNG preconditions an ordinary objective gradient by the inverse Quantum
+    Fisher Information Matrix (QFIM):
 
-    Because it relies on PyTorch autograd, it requires a Torch-family backend
-    (:class:`TorchBackend` or :class:`NPUBackend`) and an objective that stays
-    inside the autograd graph: ``fn`` must build/simulate the circuit using the
-    backend and return the expectation value as a differentiable tensor — it
-    must **not** call ``float(...)``, ``.item()``, ``.detach()`` or
-    ``to_numpy(...)`` on its result.
+        natural_grad = (F + damping * I)^(-1) @ grad
+
+    ``fn`` is the scalar objective and ``state_fn`` returns the pure ansatz
+    state at the same parameters. By default the ordinary gradient is computed
+    with :func:`psr`, while the QFIM is estimated from central finite
+    differences of ``state_fn`` using the pure-state Fubini-Study metric.
+
+    Backend compatibility:
+        ``state_fn`` may return a NumPy array, a backend-native tensor
+        (including Torch/NPU tensors), or an aicir ``State`` object. Device
+        tensors are detached and moved to host only for the small QFIM solve,
+        avoiding assumptions about NPU complex linear-solve support.
 
     Args:
-        fn: Differentiable objective. Receives a ``torch.Tensor`` of parameters
-            (same shape as ``params``, ``requires_grad=True``, placed on the
-            backend device) and returns a scalar tensor.
-        params: Initial parameter value(s); scalars and arbitrary-shaped arrays
-            are supported. The returned gradient has the same shape.
-        backend: Torch-family backend used to pick the autograd dtype/device so
-            the parameters live where the simulation runs (important for NPU /
-            CUDA). Defaults to a CPU ``TorchBackend``.
+        fn: Scalar objective ``fn(params)``. Required unless ``grad`` is given.
+        state_fn: Pure-state ansatz function ``state_fn(params)``. Required
+            unless ``qfim`` is given.
+        params: Current parameter value(s). Scalars and arbitrary-shaped arrays
+            are supported; the returned natural gradient has the same shape.
+        grad: Optional precomputed ordinary gradient.
+        qfim: Optional precomputed QFIM.
+        gradient_method: Ordinary-gradient method when ``grad`` is omitted:
+            ``"psr"`` (default), ``"fd"``, or ``"auto"``.
+        gradient_kwargs: Extra keyword arguments forwarded to the selected
+            ordinary-gradient method.
+        shift: Parameter-shift amount used by ``gradient_method="psr"``.
+        coefficient: Parameter-shift coefficient used by
+            ``gradient_method="psr"``.
+        metric_eps: Central-difference step for QFIM state derivatives.
+        damping: Non-negative Tikhonov damping added to QFIM before solving.
+        backend: Torch-family backend used only by ``gradient_method="auto"``.
+        return_gradient: If ``True``, include the ordinary gradient.
+        return_qfim: If ``True``, include the QFIM.
 
     Returns:
-        A NumPy array with the same shape as ``params``.
+        Natural gradient with the same shape as ``params``. Optional returns
+        are appended as ``(natural_grad, gradient, qfim)`` according to the
+        requested flags.
     """
-    try:
-        import torch
-    except ModuleNotFoundError as exc:  # pragma: no cover - torch always present in tests
-        raise ModuleNotFoundError(
-            "auto (automatic differentiation) requires PyTorch; install torch or use psr/fd."
-        ) from exc
+    theta = np.asarray(params, dtype=float)
+    if theta.size == 0:
+        raise ValueError("params must contain at least one parameter")
 
-    if backend is None:
-        from aicir.channel.backends.torch_backend import TorchBackend
-
-        backend = TorchBackend(device="cpu")
-
-    complex_dtype = getattr(backend, "_dtype", torch.complex64)
-    real_dtype = torch.float64 if complex_dtype == torch.complex128 else torch.float32
-    device = getattr(backend, "_device", None)
-
-    base = np.asarray(params, dtype=float)
-    theta = torch.tensor(base, dtype=real_dtype, device=device, requires_grad=True)
-
-    value = fn(theta)
-    scalar = _to_real_torch_scalar(value, label="fn(params)")
-
-    if not scalar.requires_grad:
-        raise ValueError(
-            "auto objective is not connected to the autograd graph: ensure fn "
-            "uses a Torch-family backend and returns a differentiable tensor "
-            "without calling float()/.item()/.detach()/to_numpy()."
-        )
-
-    (grad,) = torch.autograd.grad(scalar, theta, allow_unused=True)
     if grad is None:
-        grad = torch.zeros_like(theta)
+        gradient = _ordinary_gradient_for_qng(
+            fn,
+            theta,
+            method=gradient_method,
+            shift=float(shift),
+            coefficient=float(coefficient),
+            backend=backend,
+            gradient_kwargs={} if gradient_kwargs is None else gradient_kwargs,
+        )
+    else:
+        gradient = np.asarray(grad, dtype=float)
 
-    grad_np = grad.detach().cpu().numpy().astype(float)
-    return grad_np.reshape(base.shape)
+    if gradient.shape != theta.shape:
+        try:
+            gradient = gradient.reshape(theta.shape)
+        except ValueError as exc:
+            raise ValueError(
+                f"grad must have shape {theta.shape}, got {gradient.shape}"
+            ) from exc
+
+    if qfim is None:
+        if state_fn is None:
+            raise ValueError("state_fn is required when qfim is not provided")
+        metric = _qfim_from_state_fd(state_fn, theta, eps=metric_eps)
+    else:
+        metric = _validate_qfim(qfim, theta.size)
+
+    damping_value = float(damping)
+    if damping_value < 0.0:
+        raise ValueError("damping must be non-negative")
+    regularized = metric + damping_value * np.eye(theta.size, dtype=float)
+
+    flat_grad = gradient.reshape(-1)
+    try:
+        natural_flat = np.linalg.solve(regularized, flat_grad)
+    except np.linalg.LinAlgError:
+        natural_flat = np.linalg.pinv(regularized) @ flat_grad
+
+    natural = np.asarray(natural_flat, dtype=float).reshape(theta.shape)
+    extras: list[Any] = []
+    if return_gradient:
+        extras.append(gradient)
+    if return_qfim:
+        extras.append(metric)
+    if extras:
+        return (natural, *extras)
+    return natural
 
 
-__all__ = ["psr", "spsr", "mpsr", "fd", "ad", "auto"]
+__all__ = ["auto", "psr", "spsr", "mpsr", "fd", "ad", "qng"]
