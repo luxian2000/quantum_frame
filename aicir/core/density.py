@@ -137,9 +137,13 @@ class DensityMatrix:
         """
         计算基测量概率（密度矩阵对角元的实部），shape (2^n,)，返回 numpy array。
         """
-        rho_np = self._backend.to_numpy(self._data)
-        diag = np.real(rho_np.diagonal())
-        diag = np.clip(diag, 0, None)
+        # Extract the diagonal on the backend device, then move only the
+        # 2^n probabilities to host. Calling ``to_numpy`` on the full ρ first
+        # would copy the whole 2^n × 2^n matrix off the accelerator (O(4^n))
+        # just to read O(2^n) diagonal entries. ``.diagonal()`` is a no-copy
+        # view for torch tensors and is valid for numpy arrays too.
+        diag = self._backend.to_numpy(self._backend.real(self._data.diagonal()))
+        diag = np.clip(np.asarray(diag), 0, None)
         total = diag.sum()
         return diag / total if total > 0 else diag
 
