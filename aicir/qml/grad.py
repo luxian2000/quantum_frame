@@ -11,9 +11,23 @@ import numpy as np
 
 
 def _as_scalar(value: Any, *, label: str) -> float:
+    # Accept backend-native tensors in addition to numpy arrays and Python
+    # scalars, so every gradient rule works regardless of which backend
+    # produced the objective value. In particular a NumpyBackend/TorchBackend/
+    # NPUBackend objective may return a tensor that is autograd-tracked, lives
+    # on an accelerator device (NPU/CUDA), and/or is complex. Detaching and
+    # moving to host first avoids numpy conversion errors on such tensors.
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
     array = np.asarray(value)
     if array.shape != ():
         raise ValueError(f"{label} must return a scalar value")
+    if np.iscomplexobj(array):
+        # Objectives (expectation values) are real; drop negligible imaginary
+        # noise rather than failing in float().
+        array = array.real
     return float(array)
 
 
@@ -152,6 +166,84 @@ def spsr(
     return grad
 
 
+def _fd_at_index(
+    fn: Callable[[np.ndarray], float],
+    theta: np.ndarray,
+    index: tuple[int, ...],
+    eps: float,
+    mode: str,
+    base_value: float | None,
+) -> float:
+    if mode == "central":
+        plus = theta.copy()
+        minus = theta.copy()
+        plus[index] += eps
+        minus[index] -= eps
+        forward = _as_scalar(fn(plus), label="fn(params + eps)")
+        backward = _as_scalar(fn(minus), label="fn(params - eps)")
+        return (forward - backward) / (2.0 * eps)
+    if mode == "forward":
+        plus = theta.copy()
+        plus[index] += eps
+        forward = _as_scalar(fn(plus), label="fn(params + eps)")
+        return (forward - base_value) / eps
+    # mode == "backward"
+    minus = theta.copy()
+    minus[index] -= eps
+    backward = _as_scalar(fn(minus), label="fn(params - eps)")
+    return (base_value - backward) / eps
+
+
+def fd(
+    fn: Callable[[np.ndarray], float],
+    params: Any,
+    *,
+    eps: float = 1e-3,
+    mode: str = "central",
+) -> np.ndarray:
+    """Compute an ansatz gradient by finite differences.
+
+    Unlike the parameter-shift rule, finite differences make no assumption
+    about the generator spectrum, so they apply to arbitrary differentiable
+    objectives (at the cost of a truncation/round-off trade-off in ``eps``).
+
+    Args:
+        fn: Scalar-valued function that accepts the full parameter array.
+        params: Current parameter value(s). Scalars and arbitrary-shaped arrays
+            are supported; the returned gradient has the same shape.
+        eps: Positive step size for the difference stencil. The default
+            ``1e-3`` is tuned for aicir's default ``complex64`` (single
+            precision) state simulation, where too small a step causes
+            catastrophic cancellation. For ``float64``/``complex128``
+            objectives a smaller step (e.g. ``1e-6``) is more accurate.
+        mode: Difference scheme. ``"central"`` (default) is second-order
+            accurate and uses ``2N`` evaluations; ``"forward"`` and
+            ``"backward"`` are first-order and use ``N + 1`` evaluations
+            (the unshifted value is reused across all coordinates).
+
+    Returns:
+        A NumPy array with the same shape as ``params``.
+    """
+    theta = np.asarray(params, dtype=float)
+    mode_norm = str(mode).strip().lower()
+    if mode_norm not in {"central", "forward", "backward"}:
+        raise ValueError("mode must be 'central', 'forward', or 'backward'")
+    eps_value = float(eps)
+    if not eps_value > 0.0:
+        raise ValueError("eps must be a positive number")
+
+    base_value: float | None = None
+    if mode_norm in {"forward", "backward"}:
+        base_value = _as_scalar(fn(theta), label="fn(params)")
+
+    grad = np.zeros_like(theta, dtype=float)
+    for index in np.ndindex(theta.shape):
+        grad[index] = _fd_at_index(
+            fn, theta, index, eps_value, mode_norm, base_value
+        )
+    return grad
+
+
 def multipsr(
     fn: Callable[[np.ndarray], float],
     params: Any,
@@ -182,4 +274,183 @@ def multipsr(
     return float((coeff ** len(indices)) * total)
 
 
-__all__ = ["psr", "spsr", "multipsr"]
+# ─────────────────────────── adjoint differentiation ───────────────────────────
+
+_CDTYPE = np.complex64
+
+# Single-parameter gates differentiated by the adjoint method, mapped to the
+# (Hermitian) generator G in U = exp(-i θ G / 2).
+_AD_PAULI_GENERATOR = {"rx": "X", "ry": "Y", "rz": "Z", "crx": "X", "cry": "Y", "crz": "Z"}
+_AD_DIFFERENTIABLE = set(_AD_PAULI_GENERATOR) | {"rzz"}
+
+_SWAP_LOCAL = np.array(
+    [[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=_CDTYPE
+)
+
+
+def _pauli_local(label: str) -> np.ndarray:
+    if label == "X":
+        return np.array([[0, 1], [1, 0]], dtype=_CDTYPE)
+    if label == "Y":
+        return np.array([[0, -1j], [1j, 0]], dtype=_CDTYPE)
+    if label == "Z":
+        return np.array([[1, 0], [0, -1]], dtype=_CDTYPE)
+    raise ValueError(f"unknown Pauli label {label!r}")
+
+
+def _controlled_generator_local(pauli: np.ndarray, control_states) -> np.ndarray:
+    """Generator |1…1><1…1|_controls ⊗ pauli as a (zeroed) local block matrix."""
+    cs = [int(s) for s in control_states]
+    dim = 1 << (len(cs) + 1)
+    local = np.zeros((dim, dim), dtype=_CDTYPE)
+    control_index = 0
+    for state in cs:
+        control_index = (control_index << 1) | state
+    block = [(control_index << 1) | target for target in (0, 1)]
+    local[np.ix_(block, block)] = pauli
+    return local
+
+
+def _ad_gate_local_matrix_and_axes(gate, backend):
+    """Return ``(local_matrix, axes)`` for a gate's unitary (numpy local matrix).
+
+    Mirrors the dispatch used by ``apply_gate_to_state`` so the forward and
+    backward (dagger) passes are exact inverses by construction.
+    """
+    from aicir.core.gates import (
+        _controlled_local_from_base,
+        _normalized_control_data,
+        _rzz,
+        _single_qubit_base_for_gate,
+        _unitary_parameter_matrix,
+    )
+
+    gate_type = gate["type"]
+    if gate_type in ("identity", "I"):
+        return None, None
+    if gate_type == "swap":
+        return _SWAP_LOCAL, [int(gate["qubit_1"]), int(gate["qubit_2"])]
+    if gate_type == "rzz":
+        return np.asarray(_rzz(gate["parameter"]), dtype=_CDTYPE), [
+            int(gate["qubit_1"]),
+            int(gate["qubit_2"]),
+        ]
+    if gate_type == "unitary":
+        matrix = np.asarray(_unitary_parameter_matrix(gate.get("parameter"), backend=None), dtype=_CDTYPE)
+        gate_qubits = int(round(np.log2(matrix.shape[0])))
+        return matrix, list(range(gate_qubits))
+
+    base = _single_qubit_base_for_gate(gate)
+    if base is None:
+        raise ValueError(f"adjoint differentiation does not support gate type {gate_type!r}")
+    if "control_qubits" in gate:
+        controls, control_states = _normalized_control_data(gate)
+        local = _controlled_local_from_base(base, control_states)
+        return np.asarray(local, dtype=_CDTYPE), controls + [int(gate["target_qubit"])]
+    return np.asarray(base, dtype=_CDTYPE), [int(gate["target_qubit"])]
+
+
+def _ad_generator_local_and_axes(gate):
+    """Return ``(generator_matrix, axes)`` for a differentiable gate."""
+    from aicir.core.gates import _normalized_control_data
+
+    gate_type = gate["type"]
+    if gate_type == "rzz":
+        zz = np.diag([1.0, -1.0, -1.0, 1.0]).astype(_CDTYPE)
+        return zz, [int(gate["qubit_1"]), int(gate["qubit_2"])]
+    pauli = _pauli_local(_AD_PAULI_GENERATOR[gate_type])
+    if gate_type in ("crx", "cry", "crz"):
+        controls, control_states = _normalized_control_data(gate)
+        return _controlled_generator_local(pauli, control_states), controls + [int(gate["target_qubit"])]
+    return pauli, [int(gate["target_qubit"])]
+
+
+def _ad_apply(backend, matrix, axes, n_qubits, state):
+    from aicir.core.gates import _apply_local_matrix_to_state
+
+    return _apply_local_matrix_to_state(state, backend.cast(matrix), axes, n_qubits, backend)
+
+
+def ad(circuit, observable, *, backend=None, return_value: bool = False):
+    """Adjoint-differentiation gradient of ``<O>`` over an ansatz circuit.
+
+    Reverse-mode differentiation specialised for noiseless state-vector
+    simulation. It propagates a "lambda state" backwards through the circuit
+    and reads each gradient off
+
+        ∂<O>/∂θ_k = 2 Re[<λ_k| ∂U_k/∂θ_k |ψ_{k-1}>]  =  Im[<λ_k| G_k |ψ_k>],
+
+    where ``U_k = exp(-i θ_k G_k / 2)``. The whole gradient costs one forward
+    pass plus one backward pass — ``O(P)`` gate applications for ``P``
+    parameters with only ``O(1)`` extra state storage — versus ``O(P^2)`` for
+    the parameter-shift rule. State-vector simulators only (no noise / mixed
+    states).
+
+    Unlike :func:`psr`/:func:`fd`, which differentiate a black-box scalar
+    function, ``ad`` is structure-aware: it differentiates each single-angle
+    Pauli-rotation gate (``rx``, ``ry``, ``rz``, ``crx``, ``cry``, ``crz``,
+    ``rzz``) in the circuit, returning one gradient per such gate in order of
+    appearance. Other gates (``H``, ``cx``, ``u3``, ``unitary``, …) are applied
+    but not differentiated (use :func:`psr` for those).
+
+    Args:
+        circuit: A fully-bound ``Circuit`` (no unbound ``Parameter`` symbols).
+        observable: Hermitian operator ``O`` — a ``(2^n, 2^n)`` matrix
+            (numpy/backend tensor) or any object exposing ``to_matrix(backend)``
+            (e.g. ``Hamiltonian``).
+        backend: Computation backend. Defaults to ``NumpyBackend``.
+        return_value: If ``True``, also return the expectation value ``<O>``.
+
+    Returns:
+        ``np.ndarray`` of gradients (one per differentiable gate). If
+        ``return_value`` is ``True``, returns ``(grad, expectation)``.
+    """
+    from aicir.channel.backends.numpy_backend import NumpyBackend
+
+    bk = backend if backend is not None else NumpyBackend()
+
+    unbound = getattr(circuit, "parameters", ())
+    if unbound:
+        names = ", ".join(parameter.name for parameter in unbound)
+        raise ValueError(f"circuit has unbound parameter(s): {names}; call bind_parameters(...) first")
+
+    n_qubits = int(circuit.n_qubits)
+    gates = list(circuit.gates)
+
+    if hasattr(observable, "to_matrix"):
+        operator = observable.to_matrix(bk)
+    else:
+        operator = bk.cast(observable)
+
+    # Forward pass: |ψ> = U_P ... U_1 |0>, caching each gate's local operator.
+    psi = bk.zeros_state(n_qubits)
+    cached = []
+    for gate in gates:
+        matrix, axes = _ad_gate_local_matrix_and_axes(gate, bk)
+        cached.append((matrix, axes))
+        if matrix is not None:
+            psi = _ad_apply(bk, matrix, axes, n_qubits, psi)
+
+    lam = bk.matmul(operator, psi)  # |λ_P> = O|ψ>
+    expectation = float(np.real(np.asarray(bk.to_numpy(bk.inner_product(psi, lam)))))
+
+    phi = psi  # walks backward as |ψ_k>
+    grads_reversed: list[float] = []
+    for gate, (matrix, axes) in zip(reversed(gates), reversed(cached)):
+        if gate["type"] in _AD_DIFFERENTIABLE:
+            gen, gen_axes = _ad_generator_local_and_axes(gate)
+            g_phi = _ad_apply(bk, gen, gen_axes, n_qubits, phi)  # G_k |ψ_k>
+            overlap = bk.to_numpy(bk.inner_product(lam, g_phi))  # <λ_k| G_k |ψ_k>
+            grads_reversed.append(float(np.imag(np.asarray(overlap))))
+        if matrix is not None:
+            dagger = bk.dagger(bk.cast(matrix))
+            phi = _ad_apply(bk, dagger, axes, n_qubits, phi)  # |ψ_{k-1}>
+            lam = _ad_apply(bk, dagger, axes, n_qubits, lam)  # |λ_{k-1}>
+
+    grad = np.array(list(reversed(grads_reversed)), dtype=float)
+    if return_value:
+        return grad, expectation
+    return grad
+
+
+__all__ = ["psr", "spsr", "multipsr", "fd", "ad"]
