@@ -2,6 +2,100 @@
 
 ---
 
+## CONTENTS
+
+```text
+aicir/
+├── __init__.py
+├── channel/
+│   ├── backends/
+│   │   ├── base.py
+│   │   ├── npu_backend.py
+│   │   ├── numpy_backend.py
+│   │   └── torch_backend.py
+│   ├── noise/
+│   │   ├── analysis.py
+│   │   ├── base.py
+│   │   ├── channels.py
+│   │   ├── ion_trap.py
+│   │   ├── ion_trap_noise_params.md
+│   │   ├── metrics.py
+│   │   └── model.py
+│   ├── operators.py
+│   └── states/
+├── chemistry/
+├── core/
+│   ├── circuit.py
+│   ├── density.py
+│   ├── gates.py
+│   ├── io/
+│   │   ├── README.md
+│   │   ├── dag.py
+│   │   ├── json_io.py
+│   │   └── qasm.py
+│   └── state.py
+├── encoder/
+│   ├── abstract.py
+│   ├── amplitude.py
+│   ├── angle.py
+│   ├── basis.py
+│   └── demos/
+├── measure/
+│   ├── measure.py
+│   ├── result.py
+│   └── sampler.py
+├── metrics/
+│   ├── _utils.py
+│   ├── expressibility.py
+│   ├── hardware.py
+│   ├── noisy_expressibility.py
+│   └── trainability.py
+├── optimization/
+│   ├── qubo/
+│   └── sb/
+├── optimizer/
+│   ├── README.md
+│   └── basic.py
+├── qas/
+│   ├── README.md
+│   ├── CRLQAS.py
+│   ├── PPO_RB.py
+│   ├── PPR_DQL.py
+│   ├── VQA_QAS.py
+│   ├── architecture_candidates.py
+│   ├── architecture_candidates.md
+│   ├── architecture_metrics.md
+│   ├── architecture_search.py
+│   ├── candidates.py
+│   ├── config.py
+│   ├── demos/
+│   ├── evaluator.py
+│   ├── multi_objective_reward.py
+│   ├── reward.py
+│   ├── runner.py
+│   └── search_env.py
+├── qml/
+│   ├── README.md
+│   └── grad.py
+├── universal/
+│   └── qft.py
+├── visual/
+│   ├── circuit.py
+│   ├── density.py
+│   ├── qas.py
+│   ├── state.py
+│   └── utils.py
+├── vqc/
+│   ├── QAOA.py
+│   ├── SSVQE.py
+│   ├── VQD.py
+│   ├── VQE.py
+│   └── ansatz/
+└── wireless/
+```
+
+---
+
 ## 1. 模块导入
 
 所有常用类与函数均可从顶层 `aicir` 包一次性导入。
@@ -945,7 +1039,7 @@ QAS/metrics 相关公共函数：
 
 | 子目录 | 说明文档 | 内容概要 |
 | --- | --- | --- |
-| `aicir/core/io` | [`core/io/README.md`](core/io/README.md) | OpenQASM 导出行为、受控旋转门和多控旋转门分解规则。 |
-| `aicir/optimizer` | [`optimizer/README.md`](optimizer/README.md) | `aicir.optimizer.basic` 的本地化简规则、旋转门合并和固定点优化策略。 |
-| `aicir/qas` | [`qas/README.md`](qas/README.md) | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。 |
-| `aicir/qml` | [`qml/README.md`](qml/README.md) | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。 |
+| `aicir/core/io` | [`aicir/core/io/README.md`](aicir/core/io/README.md) | OpenQASM 导出行为、受控旋转门和多控旋转门分解规则。 |
+| `aicir/optimizer` | [`aicir/optimizer/README.md`](aicir/optimizer/README.md) | `aicir.optimizer.basic` 的本地化简规则、旋转门合并和固定点优化策略。 |
+| `aicir/qas` | [`aicir/qas/README.md`](aicir/qas/README.md) | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。 |
+| `aicir/qml` | [`aicir/qml/README.md`](aicir/qml/README.md) | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。 |
