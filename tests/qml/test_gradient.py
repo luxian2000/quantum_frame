@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from aicir import Circuit, NumpyBackend, Parameter, State, cx, ry
-from aicir.qml import ad, fd, multipsr, psr, spsr
+from aicir.qml import ad, auto, fd, mpsr, psr, spsr
 
 
 def test_psr_matches_analytic_gradient_for_vector_params():
@@ -95,40 +95,40 @@ def test_spsr_rejects_too_many_samples_without_replacement():
         spsr(lambda theta: theta[0], np.array([0.1]), n_samples=2)
 
 
-def test_multipsr_single_index_matches_psr_coordinate():
+def test_mpsr_single_index_matches_psr_coordinate():
     params = np.array([0.4, -0.2])
 
     def objective(theta):
         return np.cos(theta[0]) + np.sin(theta[1])
 
-    assert np.allclose(multipsr(objective, params, parameter_indices=1), psr(objective, params)[1])
+    assert np.allclose(mpsr(objective, params, parameter_indices=1), psr(objective, params)[1])
 
 
-def test_multipsr_computes_mixed_partial_derivative():
+def test_mpsr_computes_mixed_partial_derivative():
     params = np.array([0.4, -0.2])
 
     def objective(theta):
         return np.cos(theta[0]) * np.sin(theta[1])
 
-    mixed = multipsr(objective, params, parameter_indices=[0, 1])
+    mixed = mpsr(objective, params, parameter_indices=[0, 1])
 
     assert np.allclose(mixed, -np.sin(params[0]) * np.cos(params[1]))
 
 
-def test_multipsr_supports_tuple_indices_for_shaped_params():
+def test_mpsr_supports_tuple_indices_for_shaped_params():
     params = np.array([[0.4, 0.1], [-0.2, 0.3]])
 
     def objective(theta):
         return np.cos(theta[0, 0]) * np.sin(theta[1, 0])
 
-    mixed = multipsr(objective, params, parameter_indices=[(0, 0), (1, 0)])
+    mixed = mpsr(objective, params, parameter_indices=[(0, 0), (1, 0)])
 
     assert np.allclose(mixed, -np.sin(params[0, 0]) * np.cos(params[1, 0]))
 
 
-def test_multipsr_rejects_duplicate_indices():
+def test_mpsr_rejects_duplicate_indices():
     with pytest.raises(ValueError, match="duplicates"):
-        multipsr(lambda theta: np.sum(theta), np.array([0.1, 0.2]), parameter_indices=[0, 0])
+        mpsr(lambda theta: np.sum(theta), np.array([0.1, 0.2]), parameter_indices=[0, 0])
 
 
 def test_fd_matches_analytic_gradient_for_vector_params():
@@ -233,7 +233,7 @@ def test_gradients_accept_backend_native_tensor_objective():
     assert np.allclose(psr(objective, value), [exact], atol=1e-5)
     assert np.allclose(fd(objective, value), [exact], atol=1e-4)
     assert np.allclose(spsr(objective, value, n_samples=1, rng=0), [exact], atol=1e-5)
-    assert np.allclose(multipsr(objective, value, parameter_indices=[0]), exact, atol=1e-5)
+    assert np.allclose(mpsr(objective, value, parameter_indices=[0]), exact, atol=1e-5)
 
 
 def test_as_scalar_handles_complex_and_autograd_tensors():
@@ -329,3 +329,90 @@ def test_ad_rejects_unbound_parameters():
     z = np.diag([1.0, -1.0]).astype(np.complex64)
     with pytest.raises(ValueError, match="unbound"):
         ad(circuit, z)
+
+
+def test_auto_matches_psr_on_mixed_ansatz():
+    torch = pytest.importorskip("torch")
+    from aicir.channel.backends.torch_backend import TorchBackend
+    from aicir.core.circuit import crx, rx, rz, rzz, hadamard
+
+    backend = TorchBackend(device="cpu")
+    obs = _parity_z_observable(3)
+
+    def build(theta):
+        return Circuit(
+            hadamard(0),
+            ry(theta[0], 0), rz(theta[1], 1), rx(theta[2], 2),
+            cx(1, [0]), crx(theta[3], 2, [1]), rzz(theta[4], 0, 2), ry(theta[5], 1),
+            n_qubits=3,
+        )
+
+    theta = np.array([0.3, -0.5, 0.8, 0.4, -0.7, 0.9])
+
+    def fn(t):  # differentiable: returns a grad-connected tensor
+        state = State.zero_state(3, backend).evolve(build(t).unitary(backend=backend))
+        return backend.expectation_sv(state.data, backend.cast(obs))
+
+    def obj(p):  # black-box float objective for psr reference
+        state = State.zero_state(3, backend).evolve(build(p).unitary(backend=backend))
+        return backend.to_numpy(backend.expectation_sv(state.data, backend.cast(obs)))
+
+    grad_auto = auto(fn, theta, backend=backend)
+    assert grad_auto.shape == theta.shape
+    assert np.allclose(grad_auto, psr(obj, theta), atol=1e-5)
+
+
+def test_auto_supports_scalar_param():
+    torch = pytest.importorskip("torch")
+    from aicir.channel.backends.torch_backend import TorchBackend
+
+    backend = TorchBackend(device="cpu")
+    z = np.diag([1.0, -1.0]).astype(np.complex64)
+
+    def fn(t):
+        circuit = Circuit(ry(t, 0), n_qubits=1)
+        state = State.zero_state(1, backend).evolve(circuit.unitary(backend=backend))
+        return backend.expectation_sv(state.data, backend.cast(z))
+
+    grad = auto(fn, np.array(0.5), backend=backend)
+    assert grad.shape == ()
+    assert np.allclose(grad, -np.sin(0.5), atol=1e-5)
+
+
+def test_auto_honors_backend_dtype_and_device():
+    torch = pytest.importorskip("torch")
+    from aicir.channel.backends.torch_backend import TorchBackend
+
+    backend = TorchBackend(dtype=torch.complex128, device="cpu")
+    z = np.diag([1.0, -1.0]).astype(np.complex128)
+    captured = {}
+
+    def fn(t):
+        captured["dtype"] = t.dtype
+        captured["device"] = t.device
+        captured["requires_grad"] = t.requires_grad
+        circuit = Circuit(ry(t, 0), n_qubits=1)
+        state = State.zero_state(1, backend).evolve(circuit.unitary(backend=backend))
+        return backend.expectation_sv(state.data, backend.cast(z))
+
+    grad = auto(fn, np.array(0.5), backend=backend)
+    # double-precision backend -> float64 params placed on the backend device.
+    assert captured["dtype"] == torch.float64
+    assert captured["device"] == backend._device
+    assert captured["requires_grad"] is True
+    assert np.allclose(grad, -np.sin(0.5), atol=1e-9)
+
+
+def test_auto_rejects_non_differentiable_objective():
+    torch = pytest.importorskip("torch")
+    from aicir.channel.backends.torch_backend import TorchBackend
+
+    backend = TorchBackend(device="cpu")
+
+    def fn(t):  # breaks the graph by returning a python float
+        circuit = Circuit(ry(t, 0), n_qubits=1)
+        state = State.zero_state(1, backend).evolve(circuit.unitary(backend=backend))
+        return float(backend.to_numpy(backend.expectation_sv(state.data, backend.cast(np.diag([1.0, -1.0]).astype(np.complex64)))))
+
+    with pytest.raises(ValueError, match="autograd graph"):
+        auto(fn, np.array(0.5), backend=backend)
