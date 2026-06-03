@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from aicir import Circuit, NumpyBackend, Parameter, State, cx, ry
-from aicir.qml import auto, psr, spsr, mpsr, fd, ad, qng, bdqng, kqng, dqng
+from aicir.qml import auto, psr, spsr, spsa, mpsr, fd, ad, qng, bdqng, kqng, dqng
 
 
 def test_psr_matches_analytic_gradient_for_vector_params():
@@ -93,6 +93,57 @@ def test_spsr_returns_unbiased_scaled_coordinate_estimate():
 def test_spsr_rejects_too_many_samples_without_replacement():
     with pytest.raises(ValueError, match="n_samples"):
         spsr(lambda theta: theta[0], np.array([0.1]), n_samples=2)
+
+
+def test_spsa_matches_central_difference_for_scalar_param():
+    theta = np.array(0.7)
+
+    def objective(value):
+        return np.cos(value)
+
+    grad = spsa(objective, theta, eps=1e-6, perturbations=np.array(1.0))
+
+    assert grad.shape == ()
+    assert np.allclose(grad, -np.sin(theta), atol=1e-6)
+
+
+def test_spsa_uses_supplied_perturbation_formula():
+    params = np.array([0.2, -0.1])
+    weights = np.array([2.0, -3.0])
+    delta = np.array([1.0, -1.0])
+
+    def objective(theta):
+        return float(np.dot(weights, theta))
+
+    grad = spsa(objective, params, eps=1e-6, perturbations=delta)
+    expected = np.dot(weights, delta) / delta
+
+    assert np.allclose(grad, expected, atol=1e-9)
+
+
+def test_spsa_averages_multiple_perturbations():
+    params = np.array([0.2, -0.1])
+    weights = np.array([2.0, -3.0])
+    deltas = np.array([
+        [1.0, 1.0],
+        [1.0, -1.0],
+        [-1.0, 1.0],
+        [-1.0, -1.0],
+    ])
+
+    def objective(theta):
+        return float(np.dot(weights, theta))
+
+    grad = spsa(objective, params, eps=1e-6, perturbations=deltas)
+
+    assert np.allclose(grad, weights, atol=1e-9)
+
+
+def test_spsa_rejects_invalid_inputs():
+    with pytest.raises(ValueError, match="eps"):
+        spsa(lambda theta: np.sum(theta), np.array([0.1]), eps=0.0)
+    with pytest.raises(ValueError, match="zero"):
+        spsa(lambda theta: np.sum(theta), np.array([0.1, 0.2]), perturbations=np.array([1.0, 0.0]))
 
 
 def test_mpsr_single_index_matches_psr_coordinate():
@@ -233,6 +284,7 @@ def test_gradients_accept_backend_native_tensor_objective():
     assert np.allclose(psr(objective, value), [exact], atol=1e-5)
     assert np.allclose(fd(objective, value), [exact], atol=1e-4)
     assert np.allclose(spsr(objective, value, n_samples=1, rng=0), [exact], atol=1e-5)
+    assert np.allclose(spsa(objective, value, perturbations=np.array([1.0])), [exact], atol=1e-4)
     assert np.allclose(mpsr(objective, value, parameter_indices=[0]), exact, atol=1e-5)
 
 
@@ -455,6 +507,32 @@ def test_qng_preconditions_with_supplied_qfim():
     )
 
     assert np.allclose(natural_grad, [1.0, 1.0])
+
+
+def test_qng_accepts_spsa_gradient_method():
+    backend = NumpyBackend()
+    z = np.diag([1.0, -1.0]).astype(np.complex64)
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), n_qubits=1)
+        return State.zero_state(1, backend).evolve(circuit.unitary(backend=backend))
+
+    def objective(theta):
+        state = state_fn(theta)
+        return backend.expectation_sv(state.data, backend.cast(z))
+
+    theta = np.array([0.5])
+    natural_grad, grad = qng(
+        objective,
+        state_fn,
+        theta,
+        gradient_method="spsa",
+        gradient_kwargs={"eps": 1e-3, "perturbations": np.array([1.0])},
+        return_gradient=True,
+    )
+
+    assert np.allclose(grad, [-np.sin(theta[0])], atol=1e-4)
+    assert np.allclose(natural_grad, grad, atol=1e-4)
 
 
 def test_qng_accepts_npu_backend_state_tensor():
@@ -696,6 +774,43 @@ def test_dqng_npu_backend_path_does_not_move_tensors_to_cpu(monkeypatch):
         state_fn,
         theta,
         backend=backend,
+        return_qfim_diag=True,
+    )
+
+    assert isinstance(natural_grad, torch.Tensor)
+    assert isinstance(qfim_diag, torch.Tensor)
+    assert tuple(natural_grad.shape) == (1,)
+    assert tuple(qfim_diag.shape) == (1,)
+
+
+def test_dqng_npu_backend_spsa_path_does_not_move_tensors_to_cpu(monkeypatch):
+    torch = pytest.importorskip("torch")
+    from aicir.channel.backends.npu_backend import NPUBackend
+
+    backend = NPUBackend(device="cpu")
+    z = backend.cast(np.diag([1.0, -1.0]).astype(np.complex64))
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), n_qubits=1)
+        state = State.zero_state(1, backend).evolve(circuit.unitary(backend=backend))
+        return state.data
+
+    def objective(theta):
+        return backend.expectation_sv(state_fn(theta), z)
+
+    def fail_cpu(self):
+        raise AssertionError("dqng NPU SPSA path must not move tensors to CPU")
+
+    monkeypatch.setattr(torch.Tensor, "cpu", fail_cpu)
+
+    theta = np.array([0.5])
+    natural_grad, qfim_diag = dqng(
+        objective,
+        state_fn,
+        theta,
+        backend=backend,
+        gradient_method="spsa",
+        gradient_kwargs={"eps": 1e-3, "perturbations": np.array([1.0])},
         return_qfim_diag=True,
     )
 

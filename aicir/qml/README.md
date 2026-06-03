@@ -1,6 +1,6 @@
-# aicir.qml.grad — 量子机器学习梯度工具包
+# aicir.qml — 量子机器学习梯度与梯度无关优化工具包
 
-本模块 (`aicir/qml/grad.py`) 实现了十种用于量子电路参数梯度估计或预条件的方法，覆盖从黑盒数值近似到解析反向传播和量子自然梯度的完整谱系。所有方法均与 `NumpyBackend`、`TorchBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
+本模块 (`aicir/qml/grad.py`, `aicir/qml/grad_free.py`) 实现了十一种用于量子电路参数梯度估计或预条件的方法，以及一种显式 gradient-free 的坐标精确最小化方法。所有方法均与 `NumpyBackend`、`TorchBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
 
 ---
 
@@ -14,7 +14,10 @@
   → psr（含噪声电路亦精确）或 fd（任意目标）
 
 参数量极大（>1000），允许梯度有噪声？
-  → spsr（随机采样 K 坐标，2K+1 次调用）
+  → spsr（随机采样 K 坐标，2K 次调用）
+
+参数量极大，硬件/含噪声目标每步只能承受少量函数调用？
+  → spsa（随机全方向扰动，2K 次调用，K=n_samples）
 
 需要混合高阶偏导？
   → mpsr
@@ -26,7 +29,7 @@
   → ad（最高效：O(P) 门作用，仅 O(1) 额外状态）
 
 希望优化步长适应量子态空间几何？
-  → qng（用 QFIM 逆预条件 psr/fd/auto 或外部梯度）
+  → qng（用 QFIM 逆预条件 psr/fd/spsa/auto 或外部梯度）
 
 参数量较大，但仍希望利用量子态空间几何？
   → bdqng（按 block 近似 QFIM，默认 block_size=1）
@@ -36,6 +39,9 @@
 
 参数量很大，只能承受最便宜的几何预条件？
   → dqng（只用 QFIM 对角线，便宜但粗糙）
+
+目标关于单个旋转参数满足正弦结构，希望完全不计算梯度？
+  → rotosolve（逐坐标解析最小化，gradient-free）
 ```
 
 ---
@@ -48,7 +54,8 @@
 | --------- | ------------------------- | ------------------------------------------- | -------------------------------------- |
 | `auto`  | Automatic Differentiation | 1 次反向传播                                | Torch/NPU 后端，自动微分图             |
 | `psr`   | Parameter-Shift Rule      | $2P$                                      | 通用旋转门，无噪声或含噪声均可         |
-| `spsr`  | Stochastic PSR            | $2K+1$（$K \leq P$ 次采样）             | 大参数量随机梯度                       |
+| `spsr`  | Stochastic PSR            | $2K$（$K \leq P$ 次采样）               | 大参数量随机坐标梯度                   |
+| `spsa`  | Simultaneous Perturbation Stochastic Approximation | $2K$（$K$ 个扰动方向） | 极大参数量/硬件噪声下的随机全方向梯度 |
 | `mpsr`  | Multi-parameter PSR       | $2^M$（$M$ 个坐标的混合偏导数）         | 高阶混合偏导                           |
 | `fd`    | Finite Difference         | $2P$（中心差）或 $P+1$（单侧）          | 任意可微目标，黑盒                     |
 | `ad`    | Adjoint Differentiation   | $O(P)$ 次门作用，$O(1)$ 额外存储        | 无噪声态向量模拟，效率最高             |
@@ -56,8 +63,9 @@
 | `bdqng` | Block-diagonal QNG        | 梯度调用 +$2P+1$ 次态函数调用，分块求解   | 按参数块近似 QFIM，适合大参数 ansatz   |
 | `kqng`  | KFAC-style QNG            | 梯度调用 + 分块因子估计，Kronecker 因子求解 | 用 Kronecker 因子近似 QFIM block       |
 | `dqng`  | Diagonal QNG              | 梯度调用 +$2P+1$ 次态函数调用，逐坐标除法 | QFIM 对角近似，最便宜但最粗糙          |
+| `rotosolve` | ROTOSOLVE | 每个坐标每 sweep 3 次函数调用 | 正弦结构目标的逐坐标 gradient-free 精确最小化 |
 
-$P$：可微参数数量。
+$P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 
 ---
 
@@ -87,6 +95,15 @@ $P$：可微参数数量。
 | `rng`       | 随机数生成器（int seed 或 `np.random.Generator`） |
 | `replace`   | 是否有放回采样                                      |
 | `unbiased`  | 是否乘以 P/K 无偏因子（默认 True）                  |
+
+#### `spsa(fn, params, *, eps=1e-3, n_samples=1, rng=None, perturbations=None)`
+
+| 参数              | 说明                                                                 |
+| ----------------- | -------------------------------------------------------------------- |
+| `eps`           | 同时扰动步长，默认 `1e-3`                                          |
+| `n_samples`     | 随机扰动方向数量；每个方向只需 2 次函数调用                         |
+| `rng`           | 随机数生成器（int seed 或 `np.random.Generator`）                  |
+| `perturbations` | 可选的固定扰动向量/矩阵；所有元素必须非零，提供后样本数由其第一维决定 |
 
 #### `mpsr(fn, params, parameter_indices=None, *, shift, coefficient)`
 
@@ -118,7 +135,7 @@ $P$：可微参数数量。
 | `state_fn`                | 接受完整参数数组、返回纯态 ansatz 终态；当 `qfim` 已提供时可为 `None`   |
 | `grad`                    | 可选的普通梯度；提供后跳过 `fn` 的梯度计算                                |
 | `qfim`                    | 可选的 QFIM；提供后跳过 `state_fn` 的 QFIM 估计                           |
-| `gradient_method`         | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"` 或 `"auto"`     |
+| `gradient_method`         | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"` |
 | `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                |
 | `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                  |
 | `metric_eps`              | 用于 QFIM 态导数中心差分的步长                                              |
@@ -137,7 +154,7 @@ $P$：可微参数数量。
 | `block_size`              | 未提供 `blocks` 时按 flat 参数顺序连续分块的大小，默认 `1`                   |
 | `grad`                    | 可选的普通梯度；提供后跳过 `fn` 的梯度计算                                     |
 | `qfim_blocks`             | 可选的 block QFIM 列表；提供后跳过 `state_fn` 的 block QFIM 估计               |
-| `gradient_method`         | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"` 或 `"auto"`          |
+| `gradient_method`         | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"` |
 | `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                     |
 | `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                       |
 | `metric_eps`              | 用于 block QFIM 态导数中心差分的步长                                             |
@@ -157,7 +174,7 @@ $P$：可微参数数量。
 | `block_size`              | 未提供 `blocks` / `factor_shapes` 时按 flat 参数顺序连续分块的大小            |
 | `grad`                    | 可选的普通梯度；提供后跳过 `fn` 的梯度计算                                      |
 | `kfac_factors`            | 可选的 Kronecker 因子列表 `[(A, B), ...]`；提供后跳过 `state_fn` 的因子估计   |
-| `gradient_method`         | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"` 或 `"auto"`           |
+| `gradient_method`         | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"` |
 | `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                      |
 | `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                        |
 | `metric_eps`              | 用于 QFIM block 态导数中心差分的步长                                              |
@@ -174,7 +191,7 @@ $P$：可微参数数量。
 | `state_fn`                | 接受完整参数数组、返回纯态 ansatz 终态；当 `qfim_diag` 已提供时可为 `None` |
 | `grad`                    | 可选的普通梯度；提供后跳过 `fn` 的梯度计算                                   |
 | `qfim_diag`               | 可选的 QFIM 对角线；提供后跳过 `state_fn` 的 QFIM 对角估计                   |
-| `gradient_method`         | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"` 或 `"auto"`        |
+| `gradient_method`         | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"` |
 | `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                   |
 | `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                     |
 | `metric_eps`              | 用于 QFIM 对角态导数中心差分的步长                                             |
@@ -182,6 +199,19 @@ $P$：可微参数数量。
 | `backend`                 | Torch/NPU 后端；传入 `NPUBackend` 时启用不搬回 CPU 的设备端路径              |
 | `return_gradient`         | 若为 `True`，额外返回普通梯度                                                |
 | `return_qfim_diag`        | 若为 `True`，额外返回 QFIM 对角线                                            |
+
+#### `rotosolve(fn, params, *, n_sweeps=1, parameter_indices=None, shift=π/2, atol=1e-12, backend=None, return_value=False)`
+
+| 参数                  | 说明                                                                 |
+| --------------------- | -------------------------------------------------------------------- |
+| `fn`                | 接受完整参数数组/张量、返回标量损失的目标函数                        |
+| `params`            | 当前参数值，支持标量和任意形状数组/张量                              |
+| `n_sweeps`          | 坐标扫描轮数，每轮依次更新 `parameter_indices` 中的坐标              |
+| `parameter_indices` | 可选更新坐标，支持 flat 整数索引、多维 tuple 索引或列表              |
+| `shift`             | 两点偏移量，默认 `π/2`，对应频率为 1 的标准 ROTOSOLVE 公式          |
+| `atol`              | 拟合正弦振幅低于该阈值时认为该坐标平坦，不更新                       |
+| `backend`           | Torch/NPU 后端；传入后目标值、三角函数和坐标更新保持在设备端         |
+| `return_value`      | 若为 `True`，同时返回最终目标函数值                                  |
 
 ## 3. 自动微分 `auto`
 
@@ -305,14 +335,55 @@ $$
 
 ### 特点
 
-- 只需 $2K + 1$（`replace=False`）或 $2K$（`replace=True`）次函数调用
+- 只需 $2K$ 次函数调用
 - 方差与 $K$ 成反比，但期望无偏（`unbiased=True` 时）
 - 适合变分量子本征求解器（VQE）的随机梯度下降优化
 - 当 `n_samples=P` 时退化为精确的 `psr`
 
 ---
 
-## 6. 多参数混合偏导 `mpsr`
+## 6. SPSA `spsa`
+
+```python
+from aicir.qml import spsa
+grad = spsa(fn, params, *, eps=1e-3, n_samples=1, rng=None,
+            perturbations=None)
+```
+
+### 原理
+
+SPSA（Simultaneous Perturbation Stochastic Approximation）每次采样一个随机扰动向量 $\Delta_k$，同时扰动所有参数，只用两次目标函数调用估计全量梯度：
+
+$$
+\hat{g}_k(\theta)=\frac{L(\theta+\epsilon\Delta_k)-L(\theta-\epsilon\Delta_k)}{2\epsilon}\Delta_k^{-1}
+$$
+
+默认 $\Delta_k$ 的每个元素从 $\{-1,+1\}$ 中采样，因此 $\Delta_k^{-1}=\Delta_k$。当 `n_samples > 1` 时，`spsa` 会对多个扰动方向的估计取平均以降低方差。
+
+### 特点
+
+- SPSA 是随机梯度估计器，不是 gradient-free 方法；它估计的是 $\nabla L$
+- 每个扰动方向只需 2 次函数调用，总调用次数为 $2K$，与参数数量 $P$ 无关
+- 对硬件执行、含噪声目标和超大参数量 ansatz 很有用
+- 估计通常有偏且噪声较大，适合作为随机优化器的梯度输入
+- 可通过 `perturbations` 传入固定扰动向量，便于复现实验和测试
+
+### 示例
+
+```python
+import numpy as np
+from aicir.qml import spsa
+
+def objective(theta):
+    return np.sum(np.cos(theta))
+
+theta = np.array([0.1, 0.2, 0.3])
+grad = spsa(objective, theta, eps=1e-3, n_samples=8, rng=123)
+```
+
+---
+
+## 7. 多参数混合偏导 `mpsr`
 
 ```python
 from aicir.qml import mpsr
@@ -337,7 +408,7 @@ $$
 
 ---
 
-## 7. 有限差分 `fd`
+## 8. 有限差分 `fd`
 
 ```python
 from aicir.qml import fd
@@ -371,7 +442,7 @@ aicir 默认使用 `complex64`（单精度）模拟，浮点精度约为 $10^{-7
 
 ---
 
-## 8. 伴随微分 `ad`
+## 9. 伴随微分 `ad`
 
 ```python
 from aicir.qml import ad
@@ -427,7 +498,7 @@ grad, energy = ad(circuit, H, backend=bk, return_value=True)
 
 ---
 
-## 9. 量子自然梯度 `qng`
+## 10. 量子自然梯度 `qng`
 
 ```python
 from aicir.qml import qng
@@ -450,6 +521,8 @@ $$
 - 使用 `state_fn(params)` 返回的纯态，通过中心有限差分估计 QFIM
 - 解 `(F + damping * I) @ natural_grad = grad`
 
+也可通过 `gradient_method="spsa"` 使用 SPSA 作为普通梯度来源，适合只想用少量目标函数调用估计 QNG 预条件前梯度的场景。
+
 QFIM 的纯态公式为：
 
 $$
@@ -464,7 +537,7 @@ $$
 - Torch/NPU 后端张量（如 `state.data`）
 - aicir `State` / `StateVector` 对象
 
-设备张量会在 QFIM 求解前 detach 并移动到主机，用 NumPy 完成小规模线性求解，避免依赖 NPU 的复杂矩阵求逆支持；目标函数返回的 NPU/Torch 标量仍可被 `psr` / `fd` / `auto` 路径正常处理。
+设备张量会在 QFIM 求解前 detach 并移动到主机，用 NumPy 完成小规模线性求解，避免依赖 NPU 的复杂矩阵求逆支持；目标函数返回的 NPU/Torch 标量仍可被 `psr` / `fd` / `spsa` / `auto` 路径正常处理。
 
 ### 示例
 
@@ -505,7 +578,7 @@ direction = qng(
 
 ---
 
-## 10. 分块对角量子自然梯度 `bdqng`
+## 11. 分块对角量子自然梯度 `bdqng`
 
 ```python
 from aicir.qml import bdqng
@@ -533,7 +606,7 @@ $$
 - `blocks=None` 时按 flat 参数顺序用 `block_size` 连续分块
 - `blocks` 可显式指定 flat 索引或多维 tuple 索引，且必须覆盖每个参数一次
 - 可传入 `qfim_blocks` 复用预计算的 block QFIM
-- 支持与 `qng` 相同的普通梯度来源：`psr`、`fd`、`auto` 或外部 `grad`
+- 支持与 `qng` 相同的普通梯度来源：`psr`、`fd`、`spsa`、`auto` 或外部 `grad`
 - `state_fn` 同样可返回 numpy 态向量、Torch/NPU 张量或 aicir `State`
 
 ### 示例
@@ -572,7 +645,7 @@ direction, qfim_blocks = bdqng(
 
 ---
 
-## 11. KFAC-style 量子自然梯度 `kqng`
+## 12. KFAC-style 量子自然梯度 `kqng`
 
 ```python
 from aicir.qml import kqng
@@ -648,7 +721,7 @@ direction, factors = kqng(
 
 ---
 
-## 12. 对角量子自然梯度 `dqng`
+## 13. 对角量子自然梯度 `dqng`
 
 ```python
 from aicir.qml import dqng
@@ -717,6 +790,88 @@ direction = dqng(
     qfim_diag=precomputed_diag,
     damping=1e-5,
 )
+```
+
+---
+
+## 14. ROTOSOLVE `rotosolve`
+
+```python
+from aicir.qml import rotosolve
+params = rotosolve(fn, params, *, n_sweeps=1, parameter_indices=None,
+                   backend=None, return_value=False)
+```
+
+### 原理
+
+ROTOSOLVE 是显式的 **gradient-free** 方法。它不估计梯度，也不使用有限差分梯度；它利用单个旋转参数上的三角结构，直接解出该坐标的最优值：
+
+$$
+L(\theta_k)=a\sin(\theta_k+\phi)+c
+$$
+
+固定其它参数后，`rotosolve` 对当前坐标 $k$ 评估：
+
+$$
+L_0=L(\theta_k),\quad L_+=L(\theta_k+s),\quad L_-=L(\theta_k-s)
+$$
+
+默认 $s=\pi/2$。由三点值拟合该坐标上的正弦曲线，然后解析更新到最小点：
+
+$$
+\Delta\theta_k=-\frac{\pi}{2}-\operatorname{atan2}(A, B)
+$$
+
+其中
+
+$$
+A=\frac{L_0-\frac{1}{2}(L_+ + L_-)}{1-\cos s},\qquad
+B=\frac{L_+ - L_-}{2\sin s}
+$$
+
+因此它执行的是逐坐标精确最小化，而不是沿梯度方向下降。
+
+### NPU 兼容设计
+
+当传入 `backend=NPUBackend`，或 `params` 本身是 Torch/NPU tensor 时，`rotosolve` 会走设备端路径：
+
+- 参数张量、目标函数标量、`atan2` 和坐标更新均保持为 Torch/NPU tensor
+- 不调用 `.cpu()`、`.numpy()`、`to_numpy()` 或 NumPy 三角函数处理设备标量
+- 返回值也是设备端 tensor；`return_value=True` 时最终 loss 同样保持在设备端
+
+因此 NPU ansatz 的 ROTOSOLVE 优化过程中不会由 `rotosolve` 把中间数据搬回 CPU。若用户的 `fn` 自己调用 `.cpu()` / `to_numpy()`，则主机搬移来自用户函数本身。
+
+### 示例
+
+```python
+import numpy as np
+from aicir.qml import rotosolve
+
+def objective(theta):
+    return 2.0 * np.sin(theta[0] + 0.3) + 0.5 * np.sin(theta[1] - 0.2)
+
+theta = np.array([0.7, -0.9])
+theta, value = rotosolve(objective, theta, return_value=True)
+# value ≈ -2.5
+```
+
+量子线路示例：
+
+```python
+import numpy as np
+from aicir import Circuit, NumpyBackend, State, ry
+from aicir.qml import rotosolve
+
+bk = NumpyBackend()
+z = bk.cast(np.diag([1.0, -1.0]).astype(np.complex64))
+
+def objective(theta):
+    circuit = Circuit(ry(theta[0], 0), n_qubits=1)
+    state = State.zero_state(1, bk).evolve(circuit.unitary(backend=bk))
+    return bk.expectation_sv(state.data, z)
+
+theta, value = rotosolve(objective, np.array([0.5]), return_value=True)
+# value ≈ -1.0
 ```
 
 ---
