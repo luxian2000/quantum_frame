@@ -2,13 +2,13 @@ import numpy as np
 import pytest
 
 from aicir.optimizer import (
-    AdamOptimizer,
-    COBYLAOptimizer,
-    GradientDescentOptimizer,
-    LBFGSBOptimizer,
+    Adam,
+    COBYLA,
+    GD,
+    LBFGSB,
     OptimizationResult,
-    SPSAOptimizer,
-    ScipyOptimizer,
+    SPSA,
+    ScipyMinimize,
     minimize,
     scipy_minimize,
 )
@@ -29,7 +29,7 @@ def _quadratic(target):
 
 def test_adam_optimizer_minimizes_with_explicit_gradient():
     fn, grad = _quadratic(np.array([1.0, -2.0]))
-    optimizer = AdamOptimizer(max_iters=250, learning_rate=0.08, tol=1e-4)
+    optimizer = Adam(max_iters=250, learning_rate=0.08, tol=1e-4)
 
     result = optimizer.minimize(fn, np.array([0.0, 0.0]), gradient_fn=grad)
 
@@ -45,7 +45,7 @@ def test_gradient_descent_accepts_psr_gradient_method():
     def fn(params):
         return float(np.cos(params[0]))
 
-    optimizer = GradientDescentOptimizer(max_iters=80, learning_rate=0.15, gradient_method="psr")
+    optimizer = GD(max_iters=80, learning_rate=0.15, gradient_method="psr")
     result = optimizer.minimize(fn, np.array([0.1]))
 
     assert result.fun < -0.99
@@ -53,7 +53,7 @@ def test_gradient_descent_accepts_psr_gradient_method():
 
 def test_spsa_optimizer_minimizes_one_dimensional_objective():
     fn, _ = _quadratic(np.array([2.0]))
-    optimizer = SPSAOptimizer(max_iters=80, learning_rate=0.08, perturbation=1e-3, rng=3)
+    optimizer = SPSA(max_iters=80, learning_rate=0.08, perturbation=1e-3, rng=3)
 
     result = optimizer.minimize(fn, np.array([0.0]))
 
@@ -70,7 +70,7 @@ def test_optimizer_callbacks_receive_copied_params():
         params[...] = 999.0
         seen.append((step, value, params.copy()))
 
-    optimizer = AdamOptimizer(max_iters=3, learning_rate=0.1, save_history=False)
+    optimizer = Adam(max_iters=3, learning_rate=0.1, save_history=False)
     result = optimizer.minimize(fn, np.array([0.0]), gradient_fn=grad, callback=callback)
 
     assert result.nit == 3
@@ -81,7 +81,7 @@ def test_optimizer_callbacks_receive_copied_params():
 def test_scipy_optimizer_minimizes_with_l_bfgs_b_and_gradient():
     pytest.importorskip("scipy")
     fn, grad = _quadratic(np.array([1.5, -0.5]))
-    optimizer = LBFGSBOptimizer(options={"maxiter": 50})
+    optimizer = LBFGSB(options={"maxiter": 50})
 
     result = optimizer.minimize(fn, np.array([0.0, 0.0]), gradient_fn=grad)
 
@@ -95,9 +95,9 @@ def test_cobyla_optimizer_and_scipy_minimize_wrapper():
     pytest.importorskip("scipy")
     fn, _ = _quadratic(np.array([0.25]))
 
-    result = COBYLAOptimizer(options={"maxiter": 80, "rhobeg": 0.5}).minimize(fn, np.array([2.0]))
+    result = COBYLA(options={"maxiter": 80, "rhobeg": 0.5}).minimize(fn, np.array([2.0]))
     wrapped = scipy_minimize(fn, np.array([2.0]), method="COBYLA", options={"maxiter": 80, "rhobeg": 0.5})
-    generic = minimize(fn, np.array([2.0]), optimizer=ScipyOptimizer("COBYLA", options={"maxiter": 80}))
+    generic = minimize(fn, np.array([2.0]), optimizer=ScipyMinimize("COBYLA", options={"maxiter": 80}))
 
     assert result.fun < 1e-6
     assert wrapped.fun < 1e-6
