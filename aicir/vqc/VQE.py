@@ -1,16 +1,22 @@
-"""Basic VQE implementation.
+"""Variational Quantum Eigensolver implementation.
 
-This module provides a minimal, self-contained Variational Quantum Eigensolver
-implementation based on state-vector simulation with NumPy.
+``BasicVQE`` keeps the original minimal dense_matrix RY/CNOT path for backward
+compatibility, and also supports a general orchestration path built around
+``Circuit`` templates, ``Hamiltonian`` objects, ``Measure`` backends, optional
+shot sampling/noise, and pluggable classical optimizers.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 import numpy as np
 
+from ..channel.backends.numpy_backend import NumpyBackend
+from ..channel.operators import Hamiltonian
+from ..core.circuit import Circuit
+from ..measure import Measure
 from ..qml.deriv import psr
 
 
@@ -67,52 +73,194 @@ class VQEResult:
 
     energy: float
     parameters: np.ndarray
-    statevector: np.ndarray
+    statevector: np.ndarray | None
     energy_history: list[float]
+    circuit: Circuit | None = None
+    measurement_result: Any = None
+    estimator_result: Any = None
+    optimizer_result: Any = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def final_state(self) -> np.ndarray | None:
+        """Alias for the final pure state or flattened density matrix."""
+
+        return self.statevector
 
 
 class BasicVQE:
-    """A minimal VQE solver with RY + nearest-neighbor CNOT ansatz.
+    """VQE solver with legacy and circuit-orchestration execution modes.
 
-    The ansatz per layer is:
+    Without an explicit ``ansatz`` this class preserves the original minimal
+    dense_matrix solver with an RY + nearest-neighbor CNOT ansatz:
     1) Apply RY(theta[layer, q]) on each qubit q.
     2) Apply a nearest-neighbor CNOT chain q -> q+1.
+
+    With ``ansatz`` supplied, it becomes a general VQE orchestration layer:
+    ``ansatz`` may be a parameterized ``Circuit`` or a callable
+    ``ansatz(params) -> Circuit``; ``hamiltonian`` may be a dense_matrix or
+    ``Hamiltonian`` object; measurement runs through ``Measure`` with the chosen
+    backend, optional shots, density-matrix noise, and optimizer.
     """
 
     def __init__(
         self,
-        hamiltonian: np.ndarray,
+        hamiltonian: np.ndarray | Hamiltonian,
         n_qubits: int | None = None,
         depth: int = 1,
         seed: int | None = None,
+        *,
+        ansatz: Circuit | Callable[[np.ndarray], Circuit] | None = None,
+        n_params: int | None = None,
+        parameter_shape: tuple[int, ...] | None = None,
+        backend: Any = None,
+        optimizer: Any = None,
+        shots: int | None = None,
+        noise_model: Any = None,
+        use_density_matrix: bool = False,
+        initial_state: Any = None,
+        initial_density_matrix: Any = None,
+        observable_name: str = "energy",
+        energy_estimator: str | Any = "exact",
     ) -> None:
-        ham = np.asarray(hamiltonian, dtype=np.complex128)
-        if ham.ndim != 2 or ham.shape[0] != ham.shape[1]:
-            raise ValueError("hamiltonian must be a square matrix")
-
-        inferred = _infer_n_qubits(ham.shape[0])
-        self.n_qubits = inferred if n_qubits is None else int(n_qubits)
-        if self.n_qubits != inferred:
-            raise ValueError(
-                f"n_qubits={self.n_qubits} does not match Hamiltonian dimension {ham.shape[0]}"
-            )
-
+        self.backend = backend if backend is not None else NumpyBackend()
+        self.observable = hamiltonian
+        ham, inferred = self._coerce_hamiltonian(hamiltonian, self.backend)
+        self.n_qubits = self._resolve_n_qubits(n_qubits, inferred, ansatz)
         self.hamiltonian = ham
+
         self.depth = int(depth)
         if self.depth <= 0:
             raise ValueError("depth must be a positive integer")
 
+        self.ansatz = ansatz
+        self.optimizer = optimizer
+        self.shots = shots
+        if shots is not None and int(shots) < 0:
+            raise ValueError("shots must be non-negative")
+        self.noise_model = noise_model
+        self.use_density_matrix = bool(use_density_matrix)
+        self.initial_state = initial_state
+        self.initial_density_matrix = initial_density_matrix
+        self.observable_name = str(observable_name)
+        self.energy_estimator = self._resolve_energy_estimator(energy_estimator)
+        if ansatz is None and not self._uses_exact_energy_estimator():
+            raise ValueError("non-exact energy_estimator requires a Circuit or callable ansatz")
+
+        self._parameter_shape = self._resolve_parameter_shape(ansatz, n_params, parameter_shape)
+        self._last_circuit: Circuit | None = None
+        self._last_measurement: Any = None
+        self._last_estimator_result: Any = None
         self._rng = np.random.default_rng(seed)
+
+    def _resolve_energy_estimator(self, energy_estimator: str | Any) -> str | Any:
+        if energy_estimator is None:
+            return "exact"
+        if isinstance(energy_estimator, str):
+            name = energy_estimator.strip().lower()
+            if name != "exact":
+                raise ValueError("energy_estimator string must be 'exact'")
+            return "exact"
+        if not hasattr(energy_estimator, "estimate"):
+            raise TypeError("energy_estimator must be 'exact' or expose estimate(circuit, hamiltonian, ...)")
+        return energy_estimator
+
+    def _energy_estimator_name(self) -> str:
+        if self._uses_exact_energy_estimator():
+            return "exact"
+        return type(self.energy_estimator).__name__
+
+    def _uses_exact_energy_estimator(self) -> bool:
+        return isinstance(self.energy_estimator, str) and self.energy_estimator == "exact"
+
+    def _coerce_hamiltonian(self, hamiltonian: np.ndarray | Hamiltonian, backend) -> tuple[np.ndarray, int]:
+        if hasattr(hamiltonian, "to_matrix"):
+            raw = hamiltonian.to_matrix(backend)
+            ham = np.asarray(backend.to_numpy(raw), dtype=np.complex128)
+            inferred = int(getattr(hamiltonian, "n_qubits", _infer_n_qubits(ham.shape[0])))
+        else:
+            ham = np.asarray(hamiltonian, dtype=np.complex128)
+            inferred = _infer_n_qubits(ham.shape[0]) if ham.ndim == 2 and ham.shape[0] == ham.shape[1] else -1
+
+        if ham.ndim != 2 or ham.shape[0] != ham.shape[1]:
+            raise ValueError("hamiltonian must be a square matrix or expose to_matrix(backend)")
+        matrix_inferred = _infer_n_qubits(ham.shape[0])
+        if inferred != matrix_inferred:
+            raise ValueError(
+                f"Hamiltonian n_qubits={inferred} does not match matrix dimension {ham.shape[0]}"
+            )
+        return ham, matrix_inferred
+
+    def _resolve_n_qubits(
+        self,
+        n_qubits: int | None,
+        inferred: int,
+        ansatz: Circuit | Callable[[np.ndarray], Circuit] | None,
+    ) -> int:
+        value = inferred if n_qubits is None else int(n_qubits)
+        if value != inferred:
+            raise ValueError(f"n_qubits={value} does not match Hamiltonian dimension {1 << inferred}")
+        if isinstance(ansatz, Circuit) and int(ansatz.n_qubits) != value:
+            raise ValueError(f"ansatz.n_qubits={ansatz.n_qubits} does not match n_qubits={value}")
+        return value
+
+    def _resolve_parameter_shape(
+        self,
+        ansatz: Circuit | Callable[[np.ndarray], Circuit] | None,
+        n_params: int | None,
+        parameter_shape: tuple[int, ...] | None,
+    ) -> tuple[int, ...] | None:
+        if ansatz is None:
+            return (self.depth, self.n_qubits)
+
+        if isinstance(ansatz, Circuit):
+            inferred_count = len(ansatz.parameters)
+            if n_params is not None and int(n_params) != inferred_count:
+                raise ValueError(f"n_params={n_params} does not match ansatz parameter count {inferred_count}")
+            if parameter_shape is None:
+                return (inferred_count,)
+        elif parameter_shape is None and n_params is not None:
+            return (int(n_params),)
+
+        if parameter_shape is not None:
+            shape = tuple(int(dim) for dim in parameter_shape)
+            if any(dim < 0 for dim in shape):
+                raise ValueError("parameter_shape dimensions must be non-negative")
+            if n_params is not None and int(np.prod(shape, dtype=int)) != int(n_params):
+                raise ValueError("parameter_shape size does not match n_params")
+            if isinstance(ansatz, Circuit) and int(np.prod(shape, dtype=int)) != len(ansatz.parameters):
+                raise ValueError("parameter_shape size does not match ansatz parameter count")
+            return shape
+
+        return None
 
     @property
     def n_params(self) -> int:
-        return self.depth * self.n_qubits
+        if self._parameter_shape is None:
+            raise ValueError("n_params is unknown for callable ansatz; pass n_params or parameter_shape")
+        return int(np.prod(self._parameter_shape, dtype=int))
 
     def initial_params(self, scale: float = 0.1) -> np.ndarray:
-        return self._rng.uniform(-scale, scale, size=(self.depth, self.n_qubits))
+        if self._parameter_shape is None:
+            raise ValueError("Cannot initialize params for callable ansatz without n_params or parameter_shape")
+        return self._rng.uniform(-scale, scale, size=self._parameter_shape)
+
+    def _normalize_params(self, params: np.ndarray) -> np.ndarray:
+        theta = np.asarray(params, dtype=float)
+        if self._parameter_shape is None:
+            return theta
+        expected = int(np.prod(self._parameter_shape, dtype=int))
+        if theta.size != expected:
+            raise ValueError(f"Expected {expected} parameter value(s), got {theta.size}")
+        return theta.reshape(self._parameter_shape)
 
     def ansatz_state(self, params: np.ndarray) -> np.ndarray:
-        theta = np.asarray(params, dtype=float).reshape(self.depth, self.n_qubits)
+        if self.ansatz is not None:
+            _, measurement = self._measure_circuit_exact(params, return_state=True)
+            final_state = None if measurement is None else measurement.final_state
+            return None if final_state is None else np.asarray(final_state)
+
+        theta = self._normalize_params(params)
         state = np.zeros(1 << self.n_qubits, dtype=np.complex128)
         state[0] = 1.0 + 0.0j
 
@@ -125,13 +273,102 @@ class BasicVQE:
 
         return state
 
+    def _observable_matrix(self, backend) -> Any:
+        if hasattr(self.observable, "to_matrix"):
+            return self.observable.to_matrix(backend)
+        return backend.cast(self.hamiltonian)
+
+    def bind_ansatz(self, params: np.ndarray) -> Circuit:
+        """Return a fully-bound ansatz circuit for ``params``."""
+
+        if self.ansatz is None:
+            raise ValueError("No Circuit ansatz was supplied")
+
+        theta = self._normalize_params(params)
+        if isinstance(self.ansatz, Circuit):
+            circuit = self.ansatz.bind_parameters(theta.reshape(-1))
+        elif callable(self.ansatz):
+            circuit = self.ansatz(theta)
+            if not isinstance(circuit, Circuit):
+                raise TypeError("ansatz(params) must return a Circuit")
+            if circuit.parameters:
+                circuit = circuit.bind_parameters(theta.reshape(-1))
+        else:
+            raise TypeError("ansatz must be a Circuit, callable, or None")
+
+        if int(circuit.n_qubits) != self.n_qubits:
+            raise ValueError(f"ansatz circuit n_qubits={circuit.n_qubits} does not match {self.n_qubits}")
+        if circuit.parameters:
+            names = ", ".join(parameter.name for parameter in circuit.parameters)
+            raise ValueError(f"ansatz circuit has unbound parameter(s): {names}")
+        if circuit.backend is None and self.backend is not None:
+            circuit = Circuit(*list(circuit.gates), n_qubits=circuit.n_qubits, backend=self.backend)
+        return circuit
+
+    def _measure_circuit_exact(self, params: np.ndarray, *, return_state: bool) -> tuple[float, Any]:
+        circuit = self.bind_ansatz(params)
+        backend = circuit.backend if circuit.backend is not None else self.backend
+        measure = Measure(backend)
+        observable = self._observable_matrix(backend)
+        observables = {self.observable_name: observable}
+
+        if self.noise_model is not None or self.use_density_matrix:
+            measurement = measure.run_density_matrix(
+                circuit,
+                shots=self.shots,
+                initial_density_matrix=self.initial_density_matrix,
+                observables=observables,
+                noise_model=self.noise_model,
+                return_state=return_state,
+            )
+        else:
+            measurement = measure.run(
+                circuit,
+                shots=self.shots,
+                initial_state=self.initial_state,
+                observables=observables,
+                return_state=return_state,
+            )
+
+        self._last_circuit = circuit
+        self._last_measurement = measurement
+        return float(measurement.expectation_values[self.observable_name]), measurement
+
+    def _evaluate_circuit(self, params: np.ndarray, *, return_state: bool) -> tuple[float, Any]:
+        if self._uses_exact_energy_estimator():
+            return self._measure_circuit_exact(params, return_state=return_state)
+
+        circuit = self.bind_ansatz(params)
+        estimate_kwargs: dict[str, Any] = {
+            "initial_state": self.initial_state,
+            "initial_density_matrix": self.initial_density_matrix,
+            "noise_model": self.noise_model,
+            "use_density_matrix": self.use_density_matrix,
+        }
+        if self.shots is not None:
+            estimate_kwargs["shots"] = self.shots
+
+        estimator_result = self.energy_estimator.estimate(circuit, self.observable, **estimate_kwargs)
+        self._last_circuit = circuit
+        self._last_estimator_result = estimator_result
+        if return_state:
+            _, measurement = self._measure_circuit_exact(params, return_state=True)
+            return float(estimator_result.energy), measurement
+        self._last_measurement = None
+        return float(estimator_result.energy), estimator_result
+
     def energy(self, params: np.ndarray) -> float:
+        if self.ansatz is not None:
+            value, _ = self._evaluate_circuit(params, return_state=False)
+            return value
+
+        params = self._normalize_params(params)
         state = self.ansatz_state(params)
         value = np.vdot(state, self.hamiltonian @ state)
         return float(np.real(value))
 
     def parameter_shift_gradient(self, params: np.ndarray) -> np.ndarray:
-        params = np.asarray(params, dtype=float).reshape(self.depth, self.n_qubits)
+        params = self._normalize_params(params)
         return psr(self.energy, params)
 
     def run(
@@ -139,15 +376,19 @@ class BasicVQE:
         max_iters: int = 200,
         lr: float = 0.1,
         init_params: np.ndarray | None = None,
+        optimizer: Any = None,
         callback: Callable[[int, float, np.ndarray], None] | None = None,
     ) -> VQEResult:
+        selected_optimizer = optimizer if optimizer is not None else self.optimizer
+        if selected_optimizer is not None:
+            return self._run_with_optimizer(selected_optimizer, init_params=init_params, callback=callback)
+
+        params = self.initial_params() if init_params is None else np.asarray(init_params, dtype=float)
+        params = self._normalize_params(params)
         if max_iters <= 0:
             raise ValueError("max_iters must be a positive integer")
         if lr <= 0:
             raise ValueError("lr must be positive")
-
-        params = self.initial_params() if init_params is None else np.asarray(init_params, dtype=float)
-        params = params.reshape(self.depth, self.n_qubits)
 
         history: list[float] = []
         best_energy = np.inf
@@ -167,22 +408,110 @@ class BasicVQE:
             params = params - lr * grad
 
         final_state = self.ansatz_state(best_params)
+        final_circuit = self._last_circuit
+        final_measurement = self._last_measurement
         return VQEResult(
             energy=float(best_energy),
             parameters=best_params,
             statevector=final_state,
             energy_history=history,
+            circuit=final_circuit,
+            measurement_result=final_measurement,
+            estimator_result=self._last_estimator_result,
+            metadata={
+                "mode": "circuit" if self.ansatz is not None else "legacy_dense",
+                "backend": getattr(self.backend, "name", None),
+                "shots": self.shots,
+                "noise_model": type(self.noise_model).__name__ if self.noise_model is not None else None,
+                "energy_estimator": self._energy_estimator_name(),
+            },
+        )
+
+    def _run_with_optimizer(
+        self,
+        optimizer: Any,
+        *,
+        init_params: np.ndarray | None,
+        callback: Callable[[int, float, np.ndarray], None] | None,
+    ) -> VQEResult:
+        if not hasattr(optimizer, "minimize"):
+            raise TypeError("optimizer must expose minimize(fn, init_params, ...)")
+
+        params = self.initial_params() if init_params is None else self._normalize_params(init_params)
+        opt_result = optimizer.minimize(self.energy, params, callback=callback)
+        raw_best_params = getattr(opt_result, "best_x", None)
+        if raw_best_params is None:
+            raw_best_params = getattr(opt_result, "x")
+        raw_best_energy = getattr(opt_result, "best_fun", None)
+        if raw_best_energy is None:
+            raw_best_energy = getattr(opt_result, "fun")
+        best_params = np.asarray(raw_best_params, dtype=float).reshape(params.shape)
+        best_energy = float(raw_best_energy)
+        final_state = self.ansatz_state(best_params)
+        history = [
+            float(entry["fun"])
+            for entry in getattr(opt_result, "history", [])
+            if isinstance(entry, dict) and "fun" in entry
+        ]
+        return VQEResult(
+            energy=best_energy,
+            parameters=best_params,
+            statevector=final_state,
+            energy_history=history,
+            circuit=self._last_circuit,
+            measurement_result=self._last_measurement,
+            estimator_result=self._last_estimator_result,
+            optimizer_result=opt_result,
+            metadata={
+                "mode": "circuit" if self.ansatz is not None else "legacy_dense",
+                "backend": getattr(self.backend, "name", None),
+                "optimizer": type(optimizer).__name__,
+                "shots": self.shots,
+                "noise_model": type(self.noise_model).__name__ if self.noise_model is not None else None,
+                "energy_estimator": self._energy_estimator_name(),
+            },
         )
 
 
 def run_vqe(
-    hamiltonian: np.ndarray,
+    hamiltonian: np.ndarray | Hamiltonian,
     n_qubits: int | None = None,
     depth: int = 1,
     max_iters: int = 200,
     lr: float = 0.1,
     seed: int | None = None,
+    *,
+    ansatz: Circuit | Callable[[np.ndarray], Circuit] | None = None,
+    optimizer: Any = None,
+    backend: Any = None,
+    shots: int | None = None,
+    noise_model: Any = None,
+    use_density_matrix: bool = False,
+    initial_state: Any = None,
+    initial_density_matrix: Any = None,
+    observable_name: str = "energy",
+    energy_estimator: str | Any = "exact",
+    n_params: int | None = None,
+    parameter_shape: tuple[int, ...] | None = None,
+    init_params: np.ndarray | None = None,
 ) -> VQEResult:
-    """Convenience function to run the basic VQE solver."""
-    solver = BasicVQE(hamiltonian=hamiltonian, n_qubits=n_qubits, depth=depth, seed=seed)
-    return solver.run(max_iters=max_iters, lr=lr)
+    """Convenience function to run VQE."""
+    solver = BasicVQE(
+        hamiltonian=hamiltonian,
+        n_qubits=n_qubits,
+        depth=depth,
+        seed=seed,
+        ansatz=ansatz,
+        optimizer=optimizer,
+        backend=backend,
+        shots=shots,
+        noise_model=noise_model,
+        use_density_matrix=use_density_matrix,
+        initial_state=initial_state,
+        initial_density_matrix=initial_density_matrix,
+        observable_name=observable_name,
+        energy_estimator=energy_estimator,
+        n_params=n_params,
+        parameter_shape=parameter_shape,
+    )
+    return solver.run(max_iters=max_iters, lr=lr, init_params=init_params)

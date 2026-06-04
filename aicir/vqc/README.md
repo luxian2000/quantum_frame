@@ -32,6 +32,7 @@
 
 | 函数 | 文件 | 返回 | 用途 |
 | --- | --- | --- | --- |
+| `BasicVQE` / `run_vqe` | `VQE.py` | `VQEResult` | VQE 编排：Hamiltonian、ansatz、backend、Measure、noise、optimizer |
 | `hardware_efficient_ansatz` / `hea` | `ansatz/hea.py` | `Circuit` | 标准硬件高效 ansatz |
 | `hea_parameter_count` | `ansatz/hea.py` | `int` | 计算 HEA 旋转和可参数化 entangler 参数数量 |
 | `entangling_edges` | `ansatz/hea.py` | `list[tuple[int, int]]` | 生成 `linear` / `ring` / `all_to_all` entangler 边 |
@@ -43,7 +44,99 @@
 
 ---
 
-## 3. 标准 HEA
+## 3. VQE 编排
+
+`BasicVQE` 支持两条路径：
+
+- 不传 `ansatz`：保留原来的最小 dense_matrix RY/CNOT VQE。
+- 传入 `Circuit` 或 `ansatz(params) -> Circuit`：走通用编排路径，接入 `Hamiltonian`、`Parameter`、`Measure`、backend、shots、density-matrix noise 和 `aicir.optimizer` 参数优化器。
+
+### 参数说明
+
+| 参数 | 说明 |
+| --- | --- |
+| `hamiltonian` | dense_matrix 或 `aicir.channel.operators.Hamiltonian` |
+| `ansatz` | 可选 `Circuit` 模板或 callable builder |
+| `backend` | `NumpyBackend` / `TorchBackend` / `NPUBackend` 等 |
+| `optimizer` | 可选 `GD`、`Adam`、`SPSA`、`COBYLA`、`LBFGSB`、`ScipyMinimize` 等 |
+| `shots` | 透传给 `Measure` 或 `PauliEstimator` 生成采样 counts |
+| `noise_model` | 传入后自动走 density-matrix 测量路径 |
+| `energy_estimator` | 默认 `"exact"`；也可传入 `PauliEstimator` 做有限 shots Pauli-term 能量估计 |
+| `n_params` / `parameter_shape` | callable ansatz 无法从 `Circuit.parameters` 推断参数量时使用 |
+| `initial_state` / `initial_density_matrix` | 自定义初态 |
+
+### 示例：Circuit + Hamiltonian + optimizer
+
+```python
+import numpy as np
+from aicir import Circuit, Hamiltonian, NumpyBackend, Parameter, ry
+from aicir.optimizer import GD
+from aicir.vqc import BasicVQE
+
+theta = Parameter("theta")
+ansatz = Circuit(ry(theta, 0), n_qubits=1)
+hamiltonian = Hamiltonian(n_qubits=1).term(1.0, {"Z": [0]})
+
+solver = BasicVQE(
+    hamiltonian,
+    ansatz=ansatz,
+    backend=NumpyBackend(),
+    optimizer=GD(max_iters=80, learning_rate=0.15, gradient_method="psr"),
+)
+result = solver.run(init_params=np.array([0.1]))
+print(result.energy, result.parameters)
+```
+
+### 示例：callable ansatz
+
+```python
+from aicir import Circuit, ry
+from aicir.vqc import BasicVQE
+
+def build(params):
+    return Circuit(ry(params[0], 0), n_qubits=1)
+
+solver = BasicVQE(hamiltonian, ansatz=build, n_params=1)
+energy = solver.energy(np.array([np.pi]))
+```
+
+### 示例：shots 与 noise
+
+```python
+from aicir import BitFlipChannel, NoiseModel
+
+noise = NoiseModel().add_channel(BitFlipChannel(target_qubit=0, p=0.01))
+solver = BasicVQE(
+    hamiltonian,
+    ansatz=ansatz,
+    backend=NumpyBackend(),
+    shots=1024,
+    noise_model=noise,
+)
+energy = solver.energy(np.array([0.1]))
+counts = solver._last_measurement.counts
+```
+
+### 示例：PauliEstimator 有限 shots 能量
+
+```python
+from aicir import NumpyBackend, PauliEstimator
+
+solver = BasicVQE(
+    hamiltonian,
+    ansatz=ansatz,
+    backend=NumpyBackend(),
+    energy_estimator=PauliEstimator(NumpyBackend(), shots=4096),
+)
+energy = solver.energy(np.array([0.1]))
+term_stats = solver._last_estimator_result.term_results
+```
+
+注意：`energy_estimator="exact"` 使用 full-matrix observable 精确期望；`energy_estimator=PauliEstimator(...)` 使用 Pauli 项拆分、测量基变换、shots 分配和 counts 统计估计能量。非 exact estimator 需要传入 `Circuit` 或 callable ansatz，不支持 legacy dense RY/CNOT 路径。
+
+---
+
+## 4. 标准 HEA
 
 ### 线路结构
 
@@ -109,7 +202,7 @@ unitary = bound.unitary(backend=NumpyBackend())
 
 ---
 
-## 4. HEA-TI
+## 5. HEA-TI
 
 `hea_ti_ansatz` 实现论文 *Hardware-efficient variational quantum algorithm in trapped-ion quantum computer* 中提出的 trapped-ion hardware-efficient ansatz。它用单比特旋转提供局域自由度，并用 trapped-ion 全局哈密顿量演化作为 entangler 层。全局演化当前以 `unitary` 门承载，因此返回值仍是标准 `Circuit`。
 
@@ -221,7 +314,7 @@ circuit = hea_ti(
 
 ---
 
-## 5. 与梯度工具配合
+## 6. 与梯度工具配合
 
 `hea` 和 `hea_ti` 返回的都是 `Circuit`。如果参数仍为符号 `Parameter`，需先绑定再调用 `unitary()` 或 `qml.ad()`：
 
@@ -244,11 +337,11 @@ grad, value = ad(bound, z0, backend=backend, return_value=True)
 
 ---
 
-## 6. 验证命令
+## 7. 验证命令
 
 ```bash
+PYTHONPATH=. pytest tests/vqc/test_vqe_orchestration.py
 PYTHONPATH=. pytest tests/vqc/test_hea_ansatz.py
 PYTHONPATH=. pytest tests/vqc/test_hea_ti_ansatz.py
 PYTHONPATH=. pytest tests/vqc/test_parameter_shift_uses_qml.py
 ```
-
