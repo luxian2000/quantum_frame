@@ -1,7 +1,4 @@
-"""Basic local rewrite optimizer for circuit dict/qasm/dag forms.
-
-This module is a direct rename/move of the former `aicir.optimizer.basic`.
-"""
+"""Local rewrite optimizer for circuit dict/qasm/dag forms."""
 
 from __future__ import annotations
 
