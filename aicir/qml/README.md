@@ -1,6 +1,6 @@
 # aicir.qml — 量子机器学习梯度与梯度无关优化工具包
 
-本模块 (`aicir/qml/grad.py`, `aicir/qml/grad_free.py`) 实现了十一种用于量子电路参数梯度估计或预条件的方法，以及一种显式 gradient-free 的坐标精确最小化方法。所有方法均与 `NumpyBackend`、`TorchBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
+本模块 (`aicir/qml/deriv.py`) 实现了十一种用于量子电路参数梯度估计或预条件的方法，以及一种显式 gradient-free 的坐标精确最小化方法。所有方法均与 `NumpyBackend`、`TorchBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
 
 ---
 
