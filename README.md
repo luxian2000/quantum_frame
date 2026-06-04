@@ -723,7 +723,7 @@ aicir 在 3.0 模式下的主要差异：
 
 ## 7. QML 梯度工具
 
-`aicir.qml.grad` 提供面向量子机器学习和变分量子线路的梯度工具。常用函数可直接从 `aicir.qml` 导入：
+`aicir.qml.derive` 提供面向量子机器学习和变分量子线路的梯度与 gradient-free 工具。常用函数可直接从 `aicir.qml` 导入：
 
 ```python
 from aicir.qml import psr, spsr, multipsr
@@ -833,7 +833,7 @@ mixed = multipsr(objective_2d, params, parameter_indices=[(0, 0), (1, 0)])
 
 ### 7.4 VQC 中的使用
 
-`aicir.vqc` 中已有的 `BasicVQE.parameter_shift_gradient()`、`BasicSSVQE.parameter_shift_gradient()` 和 `BasicVQD.parameter_shift_gradient()` 已统一调用 `aicir.qml.grad.psr`。因此自定义 QNN/VQC 模型时也建议复用 `psr`、`spsr` 和 `multipsr`，避免各模块重复实现 parameter-shift 逻辑。
+`aicir.vqc` 中已有的 `BasicVQE.parameter_shift_gradient()`、`BasicSSVQE.parameter_shift_gradient()` 和 `BasicVQD.parameter_shift_gradient()` 已统一调用 `aicir.qml.derive.psr`。因此自定义 QNN/VQC 模型时也建议复用 `psr`、`spsr` 和 `multipsr`，避免各模块重复实现 parameter-shift 逻辑。
 
 ---
 
