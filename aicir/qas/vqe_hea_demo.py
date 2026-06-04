@@ -19,12 +19,23 @@ try:  # pragma: no cover - fallback is tested implicitly when scipy is absent.
 except Exception:  # pragma: no cover
     minimize = None
 
+from ..channel.backends.base import Backend
 from ..channel.backends.numpy_backend import NumpyBackend
 from ..measure.measure import Measure
 from ._types import ArchitectureScore, ArchitectureSpec
 from .architecture_candidates import build_common_architectures, qaoa_ansatz
 from .evaluator import evaluate_architectures
 from .task_evaluation import bind_parameters, parameter_count
+
+try:  # pragma: no cover - optional accelerator backend.
+    from ..channel.backends.npu_backend import NPUBackend
+except Exception:  # pragma: no cover
+    NPUBackend = None
+
+try:  # pragma: no cover - optional torch backend.
+    from ..channel.backends.torch_backend import TorchBackend
+except Exception:  # pragma: no cover
+    TorchBackend = None
 
 
 H2_HAMILTONIAN = (
@@ -50,6 +61,27 @@ ENTANGLERS = ("cx", "cz", "rzz")
 FINAL_ROTATIONS = ("ry", "ry_rz")
 ENTANGLE_PATTERNS = ("linear", "ring")
 LAYER_CHOICES = (1, 2, 3)
+
+
+def resolve_qas_backend(kind: Optional[str] = None, fallback_to_cpu: bool = True) -> Backend:
+    """Resolve the QAS demo backend. Defaults to CPU/NumPy unless explicitly requested."""
+    import os
+
+    backend_kind = (kind or os.environ.get("AICIR_QAS_BACKEND") or "numpy").strip().lower()
+    if backend_kind in {"numpy", "cpu"}:
+        return NumpyBackend()
+    if backend_kind == "torch":
+        if TorchBackend is None:
+            raise RuntimeError("TorchBackend is unavailable; install torch or use AICIR_QAS_BACKEND=numpy.")
+        device = os.environ.get("AICIR_QAS_TORCH_DEVICE") or "cpu"
+        return TorchBackend(device=device)
+    if backend_kind == "npu":
+        if NPUBackend is None:
+            if fallback_to_cpu:
+                return NumpyBackend()
+            raise RuntimeError("NPUBackend is unavailable; install torch_npu or use AICIR_QAS_BACKEND=numpy.")
+        return NPUBackend.from_distributed_env(fallback_to_cpu=fallback_to_cpu)
+    raise ValueError(f"Unsupported QAS backend: {backend_kind!r}. Use numpy, cpu, torch, or npu.")
 
 
 @dataclass(frozen=True)
@@ -450,6 +482,187 @@ class VQEFitnessBudgetSweepReport:
         return lines
 
 
+@dataclass(frozen=True)
+class HamiltonianProfile:
+    """Coarse Pauli-term profile used for first-pass task-aware HEA mutations."""
+
+    n_qubits: int
+    total_weight: float
+    zz_weight: float = 0.0
+    xx_weight: float = 0.0
+    yy_weight: float = 0.0
+    single_z_weight: float = 0.0
+    single_x_weight: float = 0.0
+    single_y_weight: float = 0.0
+    other_weight: float = 0.0
+    max_pauli_distance: int = 0
+    nearest_neighbor_weight: float = 0.0
+    long_range_weight: float = 0.0
+
+    def ratio(self, name: str) -> float:
+        if self.total_weight <= 1e-12:
+            return 0.0
+        return float(getattr(self, name)) / float(self.total_weight)
+
+
+@dataclass
+class VQEB2ReliabilityRow:
+    rank: int
+    architecture: ArchitectureSpec
+    b1_energy: float
+    b2_energy: float
+    fair_energy: float
+    n_params: int
+    b1_evaluations: int
+    b2_evaluations: int
+    fair_evaluations: int
+    family: str
+    improvement_valid: bool = True
+
+    @property
+    def improvement(self) -> float:
+        return float(self.b1_energy - self.b2_energy)
+
+
+@dataclass
+class VQEB2ReliabilityReport:
+    stage1_rows: List[Stage1Row]
+    rows: List[VQEB2ReliabilityRow]
+    profile: HamiltonianProfile
+    b1_survivor_count: int
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def correlations(self) -> Dict[str, float]:
+        b1 = [row.b1_energy for row in self.rows]
+        b2 = [row.b2_energy for row in self.rows]
+        valid_improvement_rows = [row for row in self.rows if row.improvement_valid]
+        improvement = [row.improvement for row in valid_improvement_rows]
+        fair_for_improvement = [row.fair_energy for row in valid_improvement_rows]
+        fair = [row.fair_energy for row in self.rows]
+        overlap_k = min(int(self.metadata.get("overlap_k", 5)), len(self.rows))
+        improvement_overlap_k = min(int(self.metadata.get("overlap_k", 5)), len(valid_improvement_rows))
+        return {
+            "spearman_b1_vs_fair": _spearman(b1, fair),
+            "spearman_b2_vs_fair": _spearman(b2, fair),
+            "pearson_b2_vs_fair": _pearson(b2, fair),
+            f"b2_top{overlap_k}_overlap": float(_topk_overlap_pairs(b2, fair, overlap_k)),
+            "valid_improvement_rows": float(len(valid_improvement_rows)),
+            "spearman_improvement_vs_fair": _spearman([-value for value in improvement], fair_for_improvement),
+            f"improvement_top{improvement_overlap_k}_overlap": float(
+                _topk_overlap_pairs([-value for value in improvement], fair_for_improvement, improvement_overlap_k)
+            ),
+        }
+
+    def fair_energy_spread(self) -> float:
+        if not self.rows:
+            return 0.0
+        fair = [row.fair_energy for row in self.rows]
+        return float(max(fair) - min(fair))
+
+    def summary_lines(self) -> List[str]:
+        problem_name = str(self.metadata.get("problem_name", "unknown"))
+        reference_energy = float(self.metadata.get("reference_energy", 0.0))
+        correlations = self.correlations()
+        lines = [
+            f"VQE-QAS B2 reliability experiment: {problem_name}",
+            f"reference_energy: {reference_energy:.6f}",
+            f"stage1 candidates: {len(self.stage1_rows)} | B1 survivors: {self.b1_survivor_count} | evaluated: {len(self.rows)}",
+            f"fair_energy_spread: {self.fair_energy_spread():.6f}",
+            (
+                "hamiltonian_profile: "
+                f"ZZ={self.profile.ratio('zz_weight'):.3f}, "
+                f"XX={self.profile.ratio('xx_weight'):.3f}, "
+                f"YY={self.profile.ratio('yy_weight'):.3f}, "
+                f"singleZ={self.profile.ratio('single_z_weight'):.3f}, "
+                f"singleX={self.profile.ratio('single_x_weight'):.3f}"
+            ),
+            "",
+            "Correlation diagnostics",
+            "metric | value",
+        ]
+        for name, value in correlations.items():
+            lines.append(f"{name} | {value:.4f}")
+        lines.extend(["", "Rows ranked by B2 energy", "rank | b1 | b2 | improvement | improvement_valid | fair | n_params | b1_evals | b2_evals | fair_evals | family | name"])
+        for row in self.rows:
+            lines.append(
+                f"{row.rank} | {row.b1_energy:.6f} | {row.b2_energy:.6f} | {row.improvement:.6f} | {row.improvement_valid} | {row.fair_energy:.6f} | "
+                f"{row.n_params} | {row.b1_evaluations} | {row.b2_evaluations} | {row.fair_evaluations} | "
+                f"{row.family} | {row.architecture.name}"
+            )
+        return lines
+
+
+@dataclass
+class VQEFairStabilityRow:
+    rank: int
+    architecture: ArchitectureSpec
+    best_energy: float
+    mean_energy: float
+    std_energy: float
+    worst_energy: float
+    n_params: int
+    repeat_energies: List[float]
+    repeat_evaluations: List[int]
+
+
+@dataclass
+class VQEFairStabilityReport:
+    rows: List[VQEFairStabilityRow]
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def summary_lines(self) -> List[str]:
+        problem_name = str(self.metadata.get("problem_name", "unknown"))
+        reference_energy = float(self.metadata.get("reference_energy", 0.0))
+        lines = [
+            f"VQE-QAS fair VQE stability: {problem_name}",
+            f"reference_energy: {reference_energy:.6f}",
+            f"top_k: {self.metadata.get('top_k')} | repeats: {self.metadata.get('repeats')}",
+            "",
+            "Rows",
+            "rank | best | mean | std | worst | delta_best_ref | n_params | energies | name",
+        ]
+        for row in self.rows:
+            energies = ",".join(f"{energy:.6f}" for energy in row.repeat_energies)
+            lines.append(
+                f"{row.rank} | {row.best_energy:.6f} | {row.mean_energy:.6f} | {row.std_energy:.6f} | "
+                f"{row.worst_energy:.6f} | {row.best_energy - reference_energy:.6f} | {row.n_params} | "
+                f"{energies} | {row.architecture.name}"
+            )
+        return lines
+
+
+@dataclass
+class VQEEnumerationReport:
+    results: List[VQEOptimizationResult]
+    profile: HamiltonianProfile
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def summary_lines(self, top_k: int = 12) -> List[str]:
+        problem_name = str(self.metadata.get("problem_name", "unknown"))
+        reference_energy = float(self.metadata.get("reference_energy", 0.0))
+        lines = [
+            f"VQE-QAS full enumeration baseline: {problem_name}",
+            f"reference_energy: {reference_energy:.6f}",
+            f"n_candidates: {len(self.results)}",
+            (
+                "hamiltonian_profile: "
+                f"ZZ={self.profile.ratio('zz_weight'):.3f}, "
+                f"XX={self.profile.ratio('xx_weight'):.3f}, "
+                f"singleX={self.profile.ratio('single_x_weight'):.3f}"
+            ),
+            "",
+            "Top fair VQE candidates",
+            "rank | fair | delta_ref | n_params | evals | family | name",
+        ]
+        for rank, result in enumerate(self.results[: max(1, int(top_k))], start=1):
+            n_params = parameter_count(result.architecture.circuit)
+            lines.append(
+                f"{rank} | {result.energy:.6f} | {result.energy - reference_energy:.6f} | "
+                f"{n_params} | {result.evaluations} | {get_structure_family(result.architecture)} | {result.architecture.name}"
+            )
+        return lines
+
+
 @dataclass
 class VQETrainabilityPriorReport:
     stage1_rows: List[Stage1Row]
@@ -623,6 +836,354 @@ def mutate_hea_mask(mask: HEAMask, rng: np.random.Generator) -> HEAMask:
     return replace(mask, **{field_name: new_value})
 
 
+def analyze_hamiltonian(hamiltonian: Sequence[tuple[float, str]]) -> HamiltonianProfile:
+    """Summarize Pauli-term weights for first-version Hamiltonian-aware rules."""
+    if not hamiltonian:
+        raise ValueError("Hamiltonian must contain at least one Pauli term")
+    n_qubits = len(hamiltonian[0][1])
+    totals: Dict[str, float] = {
+        "zz_weight": 0.0,
+        "xx_weight": 0.0,
+        "yy_weight": 0.0,
+        "single_z_weight": 0.0,
+        "single_x_weight": 0.0,
+        "single_y_weight": 0.0,
+        "other_weight": 0.0,
+        "nearest_neighbor_weight": 0.0,
+        "long_range_weight": 0.0,
+    }
+    max_distance = 0
+    total_weight = 0.0
+    for coeff, pauli in hamiltonian:
+        if len(pauli) != n_qubits:
+            raise ValueError("All Pauli labels must have the same length")
+        weight = abs(float(coeff))
+        total_weight += weight
+        active = [(index, label) for index, label in enumerate(pauli) if label != "I"]
+        labels = [label for _, label in active]
+        if len(active) == 1:
+            if labels == ["Z"]:
+                totals["single_z_weight"] += weight
+            elif labels == ["X"]:
+                totals["single_x_weight"] += weight
+            elif labels == ["Y"]:
+                totals["single_y_weight"] += weight
+            else:
+                totals["other_weight"] += weight
+            continue
+        if len(active) == 2:
+            distance = abs(active[0][0] - active[1][0])
+            max_distance = max(max_distance, distance)
+            if distance == 1:
+                totals["nearest_neighbor_weight"] += weight
+            else:
+                totals["long_range_weight"] += weight
+            if labels == ["Z", "Z"]:
+                totals["zz_weight"] += weight
+            elif labels == ["X", "X"]:
+                totals["xx_weight"] += weight
+            elif labels == ["Y", "Y"]:
+                totals["yy_weight"] += weight
+            else:
+                totals["other_weight"] += weight
+            continue
+        totals["other_weight"] += weight
+    return HamiltonianProfile(
+        n_qubits=n_qubits,
+        total_weight=float(total_weight),
+        max_pauli_distance=int(max_distance),
+        **totals,
+    )
+
+
+def hamiltonian_aware_mask_preferences(profile: HamiltonianProfile) -> Dict[str, tuple[Any, ...]]:
+    """Translate a Hamiltonian profile into conservative HEA mutation preferences."""
+    pair_weight = profile.zz_weight + profile.xx_weight + profile.yy_weight
+    rotation_preferences: List[str] = []
+    entangler_preferences: List[str] = []
+    final_preferences: List[str] = []
+    pattern_preferences: List[str] = []
+
+    if profile.zz_weight >= max(profile.xx_weight, profile.yy_weight, 1e-12):
+        entangler_preferences.append("rzz")
+    if profile.xx_weight + profile.yy_weight > 0.20 * max(profile.total_weight, 1e-12):
+        rotation_preferences.append("rx_ry_rz")
+    if profile.single_x_weight > profile.single_z_weight and profile.single_x_weight > 0.10 * max(profile.total_weight, 1e-12):
+        rotation_preferences.append("rx_ry_rz")
+    if profile.single_z_weight >= profile.single_x_weight and profile.single_z_weight > 0.10 * max(profile.total_weight, 1e-12):
+        final_preferences.append("ry_rz")
+        rotation_preferences.append("ry_rz")
+    if pair_weight > 0 and profile.long_range_weight > profile.nearest_neighbor_weight:
+        pattern_preferences.append("ring")
+    elif pair_weight > 0:
+        pattern_preferences.append("linear")
+
+    return {
+        "rotation_block": tuple(dict.fromkeys(rotation_preferences + list(ROTATION_BLOCKS))),
+        "entangler": tuple(dict.fromkeys(entangler_preferences + list(ENTANGLERS))),
+        "final_rotation": tuple(dict.fromkeys(final_preferences + list(FINAL_ROTATIONS))),
+        "entangle_pattern": tuple(dict.fromkeys(pattern_preferences + list(ENTANGLE_PATTERNS))),
+        "layers": LAYER_CHOICES,
+    }
+
+
+def derive_priority_seed_masks(
+    profile: HamiltonianProfile,
+    max_layers: int = 3,
+    layers: Optional[Sequence[int]] = None,
+) -> List[HEAMask]:
+    """Derive problem-prior HEA seed masks from dominant Pauli-term weights."""
+    n_qubits = int(profile.n_qubits)
+    deep_layer = max(1, int(max_layers))
+    seed_layers = tuple(
+        dict.fromkeys(
+            int(layer)
+            for layer in (
+                layers
+                if layers is not None
+                else tuple(layer for layer in LAYER_CHOICES if int(layer) <= deep_layer)
+            )
+            if 1 <= int(layer) <= deep_layer
+        )
+    )
+    entanglers: List[str] = []
+    rotations: List[str] = []
+    patterns: List[str] = []
+    final_rotations: List[str] = ["ry_rz", "ry"]
+
+    if profile.zz_weight >= max(profile.xx_weight, profile.yy_weight, 1e-12):
+        entanglers.append("rzz")
+    if profile.xx_weight + profile.yy_weight > 0.10 * max(profile.total_weight, 1e-12):
+        entanglers.append("cx")
+        rotations.append("rx_ry_rz")
+    if profile.single_x_weight > 0.10 * max(profile.total_weight, 1e-12):
+        rotations.append("rx_ry_rz")
+    if profile.single_z_weight > 0.10 * max(profile.total_weight, 1e-12):
+        rotations.append("ry_rz")
+    if not entanglers:
+        entanglers.append("cx")
+    if not rotations:
+        rotations.append("ry_rz")
+
+    if profile.long_range_weight > profile.nearest_neighbor_weight:
+        patterns.extend(["ring", "linear"])
+    else:
+        patterns.extend(["linear", "ring"])
+
+    seeds: List[HEAMask] = []
+    for layer in seed_layers or (deep_layer,):
+        for rotation in tuple(dict.fromkeys(rotations + ["ry_rz", "ry"])):
+            for entangler in tuple(dict.fromkeys(entanglers + ["cx", "cz"])):
+                for pattern in tuple(dict.fromkeys(patterns)):
+                    for final_rotation in tuple(dict.fromkeys(final_rotations)):
+                        seeds.append(
+                            HEAMask(
+                                n_qubits=n_qubits,
+                                layers=int(layer),
+                                rotation_block=rotation,
+                                entangler=entangler,
+                                final_rotation=final_rotation,
+                                entangle_pattern=pattern,
+                            )
+                        )
+    return seeds
+
+
+def mutate_hea_mask_hamiltonian_aware(
+    mask: HEAMask,
+    profile: HamiltonianProfile,
+    rng: np.random.Generator,
+    bias_probability: float = 0.75,
+) -> HEAMask:
+    """Return a one-dimension neighbor, biased by the Hamiltonian profile."""
+    fields = ["layers", "rotation_block", "entangler", "final_rotation", "entangle_pattern"]
+    field_name = fields[int(rng.integers(0, len(fields)))]
+    if rng.random() >= float(bias_probability):
+        return mutate_hea_mask(mask, rng)
+    preferences = hamiltonian_aware_mask_preferences(profile)
+    choices = [choice for choice in preferences[field_name] if choice != getattr(mask, field_name)]
+    if not choices:
+        return mutate_hea_mask(mask, rng)
+    return replace(mask, **{field_name: choices[0]})
+
+
+def get_structure_family(candidate: ArchitectureSpec) -> str:
+    """Return a coarse structure-family key used by diversity-aware beam updates."""
+    raw_mask = candidate.metadata.get("hea_mask")
+    if raw_mask:
+        mask = HEAMask(*raw_mask)
+        return f"{mask.rotation_block}_{mask.entangler}_{mask.entangle_pattern}_L{mask.layers}"
+    family = str(candidate.metadata.get("family", candidate.name))
+    layers = candidate.metadata.get("layers", "?")
+    entangler = candidate.metadata.get("entangler", "?")
+    topology = candidate.metadata.get("topology", "?")
+    return f"{family}_{entangler}_{topology}_L{layers}"
+
+
+def update_beam(
+    candidates: Sequence[ArchitectureSpec],
+    scores: Dict[Any, float],
+    beam_width: int = 8,
+) -> List[ArchitectureSpec]:
+    """Select task-ranked candidates while reserving half the beam for unique families."""
+    width = max(1, int(beam_width))
+
+    def score_of(candidate: ArchitectureSpec) -> float:
+        if candidate.name in scores:
+            return float(scores[candidate.name])
+        key = tuple(candidate.metadata.get("hea_mask", ()))
+        return float(scores[key])
+
+    ranked = sorted(candidates, key=lambda candidate: (score_of(candidate), candidate.name))
+    new_beam: List[ArchitectureSpec] = []
+    seen_families = set()
+    diverse_slots = max(1, width // 2)
+    for candidate in ranked:
+        family = get_structure_family(candidate)
+        if family in seen_families:
+            continue
+        new_beam.append(candidate)
+        seen_families.add(family)
+        if len(new_beam) >= diverse_slots:
+            break
+    for candidate in ranked:
+        if candidate not in new_beam:
+            new_beam.append(candidate)
+        if len(new_beam) >= width:
+            break
+    return new_beam
+
+
+def b1_bottom_filter(
+    results: Sequence[VQEOptimizationResult],
+    keep_fraction: float = 0.60,
+) -> List[VQEOptimizationResult]:
+    """Use B1 only for bottom elimination; surviving candidates keep their B2 chance."""
+    if not results:
+        return []
+    keep_count = max(1, int(np.ceil(len(results) * float(keep_fraction))))
+    ranked = sorted(results, key=lambda result: (result.energy, result.architecture.name))
+    return ranked[:keep_count]
+
+
+def _mask_from_architecture(architecture: ArchitectureSpec) -> Optional[HEAMask]:
+    raw_mask = architecture.metadata.get("hea_mask")
+    if not raw_mask:
+        return None
+    return HEAMask(*raw_mask)
+
+
+def is_hamiltonian_favored_family(architecture: ArchitectureSpec, profile: HamiltonianProfile) -> bool:
+    """Return whether a HEA-mask architecture matches first-pass Hamiltonian priors."""
+    mask = _mask_from_architecture(architecture)
+    if mask is None:
+        return False
+    if profile.zz_weight >= max(profile.xx_weight, profile.yy_weight, 1e-12) and mask.entangler == "rzz":
+        return True
+    if profile.single_x_weight > 0.20 * max(profile.total_weight, 1e-12) and mask.rotation_block == "rx_ry_rz":
+        return True
+    if profile.long_range_weight > profile.nearest_neighbor_weight and mask.entangle_pattern == "ring":
+        return True
+    return False
+
+
+def _row_selection_key(row: Stage1Row, profile: HamiltonianProfile) -> tuple[float, float, float, str]:
+    mask = _mask_from_architecture(row.architecture)
+    layer_bonus = 0.05 * float(mask.layers if mask is not None else row.architecture.metadata.get("layers", 1))
+    family_bonus = 0.25 if is_hamiltonian_favored_family(row.architecture, profile) else 0.0
+    expressibility = float(row.score.expressibility.score)
+    trainability = float(row.score.trainability.score)
+    return (family_bonus + layer_bonus + expressibility, trainability, row.score.weighted_score, row.architecture.name)
+
+
+def stratified_stage1_pool(
+    candidates: Sequence[ArchitectureSpec],
+    profile: HamiltonianProfile,
+    pool_size: int = 16,
+    n_samples: int = 6,
+    expressibility_floor_quantile: float = 0.10,
+    trainability_floor_quantile: float = 0.10,
+    max_parameters: Optional[int] = None,
+    layer_quota: Optional[Dict[int, int]] = None,
+    family_quota: int = 2,
+    backend: Optional[NumpyBackend] = None,
+) -> List[Stage1Row]:
+    """Build a Stage 1 pool by guardrails and quota coverage, not one scalar rank."""
+    backend = backend or resolve_qas_backend()
+    target_size = max(1, int(pool_size))
+    scores = evaluate_architectures(
+        candidates,
+        backend=backend,
+        n_samples=n_samples,
+        active_metrics={"trainability": "gradient_norm"},
+    )
+    expr_bottom = _bottom_metric_keys(scores, lambda score: score.expressibility.score, expressibility_floor_quantile)
+    train_bottom = _bottom_metric_keys(scores, lambda score: score.trainability.score, trainability_floor_quantile)
+
+    rows: List[Stage1Row] = []
+    eligible: List[Stage1Row] = []
+    for score in scores:
+        architecture = score.architecture
+        key = tuple(architecture.metadata.get("hea_mask", ()))
+        failures = []
+        if key in expr_bottom:
+            failures.append("expressibility_floor")
+        if key in train_bottom:
+            failures.append("trainability_floor")
+        if max_parameters is not None and parameter_count(architecture.circuit) > int(max_parameters):
+            failures.append("complexity_cap")
+        row = Stage1Row(architecture, score, kept=False, reason="filtered:" + ",".join(failures) if failures else "eligible")
+        rows.append(row)
+        if not failures:
+            eligible.append(row)
+
+    selected: List[Stage1Row] = []
+    selected_names: set[str] = set()
+
+    def add_row(row: Stage1Row, reason: str) -> bool:
+        if row.architecture.name in selected_names or len(selected) >= target_size:
+            return False
+        row.kept = True
+        row.reason = reason
+        selected.append(row)
+        selected_names.add(row.architecture.name)
+        return True
+
+    quotas = dict(layer_quota or {1: 2, 2: 3, 3: 4})
+    for layer, quota in sorted(quotas.items()):
+        layer_rows = [row for row in eligible if (_mask_from_architecture(row.architecture) or HEAMask()).layers == int(layer)]
+        layer_rows = sorted(layer_rows, key=lambda row: _row_selection_key(row, profile), reverse=True)
+        for row in layer_rows[: max(0, int(quota))]:
+            add_row(row, f"layer_quota_L{layer}")
+
+    favored_rows = [row for row in eligible if is_hamiltonian_favored_family(row.architecture, profile)]
+    favored_rows = sorted(favored_rows, key=lambda row: _row_selection_key(row, profile), reverse=True)
+    favored_by_family: Dict[str, int] = {}
+    for row in favored_rows:
+        family = get_structure_family(row.architecture)
+        if favored_by_family.get(family, 0) >= int(family_quota):
+            continue
+        if add_row(row, "hamiltonian_family_quota"):
+            favored_by_family[family] = favored_by_family.get(family, 0) + 1
+        if len(selected) >= target_size:
+            break
+
+    diversity_rows = sorted(
+        eligible,
+        key=lambda row: (
+            get_structure_family(row.architecture) in {get_structure_family(item.architecture) for item in selected},
+            _row_selection_key(row, profile),
+        ),
+        reverse=False,
+    )
+    for row in diversity_rows:
+        if len(selected) >= target_size:
+            break
+        add_row(row, "diversity_fill")
+
+    return sorted(rows, key=lambda row: (not row.kept, row.reason, -_row_selection_key(row, profile)[0], row.architecture.name))
+
+
 def _edges(n_qubits: int, pattern: str) -> List[tuple[int, int]]:
     edges = [(i, i + 1) for i in range(n_qubits - 1)]
     if pattern == "ring":
@@ -680,6 +1241,38 @@ def architecture_from_hea_mask(mask: HEAMask, backend: Optional[NumpyBackend] = 
     )
 
 
+def rotation_only_ansatz(
+    n_qubits: int = 4,
+    layers: int = 1,
+    rotation_block: str = "ry",
+    final_rotation: str = "ry",
+    backend: Optional[NumpyBackend] = None,
+) -> ArchitectureSpec:
+    """Deliberately weak no-entanglement baseline for checking task signal size."""
+    gates: List[Dict[str, Any]] = []
+    cursor = [0]
+    for _ in range(max(1, int(layers))):
+        _append_rotation(gates, n_qubits, rotation_block, cursor)
+    _append_rotation(gates, n_qubits, final_rotation, cursor)
+    return ArchitectureSpec.from_gates(
+        name=f"rotation_only_L{layers}_{rotation_block}_{final_rotation}",
+        gates=gates,
+        n_qubits=n_qubits,
+        backend=backend,
+        description="No-entanglement rotation-only baseline for VQE-QAS signal diagnostics.",
+        tags=["VQE", "baseline", "no_entanglement"],
+        metadata={
+            "family": "rotation_only",
+            "layers": int(layers),
+            "rotation_block": rotation_block,
+            "final_rotation": final_rotation,
+            "entangler": "none",
+            "topology": "none",
+            "source": "bad_baseline",
+        },
+    )
+
+
 def _pauli_matrix(label: str) -> np.ndarray:
     matrices = {
         "I": np.eye(2, dtype=np.complex128),
@@ -727,6 +1320,50 @@ def ising4_demo_problem() -> VQEDemoProblem:
     )
 
 
+def tfim_chain_hamiltonian(
+    n_qubits: int,
+    J: float = 1.0,
+    h: float = 0.5,
+    periodic: bool = False,
+) -> tuple[tuple[float, str], ...]:
+    """Open-chain transverse-field Ising Hamiltonian used by QAS scaling checks."""
+    n_qubits = int(n_qubits)
+    if n_qubits < 2:
+        raise ValueError("TFIM chain requires at least 2 qubits")
+
+    terms: List[tuple[float, str]] = []
+    edge_count = n_qubits if periodic else n_qubits - 1
+    for index in range(edge_count):
+        left = index
+        right = (index + 1) % n_qubits
+        pauli = ["I"] * n_qubits
+        pauli[left] = "Z"
+        pauli[right] = "Z"
+        terms.append((-float(J), "".join(pauli)))
+    for index in range(n_qubits):
+        pauli = ["I"] * n_qubits
+        pauli[index] = "X"
+        terms.append((-float(h), "".join(pauli)))
+    return tuple(terms)
+
+
+def tfim_chain_demo_problem(
+    n_qubits: int,
+    J: float = 1.0,
+    h: float = 0.5,
+    periodic: bool = False,
+) -> VQEDemoProblem:
+    """Build an exact-reference TFIM chain problem for 4q/6q/8q smoke experiments."""
+    hamiltonian = tfim_chain_hamiltonian(n_qubits=n_qubits, J=J, h=h, periodic=periodic)
+    boundary = "ring" if periodic else "chain"
+    return VQEDemoProblem(
+        name=f"tfim_{boundary}_{int(n_qubits)}q_J{J:g}_h{h:g}",
+        n_qubits=int(n_qubits),
+        hamiltonian=hamiltonian,
+        reference_energy=exact_ground_energy(hamiltonian),
+    )
+
+
 def h2_hamiltonian_matrix() -> np.ndarray:
     return hamiltonian_matrix(H2_HAMILTONIAN)
 
@@ -735,11 +1372,11 @@ def evaluate_vqe_energy(
     architecture: ArchitectureSpec,
     problem: VQEDemoProblem,
     parameters: Optional[Sequence[float]] = None,
-    backend: Optional[NumpyBackend] = None,
+    backend: Optional[Backend] = None,
 ) -> float:
     if architecture.n_qubits != problem.n_qubits:
         raise ValueError("architecture and VQE problem must use the same number of qubits")
-    backend = backend or NumpyBackend()
+    backend = backend or resolve_qas_backend()
     n_params = parameter_count(architecture.circuit)
     params = [0.0] * n_params if parameters is None else list(parameters)
     if len(params) != n_params:
@@ -747,15 +1384,16 @@ def evaluate_vqe_energy(
     circuit = bind_parameters(architecture.circuit, params) if n_params else architecture.circuit
     circuit.bind_backend(backend)
     result = Measure(backend).run(circuit, return_state=True)
-    state = np.asarray(result.final_state, dtype=np.complex128).reshape(-1, 1)
-    energy = (np.conj(state).T @ hamiltonian_matrix(problem.hamiltonian) @ state)[0, 0]
-    return float(np.real(energy))
+    state = backend.cast(result.final_state)
+    operator = backend.cast(hamiltonian_matrix(problem.hamiltonian))
+    energy = backend.expectation_sv(state, operator)
+    return float(np.real(backend.to_numpy(energy)))
 
 
 def evaluate_h2_energy(
     architecture: ArchitectureSpec,
     parameters: Optional[Sequence[float]] = None,
-    backend: Optional[NumpyBackend] = None,
+    backend: Optional[Backend] = None,
 ) -> float:
     return evaluate_vqe_energy(architecture, h2_demo_problem(), parameters=parameters, backend=backend)
 
@@ -765,6 +1403,15 @@ def _evaluation_budget(architecture: ArchitectureSpec, evals_per_param: int, max
     return max(1, min(int(n_params * evals_per_param), int(max_evaluations)))
 
 
+def adaptive_fair_n_starts(architecture: ArchitectureSpec, min_starts: int = 3, params_per_start: int = 15) -> int:
+    n_params = max(1, parameter_count(architecture.circuit))
+    return max(int(min_starts), int(np.ceil(n_params / max(1, int(params_per_start)))))
+
+
+def is_b1_improvement_valid(b1_energy: float, floor_energy: float = -3.0, tolerance: float = 0.01) -> bool:
+    return abs(float(b1_energy) - float(floor_energy)) > float(tolerance)
+
+
 def optimize_vqe_energy(
     architecture: ArchitectureSpec,
     problem: VQEDemoProblem,
@@ -772,11 +1419,13 @@ def optimize_vqe_energy(
     n_starts: int = 1,
     evals_per_param: int = 10,
     max_evaluations: int = 80,
-    backend: Optional[NumpyBackend] = None,
+    backend: Optional[Backend] = None,
+    init_mode: str = "zero_then_random",
+    init_scale: float = float(np.pi),
 ) -> VQEOptimizationResult:
     if architecture.n_qubits != problem.n_qubits:
         raise ValueError("architecture and VQE problem must use the same number of qubits")
-    backend = backend or NumpyBackend()
+    backend = backend or resolve_qas_backend()
     n_params = parameter_count(architecture.circuit)
     rng = np.random.default_rng(int(seed))
     budget = _evaluation_budget(architecture, evals_per_param, max_evaluations)
@@ -787,9 +1436,19 @@ def optimize_vqe_energy(
     def objective(params: np.ndarray) -> float:
         return evaluate_vqe_energy(architecture, problem, params, backend=backend)
 
-    starts = [np.zeros(n_params, dtype=float)]
-    for _ in range(max(0, int(n_starts) - 1)):
-        starts.append(rng.uniform(-np.pi, np.pi, size=n_params))
+    mode = str(init_mode).strip().lower()
+    starts: List[np.ndarray] = []
+    start_count = max(1, int(n_starts))
+    if mode in {"zero", "zeros"}:
+        starts = [np.zeros(n_params, dtype=float) for _ in range(start_count)]
+    elif mode in {"random", "uniform"}:
+        starts = [rng.uniform(-float(init_scale), float(init_scale), size=n_params) for _ in range(start_count)]
+    elif mode in {"zero_then_random", "mixed"}:
+        starts = [np.zeros(n_params, dtype=float)]
+        for _ in range(start_count - 1):
+            starts.append(rng.uniform(-float(init_scale), float(init_scale), size=n_params))
+    else:
+        raise ValueError("init_mode must be one of: zero, random, zero_then_random")
 
     for start in starts:
         if n_params == 0:
@@ -858,7 +1517,7 @@ def zero_cost_guardrail(
     rescue_count: int = 3,
     backend: Optional[NumpyBackend] = None,
 ) -> List[Stage1Row]:
-    backend = backend or NumpyBackend()
+    backend = backend or resolve_qas_backend()
     scores = evaluate_architectures(
         candidates,
         backend=backend,
@@ -999,7 +1658,7 @@ def run_sa_search(
     backend: Optional[NumpyBackend] = None,
 ) -> tuple[VQEOptimizationResult, List[SAStep]]:
     problem = problem or h2_demo_problem()
-    backend = backend or NumpyBackend()
+    backend = backend or resolve_qas_backend()
     rng = np.random.default_rng(int(seed))
     current_mask = seed_mask
     current = optimize_vqe_energy(
@@ -1115,7 +1774,7 @@ def run_vqe_hea_demo(
     backend: Optional[NumpyBackend] = None,
 ) -> VQEHEADemoReport:
     problem = problem or h2_demo_problem()
-    backend = backend or NumpyBackend()
+    backend = backend or resolve_qas_backend()
     masks = _sample_masks(enumerate_hea_masks(problem.n_qubits), candidate_limit, seed)
     candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
     stage1_rows = zero_cost_guardrail(candidates, backend=backend)
@@ -1197,7 +1856,7 @@ def run_ising4_budget_sweep(
     backend: Optional[NumpyBackend] = None,
 ) -> VQEBudgetSweepReport:
     problem = ising4_demo_problem()
-    backend = backend or NumpyBackend()
+    backend = backend or resolve_qas_backend()
     masks = _sample_masks(enumerate_hea_masks(problem.n_qubits), candidate_limit, seed)
     candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
     stage1_rows = zero_cost_guardrail(candidates, backend=backend)
@@ -1328,7 +1987,7 @@ def run_ising4_multistart_sa(
     backend: Optional[NumpyBackend] = None,
 ) -> VQEMultiStartSAReport:
     problem = ising4_demo_problem()
-    backend = backend or NumpyBackend()
+    backend = backend or resolve_qas_backend()
     masks = _sample_masks(enumerate_hea_masks(problem.n_qubits), candidate_limit, seed)
     candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
     stage1_rows = zero_cost_guardrail(candidates, backend=backend)
@@ -1458,7 +2117,7 @@ def run_ising4_fitness_correlation(
     backend: Optional[NumpyBackend] = None,
 ) -> VQEFitnessCorrelationReport:
     problem = ising4_demo_problem()
-    backend = backend or NumpyBackend()
+    backend = backend or resolve_qas_backend()
     masks = _sample_masks(enumerate_hea_masks(problem.n_qubits), candidate_limit, seed)
     candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
     stage1_rows = zero_cost_guardrail(candidates, backend=backend)
@@ -1535,7 +2194,7 @@ def run_ising4_fitness_budget_sweep(
     backend: Optional[NumpyBackend] = None,
 ) -> VQEFitnessBudgetSweepReport:
     problem = ising4_demo_problem()
-    backend = backend or NumpyBackend()
+    backend = backend or resolve_qas_backend()
     budgets = [int(budget) for budget in budgets]
     masks = _sample_masks(enumerate_hea_masks(problem.n_qubits), candidate_limit, seed)
     candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
@@ -1603,6 +2262,815 @@ def run_ising4_fitness_budget_sweep(
     )
 
 
+def run_ising4_b2_reliability_experiment(
+    seed: int = 2026,
+    top_k: int = 8,
+    candidate_limit: int = 72,
+    stage1_keep_top: int = 16,
+    b1_n_starts: int = 1,
+    b1_evals_per_param: int = 1000,
+    b1_max_evaluations: int = 50,
+    b1_keep_fraction: float = 0.60,
+    b2_n_starts: int = 1,
+    b2_evals_per_param: int = 20,
+    b2_max_evaluations: int = 400,
+    fair_n_starts: int = 3,
+    fair_evals_per_param: int = 20,
+    fair_min_evaluations: int = 80,
+    adaptive_fair_starts: bool = True,
+    fair_params_per_start: int = 15,
+    overlap_k: int = 5,
+    include_aware_neighbors: bool = True,
+    include_bad_baseline: bool = True,
+    use_stratified_stage1: bool = True,
+    include_priority_seeds: bool = True,
+    improvement_floor: float = 1e-3,
+    b1_floor_energy: float = -3.0,
+    b1_floor_tolerance: float = 0.01,
+    backend: Optional[NumpyBackend] = None,
+) -> VQEB2ReliabilityReport:
+    """First experiment for checking whether B2 ranking tracks fair VQE ranking."""
+    problem = ising4_demo_problem()
+    backend = backend or resolve_qas_backend()
+    profile = analyze_hamiltonian(problem.hamiltonian)
+    masks = _sample_masks(enumerate_hea_masks(problem.n_qubits), candidate_limit, seed)
+    candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
+    if use_stratified_stage1:
+        stage1_rows = stratified_stage1_pool(
+            candidates,
+            profile,
+            pool_size=stage1_keep_top,
+            backend=backend,
+        )
+    else:
+        stage1_rows = zero_cost_guardrail(candidates, backend=backend)
+    kept = [row for row in stage1_rows if row.kept][: max(1, int(stage1_keep_top))]
+
+    selected_architectures = [row.architecture for row in kept[: max(1, int(top_k))]]
+    if include_priority_seeds:
+        for mask in derive_priority_seed_masks(profile, max_layers=max(LAYER_CHOICES)):
+            architecture = architecture_from_hea_mask(mask, backend=backend)
+            architecture.metadata["source"] = "hamiltonian_priority_seed"
+            selected_architectures.append(architecture)
+    if include_aware_neighbors:
+        rng = np.random.default_rng(int(seed) + 500)
+        for row in kept[: max(1, int(top_k))]:
+            mask = HEAMask(*row.architecture.metadata["hea_mask"])
+            neighbor = mutate_hea_mask_hamiltonian_aware(mask, profile, rng)
+            architecture = architecture_from_hea_mask(neighbor, backend=backend)
+            architecture.metadata["source"] = "hamiltonian_aware_neighbor"
+            selected_architectures.append(architecture)
+    if include_bad_baseline:
+        selected_architectures.append(
+            rotation_only_ansatz(
+                n_qubits=problem.n_qubits,
+                layers=1,
+                rotation_block="ry",
+                final_rotation="ry",
+                backend=backend,
+            )
+        )
+    selected_architectures = _dedupe_architectures(selected_architectures)
+
+    b1_results = []
+    for index, architecture in enumerate(selected_architectures, start=1):
+        result = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=seed + 1000 + index,
+            n_starts=b1_n_starts,
+            evals_per_param=b1_evals_per_param,
+            max_evaluations=b1_max_evaluations,
+            backend=backend,
+        )
+        b1_results.append(result)
+    b1_survivors = b1_bottom_filter(b1_results, keep_fraction=b1_keep_fraction)
+    survivor_names = {result.architecture.name for result in b1_survivors}
+    if include_priority_seeds:
+        for result in b1_results:
+            if (
+                result.architecture.metadata.get("source") == "hamiltonian_priority_seed"
+                and result.architecture.name not in survivor_names
+            ):
+                b1_survivors.append(result)
+                survivor_names.add(result.architecture.name)
+    if include_bad_baseline:
+        for result in b1_results:
+            if result.architecture.metadata.get("source") == "bad_baseline" and result.architecture.name not in survivor_names:
+                b1_survivors.append(result)
+                survivor_names.add(result.architecture.name)
+    b1_by_name = {result.architecture.name: result for result in b1_results}
+
+    rows: List[VQEB2ReliabilityRow] = []
+    for index, b1_result in enumerate(b1_survivors, start=1):
+        architecture = b1_result.architecture
+        b2 = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=seed + 2000 + index,
+            n_starts=b2_n_starts,
+            evals_per_param=b2_evals_per_param,
+            max_evaluations=b2_max_evaluations,
+            backend=backend,
+        )
+        fair_budget = max(int(fair_min_evaluations), parameter_count(architecture.circuit) * int(fair_evals_per_param))
+        starts = (
+            adaptive_fair_n_starts(architecture, min_starts=fair_n_starts, params_per_start=fair_params_per_start)
+            if adaptive_fair_starts
+            else int(fair_n_starts)
+        )
+        fair = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=seed + 3000 + index,
+            n_starts=starts,
+            evals_per_param=fair_evals_per_param,
+            max_evaluations=fair_budget,
+            backend=backend,
+        )
+        b1 = b1_by_name[architecture.name]
+        improvement = float(b1.energy - b2.energy)
+        improvement_valid = is_b1_improvement_valid(
+            b1.energy,
+            floor_energy=b1_floor_energy,
+            tolerance=b1_floor_tolerance,
+        )
+        if improvement < float(improvement_floor) and architecture.metadata.get("source") == "bad_baseline":
+            continue
+        rows.append(
+            VQEB2ReliabilityRow(
+                rank=0,
+                architecture=architecture,
+                b1_energy=b1.energy,
+                b2_energy=b2.energy,
+                fair_energy=fair.energy,
+                n_params=parameter_count(architecture.circuit),
+                b1_evaluations=b1.evaluations,
+                b2_evaluations=b2.evaluations,
+                fair_evaluations=fair.evaluations,
+                family=get_structure_family(architecture),
+                improvement_valid=improvement_valid,
+            )
+        )
+    rows.sort(key=lambda row: (row.b2_energy, row.architecture.name))
+    for rank, row in enumerate(rows, start=1):
+        row.rank = rank
+
+    return VQEB2ReliabilityReport(
+        stage1_rows=stage1_rows,
+        rows=rows,
+        profile=profile,
+        b1_survivor_count=len(b1_survivors),
+        metadata={
+            "problem_name": problem.name,
+            "reference_energy": problem.reference_energy,
+            "seed": seed,
+            "top_k": top_k,
+            "candidate_limit": candidate_limit,
+            "stage1_keep_top": stage1_keep_top,
+            "b1_max_evaluations": b1_max_evaluations,
+            "b1_keep_fraction": b1_keep_fraction,
+            "b2_evals_per_param": b2_evals_per_param,
+            "b2_max_evaluations": b2_max_evaluations,
+            "fair_n_starts": fair_n_starts,
+            "fair_evals_per_param": fair_evals_per_param,
+            "fair_min_evaluations": fair_min_evaluations,
+            "adaptive_fair_starts": adaptive_fair_starts,
+            "fair_params_per_start": fair_params_per_start,
+            "include_aware_neighbors": include_aware_neighbors,
+            "include_bad_baseline": include_bad_baseline,
+            "use_stratified_stage1": use_stratified_stage1,
+            "include_priority_seeds": include_priority_seeds,
+            "improvement_floor": improvement_floor,
+            "b1_floor_energy": b1_floor_energy,
+            "b1_floor_tolerance": b1_floor_tolerance,
+            "overlap_k": min(int(overlap_k), len(rows)),
+        },
+    )
+
+
+def run_ising4_full_enumeration_baseline(
+    seed: int = 2026,
+    candidate_limit: Optional[int] = None,
+    fair_n_starts: int = 3,
+    fair_evals_per_param: int = 20,
+    fair_min_evaluations: int = 80,
+    adaptive_fair_starts: bool = True,
+    fair_params_per_start: int = 15,
+    include_bad_baseline: bool = True,
+    backend: Optional[NumpyBackend] = None,
+) -> VQEEnumerationReport:
+    """Fair-VQE baseline over the explicit 4-qubit HEA-mask space."""
+    problem = ising4_demo_problem()
+    backend = backend or resolve_qas_backend()
+    profile = analyze_hamiltonian(problem.hamiltonian)
+    masks = enumerate_hea_masks(problem.n_qubits)
+    if candidate_limit is not None:
+        masks = _sample_masks(masks, int(candidate_limit), seed)
+    candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
+    if include_bad_baseline:
+        candidates.append(
+            rotation_only_ansatz(
+                n_qubits=problem.n_qubits,
+                layers=1,
+                rotation_block="ry",
+                final_rotation="ry",
+                backend=backend,
+            )
+        )
+    candidates = _dedupe_architectures(candidates)
+
+    results: List[VQEOptimizationResult] = []
+    for index, architecture in enumerate(candidates, start=1):
+        fair_budget = max(int(fair_min_evaluations), parameter_count(architecture.circuit) * int(fair_evals_per_param))
+        starts = (
+            adaptive_fair_n_starts(architecture, min_starts=fair_n_starts, params_per_start=fair_params_per_start)
+            if adaptive_fair_starts
+            else int(fair_n_starts)
+        )
+        result = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=seed + 5000 + index,
+            n_starts=starts,
+            evals_per_param=fair_evals_per_param,
+            max_evaluations=fair_budget,
+            backend=backend,
+        )
+        result.metadata["source"] = architecture.metadata.get("source", "full_enumeration")
+        results.append(result)
+    results.sort(key=lambda result: (result.energy, result.architecture.name))
+
+    return VQEEnumerationReport(
+        results=results,
+        profile=profile,
+        metadata={
+            "problem_name": problem.name,
+            "reference_energy": problem.reference_energy,
+            "seed": seed,
+            "candidate_limit": candidate_limit,
+            "fair_n_starts": fair_n_starts,
+            "fair_evals_per_param": fair_evals_per_param,
+            "fair_min_evaluations": fair_min_evaluations,
+            "adaptive_fair_starts": adaptive_fair_starts,
+            "fair_params_per_start": fair_params_per_start,
+            "include_bad_baseline": include_bad_baseline,
+        },
+    )
+
+
+def run_ising4_fair_vqe_stability_experiment(
+    seed: int = 2026,
+    top_k: int = 5,
+    repeats: int = 5,
+    candidate_limit: Optional[int] = 24,
+    fair_n_starts: int = 3,
+    fair_evals_per_param: int = 20,
+    fair_min_evaluations: int = 80,
+    adaptive_fair_starts: bool = True,
+    fair_params_per_start: int = 15,
+    backend: Optional[NumpyBackend] = None,
+) -> VQEFairStabilityReport:
+    """Repeat fair VQE for top enumeration candidates to expose seed sensitivity."""
+    problem = ising4_demo_problem()
+    backend = backend or resolve_qas_backend()
+    baseline = run_ising4_full_enumeration_baseline(
+        seed=seed,
+        candidate_limit=candidate_limit,
+        fair_n_starts=fair_n_starts,
+        fair_evals_per_param=fair_evals_per_param,
+        fair_min_evaluations=fair_min_evaluations,
+        adaptive_fair_starts=adaptive_fair_starts,
+        fair_params_per_start=fair_params_per_start,
+        include_bad_baseline=False,
+        backend=backend,
+    )
+    return _run_fair_stability_for_architectures(
+        [result.architecture for result in baseline.results[: max(1, int(top_k))]],
+        problem=problem,
+        seed=seed,
+        repeats=repeats,
+        fair_n_starts=fair_n_starts,
+        fair_evals_per_param=fair_evals_per_param,
+        fair_min_evaluations=fair_min_evaluations,
+        adaptive_fair_starts=adaptive_fair_starts,
+        fair_params_per_start=fair_params_per_start,
+        backend=backend,
+        metadata={
+            "candidate_source": "enumeration_top",
+            "candidate_limit": candidate_limit,
+        },
+    )
+
+
+def run_tfim_priority_seed_validation(
+    n_qubits: int = 6,
+    J: float = 1.0,
+    h: float = 0.5,
+    periodic: bool = False,
+    seed: int = 2026,
+    repeats: int = 1,
+    priority_limit: Optional[int] = 12,
+    fair_n_starts: int = 1,
+    fair_evals_per_param: int = 30,
+    fair_min_evaluations: int = 120,
+    fair_max_evaluations: int = 3000,
+    adaptive_fair_starts: bool = False,
+    fair_params_per_start: int = 20,
+    init_mode: str = "zero_then_random",
+    init_scale: float = float(np.pi),
+    only_name: Optional[str] = None,
+    priority_layers: Optional[Sequence[int]] = None,
+    backend: Optional[Backend] = None,
+) -> VQEFairStabilityReport:
+    """Validate Hamiltonian-derived priority seeds on an n-qubit TFIM chain.
+
+    This is intentionally budget-capped for first-pass 6q/8q checks. Increase
+    priority_limit, repeats, and fair_evals_per_param only after the smoke run
+    confirms runtime is acceptable.
+    """
+    backend = backend or resolve_qas_backend()
+    problem = tfim_chain_demo_problem(n_qubits=n_qubits, J=J, h=h, periodic=periodic)
+    profile = analyze_hamiltonian(problem.hamiltonian)
+    masks = derive_priority_seed_masks(profile, max_layers=max(LAYER_CHOICES), layers=priority_layers)
+    architectures = _dedupe_architectures([architecture_from_hea_mask(mask, backend=backend) for mask in masks])
+    for architecture in architectures:
+        architecture.metadata["source"] = "hamiltonian_priority_seed"
+    if only_name:
+        architectures = [architecture for architecture in architectures if str(only_name) in architecture.name]
+    if priority_limit is not None:
+        architectures = architectures[: max(1, int(priority_limit))]
+    if not architectures:
+        raise ValueError(f"No TFIM priority seed matched only_name={only_name!r}")
+
+    rows: List[VQEFairStabilityRow] = []
+    for rank, architecture in enumerate(architectures, start=1):
+        fair_budget = max(int(fair_min_evaluations), parameter_count(architecture.circuit) * int(fair_evals_per_param))
+        fair_budget = min(int(fair_budget), int(fair_max_evaluations))
+        starts = (
+            adaptive_fair_n_starts(architecture, min_starts=fair_n_starts, params_per_start=fair_params_per_start)
+            if adaptive_fair_starts
+            else int(fair_n_starts)
+        )
+        energies: List[float] = []
+        evaluations: List[int] = []
+        for repeat in range(max(1, int(repeats))):
+            result = optimize_vqe_energy(
+                architecture,
+                problem,
+                seed=seed + 15000 + rank * 100 + repeat,
+                n_starts=starts,
+                evals_per_param=fair_evals_per_param,
+                max_evaluations=fair_budget,
+                backend=backend,
+                init_mode=init_mode,
+                init_scale=init_scale,
+            )
+            energies.append(float(result.energy))
+            evaluations.append(int(result.evaluations))
+        array = np.asarray(energies, dtype=float)
+        rows.append(
+            VQEFairStabilityRow(
+                rank=rank,
+                architecture=architecture,
+                best_energy=float(np.min(array)),
+                mean_energy=float(np.mean(array)),
+                std_energy=float(np.std(array)),
+                worst_energy=float(np.max(array)),
+                n_params=parameter_count(architecture.circuit),
+                repeat_energies=energies,
+                repeat_evaluations=evaluations,
+            )
+        )
+    rows.sort(key=lambda row: (row.best_energy, row.architecture.name))
+    for rank, row in enumerate(rows, start=1):
+        row.rank = rank
+    return VQEFairStabilityReport(
+        rows=rows,
+        metadata={
+            "problem_name": problem.name,
+            "reference_energy": problem.reference_energy,
+            "seed": seed,
+            "top_k": len(architectures),
+            "repeats": repeats,
+            "candidate_source": "hamiltonian_priority_seed",
+            "priority_seed_count": len(masks),
+            "priority_limit": priority_limit,
+            "fair_n_starts": fair_n_starts,
+            "fair_evals_per_param": fair_evals_per_param,
+            "fair_min_evaluations": fair_min_evaluations,
+            "fair_max_evaluations": fair_max_evaluations,
+            "adaptive_fair_starts": adaptive_fair_starts,
+            "fair_params_per_start": fair_params_per_start,
+            "init_mode": init_mode,
+            "init_scale": init_scale,
+            "only_name": only_name,
+            "priority_layers": tuple(priority_layers) if priority_layers is not None else None,
+            "hamiltonian_profile": profile,
+        },
+    )
+
+
+def run_tfim_full_enumeration_baseline(
+    n_qubits: int = 6,
+    J: float = 1.0,
+    h: float = 0.5,
+    periodic: bool = False,
+    seed: int = 2026,
+    candidate_limit: Optional[int] = None,
+    fair_n_starts: int = 1,
+    fair_evals_per_param: int = 30,
+    fair_min_evaluations: int = 120,
+    fair_max_evaluations: int = 3000,
+    adaptive_fair_starts: bool = False,
+    fair_params_per_start: int = 20,
+    init_mode: str = "zero_then_random",
+    init_scale: float = float(np.pi),
+    backend: Optional[Backend] = None,
+) -> VQEEnumerationReport:
+    """Budget-capped fair-VQE baseline over the explicit TFIM HEA-mask space."""
+    backend = backend or resolve_qas_backend()
+    problem = tfim_chain_demo_problem(n_qubits=n_qubits, J=J, h=h, periodic=periodic)
+    profile = analyze_hamiltonian(problem.hamiltonian)
+    masks = enumerate_hea_masks(problem.n_qubits)
+    if candidate_limit is not None:
+        masks = _sample_masks(masks, int(candidate_limit), seed)
+    candidates = _dedupe_architectures([architecture_from_hea_mask(mask, backend=backend) for mask in masks])
+
+    results: List[VQEOptimizationResult] = []
+    for index, architecture in enumerate(candidates, start=1):
+        fair_budget = max(int(fair_min_evaluations), parameter_count(architecture.circuit) * int(fair_evals_per_param))
+        fair_budget = min(int(fair_budget), int(fair_max_evaluations))
+        starts = (
+            adaptive_fair_n_starts(architecture, min_starts=fair_n_starts, params_per_start=fair_params_per_start)
+            if adaptive_fair_starts
+            else int(fair_n_starts)
+        )
+        result = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=seed + 17000 + index,
+            n_starts=starts,
+            evals_per_param=fair_evals_per_param,
+            max_evaluations=fair_budget,
+            backend=backend,
+            init_mode=init_mode,
+            init_scale=init_scale,
+        )
+        result.metadata["source"] = "tfim_full_enumeration"
+        results.append(result)
+    results.sort(key=lambda result: (result.energy, result.architecture.name))
+
+    return VQEEnumerationReport(
+        results=results,
+        profile=profile,
+        metadata={
+            "problem_name": problem.name,
+            "reference_energy": problem.reference_energy,
+            "seed": seed,
+            "candidate_limit": candidate_limit,
+            "fair_n_starts": fair_n_starts,
+            "fair_evals_per_param": fair_evals_per_param,
+            "fair_min_evaluations": fair_min_evaluations,
+            "fair_max_evaluations": fair_max_evaluations,
+            "adaptive_fair_starts": adaptive_fair_starts,
+            "fair_params_per_start": fair_params_per_start,
+            "init_mode": init_mode,
+            "init_scale": init_scale,
+        },
+    )
+
+
+def run_tfim_stage1_stage2_search(
+    n_qubits: int = 6,
+    J: float = 1.0,
+    h: float = 0.5,
+    periodic: bool = False,
+    seed: int = 2026,
+    pool_count: int = 4,
+    candidate_limit: int = 72,
+    stage1_pool_size: int = 16,
+    beam_width: int = 12,
+    stage2_rounds: int = 2,
+    neighbors_per_parent: int = 2,
+    b2_n_starts: int = 1,
+    b2_evals_per_param: int = 20,
+    b2_max_evaluations: int = 600,
+    fair_repeats: int = 5,
+    fair_n_starts: int = 3,
+    fair_evals_per_param: int = 30,
+    fair_min_evaluations: int = 120,
+    fair_max_evaluations: int = 3000,
+    fair_params_per_start: int = 20,
+    init_mode: str = "zero_then_random",
+    init_scale: float = float(np.pi),
+    include_priority_seeds: bool = True,
+    priority_layers: Optional[Sequence[int]] = None,
+    layer_quota: Optional[Dict[int, int]] = None,
+    backend: Optional[Backend] = None,
+) -> VQEFairStabilityReport:
+    """Generic two-stage TFIM QAS search: multi-pool Stage 1, then Stage 2 beam."""
+    backend = backend or resolve_qas_backend()
+    problem = tfim_chain_demo_problem(n_qubits=n_qubits, J=J, h=h, periodic=periodic)
+    profile = analyze_hamiltonian(problem.hamiltonian)
+    all_masks = enumerate_hea_masks(problem.n_qubits)
+
+    stage1_rows: List[Stage1Row] = []
+    initial_architectures: List[ArchitectureSpec] = []
+    for pool_index in range(max(1, int(pool_count))):
+        masks = _sample_masks(all_masks, int(candidate_limit), seed + pool_index * 1009)
+        candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
+        rows = stratified_stage1_pool(
+            candidates,
+            profile,
+            pool_size=stage1_pool_size,
+            layer_quota=layer_quota,
+            backend=backend,
+        )
+        stage1_rows.extend(rows)
+        for row in rows:
+            if row.kept:
+                row.architecture.metadata["source"] = f"stage1_pool_{pool_index}"
+                initial_architectures.append(row.architecture)
+
+    if include_priority_seeds:
+        for mask in derive_priority_seed_masks(profile, max_layers=max(LAYER_CHOICES), layers=priority_layers):
+            architecture = architecture_from_hea_mask(mask, backend=backend)
+            architecture.metadata["source"] = "hamiltonian_priority_seed"
+            initial_architectures.append(architecture)
+
+    beam = _dedupe_architectures(initial_architectures)
+    rng = np.random.default_rng(int(seed) + 31000)
+    stage2_history: List[Dict[str, Any]] = []
+    for round_index in range(max(1, int(stage2_rounds))):
+        expanded = list(beam)
+        for architecture in beam:
+            mask = _mask_from_architecture(architecture)
+            if mask is None:
+                continue
+            for _ in range(max(0, int(neighbors_per_parent))):
+                neighbor_mask = mutate_hea_mask_hamiltonian_aware(mask, profile, rng)
+                neighbor = architecture_from_hea_mask(neighbor_mask, backend=backend)
+                neighbor.metadata["source"] = f"stage2_round_{round_index}_neighbor"
+                expanded.append(neighbor)
+                random_mask = mutate_hea_mask(mask, rng)
+                random_neighbor = architecture_from_hea_mask(random_mask, backend=backend)
+                random_neighbor.metadata["source"] = f"stage2_round_{round_index}_random_neighbor"
+                expanded.append(random_neighbor)
+        expanded = _dedupe_architectures(expanded)
+
+        b2_scores: Dict[str, float] = {}
+        for index, architecture in enumerate(expanded, start=1):
+            b2_budget = min(
+                int(b2_max_evaluations),
+                max(1, parameter_count(architecture.circuit) * int(b2_evals_per_param)),
+            )
+            result = optimize_vqe_energy(
+                architecture,
+                problem,
+                seed=seed + 32000 + round_index * 1000 + index,
+                n_starts=b2_n_starts,
+                evals_per_param=b2_evals_per_param,
+                max_evaluations=b2_budget,
+                backend=backend,
+                init_mode=init_mode,
+                init_scale=init_scale,
+            )
+            b2_scores[architecture.name] = float(result.energy)
+        beam = update_beam(expanded, b2_scores, beam_width=beam_width)
+        stage2_history.append(
+            {
+                "round": round_index + 1,
+                "expanded": len(expanded),
+                "beam": [architecture.name for architecture in beam],
+                "best_b2": min(b2_scores.values()) if b2_scores else None,
+            }
+        )
+
+    final_rows: List[VQEFairStabilityRow] = []
+    for rank, architecture in enumerate(beam, start=1):
+        fair_budget = max(int(fair_min_evaluations), parameter_count(architecture.circuit) * int(fair_evals_per_param))
+        fair_budget = min(int(fair_budget), int(fair_max_evaluations))
+        starts = adaptive_fair_n_starts(
+            architecture,
+            min_starts=fair_n_starts,
+            params_per_start=fair_params_per_start,
+        )
+        energies: List[float] = []
+        evaluations: List[int] = []
+        for repeat in range(max(1, int(fair_repeats))):
+            result = optimize_vqe_energy(
+                architecture,
+                problem,
+                seed=seed + 36000 + rank * 100 + repeat,
+                n_starts=starts,
+                evals_per_param=fair_evals_per_param,
+                max_evaluations=fair_budget,
+                backend=backend,
+                init_mode=init_mode,
+                init_scale=init_scale,
+            )
+            energies.append(float(result.energy))
+            evaluations.append(int(result.evaluations))
+        array = np.asarray(energies, dtype=float)
+        final_rows.append(
+            VQEFairStabilityRow(
+                rank=rank,
+                architecture=architecture,
+                best_energy=float(np.min(array)),
+                mean_energy=float(np.mean(array)),
+                std_energy=float(np.std(array)),
+                worst_energy=float(np.max(array)),
+                n_params=parameter_count(architecture.circuit),
+                repeat_energies=energies,
+                repeat_evaluations=evaluations,
+            )
+        )
+    final_rows.sort(key=lambda row: (row.best_energy, row.architecture.name))
+    for rank, row in enumerate(final_rows, start=1):
+        row.rank = rank
+
+    return VQEFairStabilityReport(
+        rows=final_rows,
+        metadata={
+            "problem_name": problem.name,
+            "reference_energy": problem.reference_energy,
+            "seed": seed,
+            "candidate_source": "stage1_stage2_pipeline",
+            "top_k": len(final_rows),
+            "repeats": fair_repeats,
+            "pool_count": pool_count,
+            "candidate_limit": candidate_limit,
+            "stage1_pool_size": stage1_pool_size,
+            "stage1_rows": len(stage1_rows),
+            "stage1_kept": len(_dedupe_architectures(initial_architectures)),
+            "beam_width": beam_width,
+            "stage2_rounds": stage2_rounds,
+            "neighbors_per_parent": neighbors_per_parent,
+            "stage2_history": stage2_history,
+            "b2_n_starts": b2_n_starts,
+            "b2_evals_per_param": b2_evals_per_param,
+            "b2_max_evaluations": b2_max_evaluations,
+            "fair_n_starts": fair_n_starts,
+            "fair_evals_per_param": fair_evals_per_param,
+            "fair_min_evaluations": fair_min_evaluations,
+            "fair_max_evaluations": fair_max_evaluations,
+            "fair_params_per_start": fair_params_per_start,
+            "init_mode": init_mode,
+            "init_scale": init_scale,
+            "include_priority_seeds": include_priority_seeds,
+            "priority_layers": tuple(priority_layers) if priority_layers is not None else None,
+            "layer_quota": dict(layer_quota) if layer_quota is not None else None,
+            "hamiltonian_profile": profile,
+        },
+    )
+
+
+def _run_fair_stability_for_architectures(
+    architectures: Sequence[ArchitectureSpec],
+    problem: VQEDemoProblem,
+    seed: int,
+    repeats: int,
+    fair_n_starts: int,
+    fair_evals_per_param: int,
+    fair_min_evaluations: int,
+    adaptive_fair_starts: bool,
+    fair_params_per_start: int,
+    backend: Backend,
+    metadata: Optional[Dict[str, Any]] = None,
+    init_mode: str = "zero_then_random",
+    init_scale: float = float(np.pi),
+) -> VQEFairStabilityReport:
+    rows: List[VQEFairStabilityRow] = []
+    architectures = _dedupe_architectures(architectures)
+    for rank, architecture in enumerate(architectures, start=1):
+        fair_budget = max(int(fair_min_evaluations), parameter_count(architecture.circuit) * int(fair_evals_per_param))
+        starts = (
+            adaptive_fair_n_starts(architecture, min_starts=fair_n_starts, params_per_start=fair_params_per_start)
+            if adaptive_fair_starts
+            else int(fair_n_starts)
+        )
+        energies: List[float] = []
+        evaluations: List[int] = []
+        for repeat in range(max(1, int(repeats))):
+            repeated = optimize_vqe_energy(
+                architecture,
+                problem,
+                seed=seed + 9000 + rank * 100 + repeat,
+                n_starts=starts,
+                evals_per_param=fair_evals_per_param,
+                max_evaluations=fair_budget,
+                backend=backend,
+                init_mode=init_mode,
+                init_scale=init_scale,
+            )
+            energies.append(float(repeated.energy))
+            evaluations.append(int(repeated.evaluations))
+        array = np.asarray(energies, dtype=float)
+        rows.append(
+            VQEFairStabilityRow(
+                rank=rank,
+                architecture=architecture,
+                best_energy=float(np.min(array)),
+                mean_energy=float(np.mean(array)),
+                std_energy=float(np.std(array)),
+                worst_energy=float(np.max(array)),
+                n_params=parameter_count(architecture.circuit),
+                repeat_energies=energies,
+                repeat_evaluations=evaluations,
+            )
+        )
+    rows.sort(key=lambda row: (row.best_energy, row.architecture.name))
+    for rank, row in enumerate(rows, start=1):
+        row.rank = rank
+    report_metadata = dict(metadata or {})
+    report_metadata.update(
+        {
+            "problem_name": problem.name,
+            "reference_energy": problem.reference_energy,
+            "seed": seed,
+            "top_k": len(architectures),
+            "repeats": repeats,
+            "fair_n_starts": fair_n_starts,
+            "fair_evals_per_param": fair_evals_per_param,
+            "fair_min_evaluations": fair_min_evaluations,
+            "adaptive_fair_starts": adaptive_fair_starts,
+            "fair_params_per_start": fair_params_per_start,
+            "init_mode": init_mode,
+            "init_scale": init_scale,
+        }
+    )
+    return VQEFairStabilityReport(
+        rows=rows,
+        metadata=report_metadata,
+    )
+
+
+def run_ising4_final_multiseed_validation(
+    seed: int = 2026,
+    repeats: int = 5,
+    candidate_limit: int = 72,
+    stage1_keep_top: int = 16,
+    b1_n_starts: int = 1,
+    b1_evals_per_param: int = 1000,
+    b1_max_evaluations: int = 50,
+    b1_keep_fraction: float = 0.60,
+    b2_n_starts: int = 1,
+    b2_evals_per_param: int = 20,
+    b2_max_evaluations: int = 400,
+    fair_n_starts: int = 3,
+    fair_evals_per_param: int = 20,
+    fair_min_evaluations: int = 80,
+    adaptive_fair_starts: bool = True,
+    fair_params_per_start: int = 15,
+    include_aware_neighbors: bool = True,
+    include_priority_seeds: bool = True,
+    backend: Optional[Backend] = None,
+) -> VQEFairStabilityReport:
+    """Final 4q pipeline: Stage 1/prior candidates, B2 diagnostics, multi-seed fair ranking."""
+    backend = backend or resolve_qas_backend()
+    diagnostics = run_ising4_b2_reliability_experiment(
+        seed=seed,
+        candidate_limit=candidate_limit,
+        stage1_keep_top=stage1_keep_top,
+        b1_n_starts=b1_n_starts,
+        b1_evals_per_param=b1_evals_per_param,
+        b1_max_evaluations=b1_max_evaluations,
+        b1_keep_fraction=b1_keep_fraction,
+        b2_n_starts=b2_n_starts,
+        b2_evals_per_param=b2_evals_per_param,
+        b2_max_evaluations=b2_max_evaluations,
+        fair_n_starts=fair_n_starts,
+        fair_evals_per_param=fair_evals_per_param,
+        fair_min_evaluations=fair_min_evaluations,
+        adaptive_fair_starts=adaptive_fair_starts,
+        fair_params_per_start=fair_params_per_start,
+        include_aware_neighbors=include_aware_neighbors,
+        include_bad_baseline=True,
+        include_priority_seeds=include_priority_seeds,
+        backend=backend,
+    )
+    architectures = [row.architecture for row in diagnostics.rows]
+    return _run_fair_stability_for_architectures(
+        architectures,
+        problem=ising4_demo_problem(),
+        seed=seed + 12000,
+        repeats=repeats,
+        fair_n_starts=fair_n_starts,
+        fair_evals_per_param=fair_evals_per_param,
+        fair_min_evaluations=fair_min_evaluations,
+        adaptive_fair_starts=adaptive_fair_starts,
+        fair_params_per_start=fair_params_per_start,
+        backend=backend,
+        metadata={
+            "candidate_source": "stage1_priority_b2_diagnostics",
+            "diagnostic_candidates": len(diagnostics.rows),
+            "candidate_limit": candidate_limit,
+            "stage1_keep_top": stage1_keep_top,
+        },
+    )
+
+
 def run_ising4_trainability_prior_demo(
     seed: int = 2026,
     candidate_limit: int = 72,
@@ -1619,7 +3087,7 @@ def run_ising4_trainability_prior_demo(
     backend: Optional[NumpyBackend] = None,
 ) -> VQETrainabilityPriorReport:
     problem = ising4_demo_problem()
-    backend = backend or NumpyBackend()
+    backend = backend or resolve_qas_backend()
     masks = _sample_masks(enumerate_hea_masks(problem.n_qubits), candidate_limit, seed)
     candidates = [architecture_from_hea_mask(mask, backend=backend) for mask in masks]
     stage1_rows = zero_cost_guardrail(candidates, backend=backend)
@@ -1718,29 +3186,55 @@ __all__ = [
     "H2_HAMILTONIAN",
     "H2_REFERENCE_ENERGY",
     "HEAMask",
+    "HamiltonianProfile",
     "ISING4_HAMILTONIAN",
     "LAYER_CHOICES",
     "ROTATION_BLOCKS",
     "SAStep",
     "Stage1Row",
+    "VQEB2ReliabilityReport",
     "VQEDemoProblem",
+    "VQEEnumerationReport",
+    "VQEFairStabilityReport",
     "VQEHEADemoReport",
     "VQETrainabilityPriorReport",
     "VQEOptimizationResult",
+    "analyze_hamiltonian",
     "architecture_from_hea_mask",
+    "adaptive_fair_n_starts",
+    "b1_bottom_filter",
     "enumerate_hea_masks",
     "evaluate_h2_energy",
     "evaluate_vqe_energy",
     "exact_ground_energy",
+    "get_structure_family",
+    "derive_priority_seed_masks",
     "h2_demo_problem",
     "hamiltonian_matrix",
+    "hamiltonian_aware_mask_preferences",
     "h2_hamiltonian_matrix",
+    "is_hamiltonian_favored_family",
+    "is_b1_improvement_valid",
     "ising4_demo_problem",
     "mutate_hea_mask",
+    "mutate_hea_mask_hamiltonian_aware",
     "optimize_h2_energy",
     "optimize_vqe_energy",
+    "rotation_only_ansatz",
+    "resolve_qas_backend",
+    "run_ising4_b2_reliability_experiment",
+    "run_ising4_fair_vqe_stability_experiment",
+    "run_ising4_final_multiseed_validation",
+    "run_ising4_full_enumeration_baseline",
     "run_ising4_trainability_prior_demo",
+    "run_tfim_full_enumeration_baseline",
+    "run_tfim_priority_seed_validation",
+    "run_tfim_stage1_stage2_search",
     "run_sa_search",
+    "stratified_stage1_pool",
+    "tfim_chain_demo_problem",
+    "tfim_chain_hamiltonian",
+    "update_beam",
     "run_vqe_hea_demo",
     "run_vqe_ising4_demo",
     "zero_cost_guardrail",
