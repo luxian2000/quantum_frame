@@ -11,7 +11,7 @@ from typing import Callable
 
 import numpy as np
 
-from ..qml.derive import psr
+from ..qml.deriv import psr
 from .VQE import _apply_cnot, _apply_single_qubit_gate, _infer_n_qubits, _ry
 
 

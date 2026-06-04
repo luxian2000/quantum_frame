@@ -290,7 +290,7 @@ def test_gradients_accept_backend_native_tensor_objective():
 
 def test_as_scalar_handles_complex_and_autograd_tensors():
     torch = pytest.importorskip("torch")
-    from aicir.qml.derive import _as_scalar
+    from aicir.qml.deriv import _as_scalar
 
     assert _as_scalar(torch.tensor(0.7 + 0j), label="x") == pytest.approx(0.7)
     assert _as_scalar(torch.tensor(0.5, requires_grad=True) * 2, label="x") == pytest.approx(1.0)
