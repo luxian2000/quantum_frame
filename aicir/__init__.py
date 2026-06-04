@@ -13,6 +13,7 @@ from .channel.noise import (
     NoiseModel,
     PhaseFlipChannel,
 )
+from .measure import PauliEstimateResult, PauliEstimator
 from .measure.measure import Measure
 from .measure.result import Result
 from .core import (
@@ -88,6 +89,8 @@ __all__ = [
     "PhaseFlipChannel",
     "AmplitudeDampingChannel",
     "Measure",
+    "PauliEstimator",
+    "PauliEstimateResult",
     "Result",
     "Circuit",
     "Parameter",

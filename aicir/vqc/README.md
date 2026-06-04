@@ -116,7 +116,7 @@ energy = solver.energy(np.array([0.1]))
 counts = solver._last_measurement.counts
 ```
 
-注意：当前 `shots` 只控制 `Measure` 返回的采样 counts；VQE 的 `energy` 使用 observable 的精确期望值。若需要按 Pauli 项进行有限 shots 能量估计，应在后续加入独立 estimator。
+注意：当前 `BasicVQE` 的 `shots` 只控制 `Measure` 返回的采样 counts；`energy` 仍使用 observable 的精确期望值。有限 shots 的 Pauli-term 能量估计已由 `aicir.measure.PauliEstimator` 提供，后续可接入 `BasicVQE` 作为可选 energy estimator。
 
 ---
 
