@@ -1,10 +1,15 @@
 # aicir.optimizer
 
-本文件记录 `aicir.optimizer.basic` 中的本地化简规则，便于维护与回归测试。
+本模块包含两类优化器：
+
+- `aicir.optimizer.circuit`：线路级本地化简与重写规则。
+- `aicir.optimizer.params`：VQE/VQA 常用经典参数优化器。
+
+`aicir.optimizer.basic` 已改名并移除；新代码应使用 `aicir.optimizer.circuit` 或包级导出的 `optimize_basic`。
 
 ## 概述
 
-`aicir.optimizer.basic.optimize_basic` 实现了一组简单的局部门级化简与合并规则，用于消除明显的冗余门并合并可合并的相邻旋转门，目的是减小导出后电路的体积并改善可读性。
+`aicir.optimizer.circuit.optimize_basic` 实现了一组简单的局部门级化简与合并规则，用于消除明显的冗余门并合并可合并的相邻旋转门，目的是减小导出后电路的体积并改善可读性。
 
 这些优化可接受多种输入形式并保持输出类型：
 - `Circuit` / `list[gate_dict]` / dict(`gates`, `n_qubits`)（记作 dict 路径）
@@ -75,7 +80,58 @@ rx(0.3) q[0];
 
 -## 实现细节指引
 
-- 主要实现文件：`aicir/optimizer/basic.py`。
+- 主要实现文件：`aicir/optimizer/circuit.py`。
 - 合并逻辑仅处理“无控制”的单量子比特旋转；对受控旋转、三角函数等更复杂的恒等/合并关系不作尝试，以保持实现简单且高效。
 
 如需将来扩展到更复杂的合并（例如等价变换、整数倍 pi 归约、模 2π 归约等），请在该 README 中记录新增规则并对应添加覆盖测试。
+
+---
+
+## 参数优化器
+
+`aicir.optimizer.params` 面向 VQE/VQA 的经典参数优化循环。它与 `aicir.qml.deriv` 的职责不同：`qml.deriv` 提供梯度估计器或几何预条件方向，`optimizer.params` 负责迭代更新参数、记录 history、callback、best value 和统一结果对象。
+
+### 公共接口
+
+| 类 / 函数 | 说明 |
+| --- | --- |
+| `OptimizationResult` | 统一优化结果，包含 `x`、`fun`、`best_x`、`best_fun`、`history` 等 |
+| `GD` | 固定步长梯度下降，支持 `psr` / `fd` / `spsa` / 自定义梯度 |
+| `Adam` | Adam 参数优化器，适合 VQE 中配合 parameter-shift、finite-difference 或外部梯度 |
+| `SPSA` | 使用 `qml.deriv.spsa` 梯度估计的 SPSA 优化循环 |
+| `ScipyMinimize` | `scipy.optimize.minimize` 通用包装，保持参数原始 shape |
+| `COBYLA` | `ScipyMinimize(method="COBYLA")` 便捷封装 |
+| `LBFGSB` | `ScipyMinimize(method="L-BFGS-B")` 便捷封装 |
+| `scipy_minimize` | 函数式 SciPy minimize 包装 |
+| `minimize` | 接受 optimizer 对象或 SciPy method 名称的统一入口 |
+
+### 示例
+
+```python
+import numpy as np
+from aicir.optimizer import Adam, SPSA
+
+def energy(theta):
+    return float(np.cos(theta[0]))
+
+adam = Adam(max_iters=100, learning_rate=0.05, gradient_method="psr")
+result = adam.minimize(energy, np.array([0.1]))
+
+spsa = SPSA(max_iters=100, learning_rate=0.05, perturbation=1e-2, rng=7)
+result_spsa = spsa.minimize(energy, np.array([0.1]))
+```
+
+SciPy 优化器在调用时才导入 SciPy：
+
+```python
+from aicir.optimizer import COBYLA, LBFGSB
+
+cobyla = COBYLA(options={"maxiter": 200})
+result = cobyla.minimize(energy, np.array([0.1]))
+
+def grad(theta):
+    return np.array([-np.sin(theta[0])])
+
+lbfgsb = LBFGSB(options={"maxiter": 100})
+result = lbfgsb.minimize(energy, np.array([0.1]), gradient_fn=grad)
+```
