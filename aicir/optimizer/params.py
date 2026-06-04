@@ -120,7 +120,7 @@ def _gradient_from_method(
     raise ValueError("gradient_method must be 'psr', 'fd', 'spsa', or a callable")
 
 
-class GradientDescentOptimizer:
+class GD:
     """Fixed-step gradient descent for VQE/VQA objectives."""
 
     def __init__(
@@ -202,7 +202,7 @@ class GradientDescentOptimizer:
         )
 
 
-class AdamOptimizer:
+class Adam:
     """Adam optimizer over NumPy parameter arrays."""
 
     def __init__(
@@ -303,7 +303,7 @@ class AdamOptimizer:
         )
 
 
-class SPSAOptimizer:
+class SPSA:
     """SPSA-gradient optimizer for noisy or expensive VQE objectives."""
 
     def __init__(
@@ -397,7 +397,7 @@ class SPSAOptimizer:
         )
 
 
-class ScipyOptimizer:
+class ScipyMinimize:
     """Wrapper around ``scipy.optimize.minimize`` preserving parameter shape."""
 
     def __init__(
@@ -429,7 +429,7 @@ class ScipyOptimizer:
             from scipy.optimize import minimize as scipy_minimize_impl
         except ModuleNotFoundError as exc:
             raise ModuleNotFoundError(
-                "ScipyOptimizer requires scipy; install scipy or use AdamOptimizer/SPSAOptimizer."
+                "ScipyMinimize requires scipy; install scipy or use Adam/SPSA."
             ) from exc
 
         init = _as_params(init_params)
@@ -488,14 +488,14 @@ class ScipyOptimizer:
         )
 
 
-class COBYLAOptimizer(ScipyOptimizer):
+class COBYLA(ScipyMinimize):
     """Derivative-free COBYLA optimizer."""
 
     def __init__(self, *, options: Mapping[str, Any] | None = None, constraints: Any = ()) -> None:
         super().__init__("COBYLA", constraints=constraints, options=options)
 
 
-class LBFGSBOptimizer(ScipyOptimizer):
+class LBFGSB(ScipyMinimize):
     """L-BFGS-B optimizer with optional explicit gradient."""
 
     def __init__(
@@ -522,14 +522,14 @@ def scipy_minimize(
     method: str = "COBYLA",
     **kwargs: Any,
 ) -> OptimizationResult:
-    """Convenience wrapper for :class:`ScipyOptimizer`."""
+    """Convenience wrapper for :class:`ScipyMinimize`."""
 
     optimizer_kwargs = {
         key: kwargs.pop(key)
         for key in list(kwargs)
         if key in {"bounds", "constraints", "options", "gradient_method", "gradient_kwargs"}
     }
-    optimizer = ScipyOptimizer(method=method, **optimizer_kwargs)
+    optimizer = ScipyMinimize(method=method, **optimizer_kwargs)
     return optimizer.minimize(fn, init_params, **kwargs)
 
 
@@ -551,13 +551,13 @@ def minimize(
 
 
 __all__ = [
-    "AdamOptimizer",
-    "COBYLAOptimizer",
-    "GradientDescentOptimizer",
-    "LBFGSBOptimizer",
+    "Adam",
+    "COBYLA",
+    "GD",
+    "LBFGSB",
     "OptimizationResult",
-    "SPSAOptimizer",
-    "ScipyOptimizer",
+    "SPSA",
+    "ScipyMinimize",
     "minimize",
     "scipy_minimize",
 ]

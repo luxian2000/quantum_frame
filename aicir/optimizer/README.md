@@ -96,12 +96,12 @@ rx(0.3) q[0];
 | 类 / 函数 | 说明 |
 | --- | --- |
 | `OptimizationResult` | 统一优化结果，包含 `x`、`fun`、`best_x`、`best_fun`、`history` 等 |
-| `GradientDescentOptimizer` | 固定步长梯度下降，支持 `psr` / `fd` / `spsa` / 自定义梯度 |
-| `AdamOptimizer` | Adam 参数优化器，适合 VQE 中配合 parameter-shift、finite-difference 或外部梯度 |
-| `SPSAOptimizer` | 使用 `qml.deriv.spsa` 梯度估计的 SPSA 优化循环 |
-| `ScipyOptimizer` | `scipy.optimize.minimize` 通用包装，保持参数原始 shape |
-| `COBYLAOptimizer` | `ScipyOptimizer(method="COBYLA")` 便捷封装 |
-| `LBFGSBOptimizer` | `ScipyOptimizer(method="L-BFGS-B")` 便捷封装 |
+| `GD` | 固定步长梯度下降，支持 `psr` / `fd` / `spsa` / 自定义梯度 |
+| `Adam` | Adam 参数优化器，适合 VQE 中配合 parameter-shift、finite-difference 或外部梯度 |
+| `SPSA` | 使用 `qml.deriv.spsa` 梯度估计的 SPSA 优化循环 |
+| `ScipyMinimize` | `scipy.optimize.minimize` 通用包装，保持参数原始 shape |
+| `COBYLA` | `ScipyMinimize(method="COBYLA")` 便捷封装 |
+| `LBFGSB` | `ScipyMinimize(method="L-BFGS-B")` 便捷封装 |
 | `scipy_minimize` | 函数式 SciPy minimize 包装 |
 | `minimize` | 接受 optimizer 对象或 SciPy method 名称的统一入口 |
 
@@ -109,29 +109,29 @@ rx(0.3) q[0];
 
 ```python
 import numpy as np
-from aicir.optimizer import AdamOptimizer, SPSAOptimizer
+from aicir.optimizer import Adam, SPSA
 
 def energy(theta):
     return float(np.cos(theta[0]))
 
-adam = AdamOptimizer(max_iters=100, learning_rate=0.05, gradient_method="psr")
+adam = Adam(max_iters=100, learning_rate=0.05, gradient_method="psr")
 result = adam.minimize(energy, np.array([0.1]))
 
-spsa = SPSAOptimizer(max_iters=100, learning_rate=0.05, perturbation=1e-2, rng=7)
+spsa = SPSA(max_iters=100, learning_rate=0.05, perturbation=1e-2, rng=7)
 result_spsa = spsa.minimize(energy, np.array([0.1]))
 ```
 
 SciPy 优化器在调用时才导入 SciPy：
 
 ```python
-from aicir.optimizer import COBYLAOptimizer, LBFGSBOptimizer
+from aicir.optimizer import COBYLA, LBFGSB
 
-cobyla = COBYLAOptimizer(options={"maxiter": 200})
+cobyla = COBYLA(options={"maxiter": 200})
 result = cobyla.minimize(energy, np.array([0.1]))
 
 def grad(theta):
     return np.array([-np.sin(theta[0])])
 
-lbfgsb = LBFGSBOptimizer(options={"maxiter": 100})
+lbfgsb = LBFGSB(options={"maxiter": 100})
 result = lbfgsb.minimize(energy, np.array([0.1]), gradient_fn=grad)
 ```
