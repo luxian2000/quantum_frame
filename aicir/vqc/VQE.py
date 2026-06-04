@@ -166,12 +166,12 @@ class BasicVQE:
         return energy_estimator
 
     def _energy_estimator_name(self) -> str:
-        if self.energy_estimator == "exact":
+        if self._uses_exact_energy_estimator():
             return "exact"
         return type(self.energy_estimator).__name__
 
     def _uses_exact_energy_estimator(self) -> bool:
-        return self.energy_estimator == "exact"
+        return isinstance(self.energy_estimator, str) and self.energy_estimator == "exact"
 
     def _coerce_hamiltonian(self, hamiltonian: np.ndarray | Hamiltonian, backend) -> tuple[np.ndarray, int]:
         if hasattr(hamiltonian, "to_matrix"):
@@ -354,6 +354,7 @@ class BasicVQE:
         if return_state:
             _, measurement = self._measure_circuit_exact(params, return_state=True)
             return float(estimator_result.energy), measurement
+        self._last_measurement = None
         return float(estimator_result.energy), estimator_result
 
     def energy(self, params: np.ndarray) -> float:
