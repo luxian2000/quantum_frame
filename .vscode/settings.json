@@ -7,5 +7,26 @@
             "envManager": "ms-python.python:conda",
             "packageManager": "ms-python.python:conda"
         }
-    ]
+    ],
+    "http.proxy": "http://127.0.0.1:7890",
+    "https.proxy": "http://127.0.0.1:7890",
+    "http.proxyStrictSSL": false,
+    "http.proxySupport": "override",
+    "http.noProxy": ["localhost","127.0.0.1","::1"],
+    "claudeCode.environmentVariables": [
+        {"name":"HTTP_PROXY","value":"http://127.0.0.1:7890"},
+        {"name":"HTTPS_PROXY","value":"http://127.0.0.1:7890"},
+        {"name":"NO_PROXY","value":"localhost,127.0.0.1"}
+    ],
+    // 新增：终端/插件子进程全局注入代理（解决Codex关键）
+    "terminal.integrated.env.osx": {
+        "HTTP_PROXY": "http://127.0.0.1:7890",
+        "HTTPS_PROXY": "http://127.0.0.1:7890",
+        "NO_PROXY": "127.0.0.1,localhost"
+    },
+    "terminal.integrated.env.windows": {
+        "HTTP_PROXY": "http://127.0.0.1:7890",
+        "HTTPS_PROXY": "http://127.0.0.1:7890",
+        "NO_PROXY": "127.0.0.1,localhost"
+    }
 }

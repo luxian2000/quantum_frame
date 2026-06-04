@@ -50,20 +50,20 @@
 
 ### 公共接口一览
 
-| 函数      | 全称                      | 复杂度（函数调用次数）                      | 适用场景                               |
-| --------- | ------------------------- | ------------------------------------------- | -------------------------------------- |
-| `auto`  | Automatic Differentiation | 1 次反向传播                                | Torch/NPU 后端，自动微分图             |
-| `psr`   | Parameter-Shift Rule      | $2P$                                      | 通用旋转门，无噪声或含噪声均可         |
-| `spsr`  | Stochastic PSR            | $2K$（$K \leq P$ 次采样）               | 大参数量随机坐标梯度                   |
-| `spsa`  | Simultaneous Perturbation Stochastic Approximation | $2K$（$K$ 个扰动方向） | 极大参数量/硬件噪声下的随机全方向梯度 |
-| `mpsr`  | Multi-parameter PSR       | $2^M$（$M$ 个坐标的混合偏导数）         | 高阶混合偏导                           |
-| `fd`    | Finite Difference         | $2P$（中心差）或 $P+1$（单侧）          | 任意可微目标，黑盒                     |
-| `ad`    | Adjoint Differentiation   | $O(P)$ 次门作用，$O(1)$ 额外存储        | 无噪声态向量模拟，效率最高             |
-| `qng`   | Quantum Natural Gradient  | 梯度调用 +$2P+1$ 次态函数调用             | 用 QFIM 逆预条件梯度，加速 ansatz 优化 |
-| `bdqng` | Block-diagonal QNG        | 梯度调用 +$2P+1$ 次态函数调用，分块求解   | 按参数块近似 QFIM，适合大参数 ansatz   |
-| `kqng`  | KFAC-style QNG            | 梯度调用 + 分块因子估计，Kronecker 因子求解 | 用 Kronecker 因子近似 QFIM block       |
-| `dqng`  | Diagonal QNG              | 梯度调用 +$2P+1$ 次态函数调用，逐坐标除法 | QFIM 对角近似，最便宜但最粗糙          |
-| `rotosolve` | ROTOSOLVE | 每个坐标每 sweep 3 次函数调用 | 正弦结构目标的逐坐标 gradient-free 精确最小化 |
+| 函数          | 全称                                               | 复杂度（函数调用次数）                      | 适用场景                                      |
+| ------------- | -------------------------------------------------- | ------------------------------------------- | --------------------------------------------- |
+| `auto`      | Automatic Differentiation                          | 1 次反向传播                                | Torch/NPU 后端，自动微分图                    |
+| `psr`       | Parameter-Shift Rule                               | $2P$                                      | 通用旋转门，无噪声或含噪声均可                |
+| `spsr`      | Stochastic PSR                                     | $2K$（$K \leq P$ 次采样）               | 大参数量随机坐标梯度                          |
+| `spsa`      | Simultaneous Perturbation Stochastic Approximation | $2K$（$K$ 个扰动方向）                  | 极大参数量/硬件噪声下的随机全方向梯度         |
+| `mpsr`      | Multi-parameter PSR                                | $2^M$（$M$ 个坐标的混合偏导数）         | 高阶混合偏导                                  |
+| `fd`        | Finite Difference                                  | $2P$（中心差）或 $P+1$（单侧）          | 任意可微目标，黑盒                            |
+| `ad`        | Adjoint Differentiation                            | $O(P)$ 次门作用，$O(1)$ 额外存储        | 无噪声态向量模拟，效率最高                    |
+| `qng`       | Quantum Natural Gradient                           | 梯度调用 +$2P+1$ 次态函数调用             | 用 QFIM 逆预条件梯度，加速 ansatz 优化        |
+| `bdqng`     | Block-diagonal QNG                                 | 梯度调用 +$2P+1$ 次态函数调用，分块求解   | 按参数块近似 QFIM，适合大参数 ansatz          |
+| `kqng`      | KFAC-style QNG                                     | 梯度调用 + 分块因子估计，Kronecker 因子求解 | 用 Kronecker 因子近似 QFIM block              |
+| `dqng`      | Diagonal QNG                                       | 梯度调用 +$2P+1$ 次态函数调用，逐坐标除法 | QFIM 对角近似，最便宜但最粗糙                 |
+| `rotosolve` | ROTOSOLVE                                          | 每个坐标每 sweep 3 次函数调用               | 正弦结构目标的逐坐标 gradient-free 精确最小化 |
 
 $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 
@@ -98,11 +98,11 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 
 #### `spsa(fn, params, *, eps=1e-3, n_samples=1, rng=None, perturbations=None)`
 
-| 参数              | 说明                                                                 |
-| ----------------- | -------------------------------------------------------------------- |
-| `eps`           | 同时扰动步长，默认 `1e-3`                                          |
-| `n_samples`     | 随机扰动方向数量；每个方向只需 2 次函数调用                         |
-| `rng`           | 随机数生成器（int seed 或 `np.random.Generator`）                  |
+| 参数              | 说明                                                                  |
+| ----------------- | --------------------------------------------------------------------- |
+| `eps`           | 同时扰动步长，默认 `1e-3`                                           |
+| `n_samples`     | 随机扰动方向数量；每个方向只需 2 次函数调用                           |
+| `rng`           | 随机数生成器（int seed 或 `np.random.Generator`）                   |
 | `perturbations` | 可选的固定扰动向量/矩阵；所有元素必须非零，提供后样本数由其第一维决定 |
 
 #### `mpsr(fn, params, parameter_indices=None, *, shift, coefficient)`
@@ -129,89 +129,89 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 
 #### `qng(fn, state_fn, params, *, grad=None, qfim=None, gradient_method="psr", gradient_kwargs=None, shift=π/2, coefficient=0.5, metric_eps=1e-3, damping=1e-6, backend=None, return_gradient=False, return_qfim=False)`
 
-| 参数                        | 说明                                                                        |
-| --------------------------- | --------------------------------------------------------------------------- |
-| `fn`                      | 接受完整参数数组、返回标量损失的目标函数；当 `grad` 已提供时可为 `None` |
-| `state_fn`                | 接受完整参数数组、返回纯态 ansatz 终态；当 `qfim` 已提供时可为 `None`   |
-| `grad`                    | 可选的普通梯度；提供后跳过 `fn` 的梯度计算                                |
-| `qfim`                    | 可选的 QFIM；提供后跳过 `state_fn` 的 QFIM 估计                           |
+| 参数                        | 说明                                                                                |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| `fn`                      | 接受完整参数数组、返回标量损失的目标函数；当 `grad` 已提供时可为 `None`         |
+| `state_fn`                | 接受完整参数数组、返回纯态 ansatz 终态；当 `qfim` 已提供时可为 `None`           |
+| `grad`                    | 可选的普通梯度；提供后跳过 `fn` 的梯度计算                                        |
+| `qfim`                    | 可选的 QFIM；提供后跳过 `state_fn` 的 QFIM 估计                                   |
 | `gradient_method`         | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"` |
-| `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                |
-| `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                  |
-| `metric_eps`              | 用于 QFIM 态导数中心差分的步长                                              |
-| `damping`                 | 加到 QFIM 对角线上的非负阻尼项，缓解奇异或病态矩阵                          |
-| `backend`                 | `gradient_method="auto"` 时使用的 Torch/NPU 后端                          |
-| `return_gradient`         | 若为 `True`，额外返回普通梯度                                             |
-| `return_qfim`             | 若为 `True`，额外返回 QFIM                                                |
+| `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                        |
+| `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                          |
+| `metric_eps`              | 用于 QFIM 态导数中心差分的步长                                                      |
+| `damping`                 | 加到 QFIM 对角线上的非负阻尼项，缓解奇异或病态矩阵                                  |
+| `backend`                 | `gradient_method="auto"` 时使用的 Torch/NPU 后端                                  |
+| `return_gradient`         | 若为 `True`，额外返回普通梯度                                                     |
+| `return_qfim`             | 若为 `True`，额外返回 QFIM                                                        |
 
 #### `bdqng(fn, state_fn, params, *, blocks=None, block_size=1, grad=None, qfim_blocks=None, gradient_method="psr", gradient_kwargs=None, shift=π/2, coefficient=0.5, metric_eps=1e-3, damping=1e-6, backend=None, return_gradient=False, return_qfim_blocks=False)`
 
-| 参数                        | 说明                                                                             |
-| --------------------------- | -------------------------------------------------------------------------------- |
-| `fn`                      | 接受完整参数数组、返回标量损失的目标函数；当 `grad` 已提供时可为 `None`      |
-| `state_fn`                | 接受完整参数数组、返回纯态 ansatz 终态；当 `qfim_blocks` 已提供时可为 `None` |
-| `blocks`                  | 显式参数分块，例如 `[[0, 1], [2, 3]]`；每个参数必须出现且只出现一次            |
-| `block_size`              | 未提供 `blocks` 时按 flat 参数顺序连续分块的大小，默认 `1`                   |
-| `grad`                    | 可选的普通梯度；提供后跳过 `fn` 的梯度计算                                     |
-| `qfim_blocks`             | 可选的 block QFIM 列表；提供后跳过 `state_fn` 的 block QFIM 估计               |
+| 参数                        | 说明                                                                                |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| `fn`                      | 接受完整参数数组、返回标量损失的目标函数；当 `grad` 已提供时可为 `None`         |
+| `state_fn`                | 接受完整参数数组、返回纯态 ansatz 终态；当 `qfim_blocks` 已提供时可为 `None`    |
+| `blocks`                  | 显式参数分块，例如 `[[0, 1], [2, 3]]`；每个参数必须出现且只出现一次               |
+| `block_size`              | 未提供 `blocks` 时按 flat 参数顺序连续分块的大小，默认 `1`                      |
+| `grad`                    | 可选的普通梯度；提供后跳过 `fn` 的梯度计算                                        |
+| `qfim_blocks`             | 可选的 block QFIM 列表；提供后跳过 `state_fn` 的 block QFIM 估计                  |
 | `gradient_method`         | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"` |
-| `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                     |
-| `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                       |
-| `metric_eps`              | 用于 block QFIM 态导数中心差分的步长                                             |
-| `damping`                 | 加到每个 QFIM block 对角线上的非负阻尼项                                         |
-| `backend`                 | `gradient_method="auto"` 时使用的 Torch/NPU 后端                               |
-| `return_gradient`         | 若为 `True`，额外返回普通梯度                                                  |
-| `return_qfim_blocks`      | 若为 `True`，额外返回 QFIM block 列表                                          |
+| `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                        |
+| `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                          |
+| `metric_eps`              | 用于 block QFIM 态导数中心差分的步长                                                |
+| `damping`                 | 加到每个 QFIM block 对角线上的非负阻尼项                                            |
+| `backend`                 | `gradient_method="auto"` 时使用的 Torch/NPU 后端                                  |
+| `return_gradient`         | 若为 `True`，额外返回普通梯度                                                     |
+| `return_qfim_blocks`      | 若为 `True`，额外返回 QFIM block 列表                                             |
 
 #### `kqng(fn, state_fn, params, *, blocks=None, factor_shapes=None, block_size=None, grad=None, kfac_factors=None, gradient_method="psr", gradient_kwargs=None, shift=π/2, coefficient=0.5, metric_eps=1e-3, damping=1e-6, backend=None, return_gradient=False, return_kfac_factors=False)`
 
-| 参数                        | 说明                                                                              |
-| --------------------------- | --------------------------------------------------------------------------------- |
-| `fn`                      | 接受完整参数数组、返回标量损失的目标函数；当 `grad` 已提供时可为 `None`       |
-| `state_fn`                | 接受完整参数数组、返回纯态 ansatz 终态；当 `kfac_factors` 已提供时可为 `None` |
-| `blocks`                  | 显式参数分块，例如 `[[0, 1, 2, 3], [4, 5, 6, 7]]`                               |
-| `factor_shapes`           | 每个 block 的 Kronecker reshape 形状，例如 `(2, 2)` 或 `[(2, 2), (2, 2)]`     |
-| `block_size`              | 未提供 `blocks` / `factor_shapes` 时按 flat 参数顺序连续分块的大小            |
-| `grad`                    | 可选的普通梯度；提供后跳过 `fn` 的梯度计算                                      |
-| `kfac_factors`            | 可选的 Kronecker 因子列表 `[(A, B), ...]`；提供后跳过 `state_fn` 的因子估计   |
+| 参数                        | 说明                                                                                |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| `fn`                      | 接受完整参数数组、返回标量损失的目标函数；当 `grad` 已提供时可为 `None`         |
+| `state_fn`                | 接受完整参数数组、返回纯态 ansatz 终态；当 `kfac_factors` 已提供时可为 `None`   |
+| `blocks`                  | 显式参数分块，例如 `[[0, 1, 2, 3], [4, 5, 6, 7]]`                                 |
+| `factor_shapes`           | 每个 block 的 Kronecker reshape 形状，例如 `(2, 2)` 或 `[(2, 2), (2, 2)]`       |
+| `block_size`              | 未提供 `blocks` / `factor_shapes` 时按 flat 参数顺序连续分块的大小              |
+| `grad`                    | 可选的普通梯度；提供后跳过 `fn` 的梯度计算                                        |
+| `kfac_factors`            | 可选的 Kronecker 因子列表 `[(A, B), ...]`；提供后跳过 `state_fn` 的因子估计     |
 | `gradient_method`         | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"` |
-| `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                      |
-| `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                        |
-| `metric_eps`              | 用于 QFIM block 态导数中心差分的步长                                              |
-| `damping`                 | Kronecker 因子阻尼；实现中使用 `sqrt(damping)` 加到两个因子对角线上             |
-| `backend`                 | Torch/NPU 后端；传入 `NPUBackend` 时启用不搬回 CPU 的设备端路径                 |
-| `return_gradient`         | 若为 `True`，额外返回普通梯度                                                   |
-| `return_kfac_factors`     | 若为 `True`，额外返回 Kronecker 因子列表                                        |
+| `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                        |
+| `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                          |
+| `metric_eps`              | 用于 QFIM block 态导数中心差分的步长                                                |
+| `damping`                 | Kronecker 因子阻尼；实现中使用 `sqrt(damping)` 加到两个因子对角线上               |
+| `backend`                 | Torch/NPU 后端；传入 `NPUBackend` 时启用不搬回 CPU 的设备端路径                   |
+| `return_gradient`         | 若为 `True`，额外返回普通梯度                                                     |
+| `return_kfac_factors`     | 若为 `True`，额外返回 Kronecker 因子列表                                          |
 
 #### `dqng(fn, state_fn, params, *, grad=None, qfim_diag=None, gradient_method="psr", gradient_kwargs=None, shift=π/2, coefficient=0.5, metric_eps=1e-3, damping=1e-6, backend=None, return_gradient=False, return_qfim_diag=False)`
 
-| 参数                        | 说明                                                                           |
-| --------------------------- | ------------------------------------------------------------------------------ |
-| `fn`                      | 接受完整参数数组、返回标量损失的目标函数；当 `grad` 已提供时可为 `None`    |
-| `state_fn`                | 接受完整参数数组、返回纯态 ansatz 终态；当 `qfim_diag` 已提供时可为 `None` |
-| `grad`                    | 可选的普通梯度；提供后跳过 `fn` 的梯度计算                                   |
-| `qfim_diag`               | 可选的 QFIM 对角线；提供后跳过 `state_fn` 的 QFIM 对角估计                   |
+| 参数                        | 说明                                                                                |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| `fn`                      | 接受完整参数数组、返回标量损失的目标函数；当 `grad` 已提供时可为 `None`         |
+| `state_fn`                | 接受完整参数数组、返回纯态 ansatz 终态；当 `qfim_diag` 已提供时可为 `None`      |
+| `grad`                    | 可选的普通梯度；提供后跳过 `fn` 的梯度计算                                        |
+| `qfim_diag`               | 可选的 QFIM 对角线；提供后跳过 `state_fn` 的 QFIM 对角估计                        |
 | `gradient_method`         | 未提供 `grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"` |
-| `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                   |
-| `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                     |
-| `metric_eps`              | 用于 QFIM 对角态导数中心差分的步长                                             |
-| `damping`                 | 加到每个 QFIM 对角项上的非负阻尼项                                             |
-| `backend`                 | Torch/NPU 后端；传入 `NPUBackend` 时启用不搬回 CPU 的设备端路径              |
-| `return_gradient`         | 若为 `True`，额外返回普通梯度                                                |
-| `return_qfim_diag`        | 若为 `True`，额外返回 QFIM 对角线                                            |
+| `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                        |
+| `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                          |
+| `metric_eps`              | 用于 QFIM 对角态导数中心差分的步长                                                  |
+| `damping`                 | 加到每个 QFIM 对角项上的非负阻尼项                                                  |
+| `backend`                 | Torch/NPU 后端；传入 `NPUBackend` 时启用不搬回 CPU 的设备端路径                   |
+| `return_gradient`         | 若为 `True`，额外返回普通梯度                                                     |
+| `return_qfim_diag`        | 若为 `True`，额外返回 QFIM 对角线                                                 |
 
 #### `rotosolve(fn, params, *, n_sweeps=1, parameter_indices=None, shift=π/2, atol=1e-12, backend=None, return_value=False)`
 
-| 参数                  | 说明                                                                 |
-| --------------------- | -------------------------------------------------------------------- |
-| `fn`                | 接受完整参数数组/张量、返回标量损失的目标函数                        |
-| `params`            | 当前参数值，支持标量和任意形状数组/张量                              |
-| `n_sweeps`          | 坐标扫描轮数，每轮依次更新 `parameter_indices` 中的坐标              |
-| `parameter_indices` | 可选更新坐标，支持 flat 整数索引、多维 tuple 索引或列表              |
-| `shift`             | 两点偏移量，默认 `π/2`，对应频率为 1 的标准 ROTOSOLVE 公式          |
-| `atol`              | 拟合正弦振幅低于该阈值时认为该坐标平坦，不更新                       |
-| `backend`           | Torch/NPU 后端；传入后目标值、三角函数和坐标更新保持在设备端         |
-| `return_value`      | 若为 `True`，同时返回最终目标函数值                                  |
+| 参数                  | 说明                                                          |
+| --------------------- | ------------------------------------------------------------- |
+| `fn`                | 接受完整参数数组/张量、返回标量损失的目标函数                 |
+| `params`            | 当前参数值，支持标量和任意形状数组/张量                       |
+| `n_sweeps`          | 坐标扫描轮数，每轮依次更新 `parameter_indices` 中的坐标     |
+| `parameter_indices` | 可选更新坐标，支持 flat 整数索引、多维 tuple 索引或列表       |
+| `shift`             | 两点偏移量，默认 `π/2`，对应频率为 1 的标准 ROTOSOLVE 公式 |
+| `atol`              | 拟合正弦振幅低于该阈值时认为该坐标平坦，不更新                |
+| `backend`           | Torch/NPU 后端；传入后目标值、三角函数和坐标更新保持在设备端  |
+| `return_value`      | 若为 `True`，同时返回最终目标函数值                         |
 
 ## 3. 自动微分 `auto`
 
@@ -612,7 +612,7 @@ $$
 ### 示例
 
 ```python
-import numpy as np
+，，import numpy as np
 from aicir import Circuit, NumpyBackend, State, ry
 from aicir.qml import bdqng
 
@@ -794,7 +794,7 @@ direction = dqng(
 
 ---
 
-## 14. ROTOSOLVE `rotosolve`
+## 14. ROTOSOLVE
 
 ```python
 from aicir.qml import rotosolve
