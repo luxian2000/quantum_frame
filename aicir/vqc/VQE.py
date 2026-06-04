@@ -77,6 +77,7 @@ class VQEResult:
     energy_history: list[float]
     circuit: Circuit | None = None
     measurement_result: Any = None
+    estimator_result: Any = None
     optimizer_result: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -120,6 +121,7 @@ class BasicVQE:
         initial_state: Any = None,
         initial_density_matrix: Any = None,
         observable_name: str = "energy",
+        energy_estimator: str | Any = "exact",
     ) -> None:
         self.backend = backend if backend is not None else NumpyBackend()
         self.observable = hamiltonian
@@ -141,11 +143,35 @@ class BasicVQE:
         self.initial_state = initial_state
         self.initial_density_matrix = initial_density_matrix
         self.observable_name = str(observable_name)
+        self.energy_estimator = self._resolve_energy_estimator(energy_estimator)
+        if ansatz is None and not self._uses_exact_energy_estimator():
+            raise ValueError("non-exact energy_estimator requires a Circuit or callable ansatz")
 
         self._parameter_shape = self._resolve_parameter_shape(ansatz, n_params, parameter_shape)
         self._last_circuit: Circuit | None = None
         self._last_measurement: Any = None
+        self._last_estimator_result: Any = None
         self._rng = np.random.default_rng(seed)
+
+    def _resolve_energy_estimator(self, energy_estimator: str | Any) -> str | Any:
+        if energy_estimator is None:
+            return "exact"
+        if isinstance(energy_estimator, str):
+            name = energy_estimator.strip().lower()
+            if name != "exact":
+                raise ValueError("energy_estimator string must be 'exact'")
+            return "exact"
+        if not hasattr(energy_estimator, "estimate"):
+            raise TypeError("energy_estimator must be 'exact' or expose estimate(circuit, hamiltonian, ...)")
+        return energy_estimator
+
+    def _energy_estimator_name(self) -> str:
+        if self.energy_estimator == "exact":
+            return "exact"
+        return type(self.energy_estimator).__name__
+
+    def _uses_exact_energy_estimator(self) -> bool:
+        return self.energy_estimator == "exact"
 
     def _coerce_hamiltonian(self, hamiltonian: np.ndarray | Hamiltonian, backend) -> tuple[np.ndarray, int]:
         if hasattr(hamiltonian, "to_matrix"):
@@ -230,7 +256,7 @@ class BasicVQE:
 
     def ansatz_state(self, params: np.ndarray) -> np.ndarray:
         if self.ansatz is not None:
-            _, measurement = self._evaluate_circuit(params, return_state=True)
+            _, measurement = self._measure_circuit_exact(params, return_state=True)
             final_state = None if measurement is None else measurement.final_state
             return None if final_state is None else np.asarray(final_state)
 
@@ -279,7 +305,7 @@ class BasicVQE:
             circuit = Circuit(*list(circuit.gates), n_qubits=circuit.n_qubits, backend=self.backend)
         return circuit
 
-    def _evaluate_circuit(self, params: np.ndarray, *, return_state: bool) -> tuple[float, Any]:
+    def _measure_circuit_exact(self, params: np.ndarray, *, return_state: bool) -> tuple[float, Any]:
         circuit = self.bind_ansatz(params)
         backend = circuit.backend if circuit.backend is not None else self.backend
         measure = Measure(backend)
@@ -307,6 +333,28 @@ class BasicVQE:
         self._last_circuit = circuit
         self._last_measurement = measurement
         return float(measurement.expectation_values[self.observable_name]), measurement
+
+    def _evaluate_circuit(self, params: np.ndarray, *, return_state: bool) -> tuple[float, Any]:
+        if self._uses_exact_energy_estimator():
+            return self._measure_circuit_exact(params, return_state=return_state)
+
+        circuit = self.bind_ansatz(params)
+        estimate_kwargs: dict[str, Any] = {
+            "initial_state": self.initial_state,
+            "initial_density_matrix": self.initial_density_matrix,
+            "noise_model": self.noise_model,
+            "use_density_matrix": self.use_density_matrix,
+        }
+        if self.shots is not None:
+            estimate_kwargs["shots"] = self.shots
+
+        estimator_result = self.energy_estimator.estimate(circuit, self.observable, **estimate_kwargs)
+        self._last_circuit = circuit
+        self._last_estimator_result = estimator_result
+        if return_state:
+            _, measurement = self._measure_circuit_exact(params, return_state=True)
+            return float(estimator_result.energy), measurement
+        return float(estimator_result.energy), estimator_result
 
     def energy(self, params: np.ndarray) -> float:
         if self.ansatz is not None:
@@ -368,11 +416,13 @@ class BasicVQE:
             energy_history=history,
             circuit=final_circuit,
             measurement_result=final_measurement,
+            estimator_result=self._last_estimator_result,
             metadata={
                 "mode": "circuit" if self.ansatz is not None else "legacy_dense",
                 "backend": getattr(self.backend, "name", None),
                 "shots": self.shots,
                 "noise_model": type(self.noise_model).__name__ if self.noise_model is not None else None,
+                "energy_estimator": self._energy_estimator_name(),
             },
         )
 
@@ -409,6 +459,7 @@ class BasicVQE:
             energy_history=history,
             circuit=self._last_circuit,
             measurement_result=self._last_measurement,
+            estimator_result=self._last_estimator_result,
             optimizer_result=opt_result,
             metadata={
                 "mode": "circuit" if self.ansatz is not None else "legacy_dense",
@@ -416,6 +467,7 @@ class BasicVQE:
                 "optimizer": type(optimizer).__name__,
                 "shots": self.shots,
                 "noise_model": type(self.noise_model).__name__ if self.noise_model is not None else None,
+                "energy_estimator": self._energy_estimator_name(),
             },
         )
 
@@ -437,6 +489,7 @@ def run_vqe(
     initial_state: Any = None,
     initial_density_matrix: Any = None,
     observable_name: str = "energy",
+    energy_estimator: str | Any = "exact",
     n_params: int | None = None,
     parameter_shape: tuple[int, ...] | None = None,
     init_params: np.ndarray | None = None,
@@ -456,6 +509,7 @@ def run_vqe(
         initial_state=initial_state,
         initial_density_matrix=initial_density_matrix,
         observable_name=observable_name,
+        energy_estimator=energy_estimator,
         n_params=n_params,
         parameter_shape=parameter_shape,
     )

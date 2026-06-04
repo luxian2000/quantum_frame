@@ -59,8 +59,9 @@
 | `ansatz` | 可选 `Circuit` 模板或 callable builder |
 | `backend` | `NumpyBackend` / `TorchBackend` / `NPUBackend` 等 |
 | `optimizer` | 可选 `GD`、`Adam`、`SPSA`、`COBYLA`、`LBFGSB`、`ScipyMinimize` 等 |
-| `shots` | 透传给 `Measure` 生成采样 counts；当前 energy 仍来自 observable 精确期望 |
+| `shots` | 透传给 `Measure` 或 `PauliEstimator` 生成采样 counts |
 | `noise_model` | 传入后自动走 density-matrix 测量路径 |
+| `energy_estimator` | 默认 `"exact"`；也可传入 `PauliEstimator` 做有限 shots Pauli-term 能量估计 |
 | `n_params` / `parameter_shape` | callable ansatz 无法从 `Circuit.parameters` 推断参数量时使用 |
 | `initial_state` / `initial_density_matrix` | 自定义初态 |
 
@@ -116,7 +117,22 @@ energy = solver.energy(np.array([0.1]))
 counts = solver._last_measurement.counts
 ```
 
-注意：当前 `BasicVQE` 的 `shots` 只控制 `Measure` 返回的采样 counts；`energy` 仍使用 observable 的精确期望值。有限 shots 的 Pauli-term 能量估计已由 `aicir.measure.PauliEstimator` 提供，后续可接入 `BasicVQE` 作为可选 energy estimator。
+### 示例：PauliEstimator 有限 shots 能量
+
+```python
+from aicir import NumpyBackend, PauliEstimator
+
+solver = BasicVQE(
+    hamiltonian,
+    ansatz=ansatz,
+    backend=NumpyBackend(),
+    energy_estimator=PauliEstimator(NumpyBackend(), shots=4096),
+)
+energy = solver.energy(np.array([0.1]))
+term_stats = solver._last_estimator_result.term_results
+```
+
+注意：`energy_estimator="exact"` 使用 full-matrix observable 精确期望；`energy_estimator=PauliEstimator(...)` 使用 Pauli 项拆分、测量基变换、shots 分配和 counts 统计估计能量。非 exact estimator 需要传入 `Circuit` 或 callable ansatz，不支持 legacy dense RY/CNOT 路径。
 
 ---
 
