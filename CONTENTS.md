@@ -111,7 +111,7 @@ aicir/
 ├── qml/
 │   ├── README.md
 │   ├── __init__.py
-│   └── grad.py
+│   └── deriv.py
 ├── universal/
 │   ├── __init__.py
 │   └── qft.py
