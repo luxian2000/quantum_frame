@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from aicir import BitFlipChannel, Circuit, Hamiltonian, NoiseModel, NumpyBackend, Parameter, ry
+from aicir import BitFlipChannel, Circuit, Hamiltonian, NoiseModel, NumpyBackend, Parameter, PauliEstimator, ry
 from aicir.optimizer import GD
 from aicir.vqc import BasicVQE, run_vqe
 
@@ -90,6 +90,27 @@ def test_vqe_density_matrix_noise_path_uses_measure_noise_model():
     assert solver._last_measurement.metadata["noise_model"] == "NoiseModel"
 
 
+def test_vqe_accepts_pauli_estimator_for_circuit_energy():
+    solver = BasicVQE(
+        _z_hamiltonian_object(),
+        ansatz=_single_ry_template(),
+        backend=NumpyBackend(),
+        energy_estimator=PauliEstimator(NumpyBackend(), shots=32),
+    )
+
+    assert solver.energy(np.array([0.0])) == np.float32(1.0)
+    assert solver._last_estimator_result is not None
+    assert solver._last_estimator_result.shots == 32
+    assert solver._last_estimator_result.metadata["estimator"] == "PauliEstimator"
+    assert solver._last_measurement is None
+
+    result = solver.run(init_params=np.array([0.0]), max_iters=1, lr=0.1)
+    assert result.energy == np.float32(1.0)
+    assert result.estimator_result is not None
+    assert result.measurement_result is not None
+    assert result.metadata["energy_estimator"] == "PauliEstimator"
+
+
 def test_run_vqe_convenience_accepts_generic_ansatz_and_optimizer():
     result = run_vqe(
         _z_hamiltonian_object(),
@@ -100,6 +121,21 @@ def test_run_vqe_convenience_accepts_generic_ansatz_and_optimizer():
 
     assert result.energy < -0.99
     assert result.optimizer_result is not None
+
+
+def test_run_vqe_convenience_forwards_energy_estimator():
+    result = run_vqe(
+        _z_hamiltonian_object(),
+        ansatz=_single_ry_template(),
+        energy_estimator=PauliEstimator(NumpyBackend(), shots=16),
+        init_params=np.array([0.0]),
+        max_iters=1,
+    )
+
+    assert result.energy == np.float32(1.0)
+    assert result.estimator_result is not None
+    assert result.estimator_result.shots == 16
+    assert result.metadata["energy_estimator"] == "PauliEstimator"
 
 
 def test_run_vqe_convenience_forwards_measurement_configuration():
@@ -128,3 +164,12 @@ def test_legacy_dense_vqe_path_still_runs():
     assert result.parameters.shape == (1, 1)
     assert len(result.energy_history) == 20
     assert result.metadata["mode"] == "legacy_dense"
+
+
+def test_non_exact_energy_estimator_requires_circuit_ansatz():
+    try:
+        BasicVQE(np.diag([1.0, -1.0]), energy_estimator=PauliEstimator(NumpyBackend(), shots=16))
+    except ValueError as exc:
+        assert "requires a Circuit" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
