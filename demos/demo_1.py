@@ -1,5 +1,4 @@
 from aicir import Circuit, hadamard, cnot, pauli_x, cx, ry, rz, rzz, s_gate
-from aicir.visual import plot
 
 cir = Circuit(
     hadamard(0),
@@ -13,4 +12,4 @@ cir = Circuit(
     rzz(0.3, 1, 3)
 )
 
-plot(cir)
+cir.plot()

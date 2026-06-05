@@ -194,6 +194,47 @@ def test_plot_explicit_path_and_filename(plt, tmp_path):
     assert sys.modules["aicir.visual.plot"]._DEFAULT_COUNTERS == {}
 
 
+def test_circuit_plot_method_uses_visual_plot(plt, tmp_path):
+    cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
+
+    fig, ax = cir.plot(tmp_path / "method_output")
+
+    assert fig is ax.figure
+    assert (tmp_path / "method_output.png").exists()
+
+
+def test_circuit_plot_method_default_saves_next_to_calling_script(plt, tmp_path):
+    script = tmp_path / "call_circuit_plot.py"
+    source = "\n".join(
+        [
+            "from aicir import Circuit, hadamard",
+            "cir = Circuit(hadamard(0), n_qubits=1)",
+            "cir.plot()",
+        ]
+    )
+    script.write_text(source, encoding="utf-8")
+
+    exec(compile(source, str(script), "exec"), {})
+
+    assert (tmp_path / "call_circuit_plot_cir.png").exists()
+
+
+def test_circuit_plot_method_relative_path_uses_calling_script_dir(plt, tmp_path):
+    script = tmp_path / "call_circuit_plot_relative.py"
+    source = "\n".join(
+        [
+            "from aicir import Circuit, hadamard",
+            "cir = Circuit(hadamard(0), n_qubits=1)",
+            "cir.plot('figures/named')",
+        ]
+    )
+    script.write_text(source, encoding="utf-8")
+
+    exec(compile(source, str(script), "exec"), {})
+
+    assert (tmp_path / "figures" / "named.png").exists()
+
+
 def test_plot_accepts_gate_list_and_qasm_and_json(plt, tmp_path):
     from aicir.core.io.json_io import circuit_to_json
     from aicir.core.io.qasm import circuit_to_qasm
