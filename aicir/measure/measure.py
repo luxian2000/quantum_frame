@@ -46,6 +46,59 @@ def _readout_qubits(circuit, n_qubits: int) -> Tuple[bool, List[int]]:
     return True, sorted(measured)
 
 
+def _normalize_measure_qubits(measure_qubits, n_qubits: int) -> List[int]:
+    """Validate and sort an explicit (Approach 1) ``measure_qubits`` argument."""
+    if isinstance(measure_qubits, (int, np.integer)):
+        measure_qubits = [measure_qubits]
+    try:
+        qubits = sorted({int(q) for q in measure_qubits})
+    except TypeError as exc:
+        raise TypeError("measure_qubits 必须是整数或整数序列") from exc
+    for q in qubits:
+        if q < 0 or q >= n_qubits:
+            raise ValueError(
+                f"measure_qubits 含越界比特下标 {q}（n_qubits={n_qubits}）"
+            )
+    return qubits
+
+
+def _resolve_readout(circuit, n_qubits: int, measure_qubits=None) -> Tuple[Optional[List[int]], List[int]]:
+    """Resolve readout qubits while enforcing measurement-mechanism exclusivity.
+
+    The two measurement mechanisms are mutually exclusive:
+
+    * **Approach 1 (standalone)** — the caller passes ``measure_qubits`` to
+      :meth:`Measure.run`; the circuit carries no ``measure()`` gate.
+    * **Approach 2 (in-circuit)** — the circuit embeds ``measure()`` gates and
+      ``run`` reads them out automatically; no ``measure_qubits`` is given.
+
+    Once a circuit contains ``measure()`` gates, Approach 1 can no longer be
+    applied to it: combining the two raises :class:`ValueError`.
+
+    Returns ``(report_qubits, readout)`` where ``readout`` is the ascending list
+    of qubits to sample and ``report_qubits`` is what to surface in
+    ``metadata['measured_qubits']`` (``None`` when every qubit is read out by the
+    plain default, so existing Approach-1 callers see unchanged metadata).
+    """
+    has_measure, gate_readout = _readout_qubits(circuit, n_qubits)
+
+    if measure_qubits is not None:
+        if has_measure:
+            raise ValueError(
+                "measure_qubits 不能与电路内嵌的 measure() 门同时使用："
+                "独立测量（机制一/Approach 1）与线路内嵌测量（机制二/Approach 2）"
+                "互斥。请移除电路中的 measure() 门，或不要传入 measure_qubits。"
+            )
+        explicit = _normalize_measure_qubits(measure_qubits, n_qubits)
+        if not explicit:
+            return None, list(range(n_qubits))
+        return explicit, explicit
+
+    if has_measure:
+        return gate_readout, gate_readout
+    return None, gate_readout
+
+
 def _marginal_counts(probs_np, n_qubits: int, qubits: List[int], backend, shots: int) -> Dict[str, int]:
     """Sample ``shots`` outcomes over a subset of qubits (MSB convention)."""
     k = len(qubits)
@@ -169,6 +222,7 @@ class Measure:
         initial_state=None,
         observables: Optional[Dict[str, object]] = None,
         return_state: bool = True,
+        measure_qubits: Optional[Sequence[int]] = None,
     ) -> Result:
         """
         测量一个电路，返回统一结果对象。
@@ -179,6 +233,8 @@ class Measure:
             initial_state: 初始态（None 表示 |0...0>）
             observables: 可观测量字典 {name: operator_matrix}
             return_state: 是否在结果中附带最终态向量
+            measure_qubits: 机制一（Approach 1）显式读出比特；None 表示读取全部。
+                与电路内嵌的 measure() 门（机制二/Approach 2）互斥，二者不可同时使用。
         """
         if not hasattr(circuit, "n_qubits"):
             raise TypeError("circuit 需要具备 n_qubits 属性")
@@ -203,9 +259,10 @@ class Measure:
         probs_backend = sv.probabilities()
         probs = backend.to_numpy(probs_backend).real
 
-        # In-circuit measure gates (the second mechanism) decide which qubits
-        # are read out; with none present every qubit is read out as before.
-        has_measure, readout = _readout_qubits(circuit, n_qubits)
+        # Resolve readout qubits, enforcing that the explicit (Approach 1)
+        # measure_qubits and in-circuit measure() gates (Approach 2) are not
+        # combined. With neither present every qubit is read out as before.
+        report_qubits, readout = _resolve_readout(circuit, n_qubits, measure_qubits)
 
         counts = None
         use_shots = shots if shots is not None else 0
@@ -244,7 +301,7 @@ class Measure:
                 "measure": "Measure",
                 "circuit_type": type(circuit).__name__,
                 "state_mode": "state_vector",
-                "measured_qubits": readout if has_measure else None,
+                "measured_qubits": report_qubits,
             },
         )
 
@@ -256,6 +313,7 @@ class Measure:
         observables: Optional[Dict[str, object]] = None,
         noise_model=None,
         return_state: bool = True,
+        measure_qubits: Optional[Sequence[int]] = None,
     ) -> Result:
         """
         以密度矩阵路径测量一个电路，返回统一结果对象。
@@ -267,6 +325,8 @@ class Measure:
             observables: 可观测量字典 {name: operator_matrix}
             noise_model: NoiseModel，可选。若提供且电路具有 gates，则在每个门后施加噪声。
             return_state: 是否在结果中附带最终密度矩阵（flatten 一维）
+            measure_qubits: 机制一（Approach 1）显式读出比特；None 表示读取全部。
+                与电路内嵌的 measure() 门（机制二/Approach 2）互斥，二者不可同时使用。
         """
         if not hasattr(circuit, "n_qubits"):
             raise TypeError("circuit 需要具备 n_qubits 属性")
@@ -301,7 +361,7 @@ class Measure:
         probs = rho.probabilities()
         probs_backend = backend.cast(probs)
 
-        has_measure, readout = _readout_qubits(circuit, n_qubits)
+        report_qubits, readout = _resolve_readout(circuit, n_qubits, measure_qubits)
 
         counts = None
         use_shots = shots if shots is not None else 0
@@ -343,7 +403,7 @@ class Measure:
                 "circuit_type": type(circuit).__name__,
                 "state_mode": "density_matrix",
                 "noise_model": type(noise_model).__name__ if noise_model is not None else None,
-                "measured_qubits": readout if has_measure else None,
+                "measured_qubits": report_qubits,
             },
         )
 
@@ -395,6 +455,7 @@ class Measure:
                     initial_state=opts.get("initial_state"),
                     observables=run_observables,
                     return_state=run_return_state,
+                    measure_qubits=opts.get("measure_qubits"),
                 )
             else:
                 result = self.run_density_matrix(
@@ -403,6 +464,7 @@ class Measure:
                     initial_density_matrix=opts.get("initial_density_matrix"),
                     observables=run_observables,
                     noise_model=opts.get("noise_model"),
+                    measure_qubits=opts.get("measure_qubits"),
                     return_state=run_return_state,
                 )
 

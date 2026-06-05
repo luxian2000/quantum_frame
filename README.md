@@ -240,9 +240,11 @@ print(theta.grad)
 
 aicir 提供两种量子测量机制，可按需选用。
 
-**机制一**：电路中不含任何测量门，由外部 `Measure.run()` 决定读取哪些比特（默认读取全部）。
+**机制一**：电路中不含任何测量门，由外部 `Measure.run()` 决定读取哪些比特——默认读取全部，也可通过 `measure_qubits=[...]` 显式指定。
 
 **机制二**：在构建电路时用 `measure(*qubits)` 将测量目标嵌入电路，`Measure.run()` 自动识别并对这些比特做边缘分布采样，无需额外参数。
+
+> **两种机制互斥**：一旦电路通过机制二嵌入了 `measure()` 门，就不能再对该电路使用机制一——此时向 `run()` 传入 `measure_qubits` 会抛出 `ValueError`。请二选一：要么移除电路中的 `measure()` 门，要么不要传 `measure_qubits`。
 
 `Measure` 对象绑定一个后端，`run()` 返回统一的 `Result` 对象。
 
@@ -263,6 +265,11 @@ print(result.probabilities)     # array([0.5, 0. , 0. , 0.5])
 print(result.counts)            # {'|00>': 512, '|11>': 512}
 print(result.most_probable())   # ('|00>', 0.5)
 print(result.summary())
+
+# 也可显式指定只读出部分比特（仍属机制一）
+result = measure.run(cir, shots=1024, measure_qubits=[0])
+print(result.counts)                          # 1 比特字符串，如 {'|0>': 512, '|1>': 512}
+print(result.metadata["measured_qubits"])     # [0]
 ```
 
 ### 3.2 机制二：线路内嵌测量门

@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import torch
 
-from aicir import Circuit, Measure, TorchBackend, cnot, hadamard, ry
+from aicir import Circuit, Measure, TorchBackend, cnot, hadamard, measure, ry
 from aicir.channel.backends import NumpyBackend
 from aicir.channel.operators import Hamiltonian
 from aicir.core.circuit import crx, rxx, swap, toffoli
@@ -201,6 +201,40 @@ class TestMeasure(unittest.TestCase):
             np.array([[1.0 + 0j], [0.0 + 0j]], dtype=np.complex64),
             atol=1e-6,
         )
+
+
+    def test_explicit_measure_qubits_reads_subset(self):
+        # Approach 1: tell run() which qubits to read out, no in-circuit gates.
+        result = self.measure.run(self.bell, shots=2000, measure_qubits=[0])
+
+        self.assertEqual(result.metadata["measured_qubits"], [0])
+        self.assertTrue(all(len(b.strip("|>")) == 1 for b in result.counts))
+
+    def test_explicit_measure_qubits_default_reports_none(self):
+        result = self.measure.run(self.bell, shots=None, measure_qubits=[0, 1])
+
+        # Selecting every qubit is equivalent to the plain default readout.
+        self.assertEqual(result.metadata["measured_qubits"], [0, 1])
+
+    def test_measure_qubits_validates_indices(self):
+        with self.assertRaises(ValueError):
+            self.measure.run(self.bell, shots=10, measure_qubits=[5])
+
+    def test_approaches_are_mutually_exclusive(self):
+        # Approach 2: circuit carries a measure() gate.
+        circ = Circuit(hadamard(0), cnot(1, [0]), measure(0), n_qubits=2)
+
+        # Combining it with the Approach 1 measure_qubits override is rejected.
+        with self.assertRaises(ValueError):
+            self.measure.run(circ, shots=100, measure_qubits=[1])
+        with self.assertRaises(ValueError):
+            self.measure.run_density_matrix(circ, shots=100, measure_qubits=[1])
+
+    def test_in_circuit_measure_still_works_without_override(self):
+        circ = Circuit(hadamard(0), cnot(1, [0]), measure(0), n_qubits=2)
+        result = self.measure.run(circ, shots=1000)
+
+        self.assertEqual(result.metadata["measured_qubits"], [0])
 
 
 if __name__ == "__main__":
