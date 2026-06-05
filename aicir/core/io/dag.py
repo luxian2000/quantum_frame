@@ -36,7 +36,7 @@ def _gate_qubits(gate: dict, circuit_n_qubits: int) -> List[int]:
     aicir 门字典的比特字段因门类型而异：
     - 单比特门：target_qubit
     - cx/cy/cz/crx/cry/crz/toffoli/ccnot：control_qubits + target_qubit
-    - swap/rzz：qubit_1, qubit_2
+    - swap/rzz/rxx：qubit_1, qubit_2
     - identity/I：range(n_qubits)
     """
     gate_type = gate["type"]
