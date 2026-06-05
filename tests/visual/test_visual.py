@@ -168,7 +168,7 @@ def test_plot_u2_u3_show_smaller_parameter_sublabels(plt):
 
     assert u2_label.get_fontsize() < rz_label.get_fontsize()
     assert u3_label.get_fontsize() < rz_label.get_fontsize()
-    assert abs(rz_label.get_position()[1] - 2.0) < 0.31
+    assert rz_label.get_position()[1] == pytest.approx(2.0 - 0.62 * 0.236)
     assert u2_label.get_position()[1] < 1.0
     assert u3_label.get_position()[1] < 0.0
 
@@ -184,8 +184,7 @@ def test_plot_rzz_gate_label_is_rzz(plt):
     assert "ZZ" not in labels
 
     value_ys = sorted(text.get_position()[1] for text in ax.texts if text.get_text() == "π/2")
-    assert value_ys[0] > -0.31
-    assert value_ys[1] < 1.31
+    assert value_ys == pytest.approx([-0.62 * 0.236, 1.0 - 0.62 * 0.236])
 
 
 def test_plot_rxx_gate_label_is_rxx(plt):
@@ -198,8 +197,7 @@ def test_plot_rxx_gate_label_is_rxx(plt):
     assert labels.count("π/2") == 2
 
     value_ys = sorted(text.get_position()[1] for text in ax.texts if text.get_text() == "π/2")
-    assert value_ys[0] > -0.31
-    assert value_ys[1] < 1.31
+    assert value_ys == pytest.approx([-0.62 * 0.236, 1.0 - 0.62 * 0.236])
 
 
 def test_plot_rejects_invalid_input(plt):
