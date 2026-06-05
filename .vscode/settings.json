@@ -1,13 +1,6 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
-    "python-envs.pythonProjects": [
-        {
-            "path": ".",
-            "envManager": "ms-python.python:conda",
-            "packageManager": "ms-python.python:conda"
-        }
-    ],
     // VSCode主程序代理
     "http.proxy": "http://127.0.0.1:7890",
     "https.proxy": "http://127.0.0.1:7890",
