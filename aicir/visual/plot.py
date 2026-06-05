@@ -128,22 +128,16 @@ def _gate_qubits(gate: dict, n_qubits: int) -> list[int]:
 
 
 def _pack_layers(circuit: Any) -> list[int]:
-    """Greedily assign each gate to the earliest non-overlapping column."""
+    """Assign gates to compact columns while preserving wire-span order."""
     n_qubits = int(circuit.n_qubits)
-    occupied: list[set[int]] = []
+    next_available = [0] * n_qubits
     columns: list[int] = []
     for gate in circuit.gates:
         touched = _gate_qubits(gate, n_qubits)
         span = set(range(min(touched), max(touched) + 1))
-        col = None
-        for index, used in enumerate(occupied):
-            if used.isdisjoint(span):
-                col = index
-                break
-        if col is None:
-            col = len(occupied)
-            occupied.append(set())
-        occupied[col] |= span
+        col = max(next_available[q] for q in span)
+        for q in span:
+            next_available[q] = col + 1
         columns.append(col)
     return columns
 

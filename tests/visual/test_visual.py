@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from aicir import Circuit, cnot, crz, cz, hadamard, rzz, rx, swap, toffoli
+from aicir import Circuit, cnot, crz, cz, hadamard, rzz, rx, s_gate, swap, toffoli
 from aicir.visual import (
     circuit_to_text,
     draw_circuit,
@@ -126,6 +126,29 @@ def test_plot_layered_packs_columns(plt):
     # All three independent Hadamards share one column, so every box is at x=0.
     xs = {round(patch.get_x() + patch.get_width() / 2, 6) for patch in ax.patches}
     assert xs == {0.0}
+
+
+def test_plot_layered_preserves_order_across_wire_spans(plt):
+    circuit = Circuit(
+        cnot(0, [1, 2]),
+        cnot(1, [0, 2]),
+        cnot(2, [0]),
+        s_gate(2),
+        n_qubits=3,
+    )
+
+    fig, ax = plot(circuit, layered=True, save=False)
+
+    s_patch = ax.patches[-1]
+    s_x = round(s_patch.get_x() + s_patch.get_width() / 2, 6)
+    cnot_xs = [
+        round(line.get_xdata()[0], 6)
+        for line in ax.lines
+        if len(line.get_xdata()) == 2
+        and line.get_xdata()[0] == line.get_xdata()[1]
+        and line.get_ydata()[0] != line.get_ydata()[1]
+    ]
+    assert s_x > max(cnot_xs)
 
 
 def test_plot_rejects_invalid_input(plt):
