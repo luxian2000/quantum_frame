@@ -17,7 +17,7 @@ cir = Circuit(
     pauli_x(3),
     s_gate(2),
     rzz(np.pi / 3, 0, 3),
-    measure(1, 3),
+    measure(1, 3)
 )
 
 cir.plot()
