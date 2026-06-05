@@ -232,17 +232,16 @@ def qubo_to_hamiltonian(
         z_coef[qj] = z_coef.get(qj, 0.0) - b / 4.0
         zz_coef[frozenset((qi, qj))] = zz_coef.get(frozenset((qi, qj)), 0.0) + b / 4.0
 
-    hamiltonian = Hamiltonian(n_qubits=n_qubits)
-    hamiltonian.term(complex(const), {"I": [0]})
+    terms = [("I", complex(const), [0])]
     for q, c in sorted(z_coef.items()):
         if abs(c) > 1e-12:
-            hamiltonian.term(complex(c), {"Z": [q]})
+            terms.append(("Z", complex(c), [q]))
     for key, c in sorted(zz_coef.items(), key=lambda kv: sorted(kv[0])):
         if abs(c) > 1e-12:
             qi, qj = sorted(key)
-            hamiltonian.term(complex(c), {"Z": [qi, qj]})
+            terms.append(("ZZ", complex(c), [qi, qj]))
 
-    return hamiltonian, var_to_qubit
+    return Hamiltonian(n_qubits=n_qubits, terms=terms), var_to_qubit
 
 
 # ──────────────────────────────────────────────────────────────────────────────

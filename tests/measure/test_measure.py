@@ -27,7 +27,7 @@ class TestMeasure(unittest.TestCase):
         self.assertAlmostEqual(float(np.sum(result.probabilities)), 1.0, places=6)
 
     def test_run_state_vector_expectation_and_variance(self):
-        h = Hamiltonian(n_qubits=2).term(1.0, {"Z": [0, 1]})
+        h = Hamiltonian(n_qubits=2, terms=[("ZZ", 1.0)])
         op = h.to_matrix(self.backend)
 
         result = self.measure.run(self.bell, shots=None, observables={"ZZ": op})
@@ -39,7 +39,7 @@ class TestMeasure(unittest.TestCase):
         self.assertAlmostEqual(result.stddev("ZZ"), 0.0, places=5)
 
     def test_run_density_matrix_path(self):
-        h = Hamiltonian(n_qubits=2).term(1.0, {"Z": [0, 1]})
+        h = Hamiltonian(n_qubits=2, terms=[("ZZ", 1.0)])
         op = h.to_matrix(self.backend)
 
         result = self.measure.run_density_matrix(self.bell, shots=1500, observables={"ZZ": op})
@@ -55,7 +55,7 @@ class TestMeasure(unittest.TestCase):
         c1 = Circuit(hadamard(0), n_qubits=2)
         c2 = self.bell
 
-        h = Hamiltonian(n_qubits=2).term(1.0, {"Z": [0, 1]})
+        h = Hamiltonian(n_qubits=2, terms=[("ZZ", 1.0)])
         op = h.to_matrix(self.backend)
 
         results = self.measure.run_batch(
@@ -114,7 +114,7 @@ class TestMeasure(unittest.TestCase):
         self.assertEqual(results[1].metadata["label"], "remote")
 
     def test_scan_parameters(self):
-        h = Hamiltonian(n_qubits=2).term(1.0, {"Z": [0]})
+        h = Hamiltonian(n_qubits=2, terms=[("ZI", 1.0)])
         op = h.to_matrix(self.backend)
 
         params = [0.0, np.pi / 2, np.pi]

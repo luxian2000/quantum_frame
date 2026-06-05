@@ -353,7 +353,7 @@ def test_ad_accepts_hamiltonian_observable():
 
     backend = NumpyBackend()
     circuit = Circuit(ry(0.5, 0), n_qubits=1)
-    hamiltonian = Hamiltonian(n_qubits=1).term(1.0, {"Z": [0]})
+    hamiltonian = Hamiltonian(n_qubits=1, terms=[("Z", 1.0)])
     grad = ad(circuit, hamiltonian, backend=backend)
     assert np.allclose(grad, [-np.sin(0.5)], atol=1e-6)
 

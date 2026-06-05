@@ -497,12 +497,13 @@ print(circuit.show())
 from aicir.channel.operators import Hamiltonian
 from aicir.qas import config, run
 
-h2 = Hamiltonian(n_qubits=2)
-h2.term(-1.052373245772859, {"I": [0, 1]})
-h2.term(0.39793742484318045, {"Z": [0]})
-h2.term(-0.39793742484318045, {"Z": [1]})
-h2.term(-0.01128010425623538, {"Z": [0, 1]})
-h2.term(0.18093119978423156, {"X": [0, 1]})
+h2 = Hamiltonian([
+    ("II", -1.052373245772859),
+    ("ZI", 0.39793742484318045),
+    ("IZ", -0.39793742484318045),
+    ("ZZ", -0.01128010425623538),
+    ("XX", 0.18093119978423156),
+])
 
 cfg = config.crlqas(
     max_episodes=300,
