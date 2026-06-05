@@ -18,13 +18,13 @@ def build_h2_hamiltonian() -> Hamiltonian:
 
     Coefficients correspond to a standard mapped H2 instance often used in VQE demos.
     """
-    hamiltonian = Hamiltonian(n_qubits=2)
-    hamiltonian.term(-1.052373245772859, {"I": [0, 1]})
-    hamiltonian.term(0.39793742484318045, {"Z": [0]})
-    hamiltonian.term(-0.39793742484318045, {"Z": [1]})
-    hamiltonian.term(-0.01128010425623538, {"Z": [0, 1]})
-    hamiltonian.term(0.18093119978423156, {"X": [0, 1]})
-    return hamiltonian
+    return Hamiltonian(n_qubits=2, terms=[
+        ("II", -1.052373245772859),
+        ("ZI", 0.39793742484318045),
+        ("IZ", -0.39793742484318045),
+        ("ZZ", -0.01128010425623538),
+        ("XX", 0.18093119978423156),
+    ])
 
 
 def main() -> None:

@@ -1084,16 +1084,18 @@ def h2_hamiltonian() -> Hamiltonian:
         "XYYX": 0.045,
     }
 
-    hamiltonian = Hamiltonian(n_qubits=4).term(g, {"I": [0]})
+    terms = [("I", g, [0])]
     for qubit, coefficient in z.items():
-        hamiltonian.term(coefficient, {"Z": [qubit]})
+        terms.append(("Z", coefficient, [qubit]))
     for (q0, q1), coefficient in zz.items():
-        hamiltonian.term(coefficient, {"Z": [q0, q1]})
-    hamiltonian.term(quartic["YXXY"], {"Y": [0, 3], "X": [1, 2]})
-    hamiltonian.term(quartic["YYXX"], {"Y": [0, 1], "X": [2, 3]})
-    hamiltonian.term(quartic["XXYY"], {"X": [0, 1], "Y": [2, 3]})
-    hamiltonian.term(quartic["XYYX"], {"X": [0, 3], "Y": [1, 2]})
-    return hamiltonian
+        terms.append(("ZZ", coefficient, [q0, q1]))
+    terms.extend([
+        ("YXXY", quartic["YXXY"]),
+        ("YYXX", quartic["YYXX"]),
+        ("XXYY", quartic["XXYY"]),
+        ("XYYX", quartic["XYYX"]),
+    ])
+    return Hamiltonian(n_qubits=4, terms=terms)
 
 
 def train_vqa_qas(
