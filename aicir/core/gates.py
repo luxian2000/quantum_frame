@@ -314,6 +314,23 @@ def _rzz(theta, qubit_1=0, qubit_2=1):
     )
 
 
+def _rxx(theta, qubit_1=0, qubit_2=1):
+    _ = (qubit_1, qubit_2)
+    t = float(theta)
+    cos = math.cos(t / 2.0)
+    sin = math.sin(t / 2.0)
+    neg_i_sin = -1j * sin
+    return np.array(
+        [
+            [cos, 0.0 + 0.0j, 0.0 + 0.0j, neg_i_sin],
+            [0.0 + 0.0j, cos, neg_i_sin, 0.0 + 0.0j],
+            [0.0 + 0.0j, neg_i_sin, cos, 0.0 + 0.0j],
+            [neg_i_sin, 0.0 + 0.0j, 0.0 + 0.0j, cos],
+        ],
+        dtype=_CDTYPE,
+    )
+
+
 def _contains_torch_tensor(value) -> bool:
     if isinstance(value, torch.Tensor):
         return True
@@ -475,6 +492,33 @@ def _rzz_backend(theta, backend):
             [z, exp_pos, z, z],
             [z, z, exp_pos, z],
             [z, z, z, exp_neg],
+        ],
+        dtype,
+        device,
+    )
+
+
+def _rxx_backend(theta, backend):
+    if not _contains_torch_tensor(theta):
+        return backend.cast(_rxx(theta))
+
+    ref = _first_torch_tensor(theta)
+    backend_dtype = getattr(backend, "_dtype", torch.complex64)
+    dtype = _torch_complex_dtype(backend_dtype)
+    device = getattr(backend, "_device", ref.device if ref is not None else None)
+    zero = torch.zeros((), dtype=_torch_real_dtype(dtype), device=device)
+    t = _torch_angle(theta, backend)
+    cos = torch.cos(t / 2.0)
+    sin = torch.sin(t / 2.0)
+    c = _torch_complex(cos, complex_dtype=dtype)
+    z = _torch_complex(zero, complex_dtype=dtype)
+    neg_i_sin = _torch_complex(zero, -sin, dtype)
+    return _torch_base_matrix(
+        [
+            [c, z, z, neg_i_sin],
+            [z, c, neg_i_sin, z],
+            [z, neg_i_sin, c, z],
+            [neg_i_sin, z, z, c],
         ],
         dtype,
         device,
@@ -821,10 +865,10 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
             backend,
         )
 
-    if gate_type == "rzz":
+    if gate_type in {"rzz", "rxx"}:
         parameter = gate.get("parameter")
-        local = _rzz_backend(parameter, backend)
-        cache_key = None if _contains_torch_tensor(parameter) else ("rzz", _parameter_cache_key(parameter))
+        local = _rzz_backend(parameter, backend) if gate_type == "rzz" else _rxx_backend(parameter, backend)
+        cache_key = None if _contains_torch_tensor(parameter) else (gate_type, _parameter_cache_key(parameter))
         return _apply_local_matrix_to_state(
             state,
             _cast_local_matrix(backend, local, cache_key=cache_key),
@@ -933,9 +977,10 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
             gate_matrix = _toffoli(gate["target_qubit"], controls, control_states)
         elif gate_type in ["identity", "I"]:
             return identity(cir_qubits)
-        elif gate_type == "rzz":
+        elif gate_type in {"rzz", "rxx"}:
+            local = _rzz(gate_parameter) if gate_type == "rzz" else _rxx(gate_parameter)
             return _expand_local_matrix_to_full(
-                _rzz(gate_parameter),
+                local,
                 [gate["qubit_1"], gate["qubit_2"]],
                 int(cir_qubits),
             )
@@ -1030,9 +1075,10 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
             gate_matrix = _toffoli_backend(gate["target_qubit"], controls, control_states, backend)
         elif gate_type in ["identity", "I"]:
             return backend.eye(1 << cir_qubits)
-        elif gate_type == "rzz":
+        elif gate_type in {"rzz", "rxx"}:
+            local = _rzz_backend(gate_parameter, backend) if gate_type == "rzz" else _rxx_backend(gate_parameter, backend)
             return _expand_local_matrix_to_full(
-                _rzz_backend(gate_parameter, backend),
+                local,
                 [gate["qubit_1"], gate["qubit_2"]],
                 int(cir_qubits),
                 backend=backend,

@@ -25,6 +25,7 @@ def is_two_qubit_gate(gate: dict) -> bool:
             "crz",
             "swap",
             "rzz",
+            "rxx",
             "zz",
             "toffoli",
             "ccnot",

@@ -310,7 +310,7 @@ def test_ad_matches_analytic_single_rotation():
 
 
 def test_ad_matches_psr_on_mixed_ansatz():
-    from aicir.core.circuit import cx, crx, rx, rz, rzz, hadamard
+    from aicir.core.circuit import cx, crx, rx, rxx, rz, rzz, hadamard
 
     backend = NumpyBackend()
     obs = _parity_z_observable(3)
@@ -322,11 +322,12 @@ def test_ad_matches_psr_on_mixed_ansatz():
             cx(1, [0]),
             crx(theta[3], 2, [1]),
             rzz(theta[4], 0, 2),
-            ry(theta[5], 1),
+            rxx(theta[5], 0, 1),
+            ry(theta[6], 1),
             n_qubits=3,
         )
 
-    theta = np.array([0.3, -0.5, 0.8, 0.4, -0.7, 0.9])
+    theta = np.array([0.3, -0.5, 0.8, 0.4, -0.7, 0.6, 0.9])
 
     def objective(p):
         state = State.zero_state(3, backend).evolve(build(p).unitary(backend=backend))
@@ -334,7 +335,7 @@ def test_ad_matches_psr_on_mixed_ansatz():
 
     grad_ad = ad(build(theta), obs, backend=backend)
     grad_psr = psr(objective, theta)
-    assert grad_ad.shape == (6,)
+    assert grad_ad.shape == (7,)
     assert np.allclose(grad_ad, grad_psr, atol=1e-5)
 
 

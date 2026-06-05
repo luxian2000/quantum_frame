@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from aicir import Circuit, cnot, crz, cz, hadamard, rzz, rx, s_gate, swap, toffoli
+from aicir import Circuit, cnot, crz, cz, hadamard, rxx, rzz, rx, rz, s_gate, swap, toffoli, u2, u3
 from aicir.visual import (
     circuit_to_text,
     draw_circuit,
@@ -24,7 +24,7 @@ def test_circuit_to_text_and_draw_circuit_text():
     assert diagram == draw_circuit(circuit)
     assert "H" in diagram
     assert "X" in diagram
-    assert "ZZ" in diagram
+    assert "Rzz" in diagram
     assert "pi/2" in diagram
 
 
@@ -151,6 +151,47 @@ def test_plot_layered_preserves_order_across_wire_spans(plt):
     assert s_x > max(cnot_xs)
 
 
+def test_plot_u2_u3_show_smaller_parameter_sublabels(plt):
+    circuit = Circuit(
+        rz(np.pi / 2, 0),
+        u2(np.pi / 3, np.pi / 5, 1),
+        u3(np.pi, 0.0, np.pi / 7, 2),
+        n_qubits=3,
+    )
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    text_by_value = {text.get_text(): text for text in ax.texts}
+    rz_label = text_by_value["π/2"]
+    u2_label = text_by_value["π/3, 0.628"]
+    u3_label = text_by_value["π, 0.000\n0.449"]
+
+    assert u2_label.get_fontsize() < rz_label.get_fontsize()
+    assert u3_label.get_fontsize() < rz_label.get_fontsize()
+    assert u2_label.get_position()[1] < 1.0
+    assert u3_label.get_position()[1] < 0.0
+
+
+def test_plot_rzz_gate_label_is_rzz(plt):
+    circuit = Circuit(rzz(np.pi / 2, 0, 1), n_qubits=2)
+
+    fig, ax = plot(circuit, save=False)
+
+    labels = [text.get_text() for text in ax.texts]
+    assert labels.count("Rzz") == 2
+    assert "ZZ" not in labels
+
+
+def test_plot_rxx_gate_label_is_rxx(plt):
+    circuit = Circuit(rxx(np.pi / 2, 0, 1), n_qubits=2)
+
+    fig, ax = plot(circuit, save=False)
+
+    labels = [text.get_text() for text in ax.texts]
+    assert labels.count("Rxx") == 2
+    assert "π/2" in labels
+
+
 def test_plot_rejects_invalid_input(plt):
     with pytest.raises(TypeError):
         plot(object(), save=False)
@@ -192,6 +233,47 @@ def test_plot_explicit_path_and_filename(plt, tmp_path):
     plot(Circuit(hadamard(0), n_qubits=1), str(tmp_path / "anon.png"))
     assert (tmp_path / "anon.png").exists()
     assert sys.modules["aicir.visual.plot"]._DEFAULT_COUNTERS == {}
+
+
+def test_circuit_plot_method_uses_visual_plot(plt, tmp_path):
+    cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
+
+    fig, ax = cir.plot(tmp_path / "method_output")
+
+    assert fig is ax.figure
+    assert (tmp_path / "method_output.png").exists()
+
+
+def test_circuit_plot_method_default_saves_next_to_calling_script(plt, tmp_path):
+    script = tmp_path / "call_circuit_plot.py"
+    source = "\n".join(
+        [
+            "from aicir import Circuit, hadamard",
+            "cir = Circuit(hadamard(0), n_qubits=1)",
+            "cir.plot()",
+        ]
+    )
+    script.write_text(source, encoding="utf-8")
+
+    exec(compile(source, str(script), "exec"), {})
+
+    assert (tmp_path / "call_circuit_plot_cir.png").exists()
+
+
+def test_circuit_plot_method_relative_path_uses_calling_script_dir(plt, tmp_path):
+    script = tmp_path / "call_circuit_plot_relative.py"
+    source = "\n".join(
+        [
+            "from aicir import Circuit, hadamard",
+            "cir = Circuit(hadamard(0), n_qubits=1)",
+            "cir.plot('figures/named')",
+        ]
+    )
+    script.write_text(source, encoding="utf-8")
+
+    exec(compile(source, str(script), "exec"), {})
+
+    assert (tmp_path / "figures" / "named.png").exists()
 
 
 def test_plot_accepts_gate_list_and_qasm_and_json(plt, tmp_path):

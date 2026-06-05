@@ -122,7 +122,7 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 
 | 参数             | 说明                                                                      |
 | ---------------- | ------------------------------------------------------------------------- |
-| `circuit`      | 完全绑定参数的 `Circuit` 对象（含 `rx/ry/rz/crx/cry/crz/rzz` 可微门） |
+| `circuit`      | 完全绑定参数的 `Circuit` 对象（含 `rx/ry/rz/crx/cry/crz/rzz/rxx` 可微门） |
 | `observable`   | Hermitian 算符矩阵或 `Hamiltonian` 对象                                 |
 | `backend`      | 计算后端（默认 `NumpyBackend`）                                         |
 | `return_value` | 若为 `True`，同时返回期望值 `⟨O⟩`                                   |
@@ -476,7 +476,7 @@ $$
 - **时间复杂度**：$O(P)$ 次局部门作用（与参数数量线性相关）
 - **空间复杂度**：仅需 $O(1)$ 额外状态存储（$|\lambda\rangle$ 与 $|\phi\rangle$ 各一份），远优于有限差分的 $O(P)$ 额外电路
 - 与 `psr` 相比：相同精度，但减少 $\sim P$ 倍的模拟开销
-- **结构感知**：直接作用于 `Circuit` 对象，可微门为 `rx/ry/rz/crx/cry/crz/rzz`；其他门（`H`、`cx`、`u3`、任意幺正门）正常传播但不被微分
+- **结构感知**：直接作用于 `Circuit` 对象，可微门为 `rx/ry/rz/crx/cry/crz/rzz/rxx`；其他门（`H`、`cx`、`u3`、任意幺正门）正常传播但不被微分
 - **NPU 兼容**：梯度读取 $\operatorname{Im}\langle\lambda|G|\phi\rangle$ 全程在设备端完成，不触发设备→主机拷贝
 - `observable` 可为矩阵（numpy/后端张量）或 `Hamiltonian` 对象
 

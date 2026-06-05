@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+import inspect
 import math
 import sys
 
@@ -297,7 +298,7 @@ def _format_angle_value(value):
 
 def _rotation_angle_label(gate):
     gate_type = gate.get("type")
-    if gate_type in {"rx", "ry", "rz", "crx", "cry", "crz", "rzz"}:
+    if gate_type in {"rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"}:
         return f"θ={_format_angle_value(gate.get('parameter'))}"
     return None
 
@@ -307,7 +308,7 @@ def _angle_row_index_for_gate(gate, n_qubits):
         return None
 
     gate_type = gate.get("type")
-    if gate_type in {"rzz", "swap"}:
+    if gate_type in {"rzz", "rxx", "swap"}:
         q1 = int(gate["qubit_1"])
         q2 = int(gate["qubit_2"])
         lo, hi = min(q1, q2), max(q1, q2)
@@ -362,12 +363,13 @@ def _gate_to_column(gate, n_qubits):
             between_col[q] = _vertical_cell()
         return qubit_col, between_col, angle_col
 
-    if gate_type == "rzz":
+    if gate_type in {"rzz", "rxx"}:
         q1 = int(gate["qubit_1"])
         q2 = int(gate["qubit_2"])
         lo, hi = min(q1, q2), max(q1, q2)
-        qubit_col[q1] = _symbol_cell("ZZ")
-        qubit_col[q2] = _symbol_cell("ZZ")
+        symbol = "Rzz" if gate_type == "rzz" else "Rxx"
+        qubit_col[q1] = _symbol_cell(symbol)
+        qubit_col[q2] = _symbol_cell(symbol)
         for q in range(lo, hi):
             between_col[q] = _vertical_cell()
         label = _rotation_angle_label(gate)
@@ -537,6 +539,22 @@ class Circuit:
         print(diagram, file=stream)
         return diagram
 
+    def plot(self, path=None, **kwargs):
+        """Render this circuit with :func:`aicir.visual.plot`.
+
+        Examples
+        --------
+        ``cir.plot("figures/bell")`` writes ``figures/bell.png``.
+        """
+        from ..visual import plot
+
+        frame = inspect.currentframe()
+        caller = frame.f_back if frame is not None else None
+        try:
+            return plot(self, path, _caller=caller, **kwargs)
+        finally:
+            del frame
+
     def __len__(self):
         return len(self.gates)
 
@@ -668,6 +686,14 @@ def rzz(theta, qubit_1=0, qubit_2=1):
     return {"type": "rzz", "qubit_1": qubit_1, "qubit_2": qubit_2, "parameter": theta}
 
 
+def rxx(theta, qubit_1=0, qubit_2=1):
+    return {"type": "rxx", "qubit_1": qubit_1, "qubit_2": qubit_2, "parameter": theta}
+
+
+ms_gate = rxx
+molmer_sorensen = rxx
+
+
 def toffoli(target_qubit=2, control_qubits=(0, 1)):
     return {"type": "toffoli", "target_qubit": target_qubit, "control_qubits": list(control_qubits)}
 
@@ -705,6 +731,9 @@ __all__ = [
     "crz",
     "swap",
     "rzz",
+    "rxx",
+    "ms_gate",
+    "molmer_sorensen",
     "toffoli",
     "ccnot",
     "u3",

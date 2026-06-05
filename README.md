@@ -1,4 +1,4 @@
-# AiCir 使用手册
+# aicir 使用手册
 
 ---
 
@@ -23,7 +23,7 @@ from aicir import (
     s_gate, t_gate,
     cx, cnot, cy, cz,
     crx, cry, crz,
-    swap, rzz,
+    swap, rzz, rxx, ms_gate,
     toffoli, ccnot,
     u2, u3,
 )
@@ -64,30 +64,32 @@ from aicir.qml import psr, spsr, multipsr
 
 ### 2.1 门字典速查
 
-| 函数                    | 参数                             | 说明            |
-| ----------------------- | -------------------------------- | --------------- |
-| `pauli_x(q)`          | target_qubit                     | X 门            |
-| `pauli_y(q)`          | target_qubit                     | Y 门            |
-| `pauli_z(q)`          | target_qubit                     | Z 门            |
-| `hadamard(q)`         | target_qubit                     | H 门            |
-| `s_gate(q)`           | target_qubit                     | S 门            |
-| `t_gate(q)`           | target_qubit                     | T 门            |
-| `rx(θ, q)`           | 角度, target_qubit               | Rx 旋转门       |
-| `ry(θ, q)`           | 角度, target_qubit               | Ry 旋转门       |
-| `rz(θ, q)`           | 角度, target_qubit               | Rz 旋转门       |
-| `u2(φ, λ, q)`       | phi, lambda, target_qubit        | U2 门           |
-| `u3(θ, φ, λ, q)`   | theta, phi, lambda, target_qubit | U3 通用单比特门 |
-| `cx(t, [c])`          | target, control_list             | CNOT（控制-X）  |
-| `cnot(t, [c])`        | target, control_list             | 同 cx           |
-| `cy(t, [c])`          | target, control_list             | 控制-Y          |
-| `cz(t, [c])`          | target, control_list             | 控制-Z          |
-| `crx(θ, t, [c])`     | 角度, target, control_list       | 受控 Rx         |
-| `cry(θ, t, [c])`     | 角度, target, control_list       | 受控 Ry         |
-| `crz(θ, t, [c])`     | 角度, target, control_list       | 受控 Rz         |
-| `swap(q1, q2)`        | qubit_1, qubit_2                 | SWAP 门         |
-| `rzz(θ, q1, q2)`      | 角度, qubit_1, qubit_2           | ZZ 旋转门       |
-| `toffoli(t, [c0,c1,...])` | target, control_list         | 多控制 X 门     |
-| `ccnot(t, [c0,c1,...])`   | target, control_list         | 同 toffoli      |
+| 函数                        | 参数                             | 说明            |
+| --------------------------- | -------------------------------- | --------------- |
+| `pauli_x(q)`              | target_qubit                     | X 门            |
+| `pauli_y(q)`              | target_qubit                     | Y 门            |
+| `pauli_z(q)`              | target_qubit                     | Z 门            |
+| `hadamard(q)`             | target_qubit                     | H 门            |
+| `s_gate(q)`               | target_qubit                     | S 门            |
+| `t_gate(q)`               | target_qubit                     | T 门            |
+| `rx(θ, q)`               | 角度, target_qubit               | Rx 旋转门       |
+| `ry(θ, q)`               | 角度, target_qubit               | Ry 旋转门       |
+| `rz(θ, q)`               | 角度, target_qubit               | Rz 旋转门       |
+| `u2(φ, λ, q)`           | phi, lambda, target_qubit        | U2 门           |
+| `u3(θ, φ, λ, q)`       | theta, phi, lambda, target_qubit | U3 通用单比特门 |
+| `cx(t, [c])`              | target, control_list             | CNOT（控制-X）  |
+| `cnot(t, [c])`            | target, control_list             | 同 cx           |
+| `cy(t, [c])`              | target, control_list             | 控制-Y          |
+| `cz(t, [c])`              | target, control_list             | 控制-Z          |
+| `crx(θ, t, [c])`         | 角度, target, control_list       | 受控 Rx         |
+| `cry(θ, t, [c])`         | 角度, target, control_list       | 受控 Ry         |
+| `crz(θ, t, [c])`         | 角度, target, control_list       | 受控 Rz         |
+| `swap(q1, q2)`            | qubit_1, qubit_2                 | SWAP 门         |
+| `rzz(θ, q1, q2)`         | 角度, qubit_1, qubit_2           | ZZ 旋转门       |
+| `rxx(θ, q1, q2)`         | 角度, qubit_1, qubit_2           | XX 旋转门       |
+| `ms_gate(θ, q1, q2)`     | 角度, qubit_1, qubit_2           | `rxx` 的别名    |
+| `toffoli(t, [c0,c1,...])` | target, control_list             | 多控制 X 门     |
+| `ccnot(t, [c0,c1,...])`   | target, control_list             | 同 toffoli      |
 
 `toffoli` / `ccnot` 的矩阵构造与逐门执行路径支持任意数量控制位，也支持门字典中的 `control_states`；导出为 OpenQASM `ccx` 时仍只适用于两个控制位。
 
@@ -123,7 +125,7 @@ print(U.shape)   # (4, 4)
 
 ```python
 import math
-from aicir import Circuit, rx, ry, rz, u2, u3, crx, rzz, swap, toffoli
+from aicir import Circuit, rx, ry, rz, u2, u3, crx, rzz, rxx, swap, toffoli
 
 cir = Circuit(
     rx(math.pi / 2, 0),             # Rx(π/2) 作用在 qubit 0
@@ -132,6 +134,7 @@ cir = Circuit(
     u3(math.pi, 0, math.pi, 2),     # U3(π, 0, π) ≡ X 门，作用在 qubit 2
     crx(math.pi / 2, 2, [1]),       # 受控 Rx，控制=qubit1，目标=qubit2
     rzz(math.pi / 3, 0, 2),         # RZZ 作用在 qubit0 和 qubit2
+    rxx(math.pi / 3, 0, 1),         # RXX / Mølmer-Sørensen 作用在 qubit0 和 qubit1
     swap(0, 1),                     # SWAP qubit0 和 qubit1
     toffoli(2, [0, 1]),             # Toffoli，控制=[0,1]，目标=qubit2
     n_qubits=3,
@@ -185,7 +188,7 @@ template.bind_parameters({"theta0": 0.2, "theta1": 0.5}, inplace=True)
 - 未绑定参数的电路调用 `unitary()` 会报错，需要先 `bind_parameters(...)`。
 - `allow_partial=True` 可做部分绑定，返回仍含未绑定参数的电路。
 - `Parameter` 是符号占位符，不是自动微分张量；训练梯度可使用第 7 节的 parameter-shift 工具。
-- 如果要使用 PyTorch autograd，可直接把 Torch 标量张量作为门参数，并调用 `Circuit.unitary(backend=TorchBackend(...))`。当前 `rx`/`ry`/`rz`/`u2`/`u3`、受控旋转门、`rzz` 和自定义 `unitary` 的 Torch 参数会保留计算图。
+- 如果要使用 PyTorch autograd，可直接把 Torch 标量张量作为门参数，并调用 `Circuit.unitary(backend=TorchBackend(...))`。当前 `rx`/`ry`/`rz`/`u2`/`u3`、受控旋转门、`rzz`/`rxx` 和自定义 `unitary` 的 Torch 参数会保留计算图。
 - 导出 QASM 前应先把所有符号参数绑定为数值。JSON 导出支持 `Parameter`、NumPy 标量/数组、复数和 Torch 张量数值；Torch 张量在 JSON 读回后会恢复为普通数值或列表，不会恢复为带计算图的 Tensor。
 
 ### 2.5 自定义 unitary、identity 与 Torch 自动微分
@@ -212,7 +215,7 @@ Torch 参数示例：
 
 ```python
 import torch
-from aicir import Circuit, TorchBackend, rx, rzz
+from aicir import Circuit, TorchBackend, rx, rzz, rxx
 
 backend = TorchBackend(device="cpu")
 theta = torch.tensor(0.2, requires_grad=True)
@@ -220,6 +223,7 @@ theta = torch.tensor(0.2, requires_grad=True)
 cir = Circuit(
     rx(theta, 0),
     rzz(theta, 0, 1),
+    rxx(theta, 0, 1),
     n_qubits=2,
 )
 
@@ -500,7 +504,7 @@ result = Measure(common_backend).run(full)
 - 构建阶段只保存门描述: 调用 `hadamard(0)` 等构造的是门的描述字典（例如 `{"type": "hadamard", "target_qubit": 0}`），`Circuit.__init__` 只是把这些描述存起来，并不会在构建时把门转换成数值矩阵。
 - 当前执行策略: `Measure.run`/`run_density_matrix` 在电路对象具备 `gates` 序列时，会优先走“逐门演化”路径（按门依次作用到态/密度矩阵），而不是先组装整条电路的全局矩阵后再一次性作用。
 - 矩阵在组装时生成: 真正把门变为 2^n×2^n 的数值矩阵发生在调用 `Circuit.unitary(backend=...)` 或 `Measure` 等需要数值矩阵的地方。此时会调用 `gate_to_matrix(gate, cir_qubits, backend)` 来生成每个门的矩阵。
-- backend 参数的作用: 当 `backend=None` 时，`gate_to_matrix` 会走 numpy 路径（例如调用 `_hadamard()` 等函数，在 CPU 上生成矩阵）；当传入 `backend` 时，`gate_to_matrix` 会使用后端分支（先构造 base 矩阵再通过 `_single_qubit_from_base_backend`/`_controlled_from_base_backend` 等路径调用 `backend.cast`、`backend.kron`、`backend.matmul` 等接口），从而在目标后端（CPU/GPU/NPU）上构造和组合张量。`rx`/`ry`/`rz`/`u2`/`u3`、受控旋转、`rzz` 和自定义 `unitary` 可在 `TorchBackend` 下保留 Torch 参数的梯度链路。
+- backend 参数的作用: 当 `backend=None` 时，`gate_to_matrix` 会走 numpy 路径（例如调用 `_hadamard()` 等函数，在 CPU 上生成矩阵）；当传入 `backend` 时，`gate_to_matrix` 会使用后端分支（先构造 base 矩阵再通过 `_single_qubit_from_base_backend`/`_controlled_from_base_backend` 等路径调用 `backend.cast`、`backend.kron`、`backend.matmul` 等接口），从而在目标后端（CPU/GPU/NPU）上构造和组合张量。`rx`/`ry`/`rz`/`u2`/`u3`、受控旋转、`rzz`/`rxx` 和自定义 `unitary` 可在 `TorchBackend` 下保留 Torch 参数的梯度链路。
 - 兼容回退路径: 若电路对象不提供 `gates` 序列，`Measure` 仍会回退到 `unitary()` 路径以兼容外部实现。
 - 可能的设备搬运: 在 `unitary()` 回退路径中，`Measure` 现在优先直接 `backend.cast(unitary_raw)`，避免无必要的 `to_numpy` 主机往返。
 - 性能建议: 对大 qubit 数，显式组装全矩阵会占用大量内存并产生迁移成本。若要最小化搬运，优先在构建时绑定后端（本节方式 B），或改为按门逐步在态上直接作用（逐门 apply），避免生成完整 2^n×2^n 矩阵；若需要彻底避免中间拷贝，可考虑修改 `Measure` 中的 `to_numpy` 使用点或直接在后端上逐门演化。
@@ -701,13 +705,14 @@ aicir 在 3.0 模式下的主要差异：
 
 ### 6.5 支持的 QASM 门集
 
-| QASM 门名                          | aicir 对应函数                         |
+| QASM 门名                          | aicir 对应函数                        |
 | ---------------------------------- | ------------------------------------- |
 | `x`, `y`, `z`                | `pauli_x`, `pauli_y`, `pauli_z` |
 | `h`                              | `hadamard`                          |
 | `s`, `t`                       | `s_gate`, `t_gate`                |
 | `rx`, `ry`, `rz`             | `rx`, `ry`, `rz`                |
-| `rzz(θ)`                         | `rzz`                               |
+| `rzz(θ)`                        | `rzz`                               |
+| `rxx(θ)`                        | `rxx`                               |
 | `u2(φ,λ)`                      | `u2`                                |
 | `u3(θ,φ,λ)` / `u(θ,φ,λ)` | `u3`                                |
 | `cx`                             | `cx` / `cnot`                     |
@@ -791,14 +796,14 @@ grad_est = spsr(
 
 常用参数：
 
-| 参数          | 说明                                                        |
-| ------------- | ----------------------------------------------------------- |
-| `n_samples` | 每次估计抽样的参数坐标数量                                  |
-| `rng`       | 随机种子或 NumPy generator                                  |
-| `replace`   | 是否允许重复抽样；默认 `False`                            |
-| `unbiased`  | 是否缩放为无偏估计；默认 `True`                            |
-| `shift`     | 参数位移；默认 `np.pi / 2`                                |
-| `coefficient` | shifted difference 系数；默认 `0.5`                     |
+| 参数            | 说明                                  |
+| --------------- | ------------------------------------- |
+| `n_samples`   | 每次估计抽样的参数坐标数量            |
+| `rng`         | 随机种子或 NumPy generator            |
+| `replace`     | 是否允许重复抽样；默认 `False`      |
+| `unbiased`    | 是否缩放为无偏估计；默认 `True`     |
+| `shift`       | 参数位移；默认 `np.pi / 2`          |
+| `coefficient` | shifted difference 系数；默认 `0.5` |
 
 ### 7.3 multivariate parameter-shift rule：`multipsr`
 
@@ -848,6 +853,7 @@ from aicir.visual import (
     circuit_to_text,
     draw_circuit,
     gate_histogram,
+    plot,
     plot_state_probs,
     plot_state_amplitudes,
     plot_density_matrix,
@@ -862,6 +868,18 @@ cir = Circuit(
 
 print(circuit_to_text(cir))
 print(gate_histogram(cir))  # {'cx': 1, 'hadamard': 1, 'rzz': 1}
+
+# 保存彩色线路图。无 path 时，默认保存到调用它的 .py 文件所在目录，
+# 文件名为 <脚本名>_<电路变量名>.png，例如 demos/demo_1.py 中的
+# cir.plot() 会保存为 demos/demo_1_cir.png。
+fig, ax = cir.plot()
+
+# 显式相对路径也以调用它的 .py 文件所在目录为基准，而不是命令行 cwd。
+# 例如在 demos/demo_1.py 中会保存为 demos/figures/h2.png。
+fig, ax = cir.plot("figures/h2")
+
+# 也可以继续使用函数式入口。
+fig, ax = plot(cir, "figures/h2_function")
 
 # draw_circuit 默认返回文本；output="mpl" 时返回 matplotlib 的 (fig, ax)
 diagram = draw_circuit(cir)
@@ -882,6 +900,7 @@ fig, ax = plot_density_matrix(rho, part="abs")
 - `circuit_to_text(circuit)`：返回 ASCII 线路图
 - `draw_circuit(circuit, output="text" | "mpl")`：统一线路图入口
 - `gate_histogram(circuit)`：按门 `type` 统计数量
+- `plot(circuit, path=None, ...)` / `Circuit.plot(path=None, ...)`：保存彩色线路图，返回 `(fig, ax)`；未提供 `path` 时默认保存到调用它的 `.py` 文件所在目录
 - `plot_state_probs(state_or_probs)`：绘制计算基概率柱状图
 - `plot_state_amplitudes(state)`：绘制振幅实部、虚部和模长
 - `plot_state_phase(state)`：绘制振幅相位
@@ -943,13 +962,13 @@ QAS/metrics 相关公共函数：
 
 `aicir` 子目录中还包含更具体的说明文档：
 
-| 子目录 | 说明文档 | 内容概要 |
-| --- | --- | --- |
-| `aicir/chemistry` | [`aicir/chemistry/README.md`](aicir/chemistry/README.md) | 小型固定设置的分子 qubit Hamiltonian 预置，用于 VQE 示例、单元测试和算法原型验证。 |
-| `aicir/core/io` | [`aicir/core/io/README.md`](aicir/core/io/README.md) | OpenQASM 导出行为、受控旋转门和多控旋转门分解规则。 |
-| `aicir/metrics` | [`aicir/metrics/README.md`](aicir/metrics/README.md) | 任务无关的量子线路评分指标，供 QAS、VQE ansatz 筛选等架构层任务复用。 |
-| `aicir/optimizer` | [`aicir/optimizer/README.md`](aicir/optimizer/README.md) | `aicir.optimizer.basic` 的本地化简规则、旋转门合并和固定点优化策略。 |
-| `aicir/qas` | [`aicir/qas/README.md`](aicir/qas/README.md) | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。 |
-| `aicir/qml` | [`aicir/qml/README.md`](aicir/qml/README.md) | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。 |
-| `aicir/vqc` | [`aicir/vqc/README.md`](aicir/vqc/README.md) | VQE、QAOA、VQD、SSVQE 等基础变分算法实现，以及可复用的参数化线路 ansatz 模板。 |
-| `demos` | [`demos/README.md`](demos/README.md) | 演示 `aicir.visual` 模块的示例脚本，涵盖线路、态向量、密度矩阵和 QAS 结果可视化。 |
+| 子目录              | 说明文档                                                | 内容概要                                                                            |
+| ------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `aicir/chemistry` | [`aicir/chemistry/README.md`](aicir/chemistry/README.md) | 小型固定设置的分子 qubit Hamiltonian 预置，用于 VQE 示例、单元测试和算法原型验证。  |
+| `aicir/core/io`   | [`aicir/core/io/README.md`](aicir/core/io/README.md)     | OpenQASM 导出行为、受控旋转门和多控旋转门分解规则。                                 |
+| `aicir/metrics`   | [`aicir/metrics/README.md`](aicir/metrics/README.md)     | 任务无关的量子线路评分指标，供 QAS、VQE ansatz 筛选等架构层任务复用。               |
+| `aicir/optimizer` | [`aicir/optimizer/README.md`](aicir/optimizer/README.md) | `aicir.optimizer.basic` 的本地化简规则、旋转门合并和固定点优化策略。              |
+| `aicir/qas`       | [`aicir/qas/README.md`](aicir/qas/README.md)             | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。                             |
+| `aicir/qml`       | [`aicir/qml/README.md`](aicir/qml/README.md)             | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。            |
+| `aicir/vqc`       | [`aicir/vqc/README.md`](aicir/vqc/README.md)             | VQE、QAOA、VQD、SSVQE 等基础变分算法实现，以及可复用的参数化线路 ansatz 模板。      |
+| `demos`           | [`demos/README.md`](demos/README.md)                     | 演示 `aicir.visual` 模块的示例脚本，涵盖线路、态向量、密度矩阵和 QAS 结果可视化。 |
