@@ -387,13 +387,13 @@ from aicir import PauliString, TorchBackend
 
 backend = TorchBackend()
 
-# 0.5 × Z₀ ⊗ X₁（2 比特空间），注意参数顺序：coefficient 在 n_qubits 之前
-ps = PauliString({'Z': [0], 'X': [1]}, coefficient=0.5, n_qubits=2)
+# 0.5 × Z₀ ⊗ X₁（2 比特空间）
+ps = PauliString("ZX", coefficient=0.5)
 mat = ps.to_matrix(backend)
 print(ps)   # PauliString(0.5+0j × Z⊗X)
 
-# 或者省略 n_qubits，库会自动从 paulistring 中推断（最大索引 + 1）
-ps_auto = PauliString({'Z': [0], 'X': [1]}, coefficient=0.5)
+# 也可以显式指定 n_qubits；字符串长度必须与 n_qubits 一致
+ps_auto = PauliString("ZX", coefficient=0.5, n_qubits=2)
 print(ps_auto)
 ```
 
@@ -405,10 +405,21 @@ from aicir import Hamiltonian, TorchBackend, Circuit, Measure, hadamard
 backend = TorchBackend()
 
 # H = -1.0 × Z₀Z₁  +  0.5 × X₀X₁  +  0.3 × Z₀
-H = (Hamiltonian(n_qubits=2)
-    .term(-1.0, {'Z': [0, 1]})
-    .term( 0.5, {'X': [0, 1]})
-    .term( 0.3, {'Z': [0]}))
+H = Hamiltonian([
+    ("ZZ", -1.0),
+    ("XX", 0.5),
+    ("ZI", 0.3),
+])
+
+# 若只想在指定比特上放置局部 Pauli 串，可增加 qubit index。
+# 下面等价于 4 比特完整字符串 ("ZIIZ", -1.0)。
+H03 = Hamiltonian(n_qubits=4, terms=[
+    ("ZZ", [0, 3], -1.0),
+])
+
+# 省略 coefficient 时默认为 1.0；省略 qubit index 时默认为 [0, 1, ...]。
+H_default = Hamiltonian(n_qubits=4, terms=["ZZ", ("X", [2])])
+# 也兼容 ("ZZ", -1.0, [0, 3]) 这种 Pauli-first 显式形式。
 
 # 转为后端矩阵
 H_mat = H.to_matrix(backend)

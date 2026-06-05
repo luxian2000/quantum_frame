@@ -490,7 +490,7 @@ import numpy as np
 
 bk = NumpyBackend()
 circuit = Circuit(ry(0.4, 0), cx(1, [0]), ry(0.7, 1), n_qubits=2)
-H = Hamiltonian(n_qubits=2).term(1.0, {"Z": [0]}).term(0.5, {"Z": [1]})
+H = Hamiltonian([("ZI", 1.0), ("IZ", 0.5)])
 
 grad = ad(circuit, H, backend=bk)          # 2 个 ry 门，返回长度为 2 的梯度
 grad, energy = ad(circuit, H, backend=bk, return_value=True)

@@ -13,12 +13,11 @@ from aicir.measure import (
 
 
 def test_hamiltonian_pauli_terms_decomposes_hamiltonian():
-    hamiltonian = (
-        Hamiltonian(n_qubits=2)
-        .term(0.5, {"Z": [0]})
-        .term(-1.25, {"X": [0, 1]})
-        .term(0.75, {"I": [0]})
-    )
+    hamiltonian = Hamiltonian(n_qubits=2, terms=[
+        ("ZI", 0.5),
+        ("XX", -1.25),
+        ("II", 0.75),
+    ])
 
     terms = hamiltonian_pauli_terms(hamiltonian)
 
@@ -27,6 +26,98 @@ def test_hamiltonian_pauli_terms_decomposes_hamiltonian():
         PauliTerm(-1.25, "XX"),
         PauliTerm(0.75, "II"),
     )
+
+
+def test_hamiltonian_constructor_infers_width_and_has_no_term_api():
+    hamiltonian = Hamiltonian([
+        ("ZI", 0.5),
+        ("XX", -1.25),
+    ])
+
+    assert hamiltonian.n_qubits == 2
+    assert hamiltonian_pauli_terms(hamiltonian) == (
+        PauliTerm(0.5, "ZI"),
+        PauliTerm(-1.25, "XX"),
+    )
+    assert not hasattr(hamiltonian, "term")
+
+
+def test_hamiltonian_from_list_uses_pauli_first_order():
+    hamiltonian = Hamiltonian.from_list([("ZI", 0.5), ("XX", -1.25)])
+
+    assert hamiltonian_pauli_terms(hamiltonian) == (
+        PauliTerm(0.5, "ZI"),
+        PauliTerm(-1.25, "XX"),
+    )
+
+
+def test_hamiltonian_supports_local_pauli_string_with_qubit_indices():
+    hamiltonian = Hamiltonian(n_qubits=4, terms=[
+        ("ZZ", -1.0, [0, 3]),
+        ("X", 0.25, [2]),
+        ("YY", [1, 3], 2.0),
+    ])
+
+    assert hamiltonian_pauli_terms(hamiltonian) == (
+        PauliTerm(-1.0, "ZIIZ"),
+        PauliTerm(0.25, "IIXI"),
+        PauliTerm(2.0, "IYIY"),
+    )
+
+
+def test_hamiltonian_local_terms_infer_width_from_largest_qubit_index():
+    hamiltonian = Hamiltonian([
+        ("ZZ", -1.0, [0, 3]),
+        ("X", 0.25, [2]),
+    ])
+
+    assert hamiltonian.n_qubits == 4
+    assert hamiltonian_pauli_terms(hamiltonian) == (
+        PauliTerm(-1.0, "ZIIZ"),
+        PauliTerm(0.25, "IIXI"),
+    )
+
+
+def test_hamiltonian_terms_default_coefficient_to_one():
+    hamiltonian = Hamiltonian(n_qubits=4, terms=[
+        "ZZ",
+        ("X",),
+        ("YY", [1, 3]),
+    ])
+
+    assert hamiltonian_pauli_terms(hamiltonian) == (
+        PauliTerm(1.0, "ZZII"),
+        PauliTerm(1.0, "XIII"),
+        PauliTerm(1.0, "IYIY"),
+    )
+
+
+def test_hamiltonian_terms_default_to_leading_qubit_indices():
+    hamiltonian = Hamiltonian(n_qubits=4, terms=[
+        ("ZZ", -1.0),
+        ("X", 0.25),
+    ])
+
+    assert hamiltonian_pauli_terms(hamiltonian) == (
+        PauliTerm(-1.0, "ZZII"),
+        PauliTerm(0.25, "XIII"),
+    )
+
+
+def test_hamiltonian_local_terms_validate_qubit_indices():
+    with pytest.raises(ValueError, match="Pauli 字符串长度必须与 qubits 长度一致"):
+        Hamiltonian(n_qubits=4, terms=[("ZZ", -1.0, [0])])
+
+    with pytest.raises(ValueError, match="qubits 不能包含重复下标"):
+        Hamiltonian(n_qubits=4, terms=[("ZZ", -1.0, [0, 0])])
+
+    with pytest.raises(IndexError, match="超出范围"):
+        Hamiltonian(n_qubits=4, terms=[("ZZ", -1.0, [0, 4])])
+
+
+def test_hamiltonian_rejects_coefficient_first_order():
+    with pytest.raises((TypeError, ValueError)):
+        Hamiltonian(n_qubits=4, terms=[(-1.0, "ZZ", [0, 3])])
 
 
 def test_group_pauli_terms_qubit_wise_commuting_and_shot_allocation():
@@ -58,12 +149,11 @@ def test_pauli_expectation_from_counts_uses_msb_qubit_order():
 
 def test_pauli_estimator_estimates_z_terms_with_group_covariance():
     circuit = Circuit(n_qubits=2)
-    hamiltonian = (
-        Hamiltonian(n_qubits=2)
-        .term(1.0, {"Z": [0]})
-        .term(2.0, {"Z": [1]})
-        .term(3.0, {"Z": [0, 1]})
-    )
+    hamiltonian = Hamiltonian(n_qubits=2, terms=[
+        ("ZI", 1.0),
+        ("IZ", 2.0),
+        ("ZZ", 3.0),
+    ])
 
     result = PauliEstimator(NumpyBackend(), shots=64).estimate(circuit, hamiltonian)
 
@@ -78,7 +168,7 @@ def test_pauli_estimator_estimates_z_terms_with_group_covariance():
 
 def test_pauli_estimator_applies_x_basis_change():
     circuit = Circuit(hadamard(0), n_qubits=1)
-    hamiltonian = Hamiltonian(n_qubits=1).term(1.0, {"X": [0]})
+    hamiltonian = Hamiltonian(n_qubits=1, terms=[("X", 1.0)])
 
     result = PauliEstimator(NumpyBackend(), shots=32).estimate(circuit, hamiltonian)
 
@@ -90,7 +180,7 @@ def test_pauli_estimator_applies_x_basis_change():
 
 def test_pauli_estimator_applies_y_basis_change():
     circuit = Circuit(hadamard(0), s_gate(0), n_qubits=1)
-    hamiltonian = Hamiltonian(n_qubits=1).term(1.0, {"Y": [0]})
+    hamiltonian = Hamiltonian(n_qubits=1, terms=[("Y", 1.0)])
 
     result = PauliEstimator(NumpyBackend(), shots=32).estimate(circuit, hamiltonian)
 
@@ -102,7 +192,7 @@ def test_pauli_estimator_applies_y_basis_change():
 
 def test_pauli_estimator_handles_identity_terms_without_shots():
     circuit = Circuit(n_qubits=1)
-    hamiltonian = Hamiltonian(n_qubits=1).term(2.5, {"I": [0]}).term(1.0, {"Z": [0]})
+    hamiltonian = Hamiltonian(n_qubits=1, terms=[("I", 2.5), ("Z", 1.0)])
 
     result = PauliEstimator(NumpyBackend(), shots=16).estimate(circuit, hamiltonian)
 
