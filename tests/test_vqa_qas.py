@@ -302,3 +302,93 @@ def test_h2_vqe_qas_smoke_runs_small_config():
     assert len(result.supernet_log) == 2
     assert len(result.ranking_records) == 3
     assert "baseline_vqe_energy" in result.final_metrics
+
+
+def _parameter_shift_fixture():
+    qas = VQAQAS(
+        VQAQASConfig(
+            n_qubits=2,
+            layers=1,
+            single_qubit_gates=("ry",),
+            two_qubit_pairs=(),
+            supernet_steps=0,
+            use_parameter_shift=True,
+            device="cpu",
+            seed=11,
+            task="custom",
+        )
+    )
+    architecture = qas.sample_architecture()
+
+    def objective(circuit):
+        state = qas.simulate_state(circuit)
+        return qas._probability_qubit_zero(state, qubit=0)
+
+    _, _, _, active_tensors = qas._loss(architecture, 0, objective, split="train")
+    active = []
+    seen = set()
+    for tensor in active_tensors:
+        if id(tensor) not in seen:
+            seen.add(id(tensor))
+            active.append(tensor)
+
+    def loss_closure():
+        loss, _, _, _ = qas._loss(architecture, 0, objective, split="train")
+        return loss
+
+    return qas, active, loss_closure
+
+
+def test_parameter_shift_update_uses_qml_psr(monkeypatch):
+    import aicir.qas.VQA_QAS as vqa_qas_module
+
+    qas, active, loss_closure = _parameter_shift_fixture()
+    captured = {}
+
+    def fake_psr(fn, params):
+        captured["fn"] = fn
+        captured["params"] = np.asarray(params, dtype=float).copy()
+        return np.full_like(np.asarray(params, dtype=float), 0.5)
+
+    monkeypatch.setattr(vqa_qas_module, "psr", fake_psr)
+    optimizer = torch.optim.Adam(active, lr=0.0)
+
+    qas._parameter_shift_update(active, optimizer, loss_closure)
+
+    # The gradient rule is delegated to aicir.qml.deriv.psr, called once with
+    # the current angle vector; its return value is written onto each .grad.
+    assert "fn" in captured
+    np.testing.assert_allclose(
+        captured["params"], [float(t.detach()) for t in active]
+    )
+    for tensor in active:
+        assert pytest.approx(0.5) == float(tensor.grad)
+
+
+def test_parameter_shift_update_matches_analytic_shift_rule():
+    qas, active, loss_closure = _parameter_shift_fixture()
+    base = [float(t.detach()) for t in active]
+
+    optimizer = torch.optim.Adam(active, lr=0.0)
+    grad_norm = qas._parameter_shift_update(active, optimizer, loss_closure)
+    psr_grads = np.array([float(t.grad) for t in active])
+
+    with torch.no_grad():
+        for tensor, value in zip(active, base):
+            tensor.copy_(torch.tensor(value, dtype=tensor.dtype))
+
+    analytic = []
+    for tensor in active:
+        with torch.no_grad():
+            tensor.add_(math.pi / 2.0)
+            plus = float(loss_closure().detach())
+            tensor.add_(-math.pi)
+            minus = float(loss_closure().detach())
+            tensor.add_(math.pi / 2.0)
+        analytic.append((plus - minus) / 2.0)
+    analytic = np.array(analytic)
+
+    np.testing.assert_allclose(psr_grads, analytic, atol=1e-5)
+    assert grad_norm == pytest.approx(float(np.linalg.norm(analytic)), abs=1e-5)
+    # psr leaves the tensors restored to their starting angles.
+    np.testing.assert_allclose([float(t.detach()) for t in active], base, atol=1e-6)
