@@ -472,7 +472,7 @@ _CDTYPE = np.complex64
 # Single-parameter gates differentiated by the adjoint method, mapped to the
 # (Hermitian) generator G in U = exp(-i θ G / 2).
 _AD_PAULI_GENERATOR = {"rx": "X", "ry": "Y", "rz": "Z", "crx": "X", "cry": "Y", "crz": "Z"}
-_AD_DIFFERENTIABLE = set(_AD_PAULI_GENERATOR) | {"rzz"}
+_AD_DIFFERENTIABLE = set(_AD_PAULI_GENERATOR) | {"rzz", "rxx"}
 
 _SWAP_LOCAL = np.array(
     [[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=_CDTYPE
@@ -511,6 +511,7 @@ def _ad_gate_local_matrix_and_axes(gate, backend):
     from aicir.core.gates import (
         _controlled_local_from_base,
         _normalized_control_data,
+        _rxx,
         _rzz,
         _single_qubit_base_for_gate,
         _unitary_parameter_matrix,
@@ -523,6 +524,11 @@ def _ad_gate_local_matrix_and_axes(gate, backend):
         return _SWAP_LOCAL, [int(gate["qubit_1"]), int(gate["qubit_2"])]
     if gate_type == "rzz":
         return np.asarray(_rzz(gate["parameter"]), dtype=_CDTYPE), [
+            int(gate["qubit_1"]),
+            int(gate["qubit_2"]),
+        ]
+    if gate_type == "rxx":
+        return np.asarray(_rxx(gate["parameter"]), dtype=_CDTYPE), [
             int(gate["qubit_1"]),
             int(gate["qubit_2"]),
         ]
@@ -549,6 +555,12 @@ def _ad_generator_local_and_axes(gate):
     if gate_type == "rzz":
         zz = np.diag([1.0, -1.0, -1.0, 1.0]).astype(_CDTYPE)
         return zz, [int(gate["qubit_1"]), int(gate["qubit_2"])]
+    if gate_type == "rxx":
+        xx = np.array(
+            [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]],
+            dtype=_CDTYPE,
+        )
+        return xx, [int(gate["qubit_1"]), int(gate["qubit_2"])]
     pauli = _pauli_local(_AD_PAULI_GENERATOR[gate_type])
     if gate_type in ("crx", "cry", "crz"):
         controls, control_states = _normalized_control_data(gate)
@@ -580,7 +592,7 @@ def ad(circuit, observable, *, backend=None, return_value: bool = False):
     Unlike :func:`psr`/:func:`fd`, which differentiate a black-box scalar
     function, ``ad`` is structure-aware: it differentiates each single-angle
     Pauli-rotation gate (``rx``, ``ry``, ``rz``, ``crx``, ``cry``, ``crz``,
-    ``rzz``) in the circuit, returning one gradient per such gate in order of
+    ``rzz``, ``rxx``) in the circuit, returning one gradient per such gate in order of
     appearance. Other gates (``H``, ``cx``, ``u3``, ``unitary``, …) are applied
     but not differentiated (use :func:`psr` for those).
 

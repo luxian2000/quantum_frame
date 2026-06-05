@@ -2,7 +2,7 @@ import io
 import unittest
 from contextlib import redirect_stdout
 
-from aicir import Circuit, cnot, hadamard, rz, swap
+from aicir import Circuit, cnot, hadamard, rxx, rz, swap
 
 
 class TestCircuitShow(unittest.TestCase):
@@ -59,6 +59,7 @@ class TestCircuitShow(unittest.TestCase):
             {"type": "u3", "target_qubit": 1, "parameter": [0.1, 0.2, 0.3]},
             {"type": "cy", "target_qubit": 2, "control_qubits": [1], "control_states": [1]},
             {"type": "rzz", "qubit_1": 0, "qubit_2": 2, "parameter": 0.4},
+            rxx(0.5, 1, 2),
             {"type": "toffoli", "target_qubit": 2, "control_qubits": [0, 1], "control_states": [1, 1]},
             n_qubits=3,
         )
@@ -70,7 +71,8 @@ class TestCircuitShow(unittest.TestCase):
         self.assertIn("U2", diagram)
         self.assertIn("U3", diagram)
         self.assertIn("Y", diagram)
-        self.assertIn("ZZ", diagram)
+        self.assertIn("Rzz", diagram)
+        self.assertIn("Rxx", diagram)
         self.assertGreaterEqual(diagram.count("●"), 3)
 
 

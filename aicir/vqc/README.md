@@ -170,7 +170,7 @@ hardware_efficient_ansatz(
 | `n_qubits` | 量子比特数量，必须为正整数 |
 | `layers` | rotation-entangler block 数量，可为 0 |
 | `rotation_gates` | 局域旋转块，支持 `"rx"`、`"ry"`、`"rz"`、`"u2"`、`"u3"` |
-| `entangler` | 支持 `"cx"` / `"cnot"`、`"cy"`、`"cz"`、`"crx"`、`"cry"`、`"crz"`、`"rzz"`、`"swap"` |
+| `entangler` | 支持 `"cx"` / `"cnot"`、`"cy"`、`"cz"`、`"crx"`、`"cry"`、`"crz"`、`"rzz"`、`"rxx"`、`"swap"` |
 | `topology` | `"linear"`、`"ring"`、`"all_to_all"` / `"full"`，或自定义 `(control, target)` 边列表 |
 | `final_rotation_layer` | 是否追加末尾局域旋转层 |
 | `final_rotation_gates` | 末尾旋转块；默认等于 `rotation_gates` |
@@ -333,7 +333,7 @@ z0 = np.diag([1, 1, -1, -1]).astype(np.complex64)
 grad, value = ad(bound, z0, backend=backend, return_value=True)
 ```
 
-注意：`hea_ti` 的全局演化当前是 dense `unitary` 门。`qml.ad` 只对 `rx/ry/rz/crx/cry/crz/rzz` 等结构化旋转门返回梯度，不会对 `unitary` 门中的演化时间求导。若需要优化 `t_d`，可使用黑盒目标配合 `psr` / `fd` / `spsa`，或直接传入新的 `evolution_times` 重建线路。
+注意：`hea_ti` 的全局演化当前是 dense `unitary` 门。`qml.ad` 只对 `rx/ry/rz/crx/cry/crz/rzz/rxx` 等结构化旋转门返回梯度，不会对 `unitary` 门中的演化时间求导。若需要优化 `t_d`，可使用黑盒目标配合 `psr` / `fd` / `spsa`，或直接传入新的 `evolution_times` 重建线路。
 
 ---
 

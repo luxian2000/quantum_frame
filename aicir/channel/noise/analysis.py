@@ -141,7 +141,7 @@ def analyze_gate_type_sensitivity(circuit: Circuit, noise_model: Optional[NoiseM
     sensitivity: Dict[str, float] = {}
     for gate_type in {gate.get("type", "unknown") for gate in circuit.gates}:
         count = sum(1 for gate in circuit.gates if gate.get("type", "unknown") == gate_type)
-        if gate_type in {"cx", "cnot", "cy", "cz", "rzz", "swap", "crx", "cry", "crz"}:
+        if gate_type in {"cx", "cnot", "cy", "cz", "rzz", "rxx", "swap", "crx", "cry", "crz"}:
             sensitivity[gate_type] = 0.02 * count
         elif gate_type in {"rx", "ry", "rz", "u2", "u3"}:
             sensitivity[gate_type] = 0.01 * count

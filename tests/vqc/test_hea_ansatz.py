@@ -46,6 +46,20 @@ def test_hea_supports_ring_all_to_all_and_custom_edges():
     assert circuit.gates[-1]["qubit_1"] == 0
     assert circuit.gates[-1]["qubit_2"] == 2
 
+    rxx_circuit = hardware_efficient_ansatz(
+        3,
+        layers=1,
+        rotation_gates="ry",
+        entangler="rxx",
+        topology=[(0, 2)],
+        final_rotation_layer=False,
+    )
+
+    assert len(rxx_circuit.parameters) == 4
+    assert rxx_circuit.gates[-1]["type"] == "rxx"
+    assert rxx_circuit.gates[-1]["qubit_1"] == 0
+    assert rxx_circuit.gates[-1]["qubit_2"] == 2
+
 
 def test_hea_accepts_numeric_parameters_directly():
     count = hea_parameter_count(2, layers=1, rotation_gates="u3", entangler="cz", final_rotation_layer=False)

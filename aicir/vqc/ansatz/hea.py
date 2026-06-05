@@ -23,6 +23,7 @@ from ...core.circuit import (
     rx,
     ry,
     rz,
+    rxx,
     rzz,
     swap,
     u2,
@@ -39,7 +40,7 @@ _ROTATION_PARAMETER_COUNTS = {
     "u2": 2,
     "u3": 3,
 }
-_SUPPORTED_ENTANGLERS = {"cx", "cnot", "cy", "cz", "crx", "cry", "crz", "rzz", "swap"}
+_SUPPORTED_ENTANGLERS = {"cx", "cnot", "cy", "cz", "crx", "cry", "crz", "rzz", "rxx", "swap"}
 
 
 class _ParameterStream:
@@ -192,6 +193,8 @@ def _append_entangler(gates: list[dict[str, Any]], entangler: str, edge: Edge, p
         gates.append(crz(params.next(), target, [control]))
     elif entangler == "rzz":
         gates.append(rzz(params.next(), control, target))
+    elif entangler == "rxx":
+        gates.append(rxx(params.next(), control, target))
     elif entangler == "swap":
         gates.append(swap(control, target))
     else:  # pragma: no cover - guarded by hardware_efficient_ansatz
@@ -236,7 +239,7 @@ def hea_parameter_count(
     edges = entangling_edges(n_qubits, topology)
     rotation_params = n_qubits * sum(_ROTATION_PARAMETER_COUNTS[gate] for gate in rotations)
     final_params = n_qubits * sum(_ROTATION_PARAMETER_COUNTS[gate] for gate in final_rotations)
-    entangler_params = len(edges) if entangler_key in {"crx", "cry", "crz", "rzz"} else 0
+    entangler_params = len(edges) if entangler_key in {"crx", "cry", "crz", "rzz", "rxx"} else 0
 
     total = layers * (rotation_params + entangler_params)
     if final_rotation_layer:
@@ -269,7 +272,7 @@ def hardware_efficient_ansatz(
         rotation_gates: Local rotation block, such as ``("ry", "rz")`` or
             ``"u3"``.
         entangler: Entangling gate. Supported values are ``cx``, ``cnot``,
-            ``cy``, ``cz``, ``crx``, ``cry``, ``crz``, ``rzz`` and ``swap``.
+            ``cy``, ``cz``, ``crx``, ``cry``, ``crz``, ``rzz``, ``rxx`` and ``swap``.
         topology: ``linear``, ``ring``, ``all_to_all``/``full``, or custom
             ``(control, target)`` edges.
         final_rotation_layer: Whether to append a trailing local rotation layer.

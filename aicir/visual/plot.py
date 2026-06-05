@@ -71,6 +71,7 @@ _FAMILY: dict[str, str] = {
     "cry": "rotation",
     "crz": "rotation",
     "rzz": "rotation",
+    "rxx": "rotation",
     "u2": "unitary",
     "u3": "unitary",
     "unitary": "unitary",
@@ -104,17 +105,31 @@ def _gate_label(gate: dict) -> str:
 
 
 def _angle_sublabel(gate: dict) -> str | None:
-    if gate.get("type") in {"rx", "ry", "rz", "crx", "cry", "crz", "rzz"}:
+    gate_type = gate.get("type")
+    if gate_type in {"rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"}:
         param = gate.get("parameter")
         if param is not None:
             return _pretty_angle(param)
+    if gate_type in {"u2", "u3"}:
+        params = gate.get("parameter")
+        if params is not None:
+            angles = [_pretty_angle(value) for value in params]
+            if gate_type == "u2":
+                return ", ".join(angles)
+            if gate_type == "u3" and len(angles) >= 3:
+                return f"{angles[0]}, {angles[1]}\n{angles[2]}"
+            return "\n".join(angles)
     return None
+
+
+def _sublabel_scale(gate: dict) -> float:
+    return 0.48 if gate.get("type") in {"u2", "u3"} else 0.62
 
 
 def _gate_qubits(gate: dict, n_qubits: int) -> list[int]:
     """All wires a gate touches (used for layer packing)."""
     gate_type = gate["type"]
-    if gate_type in {"swap", "rzz"}:
+    if gate_type in {"swap", "rzz", "rxx"}:
         return [int(gate["qubit_1"]), int(gate["qubit_2"])]
     if gate_type in {"identity", "I", "unitary"}:
         return list(range(n_qubits))
@@ -151,6 +166,7 @@ def _yy(qubit: int, n_qubits: int) -> float:
 
 
 def _draw_box(ax, x, y, label, facecolor, edgecolor, *, fontsize, sublabel=None,
+              sublabel_scale=0.62,
               width=_BOX, height=_BOX):
     from matplotlib.patches import FancyBboxPatch
 
@@ -170,7 +186,7 @@ def _draw_box(ax, x, y, label, facecolor, edgecolor, *, fontsize, sublabel=None,
             color=edgecolor, fontweight="bold", zorder=4)
     if sublabel:
         ax.text(x, y - height / 2 - 0.04, sublabel, ha="center", va="top",
-                fontsize=fontsize * 0.62, color=edgecolor, zorder=5,
+                fontsize=fontsize * sublabel_scale, color=edgecolor, zorder=5,
                 bbox=dict(boxstyle="round,pad=0.05", facecolor="white",
                           edgecolor="none"))
 
@@ -244,14 +260,15 @@ def _render_gate(ax, gate, x, n_qubits, fontsize):
         _draw_swap_mark(ax, x, _yy(q2, n_qubits), edgecolor)
         return
 
-    if gate_type == "rzz":
+    if gate_type in {"rzz", "rxx"}:
         q1, q2 = int(gate["qubit_1"]), int(gate["qubit_2"])
         _draw_connector(ax, x, min(q1, q2), max(q1, q2), n_qubits, edgecolor)
         sub = _angle_sublabel(gate)
-        _draw_box(ax, x, _yy(q1, n_qubits), "ZZ", facecolor, edgecolor,
+        label = "Rzz" if gate_type == "rzz" else "Rxx"
+        _draw_box(ax, x, _yy(q1, n_qubits), label, facecolor, edgecolor,
                   fontsize=fontsize)
-        _draw_box(ax, x, _yy(q2, n_qubits), "ZZ", facecolor, edgecolor,
-                  fontsize=fontsize, sublabel=sub)
+        _draw_box(ax, x, _yy(q2, n_qubits), label, facecolor, edgecolor,
+                  fontsize=fontsize, sublabel=sub, sublabel_scale=_sublabel_scale(gate))
         return
 
     controls = [int(q) for q in gate.get("control_qubits", [])]
@@ -267,11 +284,12 @@ def _render_gate(ax, gate, x, n_qubits, fontsize):
         else:
             _draw_box(ax, x, _yy(target, n_qubits), _gate_label(gate),
                       facecolor, edgecolor, fontsize=fontsize,
-                      sublabel=_angle_sublabel(gate))
+                      sublabel=_angle_sublabel(gate), sublabel_scale=_sublabel_scale(gate))
         return
 
     _draw_box(ax, x, _yy(target, n_qubits), _gate_label(gate), facecolor,
-              edgecolor, fontsize=fontsize, sublabel=_angle_sublabel(gate))
+              edgecolor, fontsize=fontsize, sublabel=_angle_sublabel(gate),
+              sublabel_scale=_sublabel_scale(gate))
 
 
 # --- Public API -----------------------------------------------------------
