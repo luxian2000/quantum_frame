@@ -31,6 +31,7 @@ from ..channel.backends.torch_backend import TorchBackend
 from ..channel.operators import Hamiltonian
 from ..core.circuit import Circuit, cx, rx, ry, rz
 from ..core.gates import apply_gate_to_state, gate_to_matrix
+from ..qml.deriv import psr
 
 
 ObjectiveFn = Callable[..., torch.Tensor | float]
@@ -570,17 +571,41 @@ class VQAQAS:
         optimizer: torch.optim.Optimizer,
         loss_closure: Callable[[], torch.Tensor],
     ) -> float:
+        # Delegate the parameter-shift rule to aicir.qml.deriv.psr so the
+        # gradient definition lives in one place. The active gate angles are
+        # optimized as torch Parameters (read by ``loss_closure`` via object
+        # identity), so we expose a black-box objective that writes a candidate
+        # angle vector into those tensors and returns the resulting scalar loss.
+        # psr then shifts one coordinate by ±π/2 at a time (the standard
+        # Pauli-rotation rule, coefficient 0.5).
         active = _unique_tensors(parameters)
         optimizer.zero_grad(set_to_none=True)
-        for parameter in active:
+
+        base_values = np.array([_float_value(parameter) for parameter in active], dtype=float)
+
+        def _write_values(values: np.ndarray) -> None:
             with torch.no_grad():
-                parameter.add_(math.pi / 2.0)
-                plus = _float_value(loss_closure())
-                parameter.add_(-math.pi)
-                minus = _float_value(loss_closure())
-                parameter.add_(math.pi / 2.0)
-            grad = (plus - minus) / 2.0
-            parameter.grad = torch.tensor(grad, dtype=parameter.dtype, device=parameter.device).reshape_as(parameter)
+                for parameter, value in zip(active, np.asarray(values).reshape(-1)):
+                    parameter.copy_(
+                        torch.as_tensor(
+                            float(value), dtype=parameter.dtype, device=parameter.device
+                        ).reshape_as(parameter)
+                    )
+
+        def objective(theta: np.ndarray) -> float:
+            _write_values(theta)
+            return _float_value(loss_closure())
+
+        gradients = np.asarray(psr(objective, base_values), dtype=float).reshape(-1)
+
+        # psr leaves the tensors at the last shifted point; restore the base
+        # angles before recording the gradient for the optimizer step.
+        _write_values(base_values)
+        for parameter, grad in zip(active, gradients):
+            parameter.grad = torch.as_tensor(
+                float(grad), dtype=parameter.dtype, device=parameter.device
+            ).reshape_as(parameter)
+
         grad_norm = self._grad_norm(active)
         optimizer.step()
         return grad_norm

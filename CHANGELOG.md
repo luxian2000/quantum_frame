@@ -21,6 +21,7 @@
 
 ### Changed
 
+- `VQA_QAS` 的参数移位（parameter-shift）梯度改为复用 `aicir.qml.deriv.psr`，与 VQE/SSVQE/VQD 一致，将移位规则收敛到单一实现；梯度数值保持不变（标准 Pauli 旋转规则，shift=π/2、coefficient=0.5）。
 - 改进线路图 layer packing，确保后出现且跨越相同 wire span 的门不会被绘制到前序多比特门之前。
 - 线路图中 `Rzz`/`Rxx` 使用完整门名显示；`rzz`/`rxx` 参数值显示在两个对应门框内部。
 - 线路图中 `rx`/`ry`/`rz` 及受控旋转门的参数值移入对应门框内部，显示在门名下方。
