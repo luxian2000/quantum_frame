@@ -411,15 +411,38 @@ H = Hamiltonian([
     ("ZI", 0.3),
 ])
 
-# 若只想在指定比特上放置局部 Pauli 串，可增加 qubit index。
-# 下面等价于 4 比特完整字符串 ("ZIIZ", -1.0)。
-H03 = Hamiltonian(n_qubits=4, terms=[
-    ("ZZ", [0, 3], -1.0),
+# ("ZZ", -2.0) 表示 -2.0 × Z₀Z₁；省略 qubit index 时默认为 [0, 1, ...]。
+H_coeff = Hamiltonian([
+    ("ZZ", -2.0),
 ])
 
-# 省略 coefficient 时默认为 1.0；省略 qubit index 时默认为 [0, 1, ...]。
-H_default = Hamiltonian(n_qubits=4, terms=["ZZ", ("X", [2])])
-# 也兼容 ("ZZ", -1.0, [0, 3]) 这种 Pauli-first 显式形式。
+# ("ZZ", [0, 3]) 表示 1.0 × Z₀Z₃；省略 coefficient 时默认为 1.0。
+H_qubits = Hamiltonian([
+    ("ZZ", [0, 3]),
+])
+
+# 完整显式形式可同时给出 qubit index 和 coefficient。
+# 下面等价于 4 比特完整字符串 ("ZIIZ", -2.0)。
+H03 = Hamiltonian([
+    ("ZZ", [0, 3], -2.0),
+])
+# coefficient 和 qubit index 可以交换顺序；下面与 H03 等价。
+H03_alt = Hamiltonian([
+    ("ZZ", -2.0, [0, 3]),
+])
+
+# 多个局部 Pauli 项可以直接写在同一个 Hamiltonian 中。
+H_pairs = Hamiltonian([
+    ("ZZ", [0, 3], -2.0),
+    ("XX", [1, 2], -0.5),
+])
+
+# 如果需要在更大的 Hilbert 空间中补 I，可传 n_qubits。
+H_default = Hamiltonian(n_qubits=4, terms=[
+    "ZZ",          # 等价于 ("ZZ", 1.0, [0, 1])
+    ("X", [2]),    # 等价于 ("X", 1.0, [2])
+])
+# 也兼容 ("ZZ", -2.0, [0, 3]) 这种 Pauli-first 显式形式。
 
 # 转为后端矩阵
 H_mat = H.to_matrix(backend)
