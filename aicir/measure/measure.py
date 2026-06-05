@@ -6,7 +6,8 @@ aicir/measure/measure.py
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+from collections.abc import Mapping
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -15,6 +16,49 @@ from ..core.density import DensityMatrix
 from ..core.state import StateVector
 from .result import Result
 from .sampler import Sampler
+
+
+def _is_measure_gate(gate) -> bool:
+    """True for in-circuit measurement markers (see :func:`aicir.measure`)."""
+    return isinstance(gate, Mapping) and gate.get("type") in ("measure", "measurement")
+
+
+def _readout_qubits(circuit, n_qubits: int) -> Tuple[bool, List[int]]:
+    """Resolve which qubits to read out from a circuit's measure gates.
+
+    Returns ``(has_measure_gate, qubits)``. With no measure gate the first
+    measurement mechanism applies: read out every qubit. An empty ``measure()``
+    also reads out every qubit. Otherwise only the marked qubits are read out,
+    sorted ascending so their bitstring is a substring of the full-register one.
+    """
+    measured: set[int] = set()
+    has_measure = False
+    for gate in getattr(circuit, "gates", []):
+        if not _is_measure_gate(gate):
+            continue
+        has_measure = True
+        qubits = gate.get("qubits")
+        if not qubits and "target_qubit" in gate:
+            qubits = [gate["target_qubit"]]
+        measured.update(int(q) for q in (qubits or []))
+    if not has_measure or not measured:
+        return has_measure, list(range(n_qubits))
+    return True, sorted(measured)
+
+
+def _marginal_counts(probs_np, n_qubits: int, qubits: List[int], backend, shots: int) -> Dict[str, int]:
+    """Sample ``shots`` outcomes over a subset of qubits (MSB convention)."""
+    k = len(qubits)
+    index = np.arange(1 << n_qubits)
+    sub = np.zeros(1 << n_qubits, dtype=np.int64)
+    for qubit in qubits:  # qubit q occupies bit (n-1-q) of the full index
+        sub = (sub << 1) | ((index >> (n_qubits - 1 - qubit)) & 1)
+    marginal = np.zeros(1 << k, dtype=np.float64)
+    np.add.at(marginal, sub, np.asarray(probs_np, dtype=np.float64).reshape(-1))
+
+    counts_vec = backend.sample(backend.cast(marginal), shots)
+    counts_np = backend.to_numpy(counts_vec).astype(int).reshape(-1)
+    return {f"|{idx:0{k}b}>": int(c) for idx, c in enumerate(counts_np) if c > 0}
 
 
 class Measure:
@@ -85,6 +129,8 @@ class Measure:
     def _evolve_state_vector_gatewise(self, circuit, sv0: StateVector, backend) -> StateVector:
         sv = sv0
         for gate in circuit.gates:
+            if _is_measure_gate(gate):
+                continue
             new_data = apply_gate_to_state(gate, sv.data, sv.n_qubits, backend)
             if new_data is None:
                 gm = gate_to_matrix(gate, cir_qubits=sv.n_qubits, backend=backend)
@@ -102,6 +148,8 @@ class Measure:
     ) -> DensityMatrix:
         rho = rho0
         for gate in circuit.gates:
+            if _is_measure_gate(gate):
+                continue
             gate_unitary = gate_to_matrix(gate, cir_qubits=rho.n_qubits, backend=backend)
             rho = rho.evolve(gate_unitary)
             if noise_model is not None:
@@ -155,10 +203,17 @@ class Measure:
         probs_backend = sv.probabilities()
         probs = backend.to_numpy(probs_backend).real
 
+        # In-circuit measure gates (the second mechanism) decide which qubits
+        # are read out; with none present every qubit is read out as before.
+        has_measure, readout = _readout_qubits(circuit, n_qubits)
+
         counts = None
         use_shots = shots if shots is not None else 0
         if use_shots > 0:
-            counts = sampler.sample_counts(probs_backend, n_qubits=n_qubits, shots=use_shots)
+            if len(readout) < n_qubits:
+                counts = _marginal_counts(probs, n_qubits, readout, backend, use_shots)
+            else:
+                counts = sampler.sample_counts(probs_backend, n_qubits=n_qubits, shots=use_shots)
 
         exp_vals: Dict[str, float] = {}
         exp_vars: Dict[str, float] = {}
@@ -189,6 +244,7 @@ class Measure:
                 "measure": "Measure",
                 "circuit_type": type(circuit).__name__,
                 "state_mode": "state_vector",
+                "measured_qubits": readout if has_measure else None,
             },
         )
 
@@ -245,10 +301,17 @@ class Measure:
         probs = rho.probabilities()
         probs_backend = backend.cast(probs)
 
+        has_measure, readout = _readout_qubits(circuit, n_qubits)
+
         counts = None
         use_shots = shots if shots is not None else 0
         if use_shots > 0:
-            counts = sampler.sample_counts(probs_backend, n_qubits=n_qubits, shots=use_shots)
+            if len(readout) < n_qubits:
+                counts = _marginal_counts(
+                    backend.to_numpy(probs_backend), n_qubits, readout, backend, use_shots
+                )
+            else:
+                counts = sampler.sample_counts(probs_backend, n_qubits=n_qubits, shots=use_shots)
 
         exp_vals: Dict[str, float] = {}
         exp_vars: Dict[str, float] = {}
@@ -280,6 +343,7 @@ class Measure:
                 "circuit_type": type(circuit).__name__,
                 "state_mode": "density_matrix",
                 "noise_model": type(noise_model).__name__ if noise_model is not None else None,
+                "measured_qubits": readout if has_measure else None,
             },
         )
 

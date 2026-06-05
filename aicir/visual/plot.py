@@ -91,6 +91,14 @@ def _style_for(gate_type: str) -> tuple[str, str]:
     return _PALETTE[_FAMILY.get(gate_type, "default")]
 
 
+def _measure_targets(gate: dict) -> list[int]:
+    """Qubits a measure gate reads out (supports ``qubits`` list or ``target_qubit``)."""
+    qubits = gate.get("qubits")
+    if not qubits and "target_qubit" in gate:
+        qubits = [gate["target_qubit"]]
+    return [int(q) for q in (qubits or [])]
+
+
 def _pretty_angle(value: Any) -> str:
     """Format an angle, preferring ``π`` fractions over decimals."""
     text = _format_angle_value(value)
@@ -138,6 +146,8 @@ def _gate_qubits(gate: dict, n_qubits: int) -> list[int]:
         return [int(gate["qubit_1"]), int(gate["qubit_2"])]
     if gate_type in {"identity", "I", "unitary"}:
         return list(range(n_qubits))
+    if gate_type in {"measure", "measurement"}:
+        return _measure_targets(gate) or [0]
     qubits: list[int] = []
     controls = gate.get("control_qubits")
     if controls:
@@ -247,8 +257,8 @@ def _render_gate(ax, gate, x, n_qubits, fontsize):
     facecolor, edgecolor = _style_for(gate_type)
 
     if gate_type in {"measure", "measurement"}:
-        target = int(gate.get("target_qubit", 0))
-        _draw_measure(ax, x, _yy(target, n_qubits), facecolor, edgecolor)
+        for target in (_measure_targets(gate) or [0]):
+            _draw_measure(ax, x, _yy(target, n_qubits), facecolor, edgecolor)
         return
 
     if gate_type in {"identity", "I"}:
@@ -346,9 +356,9 @@ def _render_figure(
     measure_col: dict[int, float] = {}
     for gate, col in zip(gates, columns):
         if gate["type"] in {"measure", "measurement"}:
-            q = int(gate.get("target_qubit", 0))
-            if q not in measure_col or col < measure_col[q]:
-                measure_col[q] = float(col)
+            for q in _measure_targets(gate):
+                if q not in measure_col or col < measure_col[q]:
+                    measure_col[q] = float(col)
 
     for q in range(n_qubits):
         y = _yy(q, n_qubits)
