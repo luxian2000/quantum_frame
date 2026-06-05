@@ -126,6 +126,10 @@ def _sublabel_scale(gate: dict) -> float:
     return 0.48 if gate.get("type") in {"u2", "u3"} else 0.62
 
 
+def _sublabel_inside_box(gate: dict) -> bool:
+    return gate.get("type") in {"rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"}
+
+
 def _gate_qubits(gate: dict, n_qubits: int) -> list[int]:
     """All wires a gate touches (used for layer packing)."""
     gate_type = gate["type"]
@@ -166,6 +170,7 @@ def _yy(qubit: int, n_qubits: int) -> float:
 
 
 def _draw_box(ax, x, y, label, facecolor, edgecolor, *, fontsize, sublabel=None,
+              sublabel_inside=False,
               sublabel_scale=0.62,
               width=_BOX, height=_BOX):
     from matplotlib.patches import FancyBboxPatch
@@ -182,13 +187,19 @@ def _draw_box(ax, x, y, label, facecolor, edgecolor, *, fontsize, sublabel=None,
         mutation_aspect=1.0,
     )
     ax.add_patch(patch)
-    ax.text(x, y, label, ha="center", va="center", fontsize=fontsize,
+    label_y = y + height * 0.14 if sublabel and sublabel_inside else y
+    ax.text(x, label_y, label, ha="center", va="center", fontsize=fontsize,
             color=edgecolor, fontweight="bold", zorder=4)
     if sublabel:
-        ax.text(x, y - height / 2 - 0.04, sublabel, ha="center", va="top",
-                fontsize=fontsize * sublabel_scale, color=edgecolor, zorder=5,
-                bbox=dict(boxstyle="round,pad=0.05", facecolor="white",
-                          edgecolor="none"))
+        if sublabel_inside:
+            ax.text(x, y - height * 0.20, sublabel, ha="center", va="center",
+                    fontsize=fontsize * sublabel_scale, color=edgecolor,
+                    zorder=5)
+        else:
+            ax.text(x, y - height / 2 - 0.04, sublabel, ha="center", va="top",
+                    fontsize=fontsize * sublabel_scale, color=edgecolor, zorder=5,
+                    bbox=dict(boxstyle="round,pad=0.05", facecolor="white",
+                              edgecolor="none"))
 
 
 def _draw_control(ax, x, y, color):
@@ -266,9 +277,11 @@ def _render_gate(ax, gate, x, n_qubits, fontsize):
         sub = _angle_sublabel(gate)
         label = "Rzz" if gate_type == "rzz" else "Rxx"
         _draw_box(ax, x, _yy(q1, n_qubits), label, facecolor, edgecolor,
-                  fontsize=fontsize)
+                  fontsize=fontsize, sublabel=sub, sublabel_inside=True,
+                  sublabel_scale=_sublabel_scale(gate))
         _draw_box(ax, x, _yy(q2, n_qubits), label, facecolor, edgecolor,
-                  fontsize=fontsize, sublabel=sub, sublabel_scale=_sublabel_scale(gate))
+                  fontsize=fontsize, sublabel=sub, sublabel_inside=True,
+                  sublabel_scale=_sublabel_scale(gate))
         return
 
     controls = [int(q) for q in gate.get("control_qubits", [])]
@@ -284,11 +297,14 @@ def _render_gate(ax, gate, x, n_qubits, fontsize):
         else:
             _draw_box(ax, x, _yy(target, n_qubits), _gate_label(gate),
                       facecolor, edgecolor, fontsize=fontsize,
-                      sublabel=_angle_sublabel(gate), sublabel_scale=_sublabel_scale(gate))
+                      sublabel=_angle_sublabel(gate),
+                      sublabel_inside=_sublabel_inside_box(gate),
+                      sublabel_scale=_sublabel_scale(gate))
         return
 
     _draw_box(ax, x, _yy(target, n_qubits), _gate_label(gate), facecolor,
               edgecolor, fontsize=fontsize, sublabel=_angle_sublabel(gate),
+              sublabel_inside=_sublabel_inside_box(gate),
               sublabel_scale=_sublabel_scale(gate))
 
 
