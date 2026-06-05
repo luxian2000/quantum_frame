@@ -13,7 +13,11 @@ cir = Circuit(
     swap(1, 2),
     pauli_x(3),
     s_gate(2),
-    rzz(np.pi / 3, 1, 3)
+    rzz(np.pi / 3, 1, 3),
+    {"type": "measure", "target_qubit": 0},
+    {"type": "measure", "target_qubit": 1},
+    {"type": "measure", "target_qubit": 2},
+    {"type": "measure", "target_qubit": 3},
 )
 
 cir.plot()

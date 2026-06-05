@@ -341,9 +341,19 @@ def _render_figure(
         fig = ax.figure
 
     x_left, x_right = -0.85, n_cols - 1 + 0.85
+
+    # Find the leftmost measurement column for each qubit (wire ends there).
+    measure_col: dict[int, float] = {}
+    for gate, col in zip(gates, columns):
+        if gate["type"] in {"measure", "measurement"}:
+            q = int(gate.get("target_qubit", 0))
+            if q not in measure_col or col < measure_col[q]:
+                measure_col[q] = float(col)
+
     for q in range(n_qubits):
         y = _yy(q, n_qubits)
-        ax.plot([x_left, x_right], [y, y], color=wire_color, linewidth=1.4,
+        wire_end = measure_col[q] if q in measure_col else x_right
+        ax.plot([x_left, wire_end], [y, y], color=wire_color, linewidth=1.4,
                 zorder=1)
         label = qubit_labels[q] if qubit_labels else f"q{q}"
         ax.text(x_left - 0.15, y, label, ha="right", va="center",
