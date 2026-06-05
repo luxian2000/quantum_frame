@@ -1,4 +1,4 @@
-# AiCir目录树
+# aicir 目录树
 
 ```text
 aicir/
@@ -20,10 +20,11 @@ aicir/
 │   │   ├── ion_trap_noise_params.md
 │   │   ├── metrics.py
 │   │   └── model.py
-│   ├── operators.py
-│   └── states/
+│   └── operators.py
 ├── chemistry/
-│   └── __init__.py
+│   ├── README.md
+│   ├── __init__.py
+│   └── molecule.py
 ├── core/
 │   ├── __init__.py
 │   ├── circuit.py
@@ -48,10 +49,12 @@ aicir/
 │       └── encode_1234_demo_redundant_true.qasm
 ├── measure/
 │   ├── __init__.py
+│   ├── estimator.py
 │   ├── measure.py
 │   ├── result.py
 │   └── sampler.py
 ├── metrics/
+│   ├── README.md
 │   ├── __init__.py
 │   ├── _utils.py
 │   ├── expressibility.py
@@ -67,7 +70,8 @@ aicir/
 ├── optimizer/
 │   ├── README.md
 │   ├── __init__.py
-│   └── basic.py
+│   ├── circuit.py
+│   └── params.py
 ├── qas/
 │   ├── README.md
 │   ├── CRLQAS.py
@@ -119,17 +123,21 @@ aicir/
 │   ├── __init__.py
 │   ├── circuit.py
 │   ├── density.py
+│   ├── plot.py
 │   ├── qas.py
 │   ├── state.py
 │   └── utils.py
 ├── vqc/
+│   ├── README.md
 │   ├── QAOA.py
 │   ├── SSVQE.py
 │   ├── VQD.py
 │   ├── VQE.py
 │   ├── __init__.py
 │   └── ansatz/
-│       └── __init__.py
+│       ├── __init__.py
+│       ├── hea.py
+│       └── hea_ti.py
 └── wireless/
     └── __init__.py
 ```
