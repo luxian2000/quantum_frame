@@ -84,6 +84,7 @@ _BOX = 0.62          # gate-box side length
 _DOT = 0.10          # control-dot radius
 _OPLUS = 0.22        # CNOT target circle radius
 _ROUND = 0.12        # corner rounding of gate boxes
+_INNER_SUBLABEL_OFFSET = 0.236  # golden-ratio lower text position inside a gate box
 
 
 def _style_for(gate_type: str) -> tuple[str, str]:
@@ -192,7 +193,7 @@ def _draw_box(ax, x, y, label, facecolor, edgecolor, *, fontsize, sublabel=None,
             color=edgecolor, fontweight="bold", zorder=4)
     if sublabel:
         if sublabel_inside:
-            ax.text(x, y - height * 0.20, sublabel, ha="center", va="center",
+            ax.text(x, y - height * _INNER_SUBLABEL_OFFSET, sublabel, ha="center", va="center",
                     fontsize=fontsize * sublabel_scale, color=edgecolor,
                     zorder=5)
         else:
