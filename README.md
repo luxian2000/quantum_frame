@@ -26,6 +26,7 @@ from aicir import (
     swap, rzz, rxx, ms_gate,
     toffoli, ccnot,
     u2, u3,
+    measure,     # 线路内测量标记（测量机制二）
 )
 
 # 电路与参数占位符
@@ -237,9 +238,15 @@ print(theta.grad)
 
 ## 3. 量子测量
 
+aicir 提供两种量子测量机制，可按需选用。
+
+**机制一**：电路中不含任何测量门，由外部 `Measure.run()` 决定读取哪些比特（默认读取全部）。
+
+**机制二**：在构建电路时用 `measure(*qubits)` 将测量目标嵌入电路，`Measure.run()` 自动识别并对这些比特做边缘分布采样，无需额外参数。
+
 `Measure` 对象绑定一个后端，`run()` 返回统一的 `Result` 对象。
 
-### 3.1 基本用法：概率 + 采样计数
+### 3.1 机制一：独立测量（读取全部比特）
 
 ```python
 from aicir import Circuit, Measure, TorchBackend, hadamard, cnot
@@ -249,7 +256,7 @@ measure = Measure(backend)
 
 cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
 
-# shots>0 时返回概率并采样
+# shots>0 时返回概率并采样；counts 为全 2 比特字符串
 result = measure.run(cir, shots=1024)
 
 print(result.probabilities)     # array([0.5, 0. , 0. , 0.5])
@@ -258,14 +265,44 @@ print(result.most_probable())   # ('|00>', 0.5)
 print(result.summary())
 ```
 
-### 3.2 仅获取概率（不采样）
+### 3.2 机制二：线路内嵌测量门
+
+`measure(*qubits)` 是一个门构造器，将测量目标嵌入电路定义。`Measure.run()` 会跳过这些标记门做酉演化，然后对指定比特输出边缘分布（marginal）计数。
+
+```python
+from aicir import Circuit, Measure, NumpyBackend, hadamard, cnot, rz, measure
+
+cir = Circuit(
+    hadamard(0),
+    cnot(1, [0]),
+    rz(0.5, 1),
+    measure(0, 1),      # 仅读取 qubit 0 和 qubit 1
+)
+
+result = Measure(NumpyBackend()).run(cir, shots=1024)
+print(result.counts)                          # 2 比特字符串，如 {'|00>': 503, '|11>': 521}
+print(result.metadata["measured_qubits"])     # [0, 1]
+```
+
+`measure()` 的接受形式：
+
+```python
+measure(0)            # 读取 qubit 0，输出 1 比特计数
+measure(1, 2, 3)      # 读取 qubit 1、2、3，输出 3 比特计数
+measure([0, 1])       # 可迭代形式，与 measure(0, 1) 等价
+measure()             # 空参数 = 读取全部比特（与机制一行为一致）
+```
+
+当电路中含多个 `measure` 门时，以**最早出现**的为准（后续同比特的 `measure` 不影响结果）。`measure` 是纯粹的读出标记，不会对态向量做投影坍缩——演化始终是全局酉的。
+
+### 3.3 仅获取概率（不采样）
 
 ```python
 result = measure.run(cir, shots=None)
 print(result.probabilities)     # 仅概率，counts 为 None
 ```
 
-### 3.3 期望值测量
+### 3.4 期望值测量
 
 ```python
 import numpy as np
@@ -284,7 +321,7 @@ print(result.expectation_values)   # {'Z0': ~0.0}
 print(result.expectation_variances)
 ```
 
-### 3.4 从 StateVector 直接测量
+### 3.5 从 StateVector 直接测量
 
 ```python
 from aicir.core import StateVector
@@ -302,7 +339,7 @@ counts = sv.measure(shots=512)
 print(counts)   # {'|00>': 512}
 ```
 
-### 3.5 Result 对象字段速查
+### 3.6 Result 对象字段速查
 
 | 字段                      | 类型                       | 说明                                                    |
 | ------------------------- | -------------------------- | ------------------------------------------------------- |
@@ -314,6 +351,8 @@ print(counts)   # {'|00>': 512}
 | `final_state`           | `np.ndarray` or `None` | 末态数据（SV 路径为向量；DM 路径为 flatten 后密度矩阵） |
 | `most_probable()`       | `(str, float)`           | 最高概率基态及其概率                                    |
 | `summary()`             | `str`                    | 单行摘要字符串                                          |
+
+机制二下 `result.metadata["measured_qubits"]` 为被读出的比特下标列表（如 `[1, 2, 3]`）；机制一下为 `None`。
 
 ---
 

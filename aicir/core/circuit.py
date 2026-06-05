@@ -104,8 +104,27 @@ def _bind_parameter_value(value, bindings):
     return deepcopy(value)
 
 
+def _is_measure_gate(gate):
+    """True for in-circuit measurement markers (see :func:`measure`)."""
+    return isinstance(gate, Mapping) and gate.get("type") in ("measure", "measurement")
+
+
+def _measure_gate_qubits(gate):
+    """Qubits a measure gate reads out; empty list means 'all qubits'."""
+    qubits = gate.get("qubits")
+    if not qubits and "target_qubit" in gate:
+        qubits = [gate["target_qubit"]]
+    return [int(q) for q in (qubits or [])]
+
+
 def _required_n_qubits_from_gate(gate):
     gate_type = gate["type"]
+
+    if gate_type in ("measure", "measurement"):
+        measured = _measure_gate_qubits(gate)
+        # An empty measure() (read out all qubits) imposes no lower bound; the
+        # unitary gates determine the circuit width.
+        return (max(measured) + 1) if measured else 0
 
     if gate_type == "unitary":
         if "n_qubits" in gate:
@@ -522,6 +541,8 @@ class Circuit:
 
         circuit_matrix = identity(self.n_qubits) if backend is None else backend.eye(1 << self.n_qubits)
         for gate in self.gates:
+            if _is_measure_gate(gate):
+                continue
             gm = gate_to_matrix(gate, self.n_qubits, backend=backend)
             if backend is None:
                 circuit_matrix = np.matmul(gm, circuit_matrix)
@@ -709,6 +730,38 @@ def u2(phi, lam, target_qubit=0):
     return {"type": "u2", "target_qubit": target_qubit, "parameter": [phi, lam]}
 
 
+def measure(*qubits):
+    """In-circuit measurement marker (the second measurement mechanism).
+
+    Unlike the standalone :class:`~aicir.measure.measure.Measure` runner, which
+    reads out every qubit at the end of a unitary-only circuit, a measure gate
+    records *which* qubits are read out as part of the circuit definition. The
+    circuit can then be measured without telling :meth:`Measure.run` which
+    qubits to sample::
+
+        cir = Circuit(hadamard(0), cnot(1, [0]), measure(0, 1))
+        result = Measure(backend).run(cir, shots=1024)  # counts over q0, q1
+
+    Accepted forms::
+
+        measure(0)            # read out qubit 0
+        measure(1, 2, 3)      # read out qubits 1, 2 and 3
+        measure([0, 1])       # iterable form
+        measure()             # read out all qubits (resolved at run time)
+
+    The marker is inert during unitary evolution: the simulator evolves the
+    circuit normally and reads out the marked qubits at the end. It does not
+    collapse the state mid-circuit.
+    """
+    flat = []
+    for qubit in qubits:
+        if isinstance(qubit, (list, tuple, set, range)):
+            flat.extend(int(value) for value in qubit)
+        else:
+            flat.append(int(qubit))
+    return {"type": "measure", "qubits": flat}
+
+
 __all__ = [
     "Circuit",
     "Parameter",
@@ -738,4 +791,5 @@ __all__ = [
     "ccnot",
     "u3",
     "u2",
+    "measure",
 ]
