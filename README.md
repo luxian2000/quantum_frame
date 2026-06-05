@@ -848,6 +848,7 @@ from aicir.visual import (
     circuit_to_text,
     draw_circuit,
     gate_histogram,
+    plot,
     plot_state_probs,
     plot_state_amplitudes,
     plot_density_matrix,
@@ -862,6 +863,18 @@ cir = Circuit(
 
 print(circuit_to_text(cir))
 print(gate_histogram(cir))  # {'cx': 1, 'hadamard': 1, 'rzz': 1}
+
+# 保存彩色线路图。无 path 时，默认保存到调用它的 .py 文件所在目录，
+# 文件名为 <脚本名>_<电路变量名>.png，例如 demos/demo_1.py 中的
+# cir.plot() 会保存为 demos/demo_1_cir.png。
+fig, ax = cir.plot()
+
+# 显式相对路径也以调用它的 .py 文件所在目录为基准，而不是命令行 cwd。
+# 例如在 demos/demo_1.py 中会保存为 demos/figures/h2.png。
+fig, ax = cir.plot("figures/h2")
+
+# 也可以继续使用函数式入口。
+fig, ax = plot(cir, "figures/h2_function")
 
 # draw_circuit 默认返回文本；output="mpl" 时返回 matplotlib 的 (fig, ax)
 diagram = draw_circuit(cir)
@@ -882,6 +895,7 @@ fig, ax = plot_density_matrix(rho, part="abs")
 - `circuit_to_text(circuit)`：返回 ASCII 线路图
 - `draw_circuit(circuit, output="text" | "mpl")`：统一线路图入口
 - `gate_histogram(circuit)`：按门 `type` 统计数量
+- `plot(circuit, path=None, ...)` / `Circuit.plot(path=None, ...)`：保存彩色线路图，返回 `(fig, ax)`；未提供 `path` 时默认保存到调用它的 `.py` 文件所在目录
 - `plot_state_probs(state_or_probs)`：绘制计算基概率柱状图
 - `plot_state_amplitudes(state)`：绘制振幅实部、虚部和模长
 - `plot_state_phase(state)`：绘制振幅相位
