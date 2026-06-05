@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+import inspect
 import math
 import sys
 
@@ -536,6 +537,22 @@ class Circuit:
         diagram = _circuit_to_ascii(self)
         print(diagram, file=stream)
         return diagram
+
+    def plot(self, path=None, **kwargs):
+        """Render this circuit with :func:`aicir.visual.plot`.
+
+        Examples
+        --------
+        ``cir.plot("figures/bell")`` writes ``figures/bell.png``.
+        """
+        from ..visual import plot
+
+        frame = inspect.currentframe()
+        caller = frame.f_back if frame is not None else None
+        try:
+            return plot(self, path, _caller=caller, **kwargs)
+        finally:
+            del frame
 
     def __len__(self):
         return len(self.gates)

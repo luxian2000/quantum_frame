@@ -439,11 +439,21 @@ def _first_circuit_arg(call: ast.Call) -> ast.expr | None:
     return None
 
 
+def _circuit_expr_for_plot_call(call: ast.Call) -> ast.expr | None:
+    arg = _first_circuit_arg(call)
+    if arg is not None:
+        return arg
+    if isinstance(call.func, ast.Attribute) and call.func.attr == "plot":
+        return call.func.value
+    return None
+
+
 def _arg_variable_name(filename: str, lineno: int) -> str | None:
     """Return the variable name passed as the circuit to ``plot`` at ``lineno``.
 
     Returns ``None`` when the argument is not a plain variable (e.g. a literal,
-    a call, an attribute, or an indexed expression).
+    a call, an attribute, or an indexed expression). For method-call syntax,
+    the receiver name in ``cir.plot()`` is treated as the circuit variable.
     """
     tree = _parse_caller_source(filename)
     if tree is None:
@@ -455,7 +465,7 @@ def _arg_variable_name(filename: str, lineno: int) -> str | None:
             continue
         start = node.lineno
         end = getattr(node, "end_lineno", None) or node.lineno
-        if start <= lineno <= end and _first_circuit_arg(node) is not None:
+        if start <= lineno <= end and _circuit_expr_for_plot_call(node) is not None:
             candidates.append(node)
     if not candidates:
         return None
@@ -464,7 +474,7 @@ def _arg_variable_name(filename: str, lineno: int) -> str | None:
     candidates.sort(
         key=lambda n: (not _is_plot_call(n), n.lineno != lineno, n.col_offset)
     )
-    arg = _first_circuit_arg(candidates[0])
+    arg = _circuit_expr_for_plot_call(candidates[0])
     if isinstance(arg, ast.Name):
         return arg.id
     return None
@@ -495,18 +505,28 @@ def _default_target(name: str | None, caller) -> tuple[Path, str]:
     return exe_dir, f"{exe_stem}_{index}"
 
 
+def _caller_dir(caller) -> Path:
+    filename = caller.f_code.co_filename if caller is not None else "<unknown>"
+    exe_path = Path(filename)
+    if caller is not None and not filename.startswith("<") and exe_path.exists():
+        return exe_path.parent
+    return Path.cwd()
+
+
 def _resolve_output_path(path: Any, name: str | None, caller) -> Path:
-    # An explicit file path (e.g. "<dir>/<name>.png") wins and short-circuits
-    # the caller-aware default naming, so it has no naming side effects.
+    # Relative explicit paths are resolved from the caller script directory, not
+    # from the shell's current working directory.
     if path is not None:
         out = Path(path)
+        if not out.is_absolute():
+            out = _caller_dir(caller) / out
         if not out.is_dir():
             return out if out.suffix.lower() == ".png" else out.with_suffix(".png")
 
     # No path, or a directory to drop the default-named file into.
     exe_dir, base = _default_target(name, caller)
     if path is not None:
-        return Path(path) / f"{base}.png"
+        return out / f"{base}.png"
     return exe_dir / f"{base}.png"
 
 
@@ -523,6 +543,7 @@ def plot(
     title: str | None = None,
     qubit_labels: list[str] | None = None,
     wire_color: str = "#9AA0A6",
+    _caller=None,
 ):
     """Plot a quantum circuit as a coloured, rounded-box PNG figure.
 
@@ -578,7 +599,7 @@ def plot(
     (fig, ax) tuple.
     """
     frame = inspect.currentframe()
-    caller = frame.f_back if frame is not None else None
+    caller = _caller if _caller is not None else (frame.f_back if frame is not None else None)
     circuit_obj, _ = _coerce_circuit(circuit)
     fig, axes = _render_figure(
         circuit_obj,
