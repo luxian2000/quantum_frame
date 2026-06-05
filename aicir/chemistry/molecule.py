@@ -26,21 +26,6 @@ def _normalize_name(name: str) -> str:
     return key
 
 
-def _pauli_string_to_dict(pauli: str) -> dict[str, list[int]]:
-    labels = str(pauli).strip().upper()
-    if not labels:
-        raise ValueError("pauli string cannot be empty")
-
-    grouped: dict[str, list[int]] = {}
-    for qubit, label in enumerate(labels):
-        if label == "I":
-            continue
-        if label not in {"X", "Y", "Z"}:
-            raise ValueError(f"unsupported Pauli label {label!r} in {pauli!r}")
-        grouped.setdefault(label, []).append(qubit)
-    return grouped
-
-
 @dataclass(frozen=True)
 class MoleculeHamiltonian:
     """A fixed molecular qubit Hamiltonian preset."""
@@ -58,15 +43,15 @@ class MoleculeHamiltonian:
     def to_hamiltonian(self) -> Hamiltonian:
         """Build a fresh :class:`Hamiltonian` instance from the preset terms."""
 
-        hamiltonian = Hamiltonian(n_qubits=self.n_qubits)
+        terms: list[tuple[str, complex]] = []
         for coefficient, pauli in self.terms:
             if len(pauli) != self.n_qubits:
                 raise ValueError(
                     f"Preset {self.name!r} has Pauli string {pauli!r} "
                     f"with length {len(pauli)} for n_qubits={self.n_qubits}"
                 )
-            hamiltonian.term(coefficient, _pauli_string_to_dict(pauli))
-        return hamiltonian
+            terms.append((pauli, coefficient))
+        return Hamiltonian(n_qubits=self.n_qubits, terms=terms)
 
     def to_matrix(self, backend=None) -> np.ndarray:
         """Return the dense_matrix representation using ``backend``."""

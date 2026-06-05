@@ -75,7 +75,7 @@ from aicir.vqc import BasicVQE
 
 theta = Parameter("theta")
 ansatz = Circuit(ry(theta, 0), n_qubits=1)
-hamiltonian = Hamiltonian(n_qubits=1).term(1.0, {"Z": [0]})
+hamiltonian = Hamiltonian([("Z", 1.0)])
 
 solver = BasicVQE(
     hamiltonian,

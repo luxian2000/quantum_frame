@@ -8,7 +8,7 @@ from aicir.vqc import BasicVQE, run_vqe
 
 
 def _z_hamiltonian_object():
-    return Hamiltonian(n_qubits=1).term(1.0, {"Z": [0]})
+    return Hamiltonian(n_qubits=1, terms=[("Z", 1.0)])
 
 
 def _single_ry_template():
