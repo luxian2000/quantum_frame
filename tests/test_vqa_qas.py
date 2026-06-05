@@ -21,6 +21,7 @@ def _classification_config(**kwargs):
         n_qubits=3,
         layers=3,
         single_qubit_gates=("ry",),
+        two_qubit_gates=("cx",),
         two_qubit_pairs=((0, 1), (0, 2), (1, 2)),
         supernet_steps=0,
         ranking_num=3,
@@ -38,6 +39,7 @@ def _h2_config(**kwargs):
         n_qubits=4,
         layers=3,
         single_qubit_gates=("ry", "rz"),
+        two_qubit_gates=("cx",),
         two_qubit_pairs=((0, 1), (1, 2), (2, 3)),
         supernet_steps=0,
         ranking_num=3,
@@ -85,6 +87,113 @@ def test_h2_search_space_size_is_128_cubed():
     qas = VQAQAS(_h2_config())
 
     assert qas.logical_search_space_size() == 128**3
+
+
+def test_default_gate_set_search_space_uses_full_alphabet():
+    # Default single set {i, h, rx, ry, rz} (5) over 3 qubits, two-qubit choice
+    # alphabet {none, cx, rzz} (3) over 3 pairs.
+    qas = VQAQAS(
+        VQAQASConfig(
+            n_qubits=3,
+            layers=1,
+            two_qubit_pairs=((0, 1), (0, 2), (1, 2)),
+            device="cpu",
+            task="custom",
+        )
+    )
+
+    assert qas.layer_search_space_size() == (5**3) * (3**3)
+
+
+def test_identity_single_qubit_gate_emits_no_gate_and_no_parameter():
+    qas = VQAQAS(
+        VQAQASConfig(
+            n_qubits=2,
+            layers=1,
+            single_qubit_gates=("i", "ry"),
+            two_qubit_gates=("cx",),
+            two_qubit_pairs=(),
+            device="cpu",
+            task="custom",
+        )
+    )
+    architecture = Architecture((LayerArchitecture(("i", "i"), ()),))
+
+    circuit, keys, tensors = qas.build_circuit(architecture)
+
+    assert circuit.gates == []
+    assert keys == []
+    assert tensors == []
+
+
+def test_hadamard_single_qubit_gate_is_emitted_without_parameters():
+    qas = VQAQAS(
+        VQAQASConfig(
+            n_qubits=2,
+            layers=1,
+            single_qubit_gates=("h", "ry"),
+            two_qubit_gates=("cx",),
+            two_qubit_pairs=(),
+            device="cpu",
+            task="custom",
+        )
+    )
+    architecture = Architecture((LayerArchitecture(("h", "h"), ()),))
+
+    circuit, keys, tensors = qas.build_circuit(architecture)
+
+    # Hadamard is a fixed (zero-parameter) gate: emitted, but no trainable angle.
+    assert [gate["type"] for gate in circuit.gates] == ["hadamard", "hadamard"]
+    assert keys == []
+    assert tensors == []
+    assert "H" in circuit.show()
+
+
+def test_rzz_two_qubit_gate_is_trainable_and_differentiable():
+    qas = VQAQAS(
+        VQAQASConfig(
+            n_qubits=2,
+            layers=1,
+            single_qubit_gates=("i", "rx"),
+            two_qubit_gates=("rzz",),
+            two_qubit_pairs=((0, 1),),
+            device="cpu",
+            task="custom",
+        )
+    )
+    architecture = Architecture((LayerArchitecture(("rx", "rx"), ("rzz",)),))
+
+    circuit, keys, tensors = qas.build_circuit(architecture)
+
+    # The identity placeholder emits nothing; rzz adds a trainable two-qubit angle.
+    tq_keys = [key for key in keys if key[0] == "tq"]
+    assert len(tq_keys) == 1
+    assert tq_keys[0][5] == "rzz"
+    assert len(tensors) == 3  # two rx angles + one rzz angle
+    assert tensors[-1] is qas.shared_parameters[tq_keys[0]]
+
+    with torch.no_grad():
+        for tensor in tensors[:2]:
+            tensor.copy_(torch.tensor(0.5, dtype=tensor.dtype))
+    state = qas.simulate_state(circuit)
+    # X⊗I does not commute with ZZ, so the rzz angle affects the expectation.
+    observable = torch.tensor(
+        [[0, 0, 1, 0], [0, 0, 0, 1], [1, 0, 0, 0], [0, 1, 0, 0]],
+        dtype=torch.complex64,
+    )
+    loss = (qas.backend.expectation_sv(state, observable) - 0.3) ** 2
+
+    loss.backward()
+
+    assert tensors[-1].grad is not None
+    assert torch.isfinite(tensors[-1].grad)
+
+
+def test_two_qubit_mask_is_backward_compatible_view():
+    layer = LayerArchitecture(("ry", "ry"), (True, False))
+
+    assert layer.two_qubit_choices == ("cx", "none")
+    assert layer.two_qubit_mask == (True, False)
 
 
 def test_supplementary_config_fields_are_available():

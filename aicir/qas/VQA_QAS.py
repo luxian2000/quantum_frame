@@ -29,13 +29,98 @@ import torch
 
 from ..channel.backends.torch_backend import TorchBackend
 from ..channel.operators import Hamiltonian
-from ..core.circuit import Circuit, cx, rx, ry, rz
+from ..core.circuit import Circuit, cx, hadamard, rx, ry, rz, rzz
 from ..core.gates import apply_gate_to_state, gate_to_matrix
 from ..qml.deriv import psr
 
 
 ObjectiveFn = Callable[..., torch.Tensor | float]
-ParameterKey = tuple[int, int, tuple[str, ...], int, str]
+# Trainable-parameter address inside the supernet. The leading tag ("sq" / "tq")
+# separates single-qubit from two-qubit parameters so the two weight-sharing
+# signatures never collide; the layout tuple is the per-layer gate layout that
+# the weight-sharing rule keys on; param_index keeps multi-angle gates
+# addressable (the scoped gate set only uses single-angle rotations, so it is
+# always 0 here, but the structure generalizes to u2/u3).
+ParameterKey = tuple[str, int, int, tuple[str, ...], int, str, int]
+
+# Sentinel for "no two-qubit gate on this pair" (replaces the old boolean False).
+_NO_TWO_QUBIT = "none"
+
+
+@dataclass(frozen=True)
+class GateSpec:
+    """Builder + arity metadata for one searchable gate.
+
+    ``n_params`` is the number of trainable angles the gate owns: 0 for fixed
+    gates (the identity placeholder ``i`` and ``cx``) and 1 for the rotations
+    ``rx/ry/rz`` and the parameterized two-qubit ``rzz``. ``builder`` turns a
+    parameter list plus a qubit tuple into an aicir gate dict, or returns
+    ``None`` for a no-op (used by ``i`` so that no gate is emitted at all).
+    """
+
+    name: str
+    n_params: int
+    arity: int
+    builder: Callable[[Sequence[Any], Sequence[int]], dict[str, Any] | None]
+
+
+# Scoped single-qubit gate set: identity placeholder + the three Pauli rotations.
+_SINGLE_QUBIT_GATES: dict[str, GateSpec] = {
+    "i": GateSpec("i", 0, 1, lambda params, qubits: None),
+    "h": GateSpec("h", 0, 1, lambda params, qubits: hadamard(int(qubits[0]))),
+    "rx": GateSpec("rx", 1, 1, lambda params, qubits: rx(params[0], target_qubit=int(qubits[0]))),
+    "ry": GateSpec("ry", 1, 1, lambda params, qubits: ry(params[0], target_qubit=int(qubits[0]))),
+    "rz": GateSpec("rz", 1, 1, lambda params, qubits: rz(params[0], target_qubit=int(qubits[0]))),
+}
+
+# Scoped two-qubit gate set: fixed CNOT entangler + trainable ZZ rotation.
+_TWO_QUBIT_GATES: dict[str, GateSpec] = {
+    "cx": GateSpec(
+        "cx",
+        0,
+        2,
+        lambda params, qubits: cx(target_qubit=int(qubits[1]), control_qubits=[int(qubits[0])]),
+    ),
+    "rzz": GateSpec(
+        "rzz",
+        1,
+        2,
+        lambda params, qubits: rzz(params[0], qubit_1=int(qubits[0]), qubit_2=int(qubits[1])),
+    ),
+}
+
+
+def _normalize_single_gate(name: str) -> str:
+    gate = str(name).strip().lower()
+    if gate not in _SINGLE_QUBIT_GATES:
+        raise ValueError(
+            f"VQA_QAS single-qubit gates are {tuple(_SINGLE_QUBIT_GATES)}; got {name!r}"
+        )
+    return gate
+
+
+def _normalize_two_qubit_gate(name: str) -> str:
+    gate = str(name).strip().lower()
+    if gate not in _TWO_QUBIT_GATES:
+        raise ValueError(
+            f"VQA_QAS two-qubit gates are {tuple(_TWO_QUBIT_GATES)}; got {name!r}"
+        )
+    return gate
+
+
+def _normalize_two_qubit_choice(value: Any) -> str:
+    """Normalize a per-pair choice; accepts ``bool`` for backward compatibility.
+
+    Historically a layer's two-qubit structure was a ``tuple[bool, ...]`` mask
+    over CNOT pairs. ``True`` now maps to ``"cx"`` and ``False`` to ``"none"`` so
+    existing call sites and tests keep working unchanged.
+    """
+    if isinstance(value, bool):
+        return "cx" if value else _NO_TWO_QUBIT
+    name = str(value).strip().lower()
+    if name in ("", _NO_TWO_QUBIT, "i", "identity"):
+        return _NO_TWO_QUBIT
+    return _normalize_two_qubit_gate(name)
 
 
 @dataclass(frozen=True)
@@ -50,7 +135,8 @@ class NoiseConfig:
 class VQAQASConfig:
     n_qubits: int = 3
     layers: int = 3
-    single_qubit_gates: tuple[str, ...] = ("ry",)
+    single_qubit_gates: tuple[str, ...] = ("i", "h", "rx", "ry", "rz")
+    two_qubit_gates: tuple[str, ...] = ("cx", "rzz")
     two_qubit_pairs: tuple[tuple[int, int], ...] = ((0, 1), (0, 2), (1, 2))
     search_single_qubit_gates: bool = True
     search_two_qubit_gates: bool = True
@@ -75,7 +161,18 @@ class VQAQASConfig:
 @dataclass(frozen=True)
 class LayerArchitecture:
     single_qubit_gates: tuple[str, ...]
-    two_qubit_mask: tuple[bool, ...]
+    two_qubit_choices: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        single = tuple(_normalize_single_gate(gate) for gate in self.single_qubit_gates)
+        choices = tuple(_normalize_two_qubit_choice(choice) for choice in self.two_qubit_choices)
+        object.__setattr__(self, "single_qubit_gates", single)
+        object.__setattr__(self, "two_qubit_choices", choices)
+
+    @property
+    def two_qubit_mask(self) -> tuple[bool, ...]:
+        """Backward-compatible view: ``True`` where a two-qubit gate is present."""
+        return tuple(choice != _NO_TWO_QUBIT for choice in self.two_qubit_choices)
 
 
 @dataclass(frozen=True)
@@ -94,20 +191,6 @@ class VQAQASResult:
     finetune_log: list[dict[str, Any]]
     final_metrics: dict[str, Any]
     config: VQAQASConfig
-
-
-_ROTATION_BUILDERS = {
-    "rx": rx,
-    "ry": ry,
-    "rz": rz,
-}
-
-
-def _normalize_gate_name(name: str) -> str:
-    gate = str(name).strip().lower()
-    if gate not in _ROTATION_BUILDERS:
-        raise ValueError("VQA_QAS supports trainable single-qubit gates: rx, ry, rz")
-    return gate
 
 
 def _as_torch_scalar(value: torch.Tensor | float, device: torch.device) -> torch.Tensor:
@@ -144,8 +227,9 @@ class VQAQAS:
 
     def __init__(self, config: VQAQASConfig | None = None):
         config = config or VQAQASConfig()
-        normalized_gates = tuple(_normalize_gate_name(gate) for gate in config.single_qubit_gates)
-        config = replace(config, single_qubit_gates=normalized_gates)
+        normalized_single = tuple(_normalize_single_gate(gate) for gate in config.single_qubit_gates)
+        normalized_two = tuple(_normalize_two_qubit_gate(gate) for gate in config.two_qubit_gates)
+        config = replace(config, single_qubit_gates=normalized_single, two_qubit_gates=normalized_two)
         self.config = config
         self._validate_config()
 
@@ -157,8 +241,11 @@ class VQAQAS:
 
         self.backend = TorchBackend(device=config.device)
         self.device = self.backend._device
+        # Index alphabet for the per-pair two-qubit choice: "none" first so the
+        # absent option keeps index 0, then the configured two-qubit gates.
+        self._two_qubit_choice_alphabet: tuple[str, ...] = (_NO_TWO_QUBIT,) + tuple(config.two_qubit_gates)
         self._single_layouts = self._build_single_layouts()
-        self._two_qubit_masks = self._build_two_qubit_masks()
+        self._two_qubit_layouts = self._build_two_qubit_layouts()
         self._readout_index_cache: dict[int, torch.Tensor] = {}
         self._hamiltonian_cache: dict[int, torch.Tensor] = {}
 
@@ -196,6 +283,8 @@ class VQAQAS:
             raise ValueError("finetune_steps must be non-negative")
         if cfg.learning_rate <= 0 or cfg.finetune_learning_rate <= 0:
             raise ValueError("learning rates must be positive")
+        if not cfg.single_qubit_gates:
+            raise ValueError("single_qubit_gates must be non-empty")
         for control, target in cfg.two_qubit_pairs:
             if not (0 <= int(control) < cfg.n_qubits and 0 <= int(target) < cfg.n_qubits):
                 raise ValueError("two_qubit_pairs contain a qubit outside [0, n_qubits)")
@@ -208,48 +297,98 @@ class VQAQAS:
             return [tuple(cfg.single_qubit_gates[0] for _ in range(cfg.n_qubits))]
         return [tuple(layout) for layout in product(cfg.single_qubit_gates, repeat=cfg.n_qubits)]
 
-    def _build_two_qubit_masks(self) -> list[tuple[bool, ...]]:
+    def _build_two_qubit_layouts(self) -> list[tuple[str, ...]]:
         width = len(self.config.two_qubit_pairs)
         if width == 0:
             return [()]
         if not self.config.search_two_qubit_gates:
-            return [tuple(True for _ in range(width))]
-        return [tuple(bool(bit) for bit in mask) for mask in product((False, True), repeat=width)]
+            fixed = self.config.two_qubit_gates[0] if self.config.two_qubit_gates else _NO_TWO_QUBIT
+            return [tuple(fixed for _ in range(width))]
+        return [tuple(choice) for choice in product(self._two_qubit_choice_alphabet, repeat=width)]
+
+    def _new_shared_parameter(self) -> torch.nn.Parameter:
+        value = float(self._np_rng.uniform(-0.05, 0.05))
+        return torch.nn.Parameter(torch.tensor(value, dtype=torch.float32, device=self.device))
 
     def _initialize_shared_parameters(self) -> None:
         cfg = self.config
         for supernet_id in range(cfg.supernet_num):
             parameters: list[torch.nn.Parameter] = []
             for layer_id in range(cfg.layers):
+                # Single-qubit angles: shared across ansatze whose single-qubit
+                # layout of this layer is identical (the paper's rule). Fixed
+                # gates (the identity placeholder) own zero parameters.
                 for layout in self._single_layouts:
                     for qubit_id, gate_type in enumerate(layout):
-                        key = self.parameter_key(supernet_id, layer_id, layout, qubit_id, gate_type)
-                        value = float(self._np_rng.uniform(-0.05, 0.05))
-                        tensor = torch.nn.Parameter(
-                            torch.tensor(value, dtype=torch.float32, device=self.device)
-                        )
-                        self.shared_parameters[key] = tensor
-                        parameters.append(tensor)
+                        spec = _SINGLE_QUBIT_GATES[gate_type]
+                        for param_index in range(spec.n_params):
+                            key = self.single_parameter_key(
+                                supernet_id, layer_id, layout, qubit_id, gate_type, param_index
+                            )
+                            if key in self.shared_parameters:
+                                continue
+                            tensor = self._new_shared_parameter()
+                            self.shared_parameters[key] = tensor
+                            parameters.append(tensor)
+                # Two-qubit angles (e.g. rzz): the same indexing principle applied
+                # to the second category — shared across ansatze whose two-qubit
+                # layout of this layer is identical. cx owns zero parameters.
+                for layout in self._two_qubit_layouts:
+                    for pair_index, choice in enumerate(layout):
+                        if choice == _NO_TWO_QUBIT:
+                            continue
+                        spec = _TWO_QUBIT_GATES[choice]
+                        for param_index in range(spec.n_params):
+                            key = self.two_qubit_parameter_key(
+                                supernet_id, layer_id, layout, pair_index, choice, param_index
+                            )
+                            if key in self.shared_parameters:
+                                continue
+                            tensor = self._new_shared_parameter()
+                            self.shared_parameters[key] = tensor
+                            parameters.append(tensor)
             self._supernet_parameter_lists.append(parameters)
 
-    def parameter_key(
+    def single_parameter_key(
         self,
         supernet_id: int,
         layer_id: int,
         single_layout: Sequence[str],
         qubit_id: int,
         gate_type: str,
+        param_index: int = 0,
     ) -> ParameterKey:
         return (
+            "sq",
             int(supernet_id),
             int(layer_id),
-            tuple(_normalize_gate_name(gate) for gate in single_layout),
+            tuple(_normalize_single_gate(gate) for gate in single_layout),
             int(qubit_id),
-            _normalize_gate_name(gate_type),
+            _normalize_single_gate(gate_type),
+            int(param_index),
+        )
+
+    def two_qubit_parameter_key(
+        self,
+        supernet_id: int,
+        layer_id: int,
+        two_qubit_layout: Sequence[str],
+        pair_index: int,
+        gate_type: str,
+        param_index: int = 0,
+    ) -> ParameterKey:
+        return (
+            "tq",
+            int(supernet_id),
+            int(layer_id),
+            tuple(_normalize_two_qubit_choice(choice) for choice in two_qubit_layout),
+            int(pair_index),
+            _normalize_two_qubit_gate(gate_type),
+            int(param_index),
         )
 
     def layer_search_space_size(self) -> int:
-        return len(self._single_layouts) * len(self._two_qubit_masks)
+        return len(self._single_layouts) * len(self._two_qubit_layouts)
 
     def logical_search_space_size(self) -> int:
         return self.layer_search_space_size() ** self.config.layers
@@ -258,18 +397,21 @@ class VQAQAS:
         layers: list[LayerArchitecture] = []
         for _ in range(self.config.layers):
             single_layout = self._rng.choice(self._single_layouts)
-            two_mask = self._rng.choice(self._two_qubit_masks)
-            layers.append(LayerArchitecture(single_layout, two_mask))
+            two_layout = self._rng.choice(self._two_qubit_layouts)
+            layers.append(LayerArchitecture(single_layout, two_layout))
         return Architecture(tuple(layers))
 
     def encode_architecture(self, architecture: Architecture) -> tuple[tuple[int, ...], ...]:
         encoded: list[tuple[int, ...]] = []
         for layer in architecture.layers:
             single_indices = tuple(
-                self.config.single_qubit_gates.index(_normalize_gate_name(gate))
+                self.config.single_qubit_gates.index(_normalize_single_gate(gate))
                 for gate in layer.single_qubit_gates
             )
-            two_indices = tuple(1 if active else 0 for active in layer.two_qubit_mask)
+            two_indices = tuple(
+                self._two_qubit_choice_alphabet.index(_normalize_two_qubit_choice(choice))
+                for choice in layer.two_qubit_choices
+            )
             encoded.append(single_indices + two_indices)
         return tuple(encoded)
 
@@ -288,12 +430,21 @@ class VQAQAS:
             if len(raw) != width:
                 raise ValueError("layer architecture index list has the wrong length")
             single = tuple(self.config.single_qubit_gates[int(idx)] for idx in raw[: self.config.n_qubits])
-            mask = tuple(bool(v) for v in raw[self.config.n_qubits :])
-            layers.append(LayerArchitecture(single, mask))
+            choices = tuple(self._two_qubit_choice_alphabet[int(v)] for v in raw[self.config.n_qubits :])
+            layers.append(LayerArchitecture(single, choices))
         return Architecture(tuple(layers))
 
     def cnot_count(self, architecture: Architecture) -> int:
-        return sum(1 for layer in architecture.layers for active in layer.two_qubit_mask if active)
+        """Number of CNOT (``cx``) gates — the paper's noise-relevant metric."""
+        return sum(
+            1 for layer in architecture.layers for choice in layer.two_qubit_choices if choice == "cx"
+        )
+
+    def two_qubit_count(self, architecture: Architecture) -> int:
+        """Number of two-qubit gates of any type (``cx`` and ``rzz``)."""
+        return sum(
+            1 for layer in architecture.layers for choice in layer.two_qubit_choices if choice != _NO_TWO_QUBIT
+        )
 
     def build_circuit(
         self,
@@ -312,21 +463,45 @@ class VQAQAS:
         for layer_id, layer in enumerate(architecture.layers):
             if len(layer.single_qubit_gates) != self.config.n_qubits:
                 raise ValueError("single_qubit_gates length does not match n_qubits")
-            if len(layer.two_qubit_mask) != len(self.config.two_qubit_pairs):
-                raise ValueError("two_qubit_mask length does not match two_qubit_pairs")
+            if len(layer.two_qubit_choices) != len(self.config.two_qubit_pairs):
+                raise ValueError("two_qubit_choices length does not match two_qubit_pairs")
 
-            layout = tuple(_normalize_gate_name(gate) for gate in layer.single_qubit_gates)
-            for qubit_id, gate_type in enumerate(layout):
-                key = self.parameter_key(supernet_id, layer_id, layout, qubit_id, gate_type)
-                theta = parameter_source[key]
-                gates.append(_ROTATION_BUILDERS[gate_type](theta, target_qubit=qubit_id))
-                active_keys.append(key)
-                if isinstance(theta, torch.Tensor):
-                    active_tensors.append(theta)
+            single_layout = tuple(_normalize_single_gate(gate) for gate in layer.single_qubit_gates)
+            for qubit_id, gate_type in enumerate(single_layout):
+                spec = _SINGLE_QUBIT_GATES[gate_type]
+                params: list[torch.Tensor | float] = []
+                for param_index in range(spec.n_params):
+                    key = self.single_parameter_key(
+                        supernet_id, layer_id, single_layout, qubit_id, gate_type, param_index
+                    )
+                    theta = parameter_source[key]
+                    params.append(theta)
+                    active_keys.append(key)
+                    if isinstance(theta, torch.Tensor):
+                        active_tensors.append(theta)
+                gate = spec.builder(params, (qubit_id,))
+                if gate is not None:
+                    gates.append(gate)
 
-            for active, (control, target) in zip(layer.two_qubit_mask, self.config.two_qubit_pairs):
-                if active:
-                    gates.append(cx(target_qubit=int(target), control_qubits=[int(control)]))
+            two_layout = tuple(_normalize_two_qubit_choice(choice) for choice in layer.two_qubit_choices)
+            for pair_index, choice in enumerate(two_layout):
+                if choice == _NO_TWO_QUBIT:
+                    continue
+                spec = _TWO_QUBIT_GATES[choice]
+                control, target = self.config.two_qubit_pairs[pair_index]
+                params = []
+                for param_index in range(spec.n_params):
+                    key = self.two_qubit_parameter_key(
+                        supernet_id, layer_id, two_layout, pair_index, choice, param_index
+                    )
+                    theta = parameter_source[key]
+                    params.append(theta)
+                    active_keys.append(key)
+                    if isinstance(theta, torch.Tensor):
+                        active_tensors.append(theta)
+                gate = spec.builder(params, (int(control), int(target)))
+                if gate is not None:
+                    gates.append(gate)
 
         return Circuit(*gates, n_qubits=self.config.n_qubits, backend=self.backend), active_keys, active_tensors
 
@@ -667,6 +842,7 @@ class VQAQAS:
                 "gradient_norm": grad_norm,
                 "active_parameter_count": len(active_keys),
                 "cnot_count": self.cnot_count(architecture),
+                "two_qubit_count": self.two_qubit_count(architecture),
             }
             if self.config.track_best_validation and self.config.task.lower() in {"classification", "binary_classification"}:
                 record.update(self._track_validation_best(architecture, selected_id, objective, dataset, hamiltonian))
@@ -717,6 +893,7 @@ class VQAQAS:
                     "score": losses[selected_id],
                     "candidate_losses": losses,
                     "cnot_count": self.cnot_count(architecture),
+                    "two_qubit_count": self.two_qubit_count(architecture),
                 }
             )
         records.sort(key=lambda item: item["score"])
@@ -808,6 +985,7 @@ class VQAQAS:
         metrics: dict[str, Any] = {
             "selected_ansatz": architecture,
             "selected_cnot_count": self.cnot_count(architecture),
+            "selected_two_qubit_count": self.two_qubit_count(architecture),
             "selected_circuit_ascii": _circuit_diagram(circuit),
         }
         if task in {"classification", "binary_classification"}:
@@ -850,13 +1028,24 @@ class VQAQAS:
         return metrics
 
     def _run_fixed_h2_vqe_baseline(self, hamiltonian: Any) -> float:
+        # Conventional fixed VQE reference (Fig. 3a): every configured rotation
+        # type on every qubit, then one fixed CNOT entangler per pair. The gate
+        # specs carry arity, so multi-/zero-parameter gates are sized correctly.
         hamiltonian_matrix = self._hamiltonian_matrix(hamiltonian)
-        gate_types = tuple(dict.fromkeys(self.config.single_qubit_gates))
-        parameters: list[torch.nn.Parameter] = []
-        for _ in range(self.config.layers * self.config.n_qubits * len(gate_types)):
-            value = float(self._np_rng.uniform(-0.05, 0.05))
-            parameters.append(torch.nn.Parameter(torch.tensor(value, dtype=torch.float32, device=self.device)))
-        optimizer = torch.optim.Adam(parameters, lr=self.config.finetune_learning_rate)
+        single_types = tuple(dict.fromkeys(self.config.single_qubit_gates))
+        if self.config.two_qubit_gates:
+            entangler = "cx" if "cx" in self.config.two_qubit_gates else self.config.two_qubit_gates[0]
+            entangler_spec: GateSpec | None = _TWO_QUBIT_GATES[entangler]
+        else:
+            entangler_spec = None
+
+        per_layer = sum(_SINGLE_QUBIT_GATES[g].n_params for g in single_types) * self.config.n_qubits
+        if entangler_spec is not None:
+            per_layer += entangler_spec.n_params * len(self.config.two_qubit_pairs)
+        total = per_layer * self.config.layers
+
+        parameters = [self._new_shared_parameter() for _ in range(total)]
+        optimizer = torch.optim.Adam(parameters, lr=self.config.finetune_learning_rate) if parameters else None
         steps = max(1, self.config.finetune_steps)
         best_energy = math.inf
 
@@ -865,20 +1054,30 @@ class VQAQAS:
             cursor = 0
             for _ in range(self.config.layers):
                 for qubit in range(self.config.n_qubits):
-                    for gate_type in gate_types:
-                        gates.append(_ROTATION_BUILDERS[gate_type](parameters[cursor], target_qubit=qubit))
-                        cursor += 1
-                for control, target in self.config.two_qubit_pairs:
-                    gates.append(cx(target_qubit=int(target), control_qubits=[int(control)]))
+                    for gate_type in single_types:
+                        spec = _SINGLE_QUBIT_GATES[gate_type]
+                        slot = parameters[cursor : cursor + spec.n_params]
+                        cursor += spec.n_params
+                        gate = spec.builder(slot, (qubit,))
+                        if gate is not None:
+                            gates.append(gate)
+                if entangler_spec is not None:
+                    for control, target in self.config.two_qubit_pairs:
+                        slot = parameters[cursor : cursor + entangler_spec.n_params]
+                        cursor += entangler_spec.n_params
+                        gate = entangler_spec.builder(slot, (int(control), int(target)))
+                        if gate is not None:
+                            gates.append(gate)
             state = self._simulate_gates(gates)
             return self.backend.expectation_sv(state, hamiltonian_matrix)
 
         for _ in range(steps):
             loss = energy_closure()
             best_energy = min(best_energy, _float_value(loss))
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
+            if optimizer is not None:
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                optimizer.step()
         return float(best_energy)
 
     def train(
@@ -1121,7 +1320,8 @@ def classification_vqa_qas(config: VQAQASConfig | None = None) -> VQAQASResult:
         config = VQAQASConfig(
             n_qubits=3,
             layers=3,
-            single_qubit_gates=("ry",),
+            single_qubit_gates=("i", "h", "rx", "ry", "rz"),
+            two_qubit_gates=("cx", "rzz"),
             two_qubit_pairs=((0, 1), (0, 2), (1, 2)),
             search_single_qubit_gates=True,
             search_two_qubit_gates=True,
@@ -1137,7 +1337,8 @@ def h2_vqe_qas(config: VQAQASConfig | None = None) -> VQAQASResult:
         config = VQAQASConfig(
             n_qubits=4,
             layers=3,
-            single_qubit_gates=("ry", "rz"),
+            single_qubit_gates=("i", "h", "rx", "ry", "rz"),
+            two_qubit_gates=("cx", "rzz"),
             two_qubit_pairs=((0, 1), (1, 2), (2, 3)),
             search_single_qubit_gates=True,
             search_two_qubit_gates=True,
