@@ -62,6 +62,7 @@ TWOQ_GATE_TYPES = {
     "toffoli",
     "ccnot",
     "rzz",
+    "rxx",
     "zz",
     "zz_opt",
     "zz_sp_opt",
@@ -430,4 +431,3 @@ __all__ = [
     "load_default_ion_trap_noise_config",
     "DEFAULT_MD_NAME",
 ]
-

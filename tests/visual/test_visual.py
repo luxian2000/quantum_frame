@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from aicir import Circuit, cnot, crz, cz, hadamard, rzz, rx, s_gate, swap, toffoli
+from aicir import Circuit, cnot, crz, cz, hadamard, rxx, rzz, rx, rz, s_gate, swap, toffoli, u2, u3
 from aicir.visual import (
     circuit_to_text,
     draw_circuit,
@@ -24,7 +24,7 @@ def test_circuit_to_text_and_draw_circuit_text():
     assert diagram == draw_circuit(circuit)
     assert "H" in diagram
     assert "X" in diagram
-    assert "ZZ" in diagram
+    assert "Rzz" in diagram
     assert "pi/2" in diagram
 
 
@@ -149,6 +149,47 @@ def test_plot_layered_preserves_order_across_wire_spans(plt):
         and line.get_ydata()[0] != line.get_ydata()[1]
     ]
     assert s_x > max(cnot_xs)
+
+
+def test_plot_u2_u3_show_smaller_parameter_sublabels(plt):
+    circuit = Circuit(
+        rz(np.pi / 2, 0),
+        u2(np.pi / 3, np.pi / 5, 1),
+        u3(np.pi, 0.0, np.pi / 7, 2),
+        n_qubits=3,
+    )
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    text_by_value = {text.get_text(): text for text in ax.texts}
+    rz_label = text_by_value["π/2"]
+    u2_label = text_by_value["π/3, 0.628"]
+    u3_label = text_by_value["π, 0.000\n0.449"]
+
+    assert u2_label.get_fontsize() < rz_label.get_fontsize()
+    assert u3_label.get_fontsize() < rz_label.get_fontsize()
+    assert u2_label.get_position()[1] < 1.0
+    assert u3_label.get_position()[1] < 0.0
+
+
+def test_plot_rzz_gate_label_is_rzz(plt):
+    circuit = Circuit(rzz(np.pi / 2, 0, 1), n_qubits=2)
+
+    fig, ax = plot(circuit, save=False)
+
+    labels = [text.get_text() for text in ax.texts]
+    assert labels.count("Rzz") == 2
+    assert "ZZ" not in labels
+
+
+def test_plot_rxx_gate_label_is_rxx(plt):
+    circuit = Circuit(rxx(np.pi / 2, 0, 1), n_qubits=2)
+
+    fig, ax = plot(circuit, save=False)
+
+    labels = [text.get_text() for text in ax.texts]
+    assert labels.count("Rxx") == 2
+    assert "π/2" in labels
 
 
 def test_plot_rejects_invalid_input(plt):

@@ -6,7 +6,7 @@ import torch
 from aicir import Circuit, Measure, TorchBackend, cnot, hadamard, ry
 from aicir.channel.backends import NumpyBackend
 from aicir.channel.operators import Hamiltonian
-from aicir.core.circuit import crx, swap, toffoli
+from aicir.core.circuit import crx, rxx, swap, toffoli
 from aicir.core.gates import apply_gate_to_state, gate_to_matrix
 from aicir.measure.result import Result
 
@@ -167,6 +167,7 @@ class TestMeasure(unittest.TestCase):
             cnot(0, [2], [0]),
             crx(0.2, 2, [1]),
             swap(0, 2),
+            rxx(0.4, 0, 2),
             toffoli(2, [0, 1]),
         ]
 

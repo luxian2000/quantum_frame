@@ -30,7 +30,7 @@ def ion_trap_error_budget_proxy(circuit: Circuit) -> Tuple[float, Dict[str, Any]
             measure_count += 1
         elif gate_type == "reset":
             reset_count += 1
-        elif gate_type in TWOQ_GATE_TYPES or gate.get("control_qubits") or gate_type in {"swap", "rzz"}:
+        elif gate_type in TWOQ_GATE_TYPES or gate.get("control_qubits") or gate_type in {"swap", "rzz", "rxx"}:
             twoq_gate_count += 1
         elif gate_type in ONEQ_GATE_TYPES or "target_qubit" in gate:
             oneq_gate_count += 1

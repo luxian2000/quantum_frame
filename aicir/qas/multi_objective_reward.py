@@ -151,7 +151,7 @@ class ExpressibilityScore:
         two_qubit = sum(
             1
             for gate in circuit.gates
-            if gate.get("type") in {"cx", "cnot", "cy", "cz", "crx", "cry", "crz", "swap", "toffoli", "ccnot", "rzz"}
+            if gate.get("type") in {"cx", "cnot", "cy", "cz", "crx", "cry", "crz", "swap", "toffoli", "ccnot", "rzz", "rxx"}
         )
         entangling_ratio = two_qubit / n_gates
         depth_proxy = n_gates / max(1, circuit.n_qubits)
@@ -236,7 +236,7 @@ class TrainabilityScore:
         for gate in circuit.gates:
             gate_type = gate.get("type", "")
             if gate_type in {"cx", "cnot", "cy", "cz", "crx", "cry", "crz",
-                            "swap", "toffoli", "ccnot", "rzz"}:
+                            "swap", "toffoli", "ccnot", "rzz", "rxx"}:
                 two_qubit_ops += 1
             else:
                 single_qubit_ops += 1
@@ -445,7 +445,7 @@ class HardwareEfficiencyScore:
         two_qubit_count = sum(
             1 for g in circuit.gates
             if g.get("type") in {"cx", "cnot", "cy", "cz", "crx", "cry", "crz",
-                                "swap", "toffoli", "ccnot", "rzz"}
+                                "swap", "toffoli", "ccnot", "rzz", "rxx"}
         )
 
         if circuit.n_qubits > 0:
@@ -580,7 +580,7 @@ class MultiObjectiveReward:
         two_qubit = sum(
             1 for g in circuit.gates
             if g.get("type") in {"cx", "cnot", "cy", "cz", "crx", "cry", "crz",
-                                "swap", "toffoli", "ccnot", "rzz"}
+                                "swap", "toffoli", "ccnot", "rzz", "rxx"}
         )
 
         # Combined penalty

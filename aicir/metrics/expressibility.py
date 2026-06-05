@@ -55,7 +55,7 @@ def _replace_circuit_parameters(circuit: Circuit, params: np.ndarray) -> Circuit
         gate_type = gate["type"]
 
         # 根据门类型确定参数数量
-        if gate_type in ("rx", "ry", "rz", "crx", "cry", "crz", "rzz"):
+        if gate_type in ("rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"):
             # 单参数门
             gate["parameter"] = float(params[param_idx])
             param_idx += 1
@@ -100,7 +100,7 @@ def _count_total_parameters(circuit: Circuit, param_indices: List[int]) -> int:
     for idx in param_indices:
         gate = circuit.gates[idx]
         gate_type = gate["type"]
-        if gate_type in ("rx", "ry", "rz", "crx", "cry", "crz", "rzz"):
+        if gate_type in ("rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"):
             total_params += 1
         elif gate_type == "u2":
             total_params += 2

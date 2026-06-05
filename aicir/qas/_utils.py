@@ -22,6 +22,7 @@ TWO_QUBIT_GATE_TYPES = {
     "toffoli",
     "ccnot",
     "rzz",
+    "rxx",
 }
 
 
