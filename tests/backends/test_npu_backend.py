@@ -310,6 +310,106 @@ class TestNPUBackend(unittest.TestCase):
         )
         self.assertAlmostEqual(result, expected, places=5)
 
+    # ──────── autograd-safe NPU Functions (value + gradient) ────────
+
+    def test_npu_complex_matmul_function_matches_native_gradient(self):
+        from aicir.channel.backends.npu_backend import _NpuMatmulFn
+
+        torch.manual_seed(0)
+        a = torch.randn(4, 4, dtype=torch.complex64, requires_grad=True)
+        b = torch.randn(4, 3, dtype=torch.complex64, requires_grad=True)
+        c = torch.matmul(a, b)
+        (c.real ** 2 + c.imag ** 2).sum().backward()
+        ga, gb = a.grad.clone(), b.grad.clone()
+
+        a2 = a.detach().clone().requires_grad_()
+        b2 = b.detach().clone().requires_grad_()
+        c2 = _NpuMatmulFn.apply(a2, b2)
+        (c2.real ** 2 + c2.imag ** 2).sum().backward()
+
+        self.assertTrue(torch.allclose(c, c2, atol=1e-5))
+        self.assertTrue(torch.allclose(ga, a2.grad, atol=1e-4))
+        self.assertTrue(torch.allclose(gb, b2.grad, atol=1e-4))
+
+    def test_npu_real_complex_matmul_function_gradient(self):
+        from aicir.channel.backends.npu_backend import _NpuMatmulFn
+
+        torch.manual_seed(1)
+        real_gate = torch.randn(4, 4)  # constant real gate
+        v = torch.randn(4, 1, dtype=torch.complex64, requires_grad=True)
+        c = torch.matmul(real_gate.to(torch.complex64), v)
+        (c.real ** 2 + c.imag ** 2).sum().backward()
+        gv = v.grad.clone()
+
+        v2 = v.detach().clone().requires_grad_()
+        c2 = _NpuMatmulFn.apply(real_gate, v2)
+        (c2.real ** 2 + c2.imag ** 2).sum().backward()
+        self.assertTrue(torch.allclose(gv, v2.grad, atol=1e-4))
+
+    def test_npu_expectation_function_matches_native_gradient(self):
+        from aicir.channel.backends.npu_backend import _NpuExpectationFn
+        from aicir.channel.backends.gpu_backend import GPUBackend
+
+        torch.manual_seed(2)
+        m = torch.randn(8, 8, dtype=torch.complex64)
+        h = (m + m.conj().T) / 2  # Hermitian
+        s = torch.randn(8, 1, dtype=torch.complex64, requires_grad=True)
+        e = GPUBackend(device="cpu").expectation_sv(s, h)
+        e.backward()
+        gs = s.grad.clone()
+
+        s2 = s.detach().clone().requires_grad_()
+        e2 = _NpuExpectationFn.apply(s2, h)
+        e2.backward()
+        self.assertTrue(torch.allclose(e, e2, atol=1e-5))
+        self.assertTrue(torch.allclose(gs, s2.grad, atol=1e-4))
+
+    def test_npu_circuit_energy_gradient_matches_gpu(self):
+        # End-to-end: a parameterised circuit's energy gradient via the forced
+        # NPU complex path must match native GPUBackend autograd.
+        import types
+        from aicir.channel.backends.npu_backend import NPUBackend, _NpuMatmulFn
+        from aicir.channel.backends.gpu_backend import GPUBackend
+        from aicir.core.gates import apply_gate_to_state
+        from aicir.core.circuit import rx, ry, rz, rzz, cx, hadamard
+
+        torch.manual_seed(3)
+        n = 3
+        m = torch.randn(1 << n, 1 << n, dtype=torch.complex64)
+        h = (m + m.conj().T) / 2
+
+        def energy(backend, theta):
+            gates = [
+                hadamard(0), rx(theta[0], 0), ry(theta[1], 1), rz(theta[2], 2),
+                cx(target_qubit=1, control_qubits=[0]),
+                rzz(theta[3], qubit_1=1, qubit_2=2),
+            ]
+            state = backend.zeros_state(n)
+            for g in gates:
+                state = apply_gate_to_state(g, state, n, backend)
+            return backend.expectation_sv(state, backend.cast(h.numpy()))
+
+        init = [0.3, -0.7, 1.1, 0.4]
+        t1 = torch.tensor(init, requires_grad=True)
+        energy(GPUBackend(device="cpu"), t1).backward()
+        g1 = t1.grad.clone()
+
+        npu = NPUBackend(fallback_to_cpu=True)
+
+        def forced_matmul(self, a, b):
+            if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor) and (
+                torch.is_complex(a) or torch.is_complex(b)
+            ):
+                return _NpuMatmulFn.apply(a, b)
+            return GPUBackend.matmul(self, a, b)
+
+        npu.matmul = types.MethodType(forced_matmul, npu)
+        t2 = torch.tensor(init, requires_grad=True)
+        with mock.patch.object(NPUBackend, "_is_npu_complex", return_value=True):
+            energy(npu, t2).backward()
+
+        self.assertTrue(torch.allclose(g1, t2.grad, atol=1e-4))
+
 
 if __name__ == "__main__":
     unittest.main()
