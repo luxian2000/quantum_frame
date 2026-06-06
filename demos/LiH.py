@@ -24,27 +24,29 @@ from aicir.measure import hamiltonian_pauli_terms
 from aicir.qas import VQAQAS, VQAQASConfig, VQAQASResult
 
 
-LIH_GEOMETRY_ANGSTROM = (
-    ("Li", (0.000000, 0.000000, 0.000000)),
-    ("H", (0.000000, 0.000000, 1.595000)),
+LIH_GEOMETRY_ANGSTROM = (  # 以埃为单位给出 LiH 分子的几何构型。
+    ("Li", (0.000000, 0.000000, 0.000000)),  # 将锂原子放在坐标原点。
+    ("H", (0.000000, 0.000000, 1.595000)),  # 将氢原子放在 z 轴正方向 1.595 埃处。
 )
 
-LIH_BASIS = "sto3g"
-LIH_CHARGE = 0
-LIH_SPIN = 0
-LIH_ACTIVE_ELECTRONS = 2
-LIH_ACTIVE_SPATIAL_ORBITALS = 2
-LIH_QUBIT_MAPPER = "JordanWignerMapper"
+# LiH 有效空间模型的基础化学参数。
+LIH_BASIS = "sto3g"  # 采用 STO-3G 最小基组进行轨道展开。
+LIH_CHARGE = 0  # 体系总电荷为 0，对应中性 LiH 分子。
+LIH_SPIN = 0  # 总自旋量子数为 0，对应单重态。
+LIH_ACTIVE_ELECTRONS = 2  # 有效空间中保留 2 个活性电子。
+LIH_ACTIVE_SPATIAL_ORBITALS = 2  # 有效空间中保留 2 个空间轨道。
+LIH_QUBIT_MAPPER = "JordanWignerMapper"  # 使用 Jordan-Wigner 变换映射到量子比特。
 
-LIH_GENERATION = (
-    "PySCFDriver(atom='Li 0 0 0; H 0 0 1.595', basis='sto3g', "
-    "charge=0, spin=0) -> "
-    "ActiveSpaceTransformer(num_electrons=2, num_spatial_orbitals=2) -> "
-    "JordanWignerMapper"
+# 记录该哈密顿量在外部量化化学工具中的生成链路，便于复现。
+LIH_GENERATION = (  # 将电子结构问题转换成 4 比特哈密顿量的处理流程。
+    "PySCFDriver(atom='Li 0 0 0; H 0 0 1.595', basis='sto3g', "  # 用 PySCFDriver 构造 LiH 分子并求积分。
+    "charge=0, spin=0) -> "  # 指定中性单重态的电荷和自旋参数。
+    "ActiveSpaceTransformer(num_electrons=2, num_spatial_orbitals=2) -> "  # 截取 2 电子 2 轨道的活性空间。
+    "JordanWignerMapper"  # 最后用 Jordan-Wigner 编码映射到 Pauli 算符。
 )
 
-LIH_NUCLEAR_REPULSION_ENERGY = 0.995317638094044
-LIH_ACTIVE_SPACE_OFFSET = -7.798291188105942
+LIH_NUCLEAR_REPULSION_ENERGY = 0.995317638094044  # 原子核间库仑排斥能常数项。
+LIH_ACTIVE_SPACE_OFFSET = -7.798291188105942  # 有效空间截断后保留下来的能量偏移项。
 
 
 def build_lih_hamiltonian() -> Hamiltonian:
@@ -54,6 +56,8 @@ def build_lih_hamiltonian() -> Hamiltonian:
     ``("ZZ", [0, 3], coeff)`` means ``coeff * Z_0 Z_3``.
     """
 
+    # 这里直接写入由 PySCF/Qiskit Nature 导出的 Pauli 展开系数，
+    # 避免运行示例时再依赖量化化学求解流程。
     return Hamiltonian(n_qubits=4, terms=[
         ("IIII", -0.7059409881285760),
         ("IIIZ", 0.1561395312006330),
@@ -88,6 +92,7 @@ def build_lih_hamiltonian() -> Hamiltonian:
 def exact_ground_energy(hamiltonian: Hamiltonian) -> float:
     """Return the minimum eigenvalue of the dense Hamiltonian matrix."""
 
+    # 用稠密矩阵精确对角化得到基态能量，作为 QAS/VQE 的参考真值。
     backend = NumpyBackend()
     matrix = hamiltonian.to_matrix(backend)
     matrix_np = np.asarray(backend.to_numpy(matrix), dtype=np.complex64)
@@ -104,6 +109,8 @@ def lih_vqe_qas_config(**overrides) -> VQAQASConfig:
     Hamiltonian expectation ``<psi(theta)|H|psi(theta)>``.
     """
 
+    # 默认搜索空间偏向浅层线路：单比特门负责局部表达，
+    # 线性链上的双比特门负责逐步建立纠缠。
     params: dict = dict(
         n_qubits=4,
         layers=3,
@@ -133,6 +140,7 @@ def search_ground_state_qas(hamiltonian: Hamiltonian, **overrides) -> VQAQASResu
     baseline, and the selected circuit in ``final_metrics``.
     """
 
+    # 若调用方未显式指定量子比特数，则与输入哈密顿量保持一致。
     overrides.setdefault("n_qubits", hamiltonian.n_qubits)
     config = lih_vqe_qas_config(**overrides)
     return VQAQAS(config).train(hamiltonian=hamiltonian)
@@ -147,8 +155,10 @@ def _gate_to_python_call(gate: dict) -> tuple[str, str] | None:
         return repr(float(value))
 
     if gate_type in ("identity", "I"):
+        # 占位恒等门不需要写回生成代码。
         return None  # no-op placeholder: nothing to emit
 
+    # 无参数的单比特基础门直接映射到对应构造器。
     single_fixed = {
         "pauli_x": "pauli_x", "X": "pauli_x",
         "pauli_y": "pauli_y", "Y": "pauli_y",
@@ -160,6 +170,7 @@ def _gate_to_python_call(gate: dict) -> tuple[str, str] | None:
     if gate_type in single_fixed:
         return single_fixed[gate_type], f"{int(gate['target_qubit'])}"
 
+    # 参数化单比特旋转门需要把角度一并序列化。
     single_rot = {"rx": "rx", "ry": "ry", "rz": "rz"}
     if gate_type in single_rot:
         return single_rot[gate_type], f"{angle(gate['parameter'])}, {int(gate['target_qubit'])}"
@@ -177,6 +188,7 @@ def _gate_to_python_call(gate: dict) -> tuple[str, str] | None:
         target = int(gate["target_qubit"])
         controls = [int(q) for q in gate["control_qubits"]]
         states = [int(s) for s in gate.get("control_states", [1] * len(controls))]
+        # 只有非常规控制态时才显式写出 control_states，避免生成代码冗余。
         tail = "" if states == [1] * len(controls) else f", {states}"
         if gate_type in controlled_rot:
             return controlled_rot[gate_type], f"{angle(gate['parameter'])}, {target}, {controls}{tail}"
@@ -207,6 +219,7 @@ def circuit_to_python_source(
     diagram next to itself.
     """
 
+    # 先把门对象翻译成可重放的构造调用，再拼成独立 Python 模块。
     calls: list[tuple[str, str]] = []
     for gate in circuit.gates:
         rendered = _gate_to_python_call(gate)
@@ -262,6 +275,7 @@ def save_circuit_python(circuit, file_path, func_name: str = "build_lih_qas_circ
 def main() -> None:
     """Print the LiH geometry, Pauli terms, and exact dense-matrix energy."""
 
+    # 1. 构造哈密顿量并打印问题定义。
     hamiltonian = build_lih_hamiltonian()
     terms = hamiltonian_pauli_terms(hamiltonian)
 
@@ -287,9 +301,11 @@ def main() -> None:
     for term in terms:
         print(f"  {term.coefficient:+.10f} * {term.pauli}")
 
+    # 2. 先计算精确基态能量，作为后续近似算法的对照基准。
     exact = exact_ground_energy(hamiltonian)
     print(f"\nDense-matrix exact ground energy: {exact:+.10f}")
 
+    # 3. 运行 VQA_QAS 搜索浅层 ansatz，并与固定 ansatz 的 VQE 基线比较。
     print("\nSearching a ground-state circuit with VQA_QAS (task='vqe')...")
     result = search_ground_state_qas(hamiltonian)
     metrics = result.final_metrics
@@ -310,6 +326,7 @@ def main() -> None:
     save_circuit_qasm3(result.best_circuit, qasm_path)
     print(f"\n  OpenQASM 3.0 saved to: {qasm_path}")
 
+    # 4. 同时导出 Python 重建脚本，方便后续画图和复用线路。
     circuit_py_path = Path(__file__).parent / "LiH_cir.py"
     save_circuit_python(result.best_circuit, circuit_py_path)
     print(f"  Python circuit saved to: {circuit_py_path}")
