@@ -3,9 +3,31 @@ from unittest import mock
 
 import numpy as np
 import torch
+from torch.utils._python_dispatch import TorchDispatchMode
 
 from aicir import NPUBackend, StateVector, npu_runtime_context_from_env
 from aicir.channel.backends.npu_backend import is_npu_available
+
+
+class _BanComplexAddMul(TorchDispatchMode):
+    """Reproduce Ascend NPU's missing complex64 kernels on CPU.
+
+    NPU has no complex64 ``aclnnAdd``/``aclnnMul``; the real device raises if a
+    backward pass ever adds or multiplies complex tensors (e.g. when autograd
+    accumulates the gradient of a complex tensor reused in several places).
+    Entering this dispatch mode around ``loss.backward()`` makes the same
+    situation fail on CPU, so the test suite can guard the NPU path without a
+    real device.
+    """
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        kwargs = kwargs or {}
+        name = str(func)
+        if "add" in name or "mul" in name or "sub" in name:
+            for value in list(args) + list(kwargs.values()):
+                if isinstance(value, torch.Tensor) and torch.is_complex(value):
+                    raise RuntimeError(f"unsupported complex op on NPU: {name}")
+        return func(*args, **kwargs)
 
 
 class TestNPUBackend(unittest.TestCase):
@@ -409,6 +431,90 @@ class TestNPUBackend(unittest.TestCase):
             energy(npu, t2).backward()
 
         self.assertTrue(torch.allclose(g1, t2.grad, atol=1e-4))
+
+    def test_parameterized_gate_matrices_have_no_complex_backward(self):
+        # Every parameterised gate matrix must backprop without a complex
+        # add/mul, otherwise loss.backward() crashes on Ascend NPU. This is the
+        # bug where rzz/rxx reused one complex tensor across cells (-> complex
+        # add) and u2/u3 multiplied complex tensors (-> complex mul).
+        from aicir.core.gates import (
+            _rzz_backend,
+            _rxx_backend,
+            _single_qubit_base_for_gate_backend,
+        )
+        from aicir.channel.backends.gpu_backend import GPUBackend
+
+        backend = GPUBackend(device="cpu")
+
+        def matrix(gate_type, value):
+            param = torch.tensor(value, requires_grad=True)
+            if gate_type == "rzz":
+                m = _rzz_backend(param, backend)
+            elif gate_type == "rxx":
+                m = _rxx_backend(param, backend)
+            else:
+                m = _single_qubit_base_for_gate_backend(
+                    {"type": gate_type, "parameter": param}, backend
+                )
+            return param, m
+
+        cases = {
+            "rx": 0.37, "ry": 0.37, "rz": 0.37, "rzz": 0.37, "rxx": 0.37,
+            "u2": [0.3, 0.5], "u3": [0.3, 0.5, 0.7],
+        }
+        for gate_type, value in cases.items():
+            with self.subTest(gate=gate_type):
+                param, m = matrix(gate_type, value)
+                # Consume the matrix exactly once into a real scalar (mimics a
+                # gate applied to a state), so the only complex ops in backward
+                # come from the matrix construction itself.
+                vec = torch.randn(m.shape[0], 1, dtype=torch.complex64)
+                loss = torch.real(m @ vec).sum()
+                with _BanComplexAddMul():
+                    loss.backward()  # must not raise
+                self.assertIsNotNone(param.grad)
+
+    def test_npu_circuit_backward_runs_without_complex_ops(self):
+        # End-to-end guard: the full forced-NPU backward (custom matmul /
+        # expectation Functions + parameterised gate construction) must not use
+        # any complex add/mul, i.e. it would run on a real Ascend NPU.
+        import types
+        from aicir.channel.backends.npu_backend import _NpuMatmulFn, _NpuExpectationFn
+        from aicir.channel.backends.gpu_backend import GPUBackend
+        from aicir.core.gates import apply_gate_to_state
+        from aicir.core.circuit import rx, ry, rz, rzz, cx, hadamard
+
+        torch.manual_seed(4)
+        n = 3
+        m = torch.randn(1 << n, 1 << n, dtype=torch.complex64)
+        h = (m + m.conj().T) / 2
+
+        npu = NPUBackend(fallback_to_cpu=True)
+
+        def forced_matmul(self, a, b):
+            if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor) and (
+                torch.is_complex(a) or torch.is_complex(b)
+            ):
+                return _NpuMatmulFn.apply(a, b)
+            return GPUBackend.matmul(self, a, b)
+
+        npu.matmul = types.MethodType(forced_matmul, npu)
+        npu.expectation_sv = lambda state, op: _NpuExpectationFn.apply(state, op)
+
+        theta = torch.tensor([0.3, -0.7, 1.1, 0.4], requires_grad=True)
+        gates = [
+            hadamard(0), rx(theta[0], 0), ry(theta[1], 1), rz(theta[2], 2),
+            cx(target_qubit=1, control_qubits=[0]),
+            rzz(theta[3], qubit_1=1, qubit_2=2),
+        ]
+        state = npu.zeros_state(n)
+        for gate in gates:
+            state = apply_gate_to_state(gate, state, n, npu)
+        energy = npu.expectation_sv(state, npu.cast(h.numpy()))
+
+        with _BanComplexAddMul():
+            energy.backward()  # must not raise on the NPU restriction
+        self.assertIsNotNone(theta.grad)
 
 
 if __name__ == "__main__":
