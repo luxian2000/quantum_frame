@@ -10,7 +10,7 @@ aicir/
 │   │   ├── base.py
 │   │   ├── npu_backend.py
 │   │   ├── numpy_backend.py
-│   │   └── torch_backend.py
+│   │   └── gpu_backend.py
 │   ├── noise/
 │   │   ├── __init__.py
 │   │   ├── analysis.py

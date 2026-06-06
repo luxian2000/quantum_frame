@@ -10,7 +10,7 @@
 
 ```python
 # 后端
-from aicir import TorchBackend, NumpyBackend, NPUBackend
+from aicir import GPUBackend, NumpyBackend, NPUBackend
 
 # 量子态（规范路径）
 from aicir.core import StateVector, DensityMatrix
@@ -189,7 +189,7 @@ template.bind_parameters({"theta0": 0.2, "theta1": 0.5}, inplace=True)
 - 未绑定参数的电路调用 `unitary()` 会报错，需要先 `bind_parameters(...)`。
 - `allow_partial=True` 可做部分绑定，返回仍含未绑定参数的电路。
 - `Parameter` 是符号占位符，不是自动微分张量；训练梯度可使用第 7 节的 parameter-shift 工具。
-- 如果要使用 PyTorch autograd，可直接把 Torch 标量张量作为门参数，并调用 `Circuit.unitary(backend=TorchBackend(...))`。当前 `rx`/`ry`/`rz`/`u2`/`u3`、受控旋转门、`rzz`/`rxx` 和自定义 `unitary` 的 Torch 参数会保留计算图。
+- 如果要使用 PyTorch autograd，可直接把 Torch 标量张量作为门参数，并调用 `Circuit.unitary(backend=GPUBackend(...))`。当前 `rx`/`ry`/`rz`/`u2`/`u3`、受控旋转门、`rzz`/`rxx` 和自定义 `unitary` 的 Torch 参数会保留计算图。
 - 导出 QASM 前应先把所有符号参数绑定为数值。JSON 导出支持 `Parameter`、NumPy 标量/数组、复数和 Torch 张量数值；Torch 张量在 JSON 读回后会恢复为普通数值或列表，不会恢复为带计算图的 Tensor。
 
 ### 2.5 自定义 unitary、identity 与 Torch 自动微分
@@ -216,9 +216,9 @@ Torch 参数示例：
 
 ```python
 import torch
-from aicir import Circuit, TorchBackend, rx, rzz, rxx
+from aicir import Circuit, GPUBackend, rx, rzz, rxx
 
-backend = TorchBackend(device="cpu")
+backend = GPUBackend(device="cpu")
 theta = torch.tensor(0.2, requires_grad=True)
 
 cir = Circuit(
@@ -251,9 +251,9 @@ aicir 提供两种量子测量机制，可按需选用。
 ### 3.1 机制一：独立测量（读取全部比特）
 
 ```python
-from aicir import Circuit, Measure, TorchBackend, hadamard, cnot
+from aicir import Circuit, Measure, GPUBackend, hadamard, cnot
 
-backend = TorchBackend()
+backend = GPUBackend()
 measure = Measure(backend)
 
 cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
@@ -313,9 +313,9 @@ print(result.probabilities)     # 仅概率，counts 为 None
 
 ```python
 import numpy as np
-from aicir import Circuit, Measure, TorchBackend, hadamard
+from aicir import Circuit, Measure, GPUBackend, hadamard
 
-backend = TorchBackend()
+backend = GPUBackend()
 # Z 算符矩阵
 Z = np.array([[1, 0], [0, -1]], dtype=np.complex64)
 
@@ -332,10 +332,10 @@ print(result.expectation_variances)
 
 ```python
 from aicir.core import StateVector
-from aicir import TorchBackend
+from aicir import GPUBackend
 import numpy as np
 
-backend = TorchBackend()
+backend = GPUBackend()
 sv = StateVector.zero_state(2, backend)
 
 # 直接获取概率分布
@@ -370,9 +370,9 @@ aicir 提供三个层次的算符构建工具：`PauliOp`、`PauliString`、`Ham
 ### 4.1 单算符 PauliOp
 
 ```python
-from aicir import PauliOp, TorchBackend
+from aicir import PauliOp, GPUBackend
 
-backend = TorchBackend()
+backend = GPUBackend()
 
 # Z 作用在 qubit 0，在 2 比特空间里展开为 4×4 矩阵
 Z0 = PauliOp('Z', qubit=0)
@@ -383,9 +383,9 @@ print(mat.shape)   # torch.Size([4, 4])
 ### 4.2 多体泡利串 PauliString
 
 ```python
-from aicir import PauliString, TorchBackend
+from aicir import PauliString, GPUBackend
 
-backend = TorchBackend()
+backend = GPUBackend()
 
 # 0.5 × Z₀ ⊗ X₁（2 比特空间）
 ps = PauliString("ZX", coefficient=0.5)
@@ -400,9 +400,9 @@ print(ps_auto)
 ### 4.3 哈密顿量 Hamiltonian
 
 ```python
-from aicir import Hamiltonian, TorchBackend, Circuit, Measure, hadamard
+from aicir import Hamiltonian, GPUBackend, Circuit, Measure, hadamard
 
-backend = TorchBackend()
+backend = GPUBackend()
 
 # H = -1.0 × Z₀Z₁  +  0.5 × X₀X₁  +  0.3 × Z₀
 H = Hamiltonian([
@@ -469,11 +469,11 @@ from aicir import (
     BitFlipChannel,
     PhaseFlipChannel,
     AmplitudeDampingChannel,
-    TorchBackend,
+    GPUBackend,
 )
 from aicir.core import DensityMatrix
 
-backend = TorchBackend()
+backend = GPUBackend()
 model = (NoiseModel()
          .add_channel(DepolarizingChannel(target_qubit=0, p=0.01))
          .add_channel(BitFlipChannel(target_qubit=1, p=0.02), after_gates=["hadamard"])
@@ -563,7 +563,7 @@ print(result.backend_name)
 
 - **可以在两处指定 backend**：`Circuit` 或 `Measure` 都支持传入后端。
 - **优先级**：`Measure` 会优先使用 `circuit.backend`（若存在），否则使用 `Measure` 自身的后端（见 `Measure._resolve_backend` 的实现）。因此将后端绑定到 `Circuit` 能避免回退到主机端拼装或与 Measure 中传入后端的混淆。
-- **为什么推荐绑定到 `Circuit`**：当电路具有 `gates` 时，`Measure` 会逐门调用 `gate_to_matrix(..., backend=resolved_backend)` 在目标设备上构造并作用门矩阵，从而减少构造完整 2^n×2^n 矩阵的内存与主机→设备搬运；若 `unitary(backend=...)` 不被支持则会回退到无 backend 的 `unitary()`（在 CPU 上用 numpy 拼装整矩阵），然后再 `backend.cast` 到设备，这会引起大规模数据搬运。对于 `TorchBackend`，参数化门的 Torch 标量张量会通过 torch 运算构造矩阵，从而保留 autograd 计算图。
+- **为什么推荐绑定到 `Circuit`**：当电路具有 `gates` 时，`Measure` 会逐门调用 `gate_to_matrix(..., backend=resolved_backend)` 在目标设备上构造并作用门矩阵，从而减少构造完整 2^n×2^n 矩阵的内存与主机→设备搬运；若 `unitary(backend=...)` 不被支持则会回退到无 backend 的 `unitary()`（在 CPU 上用 numpy 拼装整矩阵），然后再 `backend.cast` 到设备，这会引起大规模数据搬运。对于 `GPUBackend`，参数化门的 Torch 标量张量会通过 torch 运算构造矩阵，从而保留 autograd 计算图。
 
 关于将多个电路合并（拼接）时的 backend 确定：
 
@@ -584,7 +584,7 @@ result = Measure(common_backend).run(full)
 - 构建阶段只保存门描述: 调用 `hadamard(0)` 等构造的是门的描述字典（例如 `{"type": "hadamard", "target_qubit": 0}`），`Circuit.__init__` 只是把这些描述存起来，并不会在构建时把门转换成数值矩阵。
 - 当前执行策略: `Measure.run`/`run_density_matrix` 在电路对象具备 `gates` 序列时，会优先走“逐门演化”路径（按门依次作用到态/密度矩阵），而不是先组装整条电路的全局矩阵后再一次性作用。
 - 矩阵在组装时生成: 真正把门变为 2^n×2^n 的数值矩阵发生在调用 `Circuit.unitary(backend=...)` 或 `Measure` 等需要数值矩阵的地方。此时会调用 `gate_to_matrix(gate, cir_qubits, backend)` 来生成每个门的矩阵。
-- backend 参数的作用: 当 `backend=None` 时，`gate_to_matrix` 会走 numpy 路径（例如调用 `_hadamard()` 等函数，在 CPU 上生成矩阵）；当传入 `backend` 时，`gate_to_matrix` 会使用后端分支（先构造 base 矩阵再通过 `_single_qubit_from_base_backend`/`_controlled_from_base_backend` 等路径调用 `backend.cast`、`backend.kron`、`backend.matmul` 等接口），从而在目标后端（CPU/GPU/NPU）上构造和组合张量。`rx`/`ry`/`rz`/`u2`/`u3`、受控旋转、`rzz`/`rxx` 和自定义 `unitary` 可在 `TorchBackend` 下保留 Torch 参数的梯度链路。
+- backend 参数的作用: 当 `backend=None` 时，`gate_to_matrix` 会走 numpy 路径（例如调用 `_hadamard()` 等函数，在 CPU 上生成矩阵）；当传入 `backend` 时，`gate_to_matrix` 会使用后端分支（先构造 base 矩阵再通过 `_single_qubit_from_base_backend`/`_controlled_from_base_backend` 等路径调用 `backend.cast`、`backend.kron`、`backend.matmul` 等接口），从而在目标后端（CPU/GPU/NPU）上构造和组合张量。`rx`/`ry`/`rz`/`u2`/`u3`、受控旋转、`rzz`/`rxx` 和自定义 `unitary` 可在 `GPUBackend` 下保留 Torch 参数的梯度链路。
 - 兼容回退路径: 若电路对象不提供 `gates` 序列，`Measure` 仍会回退到 `unitary()` 路径以兼容外部实现。
 - 可能的设备搬运: 在 `unitary()` 回退路径中，`Measure` 现在优先直接 `backend.cast(unitary_raw)`，避免无必要的 `to_numpy` 主机往返。
 - 性能建议: 对大 qubit 数，显式组装全矩阵会占用大量内存并产生迁移成本。若要最小化搬运，优先在构建时绑定后端（本节方式 B），或改为按门逐步在态上直接作用（逐门 apply），避免生成完整 2^n×2^n 矩阵；若需要彻底避免中间拷贝，可考虑修改 `Measure` 中的 `to_numpy` 使用点或直接在后端上逐门演化。

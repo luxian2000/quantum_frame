@@ -4,7 +4,7 @@ aicir/channel/backends/npu_backend.py
 Ascend NPU backend built on top of PyTorch + torch_npu.
 
 Design goals:
-- Reuse TorchBackend math kernels to keep behavior consistent.
+- Reuse GPUBackend math kernels to keep behavior consistent.
 - Prefer NPU automatically when available.
 - Allow graceful CPU fallback for environments without torch_npu.
 """
@@ -16,7 +16,7 @@ from dataclasses import dataclass, replace
 
 import torch
 
-from .torch_backend import TorchBackend
+from .gpu_backend import GPUBackend
 
 try:
     import torch_npu  # noqa: F401
@@ -69,8 +69,8 @@ def _has_complete_distributed_env() -> bool:
     return all(os.environ.get(name) for name in ("MASTER_ADDR", "MASTER_PORT", "WORLD_SIZE", "RANK"))
 
 
-class NPUBackend(TorchBackend):
-    """NPU-first backend for Ascend devices, compatible with TorchBackend API."""
+class NPUBackend(GPUBackend):
+    """NPU-first backend for Ascend devices, compatible with GPUBackend API."""
 
     def __init__(self, dtype=None, device=None, fallback_to_cpu: bool = True):
         """
