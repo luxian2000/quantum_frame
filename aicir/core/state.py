@@ -78,10 +78,10 @@ class State:
 
     示例::
 
-        from aicir.channel.backends import TorchBackend
+        from aicir.channel.backends import GPUBackend
         from aicir.core import State
 
-        bk = TorchBackend()
+        bk = GPUBackend()
         sv = State.zero_state(2, bk)                # |00⟩
         U  = ...                                    # 某个 4×4 酉矩阵
         sv2 = sv.evolve(U)                          # |ψ'⟩ = U|ψ⟩

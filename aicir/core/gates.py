@@ -376,6 +376,17 @@ def _torch_complex(real, imag=None, complex_dtype=None):
     return out.to(dtype=complex_dtype or _torch_complex_dtype(out.dtype))
 
 
+def _torch_expi(angle, complex_dtype=None):
+    """Return ``exp(i * angle)`` for a real tensor as ``cos + i*sin``.
+
+    Equivalent to ``torch.exp(_torch_complex(0, angle))`` but built from real
+    ``cos``/``sin``. Ascend NPU has no complex64 ``exp`` kernel, so the direct
+    complex-exp form raises there; this real-valued form runs on CPU/CUDA/NPU
+    alike and is autograd-friendly.
+    """
+    return _torch_complex(torch.cos(angle), torch.sin(angle), complex_dtype)
+
+
 def _torch_base_matrix(entries, dtype, device):
     rows = []
     for row in entries:
@@ -429,8 +440,8 @@ def _single_qubit_base_for_gate_backend(gate, backend):
         )
     if gate_type in ["rz", "crz"]:
         t = _torch_angle(parameter, backend)
-        exp_neg = torch.exp(_torch_complex(zero, -t / 2.0, dtype))
-        exp_pos = torch.exp(_torch_complex(zero, t / 2.0, dtype))
+        exp_neg = _torch_expi(-t / 2.0, dtype)
+        exp_pos = _torch_expi(t / 2.0, dtype)
         return _torch_base_matrix(
             [[exp_neg, _torch_complex(zero, complex_dtype=dtype)], [_torch_complex(zero, complex_dtype=dtype), exp_pos]],
             dtype,
@@ -442,9 +453,9 @@ def _single_qubit_base_for_gate_backend(gate, backend):
         lam = _torch_angle(parameter[2], backend)
         cos = torch.cos(theta / 2.0)
         sin = torch.sin(theta / 2.0)
-        exp_iphi = torch.exp(_torch_complex(zero, phi, dtype))
-        exp_ilam = torch.exp(_torch_complex(zero, lam, dtype))
-        exp_iphi_lam = torch.exp(_torch_complex(zero, phi + lam, dtype))
+        exp_iphi = _torch_expi(phi, dtype)
+        exp_ilam = _torch_expi(lam, dtype)
+        exp_iphi_lam = _torch_expi(phi + lam, dtype)
         return _torch_base_matrix(
             [
                 [_torch_complex(cos, complex_dtype=dtype), -exp_ilam * _torch_complex(sin, complex_dtype=dtype)],
@@ -458,9 +469,9 @@ def _single_qubit_base_for_gate_backend(gate, backend):
         lam = _torch_angle(parameter[1], backend)
         cos = torch.cos(one * (math.pi / 4.0))
         sin = torch.sin(one * (math.pi / 4.0))
-        exp_iphi = torch.exp(_torch_complex(zero, phi, dtype))
-        exp_ilam = torch.exp(_torch_complex(zero, lam, dtype))
-        exp_iphi_lam = torch.exp(_torch_complex(zero, phi + lam, dtype))
+        exp_iphi = _torch_expi(phi, dtype)
+        exp_ilam = _torch_expi(lam, dtype)
+        exp_iphi_lam = _torch_expi(phi + lam, dtype)
         return _torch_base_matrix(
             [
                 [_torch_complex(cos, complex_dtype=dtype), -exp_ilam * _torch_complex(sin, complex_dtype=dtype)],
@@ -483,8 +494,8 @@ def _rzz_backend(theta, backend):
     device = getattr(backend, "_device", ref.device if ref is not None else None)
     zero = torch.zeros((), dtype=_torch_real_dtype(dtype), device=device)
     t = _torch_angle(theta, backend)
-    exp_neg = torch.exp(_torch_complex(zero, -t / 2.0, dtype))
-    exp_pos = torch.exp(_torch_complex(zero, t / 2.0, dtype))
+    exp_neg = _torch_expi(-t / 2.0, dtype)
+    exp_pos = _torch_expi(t / 2.0, dtype)
     z = _torch_complex(zero, complex_dtype=dtype)
     return _torch_base_matrix(
         [

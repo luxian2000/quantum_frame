@@ -265,7 +265,7 @@ def test_gradients_accept_backend_native_tensor_objective():
     """Objectives returning raw backend tensors (e.g. NPU/Torch expectation_sv,
     autograd-tracked or complex) must work across every gradient rule."""
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.torch_backend import TorchBackend
+    from aicir.channel.backends.gpu_backend import TorchBackend
 
     theta = Parameter("theta")
     template = Circuit(ry(theta, 0), n_qubits=1)
@@ -360,7 +360,7 @@ def test_ad_accepts_hamiltonian_observable():
 
 def test_ad_matches_psr_on_torch_backend():
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.torch_backend import TorchBackend
+    from aicir.channel.backends.gpu_backend import TorchBackend
     from aicir.core.circuit import rz
 
     backend = TorchBackend(device="cpu")
@@ -386,7 +386,7 @@ def test_ad_rejects_unbound_parameters():
 
 def test_auto_matches_psr_on_mixed_ansatz():
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.torch_backend import TorchBackend
+    from aicir.channel.backends.gpu_backend import TorchBackend
     from aicir.core.circuit import crx, rx, rz, rzz, hadamard
 
     backend = TorchBackend(device="cpu")
@@ -417,7 +417,7 @@ def test_auto_matches_psr_on_mixed_ansatz():
 
 def test_auto_supports_scalar_param():
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.torch_backend import TorchBackend
+    from aicir.channel.backends.gpu_backend import TorchBackend
 
     backend = TorchBackend(device="cpu")
     z = np.diag([1.0, -1.0]).astype(np.complex64)
@@ -434,7 +434,7 @@ def test_auto_supports_scalar_param():
 
 def test_auto_honors_backend_dtype_and_device():
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.torch_backend import TorchBackend
+    from aicir.channel.backends.gpu_backend import TorchBackend
 
     backend = TorchBackend(dtype=torch.complex128, device="cpu")
     z = np.diag([1.0, -1.0]).astype(np.complex128)
@@ -458,7 +458,7 @@ def test_auto_honors_backend_dtype_and_device():
 
 def test_auto_rejects_non_differentiable_objective():
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.torch_backend import TorchBackend
+    from aicir.channel.backends.gpu_backend import TorchBackend
 
     backend = TorchBackend(device="cpu")
 

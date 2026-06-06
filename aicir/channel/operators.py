@@ -7,10 +7,10 @@ aicir/channel/operators.py
 
 示例::
 
-    from aicir.channel.backends import TorchBackend
+    from aicir.channel.backends import GPUBackend
     from aicir.channel.operators import Hamiltonian
 
-    bk = TorchBackend()
+    bk = GPUBackend()
 
     # H = -0.5 * Z₀Z₁  +  0.3 * X₀X₁
     H = Hamiltonian([
@@ -249,7 +249,7 @@ class Hamiltonian:
 
     示例::
 
-        bk = TorchBackend()
+        bk = GPUBackend()
 
         # H = -Z₀Z₁  +  0.5 X₀X₁  +  0.3 Z₀
         H = Hamiltonian([
