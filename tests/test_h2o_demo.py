@@ -1,4 +1,4 @@
-from demos.H2O import build_h2o_hamiltonian, exact_ground_energy
+from demos.H2O.H2O import build_h2o_hamiltonian, exact_ground_energy
 from aicir.measure import hamiltonian_pauli_terms
 
 
