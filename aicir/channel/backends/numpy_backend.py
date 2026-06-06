@@ -5,7 +5,7 @@ aicir/channel/backends/numpy_backend.py
 
 特点：
 - 无外部深度学习依赖，环境要求最低
-- 不支持自动微分（参数优化需用 TorchBackend）
+- 不支持自动微分（参数优化需用 GPUBackend）
 - 适合小规模验证和算法原型
 """
 

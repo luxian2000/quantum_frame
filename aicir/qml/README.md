@@ -1,6 +1,6 @@
 # aicir.qml — 量子机器学习梯度与梯度无关优化工具包
 
-本模块 (`aicir/qml/deriv.py`) 实现了十一种用于量子电路参数梯度估计或预条件的方法，以及一种显式 gradient-free 的坐标精确最小化方法。所有方法均与 `NumpyBackend`、`TorchBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
+本模块 (`aicir/qml/deriv.py`) 实现了十一种用于量子电路参数梯度估计或预条件的方法，以及一种显式 gradient-free 的坐标精确最小化方法。所有方法均与 `NumpyBackend`、`GPUBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
 
 ---
 
@@ -76,7 +76,7 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | 参数        | 说明                                                                            |
 | ----------- | ------------------------------------------------------------------------------- |
 | `fn`      | 接受 `torch.Tensor`（`requires_grad=True`）参数，返回可微标量张量的目标函数 |
-| `backend` | Torch/NPU 后端（决定参数的 dtype 和 device，默认 CPU TorchBackend）             |
+| `backend` | Torch/NPU 后端（决定参数的 dtype 和 device，默认 CPU GPUBackend）             |
 
 #### `psr(fn, params, *, shift=π/2, coefficient=0.5)`
 
@@ -256,10 +256,10 @@ $$
 ```python
 from aicir.qml import auto
 from aicir import Circuit, State, ry
-from aicir.channel.backends.torch_backend import TorchBackend
+from aicir.channel.backends.gpu_backend import GPUBackend
 import numpy as np
 
-bk = TorchBackend(device="cpu")
+bk = GPUBackend(device="cpu")
 z   = bk.cast(np.diag([1.0, -1.0]).astype(np.complex64))
 
 def fn(theta):                        # theta: torch.Tensor, requires_grad=True
