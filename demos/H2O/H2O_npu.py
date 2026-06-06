@@ -1,19 +1,19 @@
 """Search a deeper H2O ground-state circuit with the supernet method on NPU.
 
 This is the NPU counterpart of ``demos/H2O/H2O.py``. It runs the same supernet
-QAS search but on the Ascend NPU backend (``device="npu"``) and with a deeper
-ansatz (``L=8`` by default), to test whether more depth lowers the energy.
+QAS search but on the Ascend NPU backend (``device="npu"``).
 
 Default hyperparameters were retuned after experiment 1 (see
 ``demos/H2O/result_npu.md``). There the ``L=8`` search reached only ~344.9 mHa
 while the *fixed-ansatz* VQE baseline reached ~0.53 mHa, i.e. the circuit has
-enough capacity but the search under-converged. The retuned defaults therefore
-keep ``L=8`` and spend more budget on optimisation rather than depth:
-``supernet_num`` 5 -> 8 (more supernets relieve weight-sharing competition),
-``supernet_steps`` 250 -> 500, ``ranking_num`` 80 -> 150, and most importantly
-``finetune_steps`` 250 -> 1000 (fine-tuning the single selected circuit is the
-dominant lever for the final reported energy). Expect a longer wall-clock time
-than experiment 1's ~1320 s.
+enough capacity but the search under-converged. The retuned defaults spend more
+budget on optimisation: ``supernet_num`` 5 -> 8 (more supernets relieve
+weight-sharing competition), ``supernet_steps`` 250 -> 500, ``ranking_num``
+80 -> 150, and most importantly ``finetune_steps`` 250 -> 1000 (fine-tuning the
+single selected circuit is the dominant lever for the final reported energy).
+The default depth is also reduced to ``L=6`` to shrink the search space (a
+smaller, easier-to-search ansatz), matching the CPU demo's depth. Expect a
+longer wall-clock time than experiment 1's ~1320 s.
 
 All information is written to a text report (default ``H2O_npu_result.txt``,
 next to this file) and also echoed to stdout, so the remote NPU run leaves a
@@ -80,7 +80,7 @@ def _device_report(device: str) -> list[str]:
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Deeper H2O supernet VQE on NPU.")
     parser.add_argument("--device", default="npu:0", help="torch device, e.g. npu:0 / npu / cpu")
-    parser.add_argument("--layers", type=int, default=8, help="ansatz depth L (>=8 recommended)")
+    parser.add_argument("--layers", type=int, default=6, help="ansatz depth L")
     parser.add_argument("--supernet-num", type=int, default=8, help="number of supernets W (more relieves weight-sharing competition)")
     parser.add_argument("--supernet-steps", type=int, default=500, help="supernet optimisation steps")
     parser.add_argument("--ranking-num", type=int, default=150, help="number of ranked candidate ansatze")
