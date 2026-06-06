@@ -1,4 +1,4 @@
-from demos.LiH import (
+from demos.LiH.LiH import (
     build_lih_hamiltonian,
     exact_ground_energy,
     search_ground_state_qas,
