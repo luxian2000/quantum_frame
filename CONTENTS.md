@@ -77,7 +77,7 @@ aicir/
 │   ├── CRLQAS.py
 │   ├── PPO_RB.py
 │   ├── PPR_DQL.py
-│   ├── VQA_QAS.py
+│   ├── supernet.py
 │   ├── __init__.py
 │   ├── _types.py
 │   ├── _utils.py

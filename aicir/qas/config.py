@@ -7,20 +7,24 @@ from typing import Any, Callable
 from .CRLQAS import AdamSPSAConfig, CRLQASConfig
 from .PPO_RB import PPORollbackConfig
 from .PPR_DQL import PPRDQLConfig
-from .VQA_QAS import VQAQASConfig
+from .supernet import SupernetConfig
 
 QASMethod = str
 
-_PUBLIC_METHODS = ("vqa_qas", "vqa_classification", "vqa_h2", "ppo_rb", "ppr_dql", "crlqas")
+_PUBLIC_METHODS = ("supernet", "supernet_classification", "supernet_h2", "ppo_rb", "ppr_dql", "crlqas")
 
 _METHOD_ALIASES = {
-    "vqa": "vqa_qas",
-    "vqa_qas": "vqa_qas",
-    "vqa_classification": "vqa_classification",
-    "classification": "vqa_classification",
-    "vqa_h2": "vqa_h2",
-    "h2": "vqa_h2",
-    "h2_vqe": "vqa_h2",
+    # supernet (formerly VQA_QAS) — keep the old strings working for run().
+    "supernet": "supernet",
+    "vqa": "supernet",
+    "vqa_qas": "supernet",
+    "supernet_classification": "supernet_classification",
+    "vqa_classification": "supernet_classification",
+    "classification": "supernet_classification",
+    "supernet_h2": "supernet_h2",
+    "vqa_h2": "supernet_h2",
+    "h2": "supernet_h2",
+    "h2_vqe": "supernet_h2",
     "ppo": "ppo_rb",
     "ppo_rb": "ppo_rb",
     "ppr": "ppr_dql",
@@ -30,22 +34,22 @@ _METHOD_ALIASES = {
 }
 
 
-def vqa_qas(**kwargs: Any) -> VQAQASConfig:
-    """Build a ``VQA_QAS`` config with optional field overrides."""
+def supernet(**kwargs: Any) -> SupernetConfig:
+    """Build a ``supernet`` config with optional field overrides."""
 
-    return _build(VQAQASConfig, kwargs)
+    return _build(SupernetConfig, kwargs)
 
 
-def vqa_classification(**kwargs: Any) -> VQAQASConfig:
-    """Build a ``VQA_QAS`` config for the built-in classification task."""
+def supernet_classification(**kwargs: Any) -> SupernetConfig:
+    """Build a ``supernet`` config for the built-in classification task."""
 
     values = {"task": "classification"}
     values.update(kwargs)
-    return _build(VQAQASConfig, values)
+    return _build(SupernetConfig, values)
 
 
-def vqa_h2(**kwargs: Any) -> VQAQASConfig:
-    """Build a ``VQA_QAS`` config for the built-in H2 VQE task."""
+def supernet_h2(**kwargs: Any) -> SupernetConfig:
+    """Build a ``supernet`` config for the built-in H2 VQE task."""
 
     values = {
         "n_qubits": 4,
@@ -58,7 +62,7 @@ def vqa_h2(**kwargs: Any) -> VQAQASConfig:
         "task": "h2_vqe",
     }
     values.update(kwargs)
-    return _build(VQAQASConfig, values)
+    return _build(SupernetConfig, values)
 
 
 def ppo_rb(**kwargs: Any) -> PPORollbackConfig:
@@ -126,17 +130,14 @@ def _build(config_type: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
         raise TypeError(f"{config_type.__name__} does not accept the provided config fields.") from exc
 
 
-vqa = vqa_qas
-classification = vqa_classification
-h2_vqe = vqa_h2
 ppo = ppo_rb
 ppr = ppr_dql
 crl = crlqas
 
 _FACTORIES = {
-    "vqa_qas": vqa_qas,
-    "vqa_classification": vqa_classification,
-    "vqa_h2": vqa_h2,
+    "supernet": supernet,
+    "supernet_classification": supernet_classification,
+    "supernet_h2": supernet_h2,
     "ppo_rb": ppo_rb,
     "ppr_dql": ppr_dql,
     "crlqas": crlqas,
@@ -145,19 +146,16 @@ _FACTORIES = {
 __all__ = [
     "adam_spsa",
     "canonical_method",
-    "classification",
     "create",
     "crl",
     "crlqas",
     "for_method",
-    "h2_vqe",
     "method_names",
     "ppo",
     "ppo_rb",
     "ppr",
     "ppr_dql",
-    "vqa",
-    "vqa_h2",
-    "vqa_qas",
-    "vqa_classification",
+    "supernet",
+    "supernet_classification",
+    "supernet_h2",
 ]

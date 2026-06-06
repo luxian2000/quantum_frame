@@ -12,7 +12,7 @@ from aicir.qas import (
 
 
 def _tiny_vqa_config():
-    return config.vqa_qas(
+    return config.supernet(
         n_qubits=3,
         layers=3,
         single_qubit_gates=("ry",),
@@ -46,15 +46,15 @@ def _tiny_ppr_config():
 
 
 def test_available_qas_methods_contains_public_names():
-    assert available_qas_methods() == ("vqa_qas", "vqa_classification", "vqa_h2", "ppo_rb", "ppr_dql", "crlqas")
+    assert available_qas_methods() == ("supernet", "supernet_classification", "supernet_h2", "ppo_rb", "ppr_dql", "crlqas")
 
 
 def test_config_factory_uses_method_names_without_config_class_imports():
-    vqa_config = config.vqa_qas(supernet_steps=0)
+    vqa_config = config.supernet(supernet_steps=0)
     ppr_config = config.create("PPR_DQL", episode_num=1)
     crl_config = config.crlqas(adam_spsa={"iterations": 2})
 
-    assert vqa_config.__class__.__name__ == "VQAQASConfig"
+    assert vqa_config.__class__.__name__ == "SupernetConfig"
     assert vqa_config.supernet_steps == 0
     assert ppr_config.__class__.__name__ == "PPRDQLConfig"
     assert ppr_config.episode_num == 1
@@ -62,7 +62,7 @@ def test_config_factory_uses_method_names_without_config_class_imports():
 
 
 def test_default_qas_config_remains_method_name_wrapper():
-    assert default_qas_config("classification").__class__.__name__ == "VQAQASConfig"
+    assert default_qas_config("classification").__class__.__name__ == "SupernetConfig"
     assert default_qas_config("VQA_QAS", supernet_steps=0).supernet_steps == 0
 
 
@@ -75,7 +75,7 @@ def test_run_dispatches_vqa_classification():
 
 
 def test_run_accepts_custom_vqa_objective_keyword():
-    cfg = config.vqa_qas(
+    cfg = config.supernet(
         n_qubits=1,
         layers=1,
         single_qubit_gates=("ry",),
