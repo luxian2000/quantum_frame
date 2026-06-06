@@ -1,7 +1,7 @@
-"""Demo: VQA_QAS for the Hamiltonian-cycle problem (Lucas 2014, Eq. 56).
+"""Demo: supernet for the Hamiltonian-cycle problem (Lucas 2014, Eq. 56).
 
 We encode "does graph G admit a Hamiltonian cycle?" as the ground state of a
-diagonal Ising Hamiltonian, then let :mod:`aicir.qas.VQA_QAS` search a circuit
+diagonal Ising Hamiltonian, then let :mod:`aicir.qas.supernet` search a circuit
 that prepares that ground state. The optimal computational-basis state is
 decoded back into the cycle ordering.
 
@@ -42,7 +42,7 @@ PINNED = {(0, 0): 1}
 
 def main() -> None:
     print("=" * 72)
-    print("VQA_QAS Demo: Hamiltonian Cycle (Lucas 2014, Eq. 56)")
+    print("supernet Demo: Hamiltonian Cycle (Lucas 2014, Eq. 56)")
     print("=" * 72)
     print(f"Graph: N={N_VERTICES} vertices, edges={EDGES} (cycle graph C4)")
 
@@ -58,7 +58,7 @@ def main() -> None:
     print(f"  brute-force optimum energy: {classical_energy:.6f}")
     print(f"  brute-force cycle: {format_order(classical_order, cyclic=True)}")
 
-    print("\n[2/4] Searching a circuit with VQA_QAS (task='vqe')...")
+    print("\n[2/4] Searching a circuit with supernet (task='vqe')...")
     solution = solve_ground_state_qas(
         hamiltonian,
         n_qubits,
@@ -76,7 +76,7 @@ def main() -> None:
     )
     order = assignment_to_order(assignment, N_VERTICES)
     valid = is_valid_ordering(order, EDGES, cyclic=True)
-    print(f"  best VQA_QAS energy: {solution.energy:+.6f} (winning seed {solution.seed})")
+    print(f"  best supernet energy: {solution.energy:+.6f} (winning seed {solution.seed})")
     print(f"  measured ground-state probability: {float(solution.probabilities[solution.best_index]):.4f}")
     print(f"  decoded cycle: {format_order(order, cyclic=True)}")
     print(f"  valid Hamiltonian cycle: {valid}")

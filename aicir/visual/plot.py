@@ -132,11 +132,7 @@ def _angle_sublabel(gate: dict) -> str | None:
 
 
 def _sublabel_scale(gate: dict) -> float:
-    return 0.48 if gate.get("type") in {"u2", "u3"} else 0.62
-
-
-def _sublabel_inside_box(gate: dict) -> bool:
-    return gate.get("type") in {"rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"}
+    return 0.40 if gate.get("type") in {"u2", "u3"} else 0.50
 
 
 def _gate_qubits(gate: dict, n_qubits: int) -> list[int]:
@@ -285,14 +281,15 @@ def _render_gate(ax, gate, x, n_qubits, fontsize):
     if gate_type in {"rzz", "rxx"}:
         q1, q2 = int(gate["qubit_1"]), int(gate["qubit_2"])
         _draw_connector(ax, x, min(q1, q2), max(q1, q2), n_qubits, edgecolor)
-        sub = _angle_sublabel(gate)
         label = "Rzz" if gate_type == "rzz" else "Rxx"
-        _draw_box(ax, x, _yy(q1, n_qubits), label, facecolor, edgecolor,
-                  fontsize=fontsize, sublabel=sub, sublabel_inside=True,
-                  sublabel_scale=_sublabel_scale(gate))
-        _draw_box(ax, x, _yy(q2, n_qubits), label, facecolor, edgecolor,
-                  fontsize=fontsize, sublabel=sub, sublabel_inside=True,
-                  sublabel_scale=_sublabel_scale(gate))
+        # Two squares share one angle, shown once below the lower square (the
+        # larger qubit index maps to the smaller y, i.e. the visually lower box).
+        upper_qubit, lower_qubit = min(q1, q2), max(q1, q2)
+        _draw_box(ax, x, _yy(upper_qubit, n_qubits), label, facecolor, edgecolor,
+                  fontsize=fontsize)
+        _draw_box(ax, x, _yy(lower_qubit, n_qubits), label, facecolor, edgecolor,
+                  fontsize=fontsize, sublabel=_angle_sublabel(gate),
+                  sublabel_inside=False, sublabel_scale=_sublabel_scale(gate))
         return
 
     controls = [int(q) for q in gate.get("control_qubits", [])]
@@ -309,13 +306,13 @@ def _render_gate(ax, gate, x, n_qubits, fontsize):
             _draw_box(ax, x, _yy(target, n_qubits), _gate_label(gate),
                       facecolor, edgecolor, fontsize=fontsize,
                       sublabel=_angle_sublabel(gate),
-                      sublabel_inside=_sublabel_inside_box(gate),
+                      sublabel_inside=False,
                       sublabel_scale=_sublabel_scale(gate))
         return
 
     _draw_box(ax, x, _yy(target, n_qubits), _gate_label(gate), facecolor,
               edgecolor, fontsize=fontsize, sublabel=_angle_sublabel(gate),
-              sublabel_inside=_sublabel_inside_box(gate),
+              sublabel_inside=False,
               sublabel_scale=_sublabel_scale(gate))
 
 

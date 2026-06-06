@@ -7,6 +7,8 @@ Run from the repository root:
 
 ```bash
 python -m demos.vqe_h2_demo
+python -m demos.H2O
+python -m demos.LiH
 python -m demos.visual_circuit_demo
 python -m demos.visual_state_demo
 python -m demos.visual_density_demo
@@ -17,6 +19,18 @@ H2 VQE with shot-based Pauli-term energy estimation:
 
 ```bash
 python -m demos.vqe_h2_demo --estimator pauli --optimizer spsa --shots 4096
+```
+
+Construct and inspect a PySCF/Qiskit Nature H2O active-space Hamiltonian:
+
+```bash
+python -m demos.H2O
+```
+
+Construct and inspect a PySCF/Qiskit Nature LiH active-space Hamiltonian:
+
+```bash
+python -m demos.LiH
 ```
 
 By default, figures are saved to:

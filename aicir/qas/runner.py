@@ -9,7 +9,7 @@ from . import config as qas_config
 from .CRLQAS import train_crlqas
 from .PPO_RB import ppo_rb_qas
 from .PPR_DQL import train_ppr_dql
-from .VQA_QAS import classification_vqa_qas, h2_vqe_qas, train_vqa_qas
+from .supernet import classification_supernet, h2_vqe_supernet, train_supernet
 
 QASMethod = str
 
@@ -53,24 +53,24 @@ def run(request: QASRunConfig | QASMethod, **kwargs: Any) -> Any:
     """Run a QAS implementation with a common packaged-user interface.
 
     Examples:
-        ``run("VQA_QAS", config=config.vqa_qas(...))``
+        ``run("supernet", config=config.supernet(...))``
         ``run(QASRunConfig(method="ppr_dql", target_state=state))``
     """
 
     run_config = _as_run_config(request, kwargs)
     method = qas_config.canonical_method(run_config.method)
 
-    if method == "vqa_qas":
-        return train_vqa_qas(
+    if method == "supernet":
+        return train_supernet(
             objective=run_config.objective,
             config=run_config.config,
             dataset=run_config.dataset,
             hamiltonian=run_config.hamiltonian,
         )
-    if method == "vqa_classification":
-        return classification_vqa_qas(config=run_config.config)
-    if method == "vqa_h2":
-        return h2_vqe_qas(config=run_config.config)
+    if method == "supernet_classification":
+        return classification_supernet(config=run_config.config)
+    if method == "supernet_h2":
+        return h2_vqe_supernet(config=run_config.config)
     if method == "ppo_rb":
         _require(run_config.target_density_matrix is not None, "ppo_rb requires target_density_matrix.")
         _require(run_config.epsilon is not None, "ppo_rb requires epsilon.")
