@@ -69,6 +69,80 @@ def _has_complete_distributed_env() -> bool:
     return all(os.environ.get(name) for name in ("MASTER_ADDR", "MASTER_PORT", "WORLD_SIZE", "RANK"))
 
 
+def _np_is_complex(x) -> bool:
+    return isinstance(x, torch.Tensor) and torch.is_complex(x)
+
+
+def _np_conj_T(x: torch.Tensor) -> torch.Tensor:
+    """Conjugate transpose, NPU-safe (no torch.conj on complex64)."""
+    xt = torch.transpose(x, -2, -1)
+    if _np_is_complex(xt):
+        return torch.complex(torch.real(xt), -torch.imag(xt))
+    return xt
+
+
+class _NpuMatmulFn(torch.autograd.Function):
+    """Complex matmul on NPU with an autograd-safe custom backward.
+
+    NPU has no complex64 kernels, so the forward decomposes into real matmuls
+    (via ``NPUBackend._matmul_forward``). The catch is autograd *backward*: if
+    that decomposition is recorded in the traced graph, the engine accumulates
+    complex gradients with ``aclnnAdd``—which NPU also lacks. By computing both
+    forward and backward *inside* this Function (untraced), the traced graph
+    sees only one node with complex in/out used linearly, so no complex-tensor
+    gradient accumulation ever happens. Gradients match native complex matmul.
+    """
+
+    @staticmethod
+    def forward(ctx, a, b):
+        ctx.save_for_backward(a, b)
+        return NPUBackend._matmul_forward(a, b)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        a, b = ctx.saved_tensors
+        grad_a = grad_b = None
+        if ctx.needs_input_grad[0]:
+            ga = NPUBackend._matmul_forward(grad_output, _np_conj_T(b))
+            grad_a = ga if _np_is_complex(a) else (torch.real(ga) if _np_is_complex(ga) else ga)
+        if ctx.needs_input_grad[1]:
+            gb = NPUBackend._matmul_forward(_np_conj_T(a), grad_output)
+            grad_b = gb if _np_is_complex(b) else (torch.real(gb) if _np_is_complex(gb) else gb)
+        return grad_a, grad_b
+
+
+class _NpuExpectationFn(torch.autograd.Function):
+    """``Re⟨ψ|O|ψ⟩`` on NPU with an autograd-safe custom backward.
+
+    The state appears twice in ``s^H O s`` (bra and ket); in a plain graph its
+    gradient would be accumulated (complex add → unsupported on NPU). Wrapping
+    the whole expectation keeps the state consumed exactly once in the traced
+    graph, so its gradient is assigned, not accumulated. For real loss
+    ``E = Re(s^H O s)``, ``dE/ds`` (PyTorch convention) is ``(O + O^H) s``.
+    """
+
+    @staticmethod
+    def forward(ctx, state, operator):
+        ctx.save_for_backward(state, operator)
+        s = state.reshape(-1, 1)
+        hs = NPUBackend._matmul_forward(operator, s)
+        val = NPUBackend._matmul_forward(_np_conj_T(s), hs)
+        return torch.real(val).reshape(())
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        state, operator = ctx.saved_tensors
+        s = state.reshape(-1, 1)
+        hs = NPUBackend._matmul_forward(operator, s)            # O s
+        hhs = NPUBackend._matmul_forward(_np_conj_T(operator), s)  # O^H s
+        go = grad_output  # real scalar
+        # Combine via real parts to avoid a complex64 add on NPU.
+        grad_real = (torch.real(hs) + torch.real(hhs)) * go
+        grad_imag = (torch.imag(hs) + torch.imag(hhs)) * go
+        grad_state = torch.complex(grad_real, grad_imag).reshape(state.shape)
+        return grad_state, None
+
+
 class NPUBackend(GPUBackend):
     """NPU-first backend for Ascend devices, compatible with GPUBackend API."""
 
@@ -265,25 +339,34 @@ class NPUBackend(GPUBackend):
         imag = torch.matmul(torch.imag(complex_matrix), real_matrix)
         return torch.complex(real, imag).to(dtype=complex_matrix.dtype)
 
+    @staticmethod
+    def _matmul_forward(a, b):
+        """NPU-safe matmul (no autograd graph), dispatching by real/complex mix.
+
+        This is the raw forward kernel shared by the autograd-friendly
+        ``_NpuMatmulFn`` (both its forward and backward) and is what keeps the
+        complex decomposition out of the traced graph.
+        """
+        a_complex = _np_is_complex(a)
+        b_complex = _np_is_complex(b)
+        if not a_complex and b_complex:
+            return NPUBackend._real_complex_matmul(a, b)
+        if a_complex and not b_complex:
+            return NPUBackend._complex_real_matmul(a, b)
+        if a_complex and b_complex:
+            return NPUBackend._complex_matmul_workaround(a, b)
+        return torch.matmul(a, b)
+
     def matmul(self, a, b):
         if (
             getattr(self._device, "type", None) == "npu"
             and isinstance(a, torch.Tensor)
             and isinstance(b, torch.Tensor)
-            and not torch.is_complex(a)
-            and torch.is_complex(b)
+            and (torch.is_complex(a) or torch.is_complex(b))
         ):
-            return self._real_complex_matmul(a, b)
-        if (
-            getattr(self._device, "type", None) == "npu"
-            and isinstance(a, torch.Tensor)
-            and isinstance(b, torch.Tensor)
-            and torch.is_complex(a)
-            and not torch.is_complex(b)
-        ):
-            return self._complex_real_matmul(a, b)
-        if self._should_use_complex_matmul_workaround(a, b):
-            return self._complex_matmul_workaround(a, b)
+            # Route complex matmul through the custom autograd Function so that
+            # backward stays NPU-safe (no complex64 gradient-accumulation adds).
+            return _NpuMatmulFn.apply(a, b)
         return super().matmul(a, b)
 
     def cast_local_matrix(self, matrix, cache_key=None, real_if_possible: bool = True):
@@ -428,13 +511,14 @@ class NPUBackend(GPUBackend):
         return super().partial_trace(rho, keep, n_qubits)
 
     def expectation_sv(self, state, operator):
-        """NPU workaround: ⟨ψ|O|ψ⟩ via self.matmul/dagger (avoids @ operator on complex64)."""
+        """NPU workaround: ⟨ψ|O|ψ⟩ via a custom autograd Function.
+
+        Wrapping the whole expectation keeps the (fan-out) state consumed once in
+        the traced graph, so backward never accumulates complex gradients
+        (aclnnAdd on complex64). Equivalent value/grad to the parent on CPU/CUDA.
+        """
         if self._is_npu_complex(state):
-            s = state.reshape(-1, 1)
-            op_s = self.matmul(operator, s)
-            dag_s = self.dagger(s)
-            val = self.matmul(dag_s, op_s)[0, 0]
-            return torch.real(val)
+            return _NpuExpectationFn.apply(state, operator)
         return super().expectation_sv(state, operator)
 
     def expectation_dm(self, rho, operator):
