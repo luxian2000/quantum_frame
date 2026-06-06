@@ -486,22 +486,100 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 
 ---
 
-## 5. NPU 后端的使用
+## 5. 计算后端的选择与使用
 
-aicir 通过 `NPUBackend` 支持 Ascend NPU（依赖 `torch_npu`）。
+aicir 提供三种计算后端，都实现统一的 `Backend` 接口，可与 `Circuit` / `Measure` / `StateVector` / `Hamiltonian` 无缝配合。它们的区别只在底层张量库与运行设备，业务代码无需改动即可切换：
 
-说明：Ascend NPU 在不同版本的 `torch_npu` 组合下，对 `complex64` 的内核支持并不完整。某些复数算子会直接报错，例如：
+| 后端 | 底层库 | 运行设备 | 自动微分 | 典型用途 |
+| --- | --- | --- | --- | --- |
+| `NumpyBackend` | NumPy | CPU | 否 | 小规模验证、算法原型、无 PyTorch 依赖环境 |
+| `GPUBackend`（别名 `TorchBackend`） | PyTorch | CPU / CUDA GPU | 是 | 变分算法（VQE/QAOA/QML）、需要梯度或 GPU 加速 |
+| `NPUBackend` | PyTorch + `torch_npu` | Ascend NPU（可回退 CPU） | 是 | 昇腾 NPU 上的仿真与训练 |
 
+> 命名说明：`TorchBackend` 是 `GPUBackend` 的**过时别名**，仅为向后兼容保留，新代码请使用 `GPUBackend`。`NPUBackend` 继承自 `GPUBackend`，复用其全部数学内核，并对 NPU 缺失的 `complex64` 算子做实部/虚部拆分回退（详见 5.4 / 5.5）。
+
+三种后端的调用范式完全一致——构造一个后端实例，绑定到 `Circuit`（或传给 `Measure`）即可：
+
+```python
+from aicir import Circuit, Measure, NumpyBackend, GPUBackend, NPUBackend, hadamard, cnot
+
+backend = GPUBackend(device="cpu")     # 换成 NumpyBackend() 或 NPUBackend() 完全等价
+cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2, backend=backend)
+result = Measure(backend).run(cir, shots=1024)
+print(result.backend_name, result.counts)
+```
+
+> 后端可绑定在 `Circuit` 上，也可只传给 `Measure`；当两者都给定时以 `circuit.backend` 优先。推荐绑定到 `Circuit`，原因与逐门演化、减少主机↔设备搬运有关（详见 5.6）。
+
+### 5.1 NumpyBackend（CPU 参考实现）
+
+```python
+from aicir import NumpyBackend
+
+backend = NumpyBackend()               # 纯 CPU，默认 numpy complex64
+backend = NumpyBackend(dtype="complex128")   # 可选：指定复数精度
+```
+
+- 依赖最少，无需安装 PyTorch。
+- **不支持自动微分**，因此不能用于基于 autograd 的参数训练（如需梯度，请改用 `GPUBackend`，或配合第 7 节中参数移位 `psr` 等数值方法）。
+- 适合教学、单元测试与小比特数验证。
+
+### 5.2 GPUBackend（PyTorch，CPU / CUDA）
+
+```python
+import torch
+from aicir import GPUBackend
+
+backend = GPUBackend()                       # 默认设备：有 CUDA 用 cuda，否则 cpu
+backend = GPUBackend(device="cpu")           # 强制 CPU
+backend = GPUBackend(device="cuda:0")        # 指定某张 GPU
+backend = GPUBackend(device=torch.device("cuda"), dtype=torch.complex128)  # 自定义设备与精度
+```
+
+构造参数：
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `device` | 有 CUDA 用 `cuda`，否则 `cpu` | 接收字符串或 `torch.device` |
+| `dtype` | `torch.complex64` | 复数精度，可设 `torch.complex128` 提高精度 |
+
+- **支持 PyTorch autograd**：把 Torch 标量张量作为门参数（`rx/ry/rz/u2/u3`、受控旋转、`rzz/rxx`、自定义 `unitary`）即可保留计算图，用于 VQE/QAOA/QML 训练（见 2.5 节与第 7 节）。
+- **支持 CUDA GPU 加速**：把 `device` 指向 GPU 即可，门矩阵构造与态演化都在 GPU 上完成。
+
+### 5.3 NPUBackend（Ascend NPU）
+
+```python
+from aicir import NPUBackend
+
+backend = NPUBackend()                                       # 自动选 npu:0（不可用则回退 CPU）
+backend = NPUBackend(device="npu:1")                         # 指定某张 NPU 卡
+backend = NPUBackend(device="npu:0", fallback_to_cpu=False)  # 严格模式：NPU 不可用直接报错
+backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)  # 多卡：按 LOCAL_RANK 自动绑卡
+```
+
+构造参数：
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `device` | 自动 `npu:0` | 目标 NPU 设备 |
+| `dtype` | `torch.complex64` | 复数精度 |
+| `fallback_to_cpu` | `True` | NPU 不可用时是否回退 CPU；`False` 则抛 `RuntimeError`（用于平台验证） |
+
+- 继承自 `GPUBackend`，API 完全一致，可直接替换其它后端。
+- 依赖 `torch_npu`；在真正的 NPU 设备上会自动对缺失的 `complex64` 内核做兼容回退（见 5.4 / 5.5）。
+- 严格模式见 5.7，多卡/分布式见 5.9，端到端示例见 5.10。
+
+> 在 QAS supernet（`aicir/qas`）中无需手动构造后端：只要把 `device="npu:0"` 传入配置，框架会自动选用 `NPUBackend`（见 `aicir/qas/supernet.py` 的 `_make_backend`）；CPU/CUDA 设备则用 `GPUBackend`。
+
+### 5.4 NPU 兼容性概述（complex64）
+
+Ascend NPU 在不同版本的 `torch_npu` 组合下，对 `complex64` 的内核支持并不完整，某些复数算子会直接报错，例如：
+
+- `aclnnMatmul ... DT_COMPLEX64 not implemented`
 - `aclnnEye ... DT_COMPLEX64 not implemented`
 - `aclnnAdd ... DT_COMPLEX64 not implemented`
 
-因此，aicir 在后端层提供了 NPU 专用兼容路径（workaround），核心思路是：
-
-- 优先走后端抽象接口（`matmul/kron/trace/...`），避免业务层直接做 torch 复数运算。
-- 在 NPU 且输入为复数时，将计算拆成实部/虚部后重组，绕过缺失内核。
-- 对常见初始化路径（如 `eye`、`|0...0>`）提供 NPU 安全实现。
-
-当前已覆盖的高频兼容算子包括：
+`NPUBackend` 在后端层提供 NPU 专用兼容路径（workaround），核心思路：优先走后端抽象接口（`matmul/kron/trace/...`）而非业务层直接做 torch 复数运算；在 NPU 且输入为复数时，将计算拆成实部/虚部后重组，绕过缺失内核；并对常见初始化路径（如 `eye`、`|0...0>`）提供 NPU 安全实现。当前已覆盖的高频兼容算子包括：
 
 - `matmul`, `apply_unitary`
 - `kron`
@@ -511,33 +589,33 @@ aicir 通过 `NPUBackend` 支持 Ascend NPU（依赖 `torch_npu`）。
 - `abs_sq`, `measure_probs`
 - `eye`, `zeros_state`
 
-注意：这不代表 NPU 对所有复数算子都原生可用。若新增路径中出现“直接 torch 复数加减乘”，仍可能触发新报错。
+此外，门矩阵构造层（`aicir/core/gates.py`）也避免对复数张量直接调用 `torch.exp`（`rz/rzz/u2/u3` 改用 `cos + i·sin` 构造），同样是为了绕过 NPU 缺失的复数内核。注意：这不代表 NPU 对所有复数算子都原生可用——若新增路径中出现“直接 torch 复数加减乘”，仍可能触发新报错（排查方法见 5.5）。
 
-### 5.1 NPU complex64 问题详解（建议先读）
+### 5.5 NPU complex64 问题详解（建议先读）
 
-#### 5.1.1 根因
+#### 5.5.1 根因
 
 - 问题不在量子算法本身，而在底层内核支持矩阵。
 - 同样的 Python 代码在 CPU/CUDA 可运行，不代表在 NPU 复数路径可运行。
 
-#### 5.1.2 典型触发点
+#### 5.5.2 典型触发点
 
 - 前端构造电路矩阵时，直接对复数张量做 `+`、`*`、某些初始化操作。
 - 绕过 `Backend` 接口，直接调用 torch 复数运算。
 
-#### 5.1.3 处理原则
+#### 5.5.3 处理原则
 
 - 不需要把整个项目都改成“处处手工拆实虚部”。
 - 只需要确保“在 NPU 上实际执行的复数运算”都经过后端封装或 NPU 专用回退。
 - 若出现新报错，按栈定位到具体算子点，再做最小修复。
 
-#### 5.1.4 快速排查清单
+#### 5.5.4 快速排查清单
 
 - 检查报错是否包含 `DT_COMPLEX64 not implemented`。
 - 检查报错栈是否位于后端层之外（例如业务文件里直接做了 torch 复数加法）。
 - 优先改为调用 `backend` 方法，必要时在 `NPUBackend` 增加拆分回退。
 
-### 5.2 推荐方式：在 `Circuit` 绑定后端（也可在 `Measure` 指定）
+### 5.6 推荐方式：在 `Circuit` 绑定后端（也可在 `Measure` 指定）
 
 推荐在构建电路时把目标后端绑定到 `Circuit`（即在 `Circuit(..., backend=...)` 或随后调用 `bind_backend()`）。
 
@@ -601,7 +679,7 @@ cir.bind_backend(backend)
 - 你希望前端矩阵组装与执行严格在同一设备上
 - 希望减少 CPU 和 XPU 之间的数据迁移
 
-### 5.4 严格 NPU 模式（不允许回退）
+### 5.7 严格 NPU 模式（不允许回退）
 
 ```python
 from aicir import NPUBackend
@@ -610,7 +688,7 @@ from aicir import NPUBackend
 backend = NPUBackend(device="npu:0", fallback_to_cpu=False)
 ```
 
-### 5.5 运行示例
+### 5.8 运行示例
 
 仓库示例脚本：`demo_npu.py`
 
@@ -619,7 +697,7 @@ python demo_npu.py
 python demo_npu.py --shots 2048 --allow-cpu-fallback
 ```
 
-### 5.6 分布式环境（多卡/多节点）
+### 5.9 分布式环境（多卡/多节点）
 
 使用环境变量 `WORLD_SIZE`、`RANK`、`LOCAL_RANK` 自动绑定对应卡：
 
@@ -645,7 +723,7 @@ python demo_npu.py --allow-cpu-fallback
 torchrun --nproc_per_node=4 your_script.py
 ```
 
-### 5.7 完整端到端示例
+### 5.10 完整端到端示例
 
 ```python
 import math
@@ -672,7 +750,7 @@ print(f"counts  : {result.counts}")
 print(f"summary : {result.summary()}")
 ```
 
-### 5.8 runtime_context 字段说明
+### 5.11 runtime_context 字段说明
 
 | 字段            | 说明                                      |
 | --------------- | ----------------------------------------- |
@@ -681,7 +759,7 @@ print(f"summary : {result.summary()}")
 | `local_rank`  | 本节点本地编号（对应 `npu:local_rank`） |
 | `distributed` | `world_size > 1` 时为 True              |
 
-### 5.9 远程 NPU 验证输出示例（新路径）
+### 5.12 远程 NPU 验证输出示例（新路径）
 
 使用新路径 smoke 脚本进行全链路验证（单门、受控门、参数门、density matrix）：
 
