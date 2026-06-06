@@ -211,7 +211,7 @@ def _gate_to_python_call(gate: dict) -> tuple[str, str] | None:
 def circuit_to_python_source(
     circuit,
     func_name: str = "build_lih_qas_circuit",
-    figure_name: str = "lih_vqa_qas_circuit.png",
+    figure_name: str = "LiH_cir.png",
     title: str = "LiH supernet ground-state ansatz",
 ) -> str:
     """Render ``circuit`` as importable Python that rebuilds and plots it.
@@ -324,7 +324,7 @@ def main() -> None:
     print("  selected ansatz circuit:")
     print(metrics["selected_circuit_ascii"])
 
-    qasm_path = Path(__file__).parent / "lih_vqa_qas_circuit.qasm"
+    qasm_path = Path(__file__).parent / "LiH_cir.qasm"
     save_circuit_qasm3(result.best_circuit, qasm_path)
     print(f"\n  OpenQASM 3.0 saved to: {qasm_path}")
 

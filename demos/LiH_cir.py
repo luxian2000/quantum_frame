@@ -41,6 +41,6 @@ circuit = build_lih_qas_circuit()
 
 
 if __name__ == "__main__":
-    figure_path = Path(__file__).with_name("lih_vqa_qas_circuit.png")
+    figure_path = Path(__file__).with_name("LiH_cir.png")
     plot(circuit, figure_path, title='LiH supernet ground-state ansatz')
     print(f"Saved circuit figure to {figure_path}")
