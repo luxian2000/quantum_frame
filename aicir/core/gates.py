@@ -453,13 +453,16 @@ def _single_qubit_base_for_gate_backend(gate, backend):
         lam = _torch_angle(parameter[2], backend)
         cos = torch.cos(theta / 2.0)
         sin = torch.sin(theta / 2.0)
-        exp_iphi = _torch_expi(phi, dtype)
-        exp_ilam = _torch_expi(lam, dtype)
-        exp_iphi_lam = _torch_expi(phi + lam, dtype)
+        # exp(i*x) * r == complex(r*cos x, r*sin x). Build each phased entry
+        # directly from real parts instead of multiplying complex tensors: NPU
+        # has no complex64 mul kernel (aclnnMul) and its backward would also do
+        # complex add. Real construction is NPU-safe and autograd-correct.
         return _torch_base_matrix(
             [
-                [_torch_complex(cos, complex_dtype=dtype), -exp_ilam * _torch_complex(sin, complex_dtype=dtype)],
-                [exp_iphi * _torch_complex(sin, complex_dtype=dtype), exp_iphi_lam * _torch_complex(cos, complex_dtype=dtype)],
+                [_torch_complex(cos, complex_dtype=dtype),
+                 _torch_complex(-sin * torch.cos(lam), -sin * torch.sin(lam), dtype)],
+                [_torch_complex(sin * torch.cos(phi), sin * torch.sin(phi), dtype),
+                 _torch_complex(cos * torch.cos(phi + lam), cos * torch.sin(phi + lam), dtype)],
             ],
             dtype,
             device,
@@ -467,15 +470,15 @@ def _single_qubit_base_for_gate_backend(gate, backend):
     if gate_type == "u2":
         phi = _torch_angle(parameter[0], backend)
         lam = _torch_angle(parameter[1], backend)
-        cos = torch.cos(one * (math.pi / 4.0))
-        sin = torch.sin(one * (math.pi / 4.0))
-        exp_iphi = _torch_expi(phi, dtype)
-        exp_ilam = _torch_expi(lam, dtype)
-        exp_iphi_lam = _torch_expi(phi + lam, dtype)
+        inv_sqrt2 = 1.0 / math.sqrt(2.0)
+        # Same real-part construction as u3 (no complex multiply); the fixed
+        # cos = sin = 1/sqrt(2) of u2 fold into the real scale factor.
         return _torch_base_matrix(
             [
-                [_torch_complex(cos, complex_dtype=dtype), -exp_ilam * _torch_complex(sin, complex_dtype=dtype)],
-                [exp_iphi * _torch_complex(sin, complex_dtype=dtype), exp_iphi_lam * _torch_complex(cos, complex_dtype=dtype)],
+                [_torch_complex(one * inv_sqrt2, complex_dtype=dtype),
+                 _torch_complex(-inv_sqrt2 * torch.cos(lam), -inv_sqrt2 * torch.sin(lam), dtype)],
+                [_torch_complex(inv_sqrt2 * torch.cos(phi), inv_sqrt2 * torch.sin(phi), dtype),
+                 _torch_complex(inv_sqrt2 * torch.cos(phi + lam), inv_sqrt2 * torch.sin(phi + lam), dtype)],
             ],
             dtype,
             device,
@@ -494,15 +497,19 @@ def _rzz_backend(theta, backend):
     device = getattr(backend, "_device", ref.device if ref is not None else None)
     zero = torch.zeros((), dtype=_torch_real_dtype(dtype), device=device)
     t = _torch_angle(theta, backend)
-    exp_neg = _torch_expi(-t / 2.0, dtype)
-    exp_pos = _torch_expi(t / 2.0, dtype)
+    # Each diagonal phase must be a *fresh* complex tensor: reusing one
+    # grad-bearing complex tensor across cells makes autograd accumulate its
+    # gradient with a complex add, which Ascend NPU's aclnnAdd cannot do for
+    # complex64. Distinct tensors push the accumulation onto the real angle t
+    # (real adds, which NPU supports). ``z`` is constant (no grad) so reuse is
+    # fine. See _single_qubit_base_for_gate_backend for the same rule.
     z = _torch_complex(zero, complex_dtype=dtype)
     return _torch_base_matrix(
         [
-            [exp_neg, z, z, z],
-            [z, exp_pos, z, z],
-            [z, z, exp_pos, z],
-            [z, z, z, exp_neg],
+            [_torch_expi(-t / 2.0, dtype), z, z, z],
+            [z, _torch_expi(t / 2.0, dtype), z, z],
+            [z, z, _torch_expi(t / 2.0, dtype), z],
+            [z, z, z, _torch_expi(-t / 2.0, dtype)],
         ],
         dtype,
         device,
@@ -521,15 +528,24 @@ def _rxx_backend(theta, backend):
     t = _torch_angle(theta, backend)
     cos = torch.cos(t / 2.0)
     sin = torch.sin(t / 2.0)
-    c = _torch_complex(cos, complex_dtype=dtype)
+    # Build each grad-bearing cell as a fresh complex tensor (see _rzz_backend):
+    # reusing one complex tensor across cells would force a complex64 add in
+    # autograd's gradient accumulation, which Ascend NPU lacks. The real
+    # ``cos``/``sin`` may be shared (their accumulation is a real add). ``z`` is
+    # constant (no grad), so it is safe to reuse.
+    def cell_c():
+        return _torch_complex(cos, complex_dtype=dtype)
+
+    def cell_nis():
+        return _torch_complex(zero, -sin, dtype)
+
     z = _torch_complex(zero, complex_dtype=dtype)
-    neg_i_sin = _torch_complex(zero, -sin, dtype)
     return _torch_base_matrix(
         [
-            [c, z, z, neg_i_sin],
-            [z, c, neg_i_sin, z],
-            [z, neg_i_sin, c, z],
-            [neg_i_sin, z, z, c],
+            [cell_c(), z, z, cell_nis()],
+            [z, cell_c(), cell_nis(), z],
+            [z, cell_nis(), cell_c(), z],
+            [cell_nis(), z, z, cell_c()],
         ],
         dtype,
         device,
