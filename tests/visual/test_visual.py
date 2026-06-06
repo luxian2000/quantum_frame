@@ -166,9 +166,11 @@ def test_plot_u2_u3_show_smaller_parameter_sublabels(plt):
     u2_label = text_by_value["π/3, 0.628"]
     u3_label = text_by_value["π, 0.000\n0.449"]
 
+    # Angle sublabels render below the box (box half-height + small gap).
+    below_box = 0.62 / 2 + 0.04
     assert u2_label.get_fontsize() < rz_label.get_fontsize()
     assert u3_label.get_fontsize() < rz_label.get_fontsize()
-    assert rz_label.get_position()[1] == pytest.approx(2.0 - 0.62 * 0.236)
+    assert rz_label.get_position()[1] == pytest.approx(2.0 - below_box)
     assert u2_label.get_position()[1] < 1.0
     assert u3_label.get_position()[1] < 0.0
 
@@ -180,11 +182,12 @@ def test_plot_rzz_gate_label_is_rzz(plt):
 
     labels = [text.get_text() for text in ax.texts]
     assert labels.count("Rzz") == 2
-    assert labels.count("π/2") == 2
+    # The shared angle is shown once, below the lower (qubit 1) square.
+    assert labels.count("π/2") == 1
     assert "ZZ" not in labels
 
-    value_ys = sorted(text.get_position()[1] for text in ax.texts if text.get_text() == "π/2")
-    assert value_ys == pytest.approx([-0.62 * 0.236, 1.0 - 0.62 * 0.236])
+    value_ys = [text.get_position()[1] for text in ax.texts if text.get_text() == "π/2"]
+    assert value_ys == pytest.approx([-(0.62 / 2 + 0.04)])
 
 
 def test_plot_rxx_gate_label_is_rxx(plt):
@@ -194,10 +197,11 @@ def test_plot_rxx_gate_label_is_rxx(plt):
 
     labels = [text.get_text() for text in ax.texts]
     assert labels.count("Rxx") == 2
-    assert labels.count("π/2") == 2
+    # The shared angle is shown once, below the lower (qubit 1) square.
+    assert labels.count("π/2") == 1
 
-    value_ys = sorted(text.get_position()[1] for text in ax.texts if text.get_text() == "π/2")
-    assert value_ys == pytest.approx([-0.62 * 0.236, 1.0 - 0.62 * 0.236])
+    value_ys = [text.get_position()[1] for text in ax.texts if text.get_text() == "π/2"]
+    assert value_ys == pytest.approx([-(0.62 / 2 + 0.04)])
 
 
 def test_plot_rejects_invalid_input(plt):

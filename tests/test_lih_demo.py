@@ -1,4 +1,8 @@
-from demos.LiH import build_lih_hamiltonian, exact_ground_energy
+from demos.LiH import (
+    build_lih_hamiltonian,
+    exact_ground_energy,
+    search_ground_state_qas,
+)
 from aicir.measure import hamiltonian_pauli_terms
 
 
@@ -18,3 +22,18 @@ def test_lih_demo_exact_ground_energy_is_finite():
     energy = exact_ground_energy(build_lih_hamiltonian())
 
     assert energy < 0.0
+
+
+def test_lih_vqa_qas_search_approaches_exact_ground_energy():
+    hamiltonian = build_lih_hamiltonian()
+    exact = exact_ground_energy(hamiltonian)
+
+    # Default config is deterministic (fixed seed) and runs in ~1.5s.
+    result = search_ground_state_qas(hamiltonian)
+    metrics = result.final_metrics
+
+    assert result.best_circuit.n_qubits == 4
+    # Variational energy obeys the Rayleigh-Ritz lower bound and gets close.
+    assert metrics["fine_tuned_energy"] >= exact - 1e-6
+    assert metrics["fine_tuned_energy"] <= exact + 2e-2
+    assert "baseline_vqe_energy" in metrics
