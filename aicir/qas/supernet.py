@@ -22,6 +22,7 @@ import inspect
 import io
 import math
 import random
+import warnings
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
@@ -256,6 +257,20 @@ class Supernet:
 
         self.backend = _make_backend(config.device)
         self.device = self.backend._device
+        # Ascend NPU has no complex64 autograd backward (gradient accumulation
+        # calls aclnnAdd on complex64, which is unimplemented). The forward path
+        # works via NPUBackend's real/imag decomposition, so fall back to the
+        # parameter-shift rule, which is forward-only and—because every active
+        # angle drives exactly one Pauli rotation (rx/ry/rz/rzz) per forward—is
+        # exact for this gate set.
+        if self.device.type == "npu" and not self.config.use_parameter_shift:
+            warnings.warn(
+                "NPU does not support complex64 autograd backward; switching to "
+                "exact parameter-shift gradients (use_parameter_shift=True).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            self.config.use_parameter_shift = True
         # Index alphabet for the per-pair two-qubit choice: "none" first so the
         # absent option keeps index 0, then the configured two-qubit gates.
         self._two_qubit_choice_alphabet: tuple[str, ...] = (_NO_TWO_QUBIT,) + tuple(config.two_qubit_gates)
@@ -1046,7 +1061,23 @@ class Supernet:
         # Conventional fixed VQE reference (Fig. 3a): every configured rotation
         # type on every qubit, then one fixed CNOT entangler per pair. The gate
         # specs carry arity, so multi-/zero-parameter gates are sized correctly.
-        hamiltonian_matrix = self._hamiltonian_matrix(hamiltonian)
+        #
+        # This reference energy is device-independent. When the search runs on
+        # NPU (where complex64 autograd backward is unavailable) we evaluate the
+        # baseline with fast CPU autograd instead of a prohibitively slow
+        # parameter-shift sweep over the full fixed ansatz.
+        backend = GPUBackend(device="cpu") if self.device.type == "npu" else self.backend
+        device = backend._device
+
+        if hamiltonian is None:
+            hamiltonian = h2_hamiltonian()
+        if isinstance(hamiltonian, Hamiltonian):
+            hamiltonian_matrix = hamiltonian.to_matrix(backend)
+        elif isinstance(hamiltonian, torch.Tensor):
+            hamiltonian_matrix = hamiltonian.to(dtype=backend._dtype, device=device)
+        else:
+            hamiltonian_matrix = backend.cast(np.asarray(hamiltonian, dtype=np.complex64))
+
         single_types = tuple(dict.fromkeys(self.config.single_qubit_gates))
         if self.config.two_qubit_gates:
             entangler = "cx" if "cx" in self.config.two_qubit_gates else self.config.two_qubit_gates[0]
@@ -1059,7 +1090,11 @@ class Supernet:
             per_layer += entangler_spec.n_params * len(self.config.two_qubit_pairs)
         total = per_layer * self.config.layers
 
-        parameters = [self._new_shared_parameter() for _ in range(total)]
+        def _new_param() -> torch.nn.Parameter:
+            value = float(self._np_rng.uniform(-0.05, 0.05))
+            return torch.nn.Parameter(torch.tensor(value, dtype=torch.float32, device=device))
+
+        parameters = [_new_param() for _ in range(total)]
         optimizer = torch.optim.Adam(parameters, lr=self.config.finetune_learning_rate) if parameters else None
         steps = max(1, self.config.finetune_steps)
         best_energy = math.inf
@@ -1083,8 +1118,14 @@ class Supernet:
                         gate = entangler_spec.builder(slot, (int(control), int(target)))
                         if gate is not None:
                             gates.append(gate)
-            state = self._simulate_gates(gates)
-            return self.backend.expectation_sv(state, hamiltonian_matrix)
+            state = backend.zeros_state(self.config.n_qubits)
+            for gate in gates:
+                evolved = apply_gate_to_state(gate, state, self.config.n_qubits, backend)
+                if evolved is None:
+                    matrix = gate_to_matrix(gate, cir_qubits=self.config.n_qubits, backend=backend)
+                    evolved = backend.apply_unitary(state, matrix)
+                state = evolved
+            return backend.expectation_sv(state, hamiltonian_matrix)
 
         for _ in range(steps):
             loss = energy_closure()
