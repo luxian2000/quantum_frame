@@ -13,4 +13,5 @@
         {"name":"HTTPS_PROXY","value":"http://127.0.0.1:7890"},
         {"name":"NO_PROXY","value":"localhost,127.0.0.1"}
     ]
+    "window.title": "${folderName} | ${branch} | ${activeEditorShort}"
 }

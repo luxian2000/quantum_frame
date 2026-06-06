@@ -1,9 +1,9 @@
-"""Demo: VQA_QAS for the Hamiltonian-path problem (Lucas 2014, Eq. 56 variant).
+"""Demo: supernet for the Hamiltonian-path problem (Lucas 2014, Eq. 56 variant).
 
 The Hamiltonian-path formulation is the cycle formulation without the
 wrap-around transition (we do not require the first and last vertices to be
 joined). We encode it as the ground state of a diagonal Ising Hamiltonian and
-let :mod:`aicir.qas.VQA_QAS` search a circuit preparing that ground state.
+let :mod:`aicir.qas.supernet` search a circuit preparing that ground state.
 
 Instance: the 3-vertex path graph with edges {0-1, 1-2}. It admits the
 Hamiltonian path 0 -> 1 -> 2 (energy 0) but NO Hamiltonian cycle, because
@@ -41,7 +41,7 @@ EDGES = [(0, 1), (1, 2)]
 
 def main() -> None:
     print("=" * 72)
-    print("VQA_QAS Demo: Hamiltonian Path (Lucas 2014, Eq. 56 without wrap-around)")
+    print("supernet Demo: Hamiltonian Path (Lucas 2014, Eq. 56 without wrap-around)")
     print("=" * 72)
     print(f"Graph: N={N_VERTICES} vertices, edges={EDGES} (path graph)")
 
@@ -62,7 +62,7 @@ def main() -> None:
     cycle_energy, _ = cycle_qubo.brute_force_minimum()
     print(f"  (cycle formulation optimum energy: {cycle_energy:.6f} > 0 => no Hamiltonian cycle)")
 
-    print("\n[2/4] Searching a circuit with VQA_QAS (task='vqe')...")
+    print("\n[2/4] Searching a circuit with supernet (task='vqe')...")
     solution = solve_ground_state_qas(
         hamiltonian,
         n_qubits,
@@ -78,7 +78,7 @@ def main() -> None:
     assignment = bitstring_to_assignment(solution.best_index, var_to_qubit, n_qubits)
     order = assignment_to_order(assignment, N_VERTICES)
     valid = is_valid_ordering(order, EDGES, cyclic=False)
-    print(f"  best VQA_QAS energy: {solution.energy:+.6f} (winning seed {solution.seed})")
+    print(f"  best supernet energy: {solution.energy:+.6f} (winning seed {solution.seed})")
     print(f"  measured ground-state probability: {float(solution.probabilities[solution.best_index]):.4f}")
     print(f"  decoded path: {format_order(order, cyclic=False)}")
     print(f"  valid Hamiltonian path: {valid}")
