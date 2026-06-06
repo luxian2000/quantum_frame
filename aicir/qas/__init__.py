@@ -46,16 +46,15 @@ try:
     from .PPR_DQL import PPRDQLConfig, PPRDQLPolicy, PPRDQLResult, ppr_dql_state_to_circuit, train_ppr_dql
     from .PPO_RB import PPORollbackConfig, ppo_rb_qas
     from .runner import QASRunConfig, available_qas_methods, default_qas_config, run
-    from .VQA_QAS import (
+    from .supernet import (
         Architecture,
         LayerArchitecture,
-        VQAQAS,
-        VQAQASConfig,
-        VQAQASResult,
-        classification_vqa_qas,
-        h2_vqe_qas,
-        train_vqa_qas,
-        vqa_qas,
+        Supernet,
+        SupernetConfig,
+        SupernetResult,
+        classification_supernet,
+        h2_vqe_supernet,
+        train_supernet,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "torch":
@@ -73,22 +72,21 @@ else:
             "PPRDQLResult",
             "PPORollbackConfig",
             "QASRunConfig",
-            "VQAQAS",
-            "VQAQASConfig",
-            "VQAQASResult",
+            "Supernet",
+            "SupernetConfig",
+            "SupernetResult",
             "available_qas_methods",
-            "classification_vqa_qas",
+            "classification_supernet",
             "config",
             "crlqas",
             "default_qas_config",
-            "h2_vqe_qas",
+            "h2_vqe_supernet",
             "ppr_dql_state_to_circuit",
             "ppo_rb_qas",
             "run",
             "train_crlqas",
             "train_ppr_dql",
-            "train_vqa_qas",
-            "vqa_qas",
+            "train_supernet",
         ]
     )
 

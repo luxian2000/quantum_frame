@@ -94,7 +94,7 @@ def _normalize_single_gate(name: str) -> str:
     gate = str(name).strip().lower()
     if gate not in _SINGLE_QUBIT_GATES:
         raise ValueError(
-            f"VQA_QAS single-qubit gates are {tuple(_SINGLE_QUBIT_GATES)}; got {name!r}"
+            f"supernet single-qubit gates are {tuple(_SINGLE_QUBIT_GATES)}; got {name!r}"
         )
     return gate
 
@@ -103,7 +103,7 @@ def _normalize_two_qubit_gate(name: str) -> str:
     gate = str(name).strip().lower()
     if gate not in _TWO_QUBIT_GATES:
         raise ValueError(
-            f"VQA_QAS two-qubit gates are {tuple(_TWO_QUBIT_GATES)}; got {name!r}"
+            f"supernet two-qubit gates are {tuple(_TWO_QUBIT_GATES)}; got {name!r}"
         )
     return gate
 
@@ -132,7 +132,7 @@ class NoiseConfig:
 
 
 @dataclass
-class VQAQASConfig:
+class SupernetConfig:
     n_qubits: int = 3
     layers: int = 3
     single_qubit_gates: tuple[str, ...] = ("i", "h", "rx", "ry", "rz")
@@ -181,7 +181,7 @@ class Architecture:
 
 
 @dataclass
-class VQAQASResult:
+class SupernetResult:
     best_architecture: Architecture
     best_circuit: Circuit
     best_score: float
@@ -190,7 +190,7 @@ class VQAQASResult:
     supernet_log: list[dict[str, Any]]
     finetune_log: list[dict[str, Any]]
     final_metrics: dict[str, Any]
-    config: VQAQASConfig
+    config: SupernetConfig
 
 
 def _as_torch_scalar(value: torch.Tensor | float, device: torch.device) -> torch.Tensor:
@@ -222,11 +222,11 @@ def _circuit_diagram(circuit: Circuit) -> str:
     return stream.getvalue().rstrip()
 
 
-class VQAQAS:
+class Supernet:
     """One-stage supernet QAS for VQA ansatz selection."""
 
-    def __init__(self, config: VQAQASConfig | None = None):
-        config = config or VQAQASConfig()
+    def __init__(self, config: SupernetConfig | None = None):
+        config = config or SupernetConfig()
         normalized_single = tuple(_normalize_single_gate(gate) for gate in config.single_qubit_gates)
         normalized_two = tuple(_normalize_two_qubit_gate(gate) for gate in config.two_qubit_gates)
         config = replace(config, single_qubit_gates=normalized_single, two_qubit_gates=normalized_two)
@@ -263,9 +263,9 @@ class VQAQAS:
     def _validate_config(self) -> None:
         cfg = self.config
         if str(cfg.noise_mode).strip().lower() != "none":
-            raise NotImplementedError("Noisy differentiable VQA_QAS is not implemented yet; use noise_mode='none'.")
+            raise NotImplementedError("Noisy differentiable supernet is not implemented yet; use noise_mode='none'.")
         if cfg.noise_config is not None and cfg.noise_config.enabled:
-            raise NotImplementedError("Noisy differentiable VQA_QAS is not implemented yet.")
+            raise NotImplementedError("Noisy differentiable supernet is not implemented yet.")
         ranking_strategy = str(cfg.ranking_strategy).strip().lower()
         if ranking_strategy not in {"random", "evolutionary"}:
             raise ValueError("ranking_strategy must be 'random' or 'evolutionary'")
@@ -849,7 +849,7 @@ class VQAQAS:
             log.append(record)
             if self.config.log_interval and (step + 1) % self.config.log_interval == 0:
                 print(
-                    f"[VQA_QAS] step={step + 1} supernet={selected_id} "
+                    f"[supernet] step={step + 1} supernet={selected_id} "
                     f"loss={record['loss']:.6f} cnot={record['cnot_count']}"
                 )
         return log
@@ -1085,7 +1085,7 @@ class VQAQAS:
         objective: ObjectiveFn | str | None = None,
         dataset: Any = None,
         hamiltonian: Any = None,
-    ) -> VQAQASResult:
+    ) -> SupernetResult:
         task = self.config.task.lower()
         if task in {"classification", "binary_classification"}:
             dataset = prepare_classification_dataset(dataset, self.config, self.device)
@@ -1141,7 +1141,7 @@ class VQAQAS:
         else:
             best_score = float(final_metrics.get("final_loss", finetune_score))
 
-        return VQAQASResult(
+        return SupernetResult(
             best_architecture=best_architecture,
             best_circuit=best_circuit,
             best_score=best_score,
@@ -1156,7 +1156,7 @@ class VQAQAS:
 
 def prepare_classification_dataset(
     dataset: Any,
-    config: VQAQASConfig,
+    config: SupernetConfig,
     device: torch.device,
 ) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
     if dataset is None:
@@ -1297,27 +1297,18 @@ def h2_hamiltonian() -> Hamiltonian:
     return Hamiltonian(n_qubits=4, terms=terms)
 
 
-def train_vqa_qas(
+def train_supernet(
     objective: ObjectiveFn | str | None = None,
-    config: VQAQASConfig | None = None,
+    config: SupernetConfig | None = None,
     dataset: Any = None,
     hamiltonian: Any = None,
-) -> VQAQASResult:
-    return VQAQAS(config).train(objective, dataset=dataset, hamiltonian=hamiltonian)
+) -> SupernetResult:
+    return Supernet(config).train(objective, dataset=dataset, hamiltonian=hamiltonian)
 
 
-def vqa_qas(
-    objective: ObjectiveFn | str | None = None,
-    config: VQAQASConfig | None = None,
-    dataset: Any = None,
-    hamiltonian: Any = None,
-) -> VQAQASResult:
-    return train_vqa_qas(objective, config=config, dataset=dataset, hamiltonian=hamiltonian)
-
-
-def classification_vqa_qas(config: VQAQASConfig | None = None) -> VQAQASResult:
+def classification_supernet(config: SupernetConfig | None = None) -> SupernetResult:
     if config is None:
-        config = VQAQASConfig(
+        config = SupernetConfig(
             n_qubits=3,
             layers=3,
             single_qubit_gates=("i", "h", "rx", "ry", "rz"),
@@ -1329,12 +1320,12 @@ def classification_vqa_qas(config: VQAQASConfig | None = None) -> VQAQASResult:
         )
     else:
         config = replace(config, task="classification")
-    return train_vqa_qas(None, config=config)
+    return train_supernet(None, config=config)
 
 
-def h2_vqe_qas(config: VQAQASConfig | None = None) -> VQAQASResult:
+def h2_vqe_supernet(config: SupernetConfig | None = None) -> SupernetResult:
     if config is None:
-        config = VQAQASConfig(
+        config = SupernetConfig(
             n_qubits=4,
             layers=3,
             single_qubit_gates=("i", "h", "rx", "ry", "rz"),
@@ -1350,18 +1341,17 @@ def h2_vqe_qas(config: VQAQASConfig | None = None) -> VQAQASResult:
     else:
         config = replace(config, task="h2_vqe")
     if config.n_qubits != 4:
-        raise ValueError("h2_vqe_qas requires n_qubits=4")
-    return train_vqa_qas(None, config=config, hamiltonian=h2_hamiltonian())
+        raise ValueError("h2_vqe_supernet requires n_qubits=4")
+    return train_supernet(None, config=config, hamiltonian=h2_hamiltonian())
 
 
 __all__ = [
-    "VQAQASConfig",
+    "SupernetConfig",
     "LayerArchitecture",
     "Architecture",
-    "VQAQASResult",
-    "VQAQAS",
-    "train_vqa_qas",
-    "vqa_qas",
-    "classification_vqa_qas",
-    "h2_vqe_qas",
+    "SupernetResult",
+    "Supernet",
+    "train_supernet",
+    "classification_supernet",
+    "h2_vqe_supernet",
 ]

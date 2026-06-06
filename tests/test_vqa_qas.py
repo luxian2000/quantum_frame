@@ -5,14 +5,14 @@ import pytest
 import torch
 
 from aicir.channel.backends.torch_backend import TorchBackend
-from aicir.qas.VQA_QAS import h2_hamiltonian, prepare_classification_dataset
+from aicir.qas.supernet import h2_hamiltonian, prepare_classification_dataset
 from aicir.qas import (
     Architecture,
     LayerArchitecture,
-    VQAQAS,
-    VQAQASConfig,
-    classification_vqa_qas,
-    h2_vqe_qas,
+    Supernet,
+    SupernetConfig,
+    classification_supernet,
+    h2_vqe_supernet,
 )
 
 
@@ -31,7 +31,7 @@ def _classification_config(**kwargs):
         task="classification",
     )
     values.update(kwargs)
-    return VQAQASConfig(**values)
+    return SupernetConfig(**values)
 
 
 def _h2_config(**kwargs):
@@ -49,7 +49,7 @@ def _h2_config(**kwargs):
         task="h2_vqe",
     )
     values.update(kwargs)
-    return VQAQASConfig(**values)
+    return SupernetConfig(**values)
 
 
 def _arch(single=("ry",), mask=(False,), layers=1):
@@ -78,13 +78,13 @@ def _tiny_dataset():
 
 
 def test_classification_search_space_size_is_8_cubed():
-    qas = VQAQAS(_classification_config())
+    qas = Supernet(_classification_config())
 
     assert qas.logical_search_space_size() == 8**3
 
 
 def test_h2_search_space_size_is_128_cubed():
-    qas = VQAQAS(_h2_config())
+    qas = Supernet(_h2_config())
 
     assert qas.logical_search_space_size() == 128**3
 
@@ -92,8 +92,8 @@ def test_h2_search_space_size_is_128_cubed():
 def test_default_gate_set_search_space_uses_full_alphabet():
     # Default single set {i, h, rx, ry, rz} (5) over 3 qubits, two-qubit choice
     # alphabet {none, cx, rzz} (3) over 3 pairs.
-    qas = VQAQAS(
-        VQAQASConfig(
+    qas = Supernet(
+        SupernetConfig(
             n_qubits=3,
             layers=1,
             two_qubit_pairs=((0, 1), (0, 2), (1, 2)),
@@ -106,8 +106,8 @@ def test_default_gate_set_search_space_uses_full_alphabet():
 
 
 def test_identity_single_qubit_gate_emits_no_gate_and_no_parameter():
-    qas = VQAQAS(
-        VQAQASConfig(
+    qas = Supernet(
+        SupernetConfig(
             n_qubits=2,
             layers=1,
             single_qubit_gates=("i", "ry"),
@@ -127,8 +127,8 @@ def test_identity_single_qubit_gate_emits_no_gate_and_no_parameter():
 
 
 def test_hadamard_single_qubit_gate_is_emitted_without_parameters():
-    qas = VQAQAS(
-        VQAQASConfig(
+    qas = Supernet(
+        SupernetConfig(
             n_qubits=2,
             layers=1,
             single_qubit_gates=("h", "ry"),
@@ -150,8 +150,8 @@ def test_hadamard_single_qubit_gate_is_emitted_without_parameters():
 
 
 def test_rzz_two_qubit_gate_is_trainable_and_differentiable():
-    qas = VQAQAS(
-        VQAQASConfig(
+    qas = Supernet(
+        SupernetConfig(
             n_qubits=2,
             layers=1,
             single_qubit_gates=("i", "rx"),
@@ -197,7 +197,7 @@ def test_two_qubit_mask_is_backward_compatible_view():
 
 
 def test_supplementary_config_fields_are_available():
-    config = VQAQASConfig()
+    config = SupernetConfig()
 
     assert config.track_best_validation is True
     assert config.ranking_strategy == "random"
@@ -206,7 +206,7 @@ def test_supplementary_config_fields_are_available():
 
 
 def test_architecture_sampling_returns_valid_architecture():
-    qas = VQAQAS(_classification_config())
+    qas = Supernet(_classification_config())
 
     architecture = qas.sample_architecture()
 
@@ -219,7 +219,7 @@ def test_architecture_sampling_returns_valid_architecture():
 
 
 def test_architecture_maps_to_valid_circuit_show_and_unitary_shape():
-    qas = VQAQAS(_classification_config(layers=1))
+    qas = Supernet(_classification_config(layers=1))
     architecture = Architecture(
         (
             LayerArchitecture(("ry", "ry", "ry"), (True, False, True)),
@@ -236,8 +236,8 @@ def test_architecture_maps_to_valid_circuit_show_and_unitary_shape():
 
 
 def test_weight_sharing_reuses_tensor_for_matching_layer_layout():
-    qas = VQAQAS(
-        VQAQASConfig(
+    qas = Supernet(
+        SupernetConfig(
             n_qubits=2,
             layers=1,
             single_qubit_gates=("ry",),
@@ -257,8 +257,8 @@ def test_weight_sharing_reuses_tensor_for_matching_layer_layout():
 
 
 def test_weight_sharing_uses_different_tensors_for_different_layouts():
-    qas = VQAQAS(
-        VQAQASConfig(
+    qas = Supernet(
+        SupernetConfig(
             n_qubits=1,
             layers=1,
             single_qubit_gates=("ry", "rz"),
@@ -277,8 +277,8 @@ def test_weight_sharing_uses_different_tensors_for_different_layouts():
 
 
 def test_supernet_selection_chooses_minimum_loss_supernet():
-    qas = VQAQAS(
-        VQAQASConfig(
+    qas = Supernet(
+        SupernetConfig(
             n_qubits=1,
             layers=1,
             single_qubit_gates=("ry",),
@@ -300,8 +300,8 @@ def test_supernet_selection_chooses_minimum_loss_supernet():
 
 
 def test_one_qubit_ry_parameter_is_differentiable():
-    qas = VQAQAS(
-        VQAQASConfig(
+    qas = Supernet(
+        SupernetConfig(
             n_qubits=1,
             layers=1,
             single_qubit_gates=("ry",),
@@ -324,8 +324,8 @@ def test_one_qubit_ry_parameter_is_differentiable():
 
 
 def test_ranking_returns_lowest_loss_architecture_among_candidates():
-    qas = VQAQAS(
-        VQAQASConfig(
+    qas = Supernet(
+        SupernetConfig(
             n_qubits=2,
             layers=1,
             single_qubit_gates=("ry",),
@@ -349,7 +349,7 @@ def test_ranking_returns_lowest_loss_architecture_among_candidates():
 
 
 def test_evolutionary_ranking_extension_raises_clear_error():
-    qas = VQAQAS(_h2_config(ranking_strategy="evolutionary"))
+    qas = Supernet(_h2_config(ranking_strategy="evolutionary"))
 
     with pytest.raises(NotImplementedError, match="Evolutionary ranking"):
         qas.rank_architectures(lambda **_: 0.0)
@@ -386,10 +386,10 @@ def test_h2_hamiltonian_matches_supplementary_eq_19_terms():
     assert (0.045, ("X", "Y", "Y", "X")) in terms
 
 
-def test_classification_vqa_qas_smoke_runs_small_config():
+def test_classification_supernet_smoke_runs_small_config():
     config = _classification_config(supernet_steps=2, ranking_num=3, finetune_steps=2)
 
-    result = classification_vqa_qas(config)
+    result = classification_supernet(config)
 
     assert np.isfinite(result.best_score)
     assert result.best_circuit.n_qubits == 3
@@ -400,10 +400,10 @@ def test_classification_vqa_qas_smoke_runs_small_config():
     assert "best_supernet_validation_accuracy" in result.final_metrics
 
 
-def test_h2_vqe_qas_smoke_runs_small_config():
+def test_h2_vqe_supernet_smoke_runs_small_config():
     config = _h2_config(supernet_steps=2, ranking_num=3, finetune_steps=2)
 
-    result = h2_vqe_qas(config)
+    result = h2_vqe_supernet(config)
 
     assert np.isfinite(result.best_score)
     assert result.best_circuit.n_qubits == 4
@@ -414,8 +414,8 @@ def test_h2_vqe_qas_smoke_runs_small_config():
 
 
 def _parameter_shift_fixture():
-    qas = VQAQAS(
-        VQAQASConfig(
+    qas = Supernet(
+        SupernetConfig(
             n_qubits=2,
             layers=1,
             single_qubit_gates=("ry",),
@@ -449,7 +449,7 @@ def _parameter_shift_fixture():
 
 
 def test_parameter_shift_update_uses_qml_psr(monkeypatch):
-    import aicir.qas.VQA_QAS as vqa_qas_module
+    import aicir.qas.supernet as vqa_qas_module
 
     qas, active, loss_closure = _parameter_shift_fixture()
     captured = {}
