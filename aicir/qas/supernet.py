@@ -10,8 +10,8 @@ Information 2022, in an aicir-native form:
 5. fine-tune the selected ansatz with independent parameters.
 
 The differentiable path intentionally uses aicir ``Circuit`` objects,
-``TorchBackend``, and aicir gate matrix/state evolution helpers. No external
-quantum SDK is used.
+``GPUBackend`` (or ``NPUBackend`` on Ascend), and aicir gate matrix/state
+evolution helpers. No external quantum SDK is used.
 """
 
 from __future__ import annotations
@@ -27,7 +27,8 @@ from typing import Any, Callable, Mapping, Sequence
 import numpy as np
 import torch
 
-from ..channel.backends.torch_backend import TorchBackend
+from ..channel.backends.gpu_backend import GPUBackend
+from ..channel.backends.npu_backend import NPUBackend
 from ..channel.operators import Hamiltonian
 from ..core.circuit import Circuit, cx, hadamard, rx, ry, rz, rzz
 from ..core.gates import apply_gate_to_state, gate_to_matrix
@@ -193,6 +194,20 @@ class SupernetResult:
     config: SupernetConfig
 
 
+def _make_backend(device: str | torch.device | None) -> GPUBackend:
+    """Pick the torch-based backend matching the requested device.
+
+    Ascend NPU lacks complex64 kernels (matmul/kron/conj/...), so NPU devices
+    must use ``NPUBackend``, whose overrides decompose those ops into real
+    arithmetic. CPU/CUDA use the plain ``GPUBackend``. On a machine without a
+    real NPU, ``NPUBackend`` transparently falls back to CPU and behaves like
+    ``GPUBackend``.
+    """
+    if str(device).lower().startswith("npu"):
+        return NPUBackend(device=device)
+    return GPUBackend(device=device)
+
+
 def _as_torch_scalar(value: torch.Tensor | float, device: torch.device) -> torch.Tensor:
     if isinstance(value, torch.Tensor):
         return value.reshape(())
@@ -239,7 +254,7 @@ class Supernet:
         self._rng = random.Random(config.seed)
         self._np_rng = np.random.default_rng(config.seed)
 
-        self.backend = TorchBackend(device=config.device)
+        self.backend = _make_backend(config.device)
         self.device = self.backend._device
         # Index alphabet for the per-pair two-qubit choice: "none" first so the
         # absent option keeps index 0, then the configured two-qubit gates.

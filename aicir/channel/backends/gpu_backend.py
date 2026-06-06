@@ -1,12 +1,15 @@
 """
-aicir/channel/backends/torch_backend.py
+aicir/channel/backends/gpu_backend.py
 
-基于 PyTorch 的计算后端。
+基于 PyTorch 的 CPU/GPU 计算后端。
 
 特点：
 - 支持 GPU（CUDA）加速
 - 支持自动微分（参数化门、VQE 等变分算法需要）
 - 与深度学习工作流深度集成
+
+注：Ascend NPU 使用 ``npu_backend.NPUBackend``（继承自本类，覆写缺少
+complex64 内核的算子）。``TorchBackend`` 为本类的过时别名，保留向后兼容。
 """
 
 from __future__ import annotations
@@ -22,8 +25,8 @@ from .base import Backend
 _CDTYPE = torch.complex64
 
 
-class TorchBackend(Backend):
-    """基于 PyTorch 的计算后端，支持 GPU 加速与自动微分。"""
+class GPUBackend(Backend):
+    """基于 PyTorch 的 CPU/GPU 计算后端，支持 GPU 加速与自动微分。"""
 
     def __init__(self, dtype=None, device=None):
         """
@@ -41,7 +44,7 @@ class TorchBackend(Backend):
 
     @property
     def name(self) -> str:
-        return f"TorchBackend(dtype={self._dtype}, device={self._device})"
+        return f"GPUBackend(dtype={self._dtype}, device={self._device})"
 
     # ──────────────────────── 张量工厂 ──────────────────────────
 
@@ -148,3 +151,8 @@ class TorchBackend(Backend):
     def expectation_dm(self, rho, operator):
         val = torch.trace(torch.matmul(rho, operator))
         return torch.real(val)
+
+
+# Deprecated alias kept for backward compatibility. ``GPUBackend`` is the
+# canonical name; ``TorchBackend`` will be removed in a future release.
+TorchBackend = GPUBackend

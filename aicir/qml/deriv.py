@@ -13,7 +13,7 @@ import numpy as np
 def _as_scalar(value: Any, *, label: str) -> float:
     # Accept backend-native tensors in addition to numpy arrays and Python
     # scalars, so every gradient rule works regardless of which backend
-    # produced the objective value. In particular a NumpyBackend/TorchBackend/
+    # produced the objective value. In particular a NumpyBackend/GPUBackend/
     # NPUBackend objective may return a tensor that is autograd-tracked, lives
     # on an accelerator device (NPU/CUDA), and/or is complex. Detaching and
     # moving to host first avoids numpy conversion errors on such tensors.
@@ -86,7 +86,7 @@ def auto(
     gradient in a single backward pass.
 
     Because it relies on PyTorch autograd, it requires a Torch-family backend
-    (:class:`TorchBackend` or :class:`NPUBackend`) and an objective that stays
+    (:class:`GPUBackend` or :class:`NPUBackend`) and an objective that stays
     inside the autograd graph: ``fn`` must build/simulate the circuit using the
     backend and return the expectation value as a differentiable tensor — it
     must **not** call ``float(...)``, ``.item()``, ``.detach()`` or
@@ -100,7 +100,7 @@ def auto(
             are supported. The returned gradient has the same shape.
         backend: Torch-family backend used to pick the autograd dtype/device so
             the parameters live where the simulation runs (important for NPU /
-            CUDA). Defaults to a CPU ``TorchBackend``.
+            CUDA). Defaults to a CPU ``GPUBackend``.
 
     Returns:
         A NumPy array with the same shape as ``params``.
@@ -113,9 +113,9 @@ def auto(
         ) from exc
 
     if backend is None:
-        from aicir.channel.backends.torch_backend import TorchBackend
+        from aicir.channel.backends.gpu_backend import GPUBackend
 
-        backend = TorchBackend(device="cpu")
+        backend = GPUBackend(device="cpu")
 
     complex_dtype = getattr(backend, "_dtype", torch.complex64)
     real_dtype = torch.float64 if complex_dtype == torch.complex128 else torch.float32
@@ -1208,9 +1208,9 @@ def _auto_torch_device(
             "auto (automatic differentiation) requires PyTorch; install torch or use psr/fd/spsa."
         )
     if backend is None:
-        from aicir.channel.backends.torch_backend import TorchBackend
+        from aicir.channel.backends.gpu_backend import GPUBackend
 
-        backend = TorchBackend(device="cpu")
+        backend = GPUBackend(device="cpu")
 
     real_dtype = _real_torch_dtype_from_backend(backend, torch)
     device = getattr(backend, "_device", None)
@@ -2122,7 +2122,7 @@ def dqng(
 # ───────────────────────── gradient-free optimization ─────────────────────────
 
 def _is_torch_family_backend(backend: Any) -> bool:
-    return backend is not None and type(backend).__name__ in {"TorchBackend", "NPUBackend"}
+    return backend is not None and type(backend).__name__ in {"GPUBackend", "TorchBackend", "NPUBackend"}
 
 
 def _real_torch_dtype_from_backend(backend: Any, torch):

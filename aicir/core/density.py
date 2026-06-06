@@ -27,10 +27,10 @@ class DensityMatrix:
 
     示例::
 
-        from aicir.channel.backends import TorchBackend
+        from aicir.channel.backends import GPUBackend
         from aicir.core import StateVector, DensityMatrix
 
-        bk = TorchBackend()
+        bk = GPUBackend()
         sv  = StateVector.zero_state(2, bk)
         rho = sv.to_density_matrix()
         print("purity:", rho.purity())          # 纯态 → 1.0
