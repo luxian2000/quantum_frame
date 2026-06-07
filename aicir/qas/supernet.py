@@ -1438,6 +1438,7 @@ def supernet_qas(
         )
     if two_qubit_pairs is None:
         two_qubit_pairs = _default_two_qubit_pairs(int(n_qubits))
+    task = config_overrides.pop("task", "vqe")
 
     config = SupernetConfig(
         n_qubits=int(n_qubits),
@@ -1453,7 +1454,7 @@ def supernet_qas(
         finetune_learning_rate=finetune_learning_rate,
         seed=seed,
         device=device,
-        task="vqe",
+        task=task,
         use_parameter_shift=use_parameter_shift,
         **config_overrides,
     )
