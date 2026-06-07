@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import torch
 
+from aicir.channel.operators import Hamiltonian
 from aicir.channel.backends.gpu_backend import TorchBackend
 from aicir.qas.supernet import h2_hamiltonian, prepare_classification_dataset
 from aicir.qas import (
@@ -124,6 +125,46 @@ def test_supernet_qas_accepts_task_override_without_duplicate_config_key(monkeyp
     )
 
     assert task == "vqe"
+
+
+def test_hamiltonian_expectation_matches_dense_matrix_value_and_gradient():
+    qas = Supernet(
+        SupernetConfig(
+            n_qubits=2,
+            layers=1,
+            two_qubit_pairs=(),
+            device="cpu",
+            task="vqe",
+        )
+    )
+    hamiltonian = Hamiltonian(
+        n_qubits=2,
+        terms=[
+            ("ZI", 0.2),
+            ("XX", -0.7),
+            ("YZ", 0.3),
+        ],
+    )
+    state = torch.tensor(
+        [0.3 + 0.1j, -0.2 + 0.4j, 0.5 - 0.1j, -0.6 + 0.2j],
+        dtype=torch.complex64,
+        requires_grad=True,
+    )
+    state = state / torch.linalg.vector_norm(state)
+    state.retain_grad()
+
+    termwise = qas._hamiltonian_expectation(state, hamiltonian)
+    dense = qas.backend.expectation_sv(state, hamiltonian.to_matrix(qas.backend))
+
+    assert torch.allclose(termwise, dense, atol=1e-6)
+    assert qas._hamiltonian_cache == {}
+
+    termwise.backward(retain_graph=True)
+    termwise_grad = state.grad.detach().clone()
+    state.grad.zero_()
+    dense.backward()
+
+    assert torch.allclose(termwise_grad, state.grad, atol=1e-6)
 
 
 def test_identity_single_qubit_gate_emits_no_gate_and_no_parameter():
