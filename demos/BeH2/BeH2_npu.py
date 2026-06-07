@@ -390,6 +390,15 @@ def _write_report(
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _error_summary(record: dict[str, Any]) -> str:
+    text = str(record.get("traceback") or record.get("worker_stdout") or "")
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            return line[:220]
+    return "no error details"
+
+
 def _build_worker_command(
     args: argparse.Namespace,
     *,
@@ -522,8 +531,11 @@ def _run_sweep(args: argparse.Namespace) -> int:
                         "seed": args.seed,
                         "traceback": "worker exited without writing result JSON\n" + (output or ""),
                     }
+                record["worker_returncode"] = process.returncode
                 records.append(record)
-                idle_devices.append(job["device"])
+                device_lost = not result_path.exists() or (process.returncode is not None and process.returncode < 0)
+                if not device_lost:
+                    idle_devices.append(job["device"])
                 if record.get("status") == "ok":
                     print(
                         f"[done]  {job['run_id']} device={job['device']} "
@@ -533,8 +545,30 @@ def _run_sweep(args: argparse.Namespace) -> int:
                 else:
                     print(
                         f"[error] {job['run_id']} device={job['device']} "
-                        f"layers={job['layers']} supernet_num={job['supernet_num']}"
+                        f"layers={job['layers']} supernet_num={job['supernet_num']} "
+                        f"reason={_error_summary(record)}"
                     )
+                    if device_lost:
+                        print(f"[disable] device={job['device']} worker was killed or wrote no JSON")
+
+            if pending and not running and not idle_devices:
+                for job in pending:
+                    records.append(
+                        {
+                            "status": "error",
+                            "run_id": job["run_id"],
+                            "device": "unassigned",
+                            "layers": job["layers"],
+                            "supernet_num": job["supernet_num"],
+                            "seed": args.seed,
+                            "traceback": "no devices left after worker failures",
+                        }
+                    )
+                    print(
+                        f"[skip]  {job['run_id']} layers={job['layers']} "
+                        f"supernet_num={job['supernet_num']} reason=no devices left"
+                    )
+                pending.clear()
 
     records.sort(key=lambda record: str(record.get("run_id", "")))
     elapsed = time.time() - start
