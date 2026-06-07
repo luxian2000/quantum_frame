@@ -209,6 +209,70 @@ H = -0.042 + 0.178(Z0 + Z1) - 0.243(Z2 + Z3)
 
 默认搜索 `RY`/`RZ` 单量子比特门布局，以及链式连接对 `(0, 1)`、`(1, 2)`、`(2, 3)` 上的 CNOT/无 CNOT 选择。结果会报告 QAS 排序阶段最优能量、微调后能量、固定硬件高效 VQE baseline、选中线路和 CNOT 数量。当 `layers=3` 时，逻辑搜索空间大小为 `128^3`。
 
+### 3.5 封装入口 `supernet_qas`（任意哈密顿量基态搜索）
+
+对任意分子/自定义哈密顿量做 VQE ansatz 搜索时，无需手工拼装 `SupernetConfig`。封装函数 `supernet_qas` 把最常调节的几个旋钮直接做成参数，其余字段使用经过验证的 VQE 默认值；`n_qubits` 和 `two_qubit_pairs` 会自动从哈密顿量推断。
+
+> 命名说明：函数名为 `supernet_qas`（区别于子模块 `aicir.qas.supernet`，避免名称冲突），可直接从包层级导入：`from aicir.qas import supernet_qas`。
+
+函数签名：
+
+```python
+from aicir.qas import supernet_qas
+
+result = supernet_qas(
+    hamiltonian,            # 必填；n_qubits 从 hamiltonian.n_qubits 推断
+    layers=6,               # 主要旋钮 1：ansatz 深度 L
+    supernet_num=5,         # 主要旋钮 2：超网络数量 W
+    supernet_steps=250,     # 主要旋钮 3：超网络优化步数
+    finetune_steps=250,     # 主要旋钮 4：选中架构微调步数
+)
+```
+
+| 参数                       | 默认值                  | 说明                                                                     |
+| -------------------------- | ----------------------- | ------------------------------------------------------------------------ |
+| `hamiltonian`            | 必填                    | 目标哈密顿量；需暴露 `n_qubits`，否则用 `n_qubits=` 显式传入。         |
+| `layers`                 | `6`                   | ansatz 深度 `L`。                                                       |
+| `supernet_num`           | `5`                   | 权重共享超网络数量 `W`。                                                |
+| `supernet_steps`         | `250`                 | 一阶段超网络优化步数。                                                    |
+| `finetune_steps`         | `250`                 | 对选中架构独立微调的步数（最终能量的主要来源）。                          |
+| `n_qubits`               | `None`                | 量子比特数；`None` 时从 `hamiltonian.n_qubits` 推断。                  |
+| `ranking_num`            | `80`                  | 排序阶段采样的候选架构数量。                                              |
+| `single_qubit_gates`     | `("i","h","rx","ry","rz")` | 单量子比特门池。                                                     |
+| `two_qubit_gates`        | `("cx","rzz")`        | 双量子比特门池（`rzz` 为带参纠缠门）。                                  |
+| `two_qubit_pairs`        | `None`                | 纠缠连接；`None` 时自动取最近邻 + 次近邻（线性链上 `1 <= j-i <= 2`）。 |
+| `learning_rate`          | `0.1`                 | 超网络阶段 Adam 学习率。                                                  |
+| `finetune_learning_rate` | `0.05`                | 微调阶段 Adam 学习率。                                                    |
+| `seed`                   | `2`                   | 随机种子。                                                                |
+| `device`                 | `"cpu"`               | Torch 设备字符串，如 `"cpu"`、`"cuda"`、`"npu:0"`。                  |
+| `use_parameter_shift`    | `False`               | 是否改用参数移位梯度（默认使用 autograd）。                               |
+| `**config_overrides`     | —                       | 其余任意 `SupernetConfig` 字段（如 `ranking_strategy`）。              |
+
+返回值与 `train_supernet` 一致，为 `SupernetResult`：`final_metrics["fine_tuned_energy"]` 为微调后能量，`final_metrics["baseline_vqe_energy"]` 为固定 ansatz 的 VQE baseline，`best_circuit` 为选中并微调后的线路。
+
+示例（自定义哈密顿量，CPU）：
+
+```python
+from aicir.channel.operators import Hamiltonian
+from aicir.qas import supernet_qas
+
+ham = Hamiltonian(n_qubits=6, terms=[("IIIIII", -4.524), ("IIIIIZ", 0.515), ...])
+
+result = supernet_qas(ham, layers=6, supernet_num=5,
+                      supernet_steps=250, finetune_steps=250)
+print(result.final_metrics["fine_tuned_energy"])
+print(result.final_metrics["baseline_vqe_energy"])
+print(result.best_circuit.show())
+```
+
+在 Ascend NPU 上只需改一个 `device` 参数（其余封装逻辑不变）：
+
+```python
+result = supernet_qas(ham, layers=6, supernet_num=5,
+                      supernet_steps=250, finetune_steps=250,
+                      device="npu:0")
+```
+
 ## 4. PPO_RB：基于真正近端策略优化的量子架构搜索
 
 `PPO_RB` 的输入是目标密度矩阵，输出是策略参数 `theta` 与搜索得到的 `Circuit`。
