@@ -1,4 +1,5 @@
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -13,6 +14,7 @@ from aicir.qas import (
     SupernetConfig,
     classification_supernet,
     h2_vqe_supernet,
+    supernet_qas,
 )
 
 
@@ -103,6 +105,25 @@ def test_default_gate_set_search_space_uses_full_alphabet():
     )
 
     assert qas.layer_search_space_size() == (5**3) * (3**3)
+
+
+def test_supernet_qas_accepts_task_override_without_duplicate_config_key(monkeypatch):
+    def fake_train(self, hamiltonian=None, dataset=None):
+        return self.config.task
+
+    monkeypatch.setattr(Supernet, "train", fake_train)
+
+    task = supernet_qas(
+        SimpleNamespace(n_qubits=1),
+        layers=1,
+        two_qubit_pairs=(),
+        supernet_steps=0,
+        ranking_num=1,
+        finetune_steps=0,
+        task="vqe",
+    )
+
+    assert task == "vqe"
 
 
 def test_identity_single_qubit_gate_emits_no_gate_and_no_parameter():
