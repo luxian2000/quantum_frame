@@ -263,6 +263,7 @@ class Supernet:
         self._two_qubit_layouts = self._build_two_qubit_layouts()
         self._readout_index_cache: dict[int, torch.Tensor] = {}
         self._hamiltonian_cache: dict[int, torch.Tensor] = {}
+        self._pauli_expectation_cache: dict[int, list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, float]]] = {}
 
         self.shared_parameters: dict[ParameterKey, torch.nn.Parameter] = {}
         self._supernet_parameter_lists: list[list[torch.nn.Parameter]] = []
@@ -588,9 +589,78 @@ class Supernet:
         self._hamiltonian_cache[cache_key] = matrix
         return matrix
 
+    def _pauli_term_cache(
+        self,
+        hamiltonian: Hamiltonian,
+    ) -> list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, float]]:
+        cache_key = id(hamiltonian)
+        if cache_key in self._pauli_expectation_cache:
+            return self._pauli_expectation_cache[cache_key]
+
+        n_qubits = int(hamiltonian.n_qubits)
+        dim = 1 << n_qubits
+        cached_terms: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, float]] = []
+        for term in hamiltonian._terms:
+            mapped_indices: list[int] = []
+            phase_real: list[float] = []
+            phase_imag: list[float] = []
+            labels = term.qubit_labels
+            for index in range(dim):
+                mapped = index
+                phase = 1.0 + 0.0j
+                for qubit, label in enumerate(labels):
+                    if label == "I":
+                        continue
+                    bit_shift = n_qubits - qubit - 1
+                    bit = (index >> bit_shift) & 1
+                    if label == "X":
+                        mapped ^= 1 << bit_shift
+                    elif label == "Y":
+                        mapped ^= 1 << bit_shift
+                        phase *= 1.0j if bit == 0 else -1.0j
+                    elif label == "Z":
+                        if bit:
+                            phase *= -1.0
+                mapped_indices.append(mapped)
+                phase_real.append(float(phase.real))
+                phase_imag.append(float(phase.imag))
+
+            coefficient = complex(term.coefficient)
+            cached_terms.append(
+                (
+                    torch.tensor(mapped_indices, dtype=torch.long, device=self.device),
+                    torch.tensor(phase_real, dtype=torch.float32, device=self.device),
+                    torch.tensor(phase_imag, dtype=torch.float32, device=self.device),
+                    float(coefficient.real),
+                    float(coefficient.imag),
+                )
+            )
+        self._pauli_expectation_cache[cache_key] = cached_terms
+        return cached_terms
+
+    def _hamiltonian_expectation(self, state: torch.Tensor, hamiltonian: Hamiltonian | np.ndarray | torch.Tensor | None) -> torch.Tensor:
+        if hamiltonian is None:
+            hamiltonian = h2_hamiltonian()
+        if isinstance(hamiltonian, Hamiltonian):
+            state_real = torch.real(state)
+            state_imag = torch.imag(state)
+            energy = torch.zeros((), dtype=torch.float32, device=self.device)
+            for mapped_indices, phase_real, phase_imag, coefficient_real, coefficient_imag in self._pauli_term_cache(hamiltonian):
+                mapped_real = state_real.index_select(0, mapped_indices)
+                mapped_imag = state_imag.index_select(0, mapped_indices)
+                overlap_real = mapped_real * state_real + mapped_imag * state_imag
+                overlap_imag = mapped_real * state_imag - mapped_imag * state_real
+                phased_real = overlap_real * phase_real - overlap_imag * phase_imag
+                phased_imag = overlap_real * phase_imag + overlap_imag * phase_real
+                term_real = phased_real.sum()
+                term_imag = phased_imag.sum()
+                energy = energy + coefficient_real * term_real - coefficient_imag * term_imag
+            return energy
+        return self.backend.expectation_sv(state, self._hamiltonian_matrix(hamiltonian))
+
     def _h2_energy(self, circuit: Circuit, hamiltonian: Hamiltonian | np.ndarray | torch.Tensor | None) -> torch.Tensor:
         state = self.simulate_state(circuit)
-        return self.backend.expectation_sv(state, self._hamiltonian_matrix(hamiltonian))
+        return self._hamiltonian_expectation(state, hamiltonian)
 
     def _external_objective_loss(
         self,
@@ -1046,7 +1116,6 @@ class Supernet:
         # Conventional fixed VQE reference (Fig. 3a): every configured rotation
         # type on every qubit, then one fixed CNOT entangler per pair. The gate
         # specs carry arity, so multi-/zero-parameter gates are sized correctly.
-        hamiltonian_matrix = self._hamiltonian_matrix(hamiltonian)
         single_types = tuple(dict.fromkeys(self.config.single_qubit_gates))
         if self.config.two_qubit_gates:
             entangler = "cx" if "cx" in self.config.two_qubit_gates else self.config.two_qubit_gates[0]
@@ -1084,7 +1153,7 @@ class Supernet:
                         if gate is not None:
                             gates.append(gate)
             state = self._simulate_gates(gates)
-            return self.backend.expectation_sv(state, hamiltonian_matrix)
+            return self._hamiltonian_expectation(state, hamiltonian)
 
         for _ in range(steps):
             loss = energy_closure()
