@@ -54,6 +54,7 @@ try:
         SupernetResult,
         classification_supernet,
         h2_vqe_supernet,
+        supernet_qas,
         train_supernet,
     )
 except ModuleNotFoundError as exc:
@@ -84,6 +85,7 @@ else:
             "ppr_dql_state_to_circuit",
             "ppo_rb_qas",
             "run",
+            "supernet_qas",
             "train_crlqas",
             "train_ppr_dql",
             "train_supernet",

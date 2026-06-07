@@ -123,14 +123,15 @@ def main(argv: list[str] | None = None) -> None:
         for line in _device_report(args.device):
             log(line)
 
-        # Import the shared H2O helpers (Hamiltonian, exact energy, search, IO).
+        # Import the shared H2O helpers (Hamiltonian, exact energy, IO) and the
+        # encapsulated supernet entry point.
         from demos.H2O.H2O import (
             build_h2o_hamiltonian,
             exact_ground_energy,
-            search_ground_state_qas,
             circuit_to_python_source,
             H2O_TWO_QUBIT_PAIRS,
         )
+        from aicir.qas import supernet_qas
         from aicir.core.io.qasm import save_circuit_qasm3
 
         hamiltonian = build_h2o_hamiltonian()
@@ -153,14 +154,14 @@ def main(argv: list[str] | None = None) -> None:
         log("running supernet search ... (this can take several minutes for deep L)")
 
         start = time.time()
-        result = search_ground_state_qas(
+        result = supernet_qas(
             hamiltonian,
-            device=args.device,
             layers=args.layers,
             supernet_num=args.supernet_num,
             supernet_steps=args.supernet_steps,
-            ranking_num=args.ranking_num,
             finetune_steps=args.finetune_steps,
+            ranking_num=args.ranking_num,
+            device=args.device,
             seed=args.seed,
         )
         elapsed = time.time() - start

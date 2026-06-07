@@ -1360,6 +1360,106 @@ def h2_vqe_supernet(config: SupernetConfig | None = None) -> SupernetResult:
     return train_supernet(None, config=config, hamiltonian=h2_hamiltonian())
 
 
+def _default_two_qubit_pairs(n_qubits: int) -> tuple[tuple[int, int], ...]:
+    """Nearest- + next-nearest-neighbour pairs on a linear chain of ``n_qubits``.
+
+    A reasonable general-purpose entangler connectivity: every pair ``(i, j)``
+    with ``1 <= j - i <= 2``. This matches the connectivity used by the LiH/H2O
+    VQE demos.
+    """
+    return tuple(
+        (i, j)
+        for i in range(n_qubits)
+        for j in range(i + 1, n_qubits)
+        if j - i <= 2
+    )
+
+
+def supernet_qas(
+    hamiltonian: Any,
+    layers: int = 6,
+    supernet_num: int = 5,
+    supernet_steps: int = 250,
+    finetune_steps: int = 250,
+    *,
+    n_qubits: int | None = None,
+    ranking_num: int = 80,
+    single_qubit_gates: tuple[str, ...] = ("i", "h", "rx", "ry", "rz"),
+    two_qubit_gates: tuple[str, ...] = ("cx", "rzz"),
+    two_qubit_pairs: tuple[tuple[int, int], ...] | None = None,
+    learning_rate: float = 0.1,
+    finetune_learning_rate: float = 0.05,
+    seed: int = 2,
+    device: str = "cpu",
+    use_parameter_shift: bool = False,
+    **config_overrides: Any,
+) -> SupernetResult:
+    """Search and fine-tune a ground-state-preparing ansatz for ``hamiltonian``.
+
+    High-level, VQE-focused wrapper over :class:`Supernet` that exposes the knobs
+    you usually tune directly, so callers do not have to assemble a full
+    :class:`SupernetConfig`. It builds the weight-shared supernet, optimises and
+    ranks the sampled ansatze, then fine-tunes the best one.
+
+    The five primary parameters (``hamiltonian``, ``layers``, ``supernet_num``,
+    ``supernet_steps``, ``finetune_steps``) are the levers usually swept; the rest
+    have sensible VQE defaults. ``n_qubits`` and ``two_qubit_pairs`` are derived
+    from the Hamiltonian when omitted. Any other :class:`SupernetConfig` field can
+    still be set through ``config_overrides``.
+
+    Args:
+        hamiltonian: Target Hamiltonian (must expose ``n_qubits`` or pass it).
+        layers: Ansatz depth ``L``.
+        supernet_num: Number of weight-shared supernets ``W``.
+        supernet_steps: Supernet optimisation steps.
+        finetune_steps: Fine-tuning steps for the selected circuit.
+        n_qubits: Qubit count; inferred from ``hamiltonian.n_qubits`` if ``None``.
+        ranking_num: Number of sampled candidate ansatze to rank.
+        single_qubit_gates: Single-qubit gate pool searched per site.
+        two_qubit_gates: Two-qubit gate pool (e.g. ``cx``/``rzz``).
+        two_qubit_pairs: Entangler connectivity; nearest + next-nearest by default.
+        learning_rate: Adam learning rate for the supernet phase.
+        finetune_learning_rate: Adam learning rate for fine-tuning.
+        seed: Random seed.
+        device: Torch device string (``"cpu"``, ``"cuda"``, ``"npu:0"`` ...).
+        use_parameter_shift: Use parameter-shift gradients instead of autograd.
+        **config_overrides: Any remaining :class:`SupernetConfig` field.
+
+    Returns:
+        SupernetResult: ``final_metrics["fine_tuned_energy"]`` and
+        ``final_metrics["baseline_vqe_energy"]`` hold the key energies, and
+        ``best_circuit`` is the selected, fine-tuned ansatz.
+    """
+    if n_qubits is None:
+        n_qubits = getattr(hamiltonian, "n_qubits", None)
+    if n_qubits is None:
+        raise ValueError(
+            "n_qubits could not be inferred from the Hamiltonian; pass n_qubits explicitly."
+        )
+    if two_qubit_pairs is None:
+        two_qubit_pairs = _default_two_qubit_pairs(int(n_qubits))
+
+    config = SupernetConfig(
+        n_qubits=int(n_qubits),
+        layers=layers,
+        single_qubit_gates=single_qubit_gates,
+        two_qubit_gates=two_qubit_gates,
+        two_qubit_pairs=two_qubit_pairs,
+        supernet_num=supernet_num,
+        supernet_steps=supernet_steps,
+        ranking_num=ranking_num,
+        finetune_steps=finetune_steps,
+        learning_rate=learning_rate,
+        finetune_learning_rate=finetune_learning_rate,
+        seed=seed,
+        device=device,
+        task="vqe",
+        use_parameter_shift=use_parameter_shift,
+        **config_overrides,
+    )
+    return Supernet(config).train(hamiltonian=hamiltonian)
+
+
 __all__ = [
     "SupernetConfig",
     "LayerArchitecture",
@@ -1369,4 +1469,5 @@ __all__ = [
     "train_supernet",
     "classification_supernet",
     "h2_vqe_supernet",
+    "supernet_qas",
 ]
