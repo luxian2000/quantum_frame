@@ -1,7 +1,8 @@
 # aicir demos
 
 These scripts demonstrate the `aicir.visual` module for circuits, state vectors,
-density matrices, QAS/metrics results, and a small VQE workflow.
+density matrices, QAS/metrics results, small VQE workflows, and QUBO-to-QAOA
+integration.
 
 Run from the repository root:
 
@@ -15,6 +16,7 @@ python -m demos.visual_circuit_demo
 python -m demos.visual_state_demo
 python -m demos.visual_density_demo
 python -m demos.visual_qas_demo
+python demos/qubo_qaoa_demo.py
 ```
 
 H2 VQE with shot-based Pauli-term energy estimation:
@@ -40,6 +42,13 @@ Construct and inspect a PySCF/Qiskit Nature LiH active-space Hamiltonian:
 
 ```bash
 python -m demos.LiH
+```
+
+Build a small QUBO model, run the dense-matrix BasicQAOA helper, and decode the
+most likely QUBO assignment:
+
+```bash
+python demos/qubo_qaoa_demo.py
 ```
 
 By default, figures are saved to:
