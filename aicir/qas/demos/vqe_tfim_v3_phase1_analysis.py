@@ -48,26 +48,31 @@ def _load_rows(input_dir: Path, scales: tuple[int, ...]) -> dict[int, list[EnumR
     data: dict[int, list[EnumRow]] = {}
     for n_qubits in scales:
         path = input_dir / f"phase1_uniform_enum_{n_qubits}q.csv"
-        if not path.exists():
-            raise FileNotFoundError(f"Missing enumeration CSV: {path}")
+        paths = [path] if path.exists() else sorted(input_dir.glob(f"phase1_uniform_enum_{n_qubits}q_shard*of*.csv"))
+        if not paths:
+            paths = sorted(input_dir.glob(f"phase1_uniform_enum_{n_qubits}q_shard*of*.partial.csv"))
+        if not paths:
+            raise FileNotFoundError(f"Missing enumeration CSV or shard CSVs for {n_qubits}q in {input_dir}")
         rows: list[EnumRow] = []
-        with path.open("r", newline="", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
-            for item in reader:
-                family = str(item.get("family") or "").strip()
-                if family in {"", "HEA-mask"}:
-                    family = _family_from_name(str(item["name"]))
-                rows.append(
-                    EnumRow(
-                        n_qubits=n_qubits,
-                        rank=int(item["rank"]),
-                        name=str(item["name"]),
-                        family=family,
-                        energy=float(item["energy"]),
-                        delta_ref=float(item["delta_ref"]),
+        for item_path in paths:
+            with item_path.open("r", newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                for item in reader:
+                    family = str(item.get("family") or "").strip()
+                    if family in {"", "HEA-mask"}:
+                        family = _family_from_name(str(item["name"]))
+                    rows.append(
+                        EnumRow(
+                            n_qubits=n_qubits,
+                            rank=int(item.get("rank") or item.get("candidate_index") or len(rows) + 1),
+                            name=str(item["name"]),
+                            family=family,
+                            energy=float(item["energy"]),
+                            delta_ref=float(item["delta_ref"]),
+                        )
                     )
-                )
-        data[n_qubits] = sorted(rows, key=lambda row: (row.energy, row.name))
+        deduped = {row.name: row for row in sorted(rows, key=lambda row: (row.energy, row.name))}
+        data[n_qubits] = sorted(deduped.values(), key=lambda row: (row.energy, row.name))
     return data
 
 
@@ -145,6 +150,7 @@ def _format_optional(value: float | None) -> str:
 
 def analyze(input_dir: Path, scales: tuple[int, ...], output_dir: Path) -> dict[str, object]:
     data = _load_rows(input_dir, scales)
+    _write_merged_csvs(output_dir, data)
     pairs = list(zip(scales, scales[1:]))
     migration = []
     for left_n, right_n in pairs:
@@ -199,6 +205,28 @@ def analyze(input_dir: Path, scales: tuple[int, ...], output_dir: Path) -> dict[
         )
     (output_dir / "phase1_migration_analysis.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return report
+
+
+def _write_merged_csvs(output_dir: Path, data: dict[int, list[EnumRow]]) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for n_qubits, rows in data.items():
+        path = output_dir / f"phase1_uniform_enum_{n_qubits}q.csv"
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["rank", "name", "family", "energy", "delta_ref"],
+            )
+            writer.writeheader()
+            for rank, row in enumerate(rows, start=1):
+                writer.writerow(
+                    {
+                        "rank": rank,
+                        "name": row.name,
+                        "family": row.family,
+                        "energy": f"{row.energy:.12f}",
+                        "delta_ref": f"{row.delta_ref:.12f}",
+                    }
+                )
 
 
 def main() -> None:
