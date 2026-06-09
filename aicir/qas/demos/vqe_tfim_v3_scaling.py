@@ -158,6 +158,17 @@ def main() -> None:
                 checkpoint_path=checkpoint_path,
                 backend=backend,
             )
+            report.metadata.update(
+                {
+                    "requested_backend": args.backend,
+                    "requested_dtype": args.dtype,
+                    "label_provenance": (
+                        "screening_proxy"
+                        if int(args.fair_n_starts) <= 1 and "complex64" in str(report.metadata.get("backend_dtype", ""))
+                        else "calibration_or_final_candidate"
+                    ),
+                }
+            )
             lines = report.summary_lines(top_k=args.top_k)
             print("\n".join(lines), flush=True)
             _write_text(prefix.with_suffix(".md"), lines)
