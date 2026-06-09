@@ -3,10 +3,12 @@ import unittest
 
 from aicir.qas import (
     HEAMask,
+    THETA_INIT_RANDOM_UNIFORM_PI,
     adaptive_fair_n_starts,
     analyze_hamiltonian,
     architecture_from_hea_mask,
     derive_priority_seed_masks,
+    diagnose_theta_randomness,
     evaluate_h2_energy,
     exact_ground_energy,
     get_structure_family,
@@ -26,7 +28,12 @@ from aicir.qas import (
     run_vqe_ising4_demo,
     resolve_qas_backend,
     stratified_stage1_pool,
+    tfim_open_chain_free_fermion_ground_energy,
     update_beam,
+    validate_tfim_reference_alignment,
+    v3_final_maxfev,
+    v3_screening_maxfev,
+    v3_top_k,
 )
 from aicir.qas.task_evaluation import parameter_count
 
@@ -56,10 +63,39 @@ class TestVQEHEADemo(unittest.TestCase):
 
         self.assertTrue(math.isfinite(energy))
 
+    def test_v3_protocol_helpers_freeze_budget_and_top_k_rules(self):
+        self.assertEqual(v3_screening_maxfev(3), 500)
+        self.assertEqual(v3_screening_maxfev(10), 800)
+        self.assertEqual(v3_final_maxfev(3), 1000)
+        self.assertEqual(v3_final_maxfev(10), 2000)
+        self.assertEqual(v3_top_k(0), 0)
+        self.assertEqual(v3_top_k(8), 8)
+        self.assertEqual(v3_top_k(108), 11)
+
+    def test_theta_randomness_diagnostic_uses_independent_uniform_pi_starts(self):
+        architecture = architecture_from_hea_mask(HEAMask(n_qubits=4, layers=1, rotation_block="ry"))
+        report = diagnose_theta_randomness(
+            architecture,
+            ising4_demo_problem(),
+            n_trials=3,
+            seed=101,
+            maxfev=2,
+            init_mode=THETA_INIT_RANDOM_UNIFORM_PI,
+        )
+
+        self.assertEqual(report["theta_init_mode"], THETA_INIT_RANDOM_UNIFORM_PI)
+        self.assertTrue(report["passes_randomness_guard"])
+        self.assertGreater(report["init_l2_std"], 0.0)
+
     def test_resolve_qas_backend_defaults_to_numpy(self):
         backend = resolve_qas_backend()
 
         self.assertIn("NumpyBackend", backend.name)
+
+    def test_resolve_qas_backend_supports_complex128_final_dtype(self):
+        backend = resolve_qas_backend(dtype="complex128")
+
+        self.assertIn("complex128", backend.name)
 
     def test_vqe_hea_demo_runs_small_pipeline(self):
         report = run_vqe_hea_demo(candidate_limit=8, stage1_keep_top=4, sa_steps=2, seed=7)
@@ -77,6 +113,25 @@ class TestVQEHEADemo(unittest.TestCase):
 
         self.assertEqual(problem.n_qubits, 4)
         self.assertAlmostEqual(problem.reference_energy, exact_ground_energy(problem.hamiltonian), places=10)
+
+    def test_tfim_reference_alignment_matches_dense_for_v3_scales(self):
+        report = validate_tfim_reference_alignment(scales=(4, 6, 8))
+
+        self.assertTrue(report.passed)
+        self.assertTrue(all(row.abs_diff < 1e-9 for row in report.rows))
+
+    def test_tfim_open_chain_free_fermion_matches_ising4_reference(self):
+        problem = ising4_demo_problem()
+
+        self.assertAlmostEqual(
+            tfim_open_chain_free_fermion_ground_energy(problem.n_qubits),
+            problem.reference_energy,
+            places=10,
+        )
+
+    def test_tfim_reference_alignment_rejects_pbc_without_parity_sector(self):
+        with self.assertRaises(NotImplementedError):
+            validate_tfim_reference_alignment(scales=(4,), periodic=True)
 
     def test_hamiltonian_analyzer_biases_ising_mutation_rules(self):
         import numpy as np

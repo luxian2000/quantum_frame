@@ -59,17 +59,22 @@ def main() -> None:
     parser.add_argument("--b2-evals-per-param", type=int, default=20)
     parser.add_argument("--b2-max-evals", type=int, default=600)
     parser.add_argument("--fair-n-starts", type=int, default=1)
-    parser.add_argument("--fair-evals-per-param", type=int, default=30)
-    parser.add_argument("--fair-max-evals", type=int, default=3000)
+    parser.add_argument("--fair-evals-per-param", type=int, default=200)
+    parser.add_argument("--fair-max-evals", type=int, default=1000000)
     parser.add_argument("--top-k", type=int, default=12)
-    parser.add_argument("--init-mode", choices=("zero", "random", "zero_then_random"), default="zero_then_random")
+    parser.add_argument(
+        "--init-mode",
+        choices=("random_uniform_pi", "zero", "random", "zero_then_random"),
+        default="random_uniform_pi",
+    )
     parser.add_argument("--init-scale", type=float, default=3.141592653589793)
     parser.add_argument("--backend", choices=("numpy", "cpu", "npu", "torch"), default=None)
+    parser.add_argument("--dtype", choices=("complex128", "complex64"), default="complex128")
     args = parser.parse_args()
     priority_layers = _parse_int_list(args.priority_layers)
     layer_quota = _parse_layer_quota(args.layer_quota)
 
-    backend = resolve_qas_backend(args.backend)
+    backend = resolve_qas_backend(args.backend, dtype=args.dtype)
     print(f"backend: {backend.name}", flush=True)
     print(
         "config: "
@@ -77,7 +82,8 @@ def main() -> None:
         f"candidate_limit={args.candidate_limit}, only_name={args.only_name}, "
         f"priority_layers={priority_layers}, layer_quota={layer_quota}, repeats={args.repeats}, "
         f"fair_n_starts={args.fair_n_starts}, fair_evals_per_param={args.fair_evals_per_param}, "
-        f"fair_max_evals={args.fair_max_evals}, init_mode={args.init_mode}, init_scale={args.init_scale}",
+        f"fair_max_evals={args.fair_max_evals}, init_mode={args.init_mode}, init_scale={args.init_scale}, "
+        f"dtype={args.dtype}",
         flush=True,
     )
     if args.mode == "priority":
@@ -104,8 +110,6 @@ def main() -> None:
             fair_max_evaluations=args.fair_max_evals,
             init_mode=args.init_mode,
             init_scale=args.init_scale,
-            priority_layers=priority_layers,
-            layer_quota=layer_quota,
             backend=backend,
         )
         print("\n".join(report.summary_lines(top_k=args.top_k)), flush=True)
