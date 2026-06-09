@@ -3,23 +3,30 @@ set -euo pipefail
 
 CARD_COUNT="${1:-1}"
 OUTPUT_DIR="${2:-outputs/vqe_tfim_v3_scaling_npu_full}"
+DEVICE_LIST="${3:-}"
 
 export KMP_DUPLICATE_LIB_OK="${KMP_DUPLICATE_LIB_OK:-TRUE}"
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
 
 mkdir -p "$OUTPUT_DIR"
 
-mapfile -t DETECTED_DEVICES < <(npu-smi info 2>/dev/null | awk '/910B/{print $2}' | head -n "$CARD_COUNT")
-if [ "${#DETECTED_DEVICES[@]}" -lt "$CARD_COUNT" ]; then
-  DETECTED_DEVICES=()
+DETECTED_DEVICES=()
+if [ -n "$DEVICE_LIST" ]; then
+  IFS=',' read -r -a DETECTED_DEVICES <<< "$DEVICE_LIST"
+else
   for ((index=0; index<CARD_COUNT; index++)); do
     DETECTED_DEVICES+=("$index")
   done
+fi
+if [ "${#DETECTED_DEVICES[@]}" -lt "$CARD_COUNT" ]; then
+  echo "DEVICE_LIST has fewer entries than CARD_COUNT: $DEVICE_LIST" >&2
+  exit 2
 fi
 
 echo "VQE-QAS v3 NPU full run"
 echo "card_count=$CARD_COUNT"
 echo "devices=${DETECTED_DEVICES[*]}"
+echo "device_numbering=logical_ASCEND_RT_VISIBLE_DEVICES"
 echo "output_dir=$OUTPUT_DIR"
 
 python aicir/qas/demos/vqe_tfim_v3_scaling.py \
