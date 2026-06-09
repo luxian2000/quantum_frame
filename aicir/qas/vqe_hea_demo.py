@@ -96,6 +96,7 @@ def resolve_qas_backend(
     backend_kind = (kind or os.environ.get("AICIR_QAS_BACKEND") or "numpy").strip().lower()
     dtype_name = (dtype or os.environ.get("AICIR_QAS_DTYPE") or "").strip().lower()
     numpy_dtype = None
+    torch_dtype = None
     if dtype_name:
         if dtype_name in {"complex128", "c128", "float64"}:
             numpy_dtype = np.complex128
@@ -103,20 +104,38 @@ def resolve_qas_backend(
             numpy_dtype = np.complex64
         else:
             raise ValueError(f"Unsupported QAS dtype: {dtype_name!r}. Use complex64 or complex128.")
+        if backend_kind in {"torch", "npu"}:
+            try:
+                import torch
+            except Exception as exc:  # pragma: no cover - depends on optional torch install.
+                raise RuntimeError(f"Backend {backend_kind!r} requires torch to honor dtype={dtype_name!r}") from exc
+            torch_dtype = torch.complex128 if numpy_dtype == np.complex128 else torch.complex64
     if backend_kind in {"numpy", "cpu"}:
         return NumpyBackend(dtype=numpy_dtype)
     if backend_kind == "torch":
         if TorchBackend is None:
             raise RuntimeError("TorchBackend is unavailable; install torch or use AICIR_QAS_BACKEND=numpy.")
         device = os.environ.get("AICIR_QAS_TORCH_DEVICE") or "cpu"
-        return TorchBackend(device=device)
+        return TorchBackend(dtype=torch_dtype, device=device)
     if backend_kind == "npu":
         if NPUBackend is None:
             if fallback_to_cpu:
-                return NumpyBackend()
+                return NumpyBackend(dtype=numpy_dtype)
             raise RuntimeError("NPUBackend is unavailable; install torch_npu or use AICIR_QAS_BACKEND=numpy.")
-        return NPUBackend.from_distributed_env(fallback_to_cpu=fallback_to_cpu)
+        return NPUBackend.from_distributed_env(dtype=torch_dtype, fallback_to_cpu=fallback_to_cpu)
     raise ValueError(f"Unsupported QAS backend: {backend_kind!r}. Use numpy, cpu, torch, or npu.")
+
+
+def backend_runtime_metadata(backend: Backend) -> Dict[str, Any]:
+    """Return actual backend provenance for result manifests."""
+    dtype = getattr(backend, "_dtype", None)
+    device = getattr(backend, "_device", None)
+    return {
+        "backend_name": getattr(backend, "name", type(backend).__name__),
+        "backend_class": type(backend).__name__,
+        "backend_dtype": str(dtype) if dtype is not None else None,
+        "backend_device": str(device) if device is not None else None,
+    }
 
 
 @dataclass(frozen=True)
@@ -3040,6 +3059,7 @@ def run_tfim_full_enumeration_baseline(
             "fair_params_per_start": fair_params_per_start,
             "init_mode": init_mode,
             "init_scale": init_scale,
+            **backend_runtime_metadata(backend),
         },
     )
 
