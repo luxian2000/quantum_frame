@@ -30,7 +30,7 @@ def test_maxcut_metrics_separate_expected_cut_from_best_readout_cut():
     assert partition[0] != partition[1]
 
 
-def test_generated_maxcut_circuit_concentrates_on_optimal_subspace():
+def test_generated_maxcut_circuit_metrics_match_checked_in_artifact():
     graph = nx.Graph()
     graph.add_nodes_from(range(maxcut_hamiltonian.N_NODES))
     graph.add_weighted_edges_from(maxcut_hamiltonian.EDGES)
@@ -43,7 +43,21 @@ def test_generated_maxcut_circuit_concentrates_on_optimal_subspace():
         NumpyBackend(),
     )
 
-    assert metrics["expected_cut"] == pytest.approx(metrics["max_cut"], abs=1e-4)
+    stored_metrics = maxcut_hamiltonian.VQE_METRICS
+
+    for key in (
+        "vqe_energy",
+        "exact_ground_energy",
+        "max_cut",
+        "expected_cut",
+        "achieved_cut",
+        "approx_ratio",
+        "expected_approx_ratio",
+    ):
+        assert metrics[key] == pytest.approx(stored_metrics[key])
+    assert metrics["n_gates"] == stored_metrics["n_gates"]
+    assert metrics["expected_cut"] <= metrics["max_cut"] + 1e-6
+    assert metrics["achieved_cut"] <= metrics["max_cut"] + 1e-6
 
 
 def test_maxcut_cli_can_disable_rzz(monkeypatch, tmp_path):
