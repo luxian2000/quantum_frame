@@ -2,6 +2,16 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-09
+
+### Fixed
+
+- 修复 `aicir.qas.supernet` 计算 `Hamiltonian` 期望能量时的形状广播 bug：当态向量为 `(2^n, 1)` 列向量（训练/微调路径的默认形状）时，会与一维 phase/index 向量广播成 `(2^n, 2^n)` 并 `sum()`，导致能量被放大 `2^n` 倍。受影响时损失停在 `真实能量 × 2^n`、梯度趋近 0、架构排序失效，supernet 无法收敛到基态。现统一把态向量展平为一维后再计算，能量幅值正确，VQE/QAS 可正常收敛（MaxCut 等对角哈密顿量近似比从约 0.6 提升到 1.0）。
+
+### Added
+
+- 新增 `demos/MaxCut/maxcut.py`：随机图 → MaxCut Ising 哈密顿量 → `supernet_qas` 搜索 VQE 基态线路 → 把哈密顿量与线路写入 `maxcut_hamiltonian.py`，并把随机图与线路一起绘制到 `maxcut_hamiltonian.png`。
+
 ## 2026-06-05
 
 ### Added
