@@ -115,6 +115,38 @@ def exact_ground_energy(hamiltonian: Hamiltonian, backend: NumpyBackend) -> floa
     return float(np.linalg.eigvalsh(matrix).min())
 
 
+def evaluate_vqe_cut_metrics(
+    circuit: Circuit,
+    graph: nx.Graph,
+    hamiltonian: Hamiltonian,
+    backend: NumpyBackend,
+) -> Tuple[dict, dict]:
+    """计算 VQE 线路的 MaxCut 指标。
+
+    ``-vqe_energy`` 是量子态概率分布上的期望割值，不一定是实际读出的某个
+    割。``achieved_cut`` 使用概率显著比特串中的最佳割值，更符合 MaxCut
+    读出结果；``expected_cut`` 单独保留能量期望对应的值。
+    """
+    vqe_energy = circuit_energy(circuit, hamiltonian, backend)
+    ground_energy = exact_ground_energy(hamiltonian, backend)
+    partition, sampled_cut = vqe_cut_partition(circuit, graph, backend)
+    max_cut = -ground_energy
+    expected_cut = -vqe_energy
+    approx_ratio = float(sampled_cut / max_cut) if max_cut > 0 else None
+    expected_approx_ratio = float(expected_cut / max_cut) if max_cut > 0 else None
+    metrics = {
+        "vqe_energy": vqe_energy,
+        "exact_ground_energy": ground_energy,
+        "max_cut": max_cut,
+        "expected_cut": expected_cut,
+        "achieved_cut": sampled_cut,
+        "approx_ratio": approx_ratio,
+        "expected_approx_ratio": expected_approx_ratio,
+        "n_gates": len(circuit.gates),
+    }
+    return metrics, partition
+
+
 def vqe_cut_partition(
     circuit: Circuit, graph: nx.Graph, backend: NumpyBackend
 ) -> Tuple[dict, float]:
@@ -206,8 +238,8 @@ def plot_graph_and_circuit(
     nx.draw_networkx_labels(graph, layout, ax=graph_ax, font_size=14, font_color="#1B3A16")
     graph_ax.set_title(
         f"Random graph: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges  "
-        f"(max-cut={metrics['max_cut']:.0f}, VQE cut={metrics['achieved_cut']:.2f}, "
-        f"ratio={metrics['approx_ratio']:.3f})",
+        f"(max-cut={metrics['max_cut']:.0f}, readout cut={metrics['achieved_cut']:.2f}, "
+        f"expected={metrics['expected_cut']:.2f}, ratio={metrics['approx_ratio']:.3f})",
         fontsize=14,
     )
     graph_ax.set_axis_off()
@@ -267,8 +299,8 @@ def build_hamiltonian() -> Hamiltonian:
 
 
 # ── VQE 基态线路（QAS supernet 搜索并微调）────────────────────────────────────
-# 指标（基于归一化态重新计算）：vqe_energy 为线路能量，exact_ground_energy 为
-# 精确基态能量，max_cut/achieved_cut 为最大割与求得割，approx_ratio 为近似比。
+# 指标（基于归一化态重新计算）：vqe_energy 为线路能量，expected_cut 为能量
+# 期望对应的割值，achieved_cut 为概率显著比特串中的最佳读出割值。
 VQE_METRICS = {metrics_repr}
 
 # 线路以 circuit-JSON 形式记录，可用 circuit_from_json 无损重建。
@@ -286,56 +318,52 @@ def main() -> None:
     parser.add_argument("--n-nodes", type=int, default=10, help="随机图节点数（量子比特数），默认 10。")
     parser.add_argument("--edge-prob", type=float, default=0.4, help="ER 随机图连边概率，默认 0.4。")
     parser.add_argument("--graph-seed", type=int, default=7, help="随机图种子。")
-    parser.add_argument("--layers", type=int, default=4, help="ansatz 层数 L。")
+    parser.add_argument("--layers", type=int, default=None,
+                        help="ansatz 层数 L，默认 min(量子比特数, 6)。")
     parser.add_argument("--supernet-num", type=int, default=3, help="权重共享超网络数量 W。")
     parser.add_argument("--supernet-steps", type=int, default=80, help="超网络优化步数。")
     parser.add_argument("--finetune-steps", type=int, default=120, help="选中架构微调步数。")
     parser.add_argument("--ranking-num", type=int, default=40, help="排序阶段采样候选架构数。")
     parser.add_argument("--qas-seed", type=int, default=2, help="QAS 随机种子。")
     parser.add_argument("--device", type=str, default="cpu", help="Torch 设备，如 cpu/cuda/npu:0。")
+    parser.add_argument("--disable-rzz", action="store_true", help="在 supernet 搜索中禁用 rzz，只保留 cx 双比特门。")
     args = parser.parse_args()
 
     # 1) 随机图
     graph = generate_random_graph(args.n_nodes, args.edge_prob, args.graph_seed)
     print(f"[1/4] 随机图：{graph.number_of_nodes()} 节点，{graph.number_of_edges()} 条边。")
 
+    # 层数 L：未显式指定时取 min(量子比特数, 6)，随问题规模自适应又设上限，
+    # 避免过深线路带来的贫瘠高原与开销。
+    n_qubits = graph.number_of_nodes()
+    layers = args.layers if args.layers is not None else min(n_qubits, 6)
+
     # 2) Ising 哈密顿量
     hamiltonian, terms = build_ising_hamiltonian(graph)
     print(f"[2/4] Ising 哈密顿量：{len(terms)} 项（含常数项）。")
 
     # 3) QAS supernet 搜索 + 微调 VQE 基态线路
-    print("[3/4] 运行 QAS supernet 搜索 VQE 基态线路（可能较慢）……")
+    print(f"[3/4] 运行 QAS supernet 搜索 VQE 基态线路（L={layers} 层，可能较慢）……")
     result = supernet_qas(
         hamiltonian,
-        layers=args.layers,
+        layers=layers,
         supernet_num=args.supernet_num,
         supernet_steps=args.supernet_steps,
         finetune_steps=args.finetune_steps,
         ranking_num=args.ranking_num,
+        two_qubit_gates=("cx",) if args.disable_rzz else ("cx", "rzz"),
         seed=args.qas_seed,
         device=args.device,
     )
     best_circuit: Circuit = result.best_circuit
 
-    # supernet 的 final_metrics 能量基于未归一化内部态，这里重新计算真实能量。
+    # 重新计算线路能量与 MaxCut 读出指标，避免把能量期望误当作单次读出的割。
     backend = NumpyBackend()
-    vqe_energy = circuit_energy(best_circuit, hamiltonian, backend)
-    ground_energy = exact_ground_energy(hamiltonian, backend)
-    # MaxCut：基态能量 ≈ -最大割权重；近似比 = 求得割 / 最大割。
-    max_cut = -ground_energy
-    achieved_cut = -vqe_energy
-    approx_ratio = float(achieved_cut / max_cut) if max_cut > 0 else None
-    metrics = {
-        "vqe_energy": vqe_energy,
-        "exact_ground_energy": ground_energy,
-        "max_cut": max_cut,
-        "achieved_cut": achieved_cut,
-        "approx_ratio": approx_ratio,
-        "n_gates": len(best_circuit.gates),
-    }
+    metrics, partition = evaluate_vqe_cut_metrics(best_circuit, graph, hamiltonian, backend)
     print(
-        f"       VQE 能量 = {vqe_energy:.6f}，精确基态 = {ground_energy:.6f}"
-        f"（最大割 = {max_cut:.3f}，近似比 = {approx_ratio:.4f}）；"
+        f"       VQE 能量 = {metrics['vqe_energy']:.6f}，精确基态 = {metrics['exact_ground_energy']:.6f}"
+        f"（最大割 = {metrics['max_cut']:.3f}，期望割 = {metrics['expected_cut']:.3f}，"
+        f"读出割 = {metrics['achieved_cut']:.3f}，近似比 = {metrics['approx_ratio']:.4f}）；"
         f"线路门数 = {metrics['n_gates']}。"
     )
 
@@ -348,8 +376,7 @@ def main() -> None:
     print(f"       已写入 {HAMILTONIAN_PY}")
 
     # 4) 把随机图和 VQE 线路画到同一张 PNG（按割划分给节点上两种颜色）
-    partition, sampled_cut = vqe_cut_partition(best_circuit, graph, backend)
-    print(f"       采样读出割值（最佳比特串）= {sampled_cut:.3f}。")
+    print(f"       采样读出割值（最佳比特串）= {metrics['achieved_cut']:.3f}。")
     plot_graph_and_circuit(graph, best_circuit, CIRCUIT_PNG, metrics, partition=partition)
     print(f"[4/4] 已绘制随机图 + VQE 线路到 {CIRCUIT_PNG}")
 

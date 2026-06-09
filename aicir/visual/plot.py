@@ -87,6 +87,60 @@ _ROUND = 0.12        # corner rounding of gate boxes
 _INNER_SUBLABEL_OFFSET = 0.236  # golden-ratio lower text position inside a gate box
 
 
+def _mark_max_text_size(text, width_data: float, height_data: float) -> None:
+    """Attach data-unit max text dimensions for the final fitting pass."""
+    text._aicir_max_width_data = float(width_data)
+    text._aicir_max_height_data = float(height_data)
+
+
+def _fit_marked_texts(ax, *, min_fontsize: float = 1.0) -> None:
+    """Shrink marked text objects so their rendered width fits a data width.
+
+    Text extents are only reliable after axis limits/aspect are final.  The draw
+    pass below obtains a renderer, measures every marked label in pixels, then
+    reduces oversized labels by the exact width ratio.
+    """
+    marked = [
+        text for text in ax.texts
+        if getattr(text, "_aicir_max_width_data", None) is not None
+        or getattr(text, "_aicir_max_height_data", None) is not None
+    ]
+    if not marked:
+        return
+
+    fig = ax.figure
+    for _ in range(3):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        changed = False
+        for text in marked:
+            x0 = text.get_position()[0]
+            y0 = text.get_position()[1]
+            max_width_data = getattr(text, "_aicir_max_width_data", None)
+            max_height_data = getattr(text, "_aicir_max_height_data", None)
+            bbox = text.get_window_extent(renderer=renderer)
+            ratios: list[float] = []
+            if max_width_data is not None:
+                left = ax.transData.transform((x0 - float(max_width_data) / 2, y0))[0]
+                right = ax.transData.transform((x0 + float(max_width_data) / 2, y0))[0]
+                max_width_px = abs(right - left)
+                if max_width_px > 0 and bbox.width > max_width_px:
+                    ratios.append(max_width_px / bbox.width)
+            if max_height_data is not None:
+                bottom = ax.transData.transform((x0, y0 - float(max_height_data) / 2))[1]
+                top = ax.transData.transform((x0, y0 + float(max_height_data) / 2))[1]
+                max_height_px = abs(top - bottom)
+                if max_height_px > 0 and bbox.height > max_height_px:
+                    ratios.append(max_height_px / bbox.height)
+            if ratios:
+                next_size = max(min_fontsize, text.get_fontsize() * min(ratios) * 0.98)
+                if next_size < text.get_fontsize():
+                    text.set_fontsize(next_size)
+                    changed = True
+        if not changed:
+            return
+
+
 def _style_for(gate_type: str) -> tuple[str, str]:
     return _PALETTE[_FAMILY.get(gate_type, "default")]
 
@@ -210,23 +264,26 @@ def _draw_box(ax, x, y, label, facecolor, edgecolor, *, fontsize, sublabel=None,
     )
     ax.add_patch(patch)
     label_y = y + height * 0.14 if sublabel and sublabel_inside else y
-    ax.text(x, label_y, label, ha="center", va="center",
-            fontsize=_fit_label_fontsize(label, fontsize, width),
-            color=edgecolor, fontweight="bold", zorder=4)
+    label_text = ax.text(x, label_y, label, ha="center", va="center",
+                         fontsize=_fit_label_fontsize(label, fontsize, width),
+                         color=edgecolor, fontweight="bold", zorder=4)
+    _mark_max_text_size(label_text, width * 0.8, height * 0.7)
     if sublabel:
         # 角度文字的字号随方块宽度等比缩放
         sub_fs = fontsize * sublabel_scale * (width / _BOX)
         if sublabel_inside:
-            ax.text(x, y - height * _INNER_SUBLABEL_OFFSET, sublabel, ha="center", va="center",
-                    fontsize=sub_fs, color=edgecolor,
-                    zorder=5)
+            sub_text = ax.text(x, y - height * _INNER_SUBLABEL_OFFSET, sublabel,
+                               ha="center", va="center", fontsize=sub_fs,
+                               color=edgecolor, zorder=5)
+            _mark_max_text_size(sub_text, width * 0.8, height * 0.7)
         else:
-            # 与方块底边的间距随高度缩放
-            gap = height * 0.065
-            ax.text(x, y - height / 2 - gap, sublabel, ha="center", va="top",
-                    fontsize=sub_fs, color=edgecolor, zorder=5,
-                    bbox=dict(boxstyle="round,pad=0.05", facecolor="white",
-                              edgecolor="none"))
+            # 与方块底边保持固定的 0.04 data-unit 间距。
+            gap = height * (0.04 / _BOX)
+            sub_text = ax.text(x, y - height / 2 - gap, sublabel, ha="center", va="top",
+                               fontsize=sub_fs, color=edgecolor, zorder=5,
+                               bbox=dict(boxstyle="round,pad=0.05", facecolor="white",
+                                         edgecolor="none"))
+            _mark_max_text_size(sub_text, width, height * 0.7)
 
 
 _DEFAULT_FONTSIZE = 15  # 与 plot() 的默认值保持一致
@@ -400,7 +457,9 @@ def _render_figure(
     ax.axis("off")
     if title:
         ax.set_title(title, fontsize=fontsize * 1.05, pad=10)
+    _fit_marked_texts(ax)
     fig.tight_layout()
+    _fit_marked_texts(ax)
     return fig, ax
 
 
