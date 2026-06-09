@@ -15,3 +15,8 @@ python aicir/qas/demos/vqe_tfim_v3_scaling.py \
   --fair-max-evals 1000000 \
   --init-mode random_uniform_pi \
   --output-dir outputs/vqe_tfim_v3_scaling_npu_full
+
+python aicir/qas/demos/vqe_tfim_v3_phase1_analysis.py \
+  --input-dir outputs/vqe_tfim_v3_scaling_npu_full \
+  --output-dir outputs/vqe_tfim_v3_scaling_npu_full \
+  --scales 4,6,8
