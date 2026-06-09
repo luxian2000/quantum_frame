@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from aicir.qas.vqe_hea_demo import (
     THETA_INIT_RANDOM_UNIFORM_PI,
+    get_structure_family,
     resolve_qas_backend,
     run_tfim_full_enumeration_baseline,
     validate_tfim_reference_alignment,
@@ -63,7 +64,7 @@ def _write_enumeration_csv(path: Path, report: Any) -> None:
                 {
                     "rank": rank,
                     "name": result.architecture.name,
-                    "family": result.architecture.metadata.get("family", ""),
+                    "family": get_structure_family(result.architecture),
                     "energy": f"{result.energy:.12f}",
                     "delta_ref": f"{result.energy - reference_energy:.12f}",
                     "n_params": parameter_count(result.architecture.circuit),
