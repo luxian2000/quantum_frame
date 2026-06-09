@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from math import exp
+from time import perf_counter
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
@@ -61,15 +62,47 @@ ENTANGLERS = ("cx", "cz", "rzz")
 FINAL_ROTATIONS = ("ry", "ry_rz")
 ENTANGLE_PATTERNS = ("linear", "ring")
 LAYER_CHOICES = (1, 2, 3)
+THETA_INIT_RANDOM_UNIFORM_PI = "random_uniform_pi"
+THETA_INIT_ZERO_DIAGNOSTIC = "zero"
+V3_COBYLA_RHOBEG = 1.0
+V3_COBYLA_TOL = 1e-6
 
 
-def resolve_qas_backend(kind: Optional[str] = None, fallback_to_cpu: bool = True) -> Backend:
+def v3_screening_maxfev(n_params: int) -> int:
+    """V3 low-fidelity proxy budget, counted as selection cost."""
+    return max(500, 80 * max(1, int(n_params)))
+
+
+def v3_final_maxfev(n_params: int) -> int:
+    """V3 final-label COBYLA budget for fair VQE."""
+    return max(1000, 200 * max(1, int(n_params)))
+
+
+def v3_top_k(candidate_count: int) -> int:
+    """V3 deployment top-K rule."""
+    return min(max(0, int(candidate_count)), max(10, int(np.ceil(0.1 * max(0, int(candidate_count))))))
+
+
+def resolve_qas_backend(
+    kind: Optional[str] = None,
+    fallback_to_cpu: bool = True,
+    dtype: Optional[str] = None,
+) -> Backend:
     """Resolve the QAS demo backend. Defaults to CPU/NumPy unless explicitly requested."""
     import os
 
     backend_kind = (kind or os.environ.get("AICIR_QAS_BACKEND") or "numpy").strip().lower()
+    dtype_name = (dtype or os.environ.get("AICIR_QAS_DTYPE") or "").strip().lower()
+    numpy_dtype = None
+    if dtype_name:
+        if dtype_name in {"complex128", "c128", "float64"}:
+            numpy_dtype = np.complex128
+        elif dtype_name in {"complex64", "c64", "float32"}:
+            numpy_dtype = np.complex64
+        else:
+            raise ValueError(f"Unsupported QAS dtype: {dtype_name!r}. Use complex64 or complex128.")
     if backend_kind in {"numpy", "cpu"}:
-        return NumpyBackend()
+        return NumpyBackend(dtype=numpy_dtype)
     if backend_kind == "torch":
         if TorchBackend is None:
             raise RuntimeError("TorchBackend is unavailable; install torch or use AICIR_QAS_BACKEND=numpy.")
@@ -92,6 +125,41 @@ class VQEDemoProblem:
     n_qubits: int
     hamiltonian: Sequence[tuple[float, str]]
     reference_energy: float
+
+
+@dataclass(frozen=True)
+class TFIMReferenceAlignmentRow:
+    n_qubits: int
+    J: float
+    h: float
+    periodic: bool
+    dense_energy: float
+    free_fermion_energy: float
+    abs_diff: float
+
+
+@dataclass(frozen=True)
+class TFIMReferenceAlignmentReport:
+    rows: List[TFIMReferenceAlignmentRow]
+    tolerance: float = 1e-9
+
+    @property
+    def passed(self) -> bool:
+        return all(row.abs_diff < float(self.tolerance) for row in self.rows)
+
+    def summary_lines(self) -> List[str]:
+        lines = [
+            "TFIM reference alignment",
+            f"tolerance: {self.tolerance:.1e} | passed: {self.passed}",
+            "n_qubits | J | h | boundary | dense | free_fermion | abs_diff",
+        ]
+        for row in self.rows:
+            boundary = "PBC" if row.periodic else "OBC"
+            lines.append(
+                f"{row.n_qubits} | {row.J:g} | {row.h:g} | {boundary} | "
+                f"{row.dense_energy:.12f} | {row.free_fermion_energy:.12f} | {row.abs_diff:.3e}"
+            )
+        return lines
 
 
 @dataclass(frozen=True)
@@ -603,6 +671,9 @@ class VQEFairStabilityRow:
     n_params: int
     repeat_energies: List[float]
     repeat_evaluations: List[int]
+    absolute_sr_10mha: float = 0.0
+    absolute_sr_20mha: float = 0.0
+    posthoc_basin_sr_5mha: float = 0.0
 
 
 @dataclass
@@ -619,13 +690,15 @@ class VQEFairStabilityReport:
             f"top_k: {self.metadata.get('top_k')} | repeats: {self.metadata.get('repeats')}",
             "",
             "Rows",
-            "rank | best | mean | std | worst | delta_best_ref | n_params | energies | name",
+            "rank | best | mean | std | worst | delta_best_ref | n_params | nfev | absolute_SR10 | absolute_SR20 | posthoc_basin_SR5 | energies | name",
         ]
         for row in self.rows:
             energies = ",".join(f"{energy:.6f}" for energy in row.repeat_energies)
+            nfev = ",".join(str(value) for value in row.repeat_evaluations)
             lines.append(
                 f"{row.rank} | {row.best_energy:.6f} | {row.mean_energy:.6f} | {row.std_energy:.6f} | "
-                f"{row.worst_energy:.6f} | {row.best_energy - reference_energy:.6f} | {row.n_params} | "
+                f"{row.worst_energy:.6f} | {row.best_energy - reference_energy:.6f} | {row.n_params} | {nfev} | "
+                f"{row.absolute_sr_10mha:.3f} | {row.absolute_sr_20mha:.3f} | {row.posthoc_basin_sr_5mha:.3f} | "
                 f"{energies} | {row.architecture.name}"
             )
         return lines
@@ -1302,6 +1375,61 @@ def exact_ground_energy(hamiltonian: Sequence[tuple[float, str]]) -> float:
     return float(np.min(np.linalg.eigvalsh(hamiltonian_matrix(hamiltonian))))
 
 
+def tfim_open_chain_free_fermion_ground_energy(
+    n_qubits: int,
+    J: float = 1.0,
+    h: float = 0.5,
+) -> float:
+    """Free-fermion ground energy for H=-J sum ZZ - h sum X with open boundaries."""
+    n_qubits = int(n_qubits)
+    if n_qubits < 2:
+        raise ValueError("TFIM chain requires at least 2 qubits")
+    A = np.zeros((n_qubits, n_qubits), dtype=np.float64)
+    B = np.zeros((n_qubits, n_qubits), dtype=np.float64)
+    np.fill_diagonal(A, -2.0 * float(h))
+    for index in range(n_qubits - 1):
+        A[index, index + 1] = -float(J)
+        A[index + 1, index] = -float(J)
+        B[index, index + 1] = -float(J)
+        B[index + 1, index] = float(J)
+    spectrum = np.linalg.eigvals((A - B) @ (A + B))
+    eps = np.sqrt(np.maximum(np.sort(np.real(spectrum)), 0.0))
+    return float(-0.5 * np.sum(eps))
+
+
+def validate_tfim_reference_alignment(
+    scales: Sequence[int] = (4, 6, 8),
+    J: float = 1.0,
+    h: float = 0.5,
+    periodic: bool = False,
+    tolerance: float = 1e-9,
+) -> TFIMReferenceAlignmentReport:
+    """Phase-0 check that dense TFIM references match the free-fermion formula."""
+    if periodic:
+        raise NotImplementedError("PBC free-fermion validation needs explicit parity-sector handling.")
+    rows: List[TFIMReferenceAlignmentRow] = []
+    for n_qubits in scales:
+        hamiltonian = tfim_chain_hamiltonian(n_qubits=int(n_qubits), J=J, h=h, periodic=periodic)
+        dense = exact_ground_energy(hamiltonian)
+        free = tfim_open_chain_free_fermion_ground_energy(n_qubits=int(n_qubits), J=J, h=h)
+        rows.append(
+            TFIMReferenceAlignmentRow(
+                n_qubits=int(n_qubits),
+                J=float(J),
+                h=float(h),
+                periodic=bool(periodic),
+                dense_energy=dense,
+                free_fermion_energy=free,
+                abs_diff=abs(dense - free),
+            )
+        )
+    report = TFIMReferenceAlignmentReport(rows=rows, tolerance=float(tolerance))
+    if not report.passed:
+        worst = max(row.abs_diff for row in rows)
+        raise AssertionError(f"TFIM dense/free-fermion reference mismatch: worst abs_diff={worst:.3e}")
+    return report
+
+
 def h2_demo_problem() -> VQEDemoProblem:
     return VQEDemoProblem(
         name="h2_toy_2q",
@@ -1419,8 +1547,9 @@ def optimize_vqe_energy(
     n_starts: int = 1,
     evals_per_param: int = 10,
     max_evaluations: int = 80,
+    budget_override: Optional[int] = None,
     backend: Optional[Backend] = None,
-    init_mode: str = "zero_then_random",
+    init_mode: str = THETA_INIT_RANDOM_UNIFORM_PI,
     init_scale: float = float(np.pi),
 ) -> VQEOptimizationResult:
     if architecture.n_qubits != problem.n_qubits:
@@ -1428,10 +1557,12 @@ def optimize_vqe_energy(
     backend = backend or resolve_qas_backend()
     n_params = parameter_count(architecture.circuit)
     rng = np.random.default_rng(int(seed))
-    budget = _evaluation_budget(architecture, evals_per_param, max_evaluations)
+    budget = int(budget_override) if budget_override is not None else _evaluation_budget(architecture, evals_per_param, max_evaluations)
+    budget = max(1, budget)
     best_energy = float("inf")
     best_params = np.zeros(n_params, dtype=float)
     total_evals = 0
+    per_start: List[Dict[str, Any]] = []
 
     def objective(params: np.ndarray) -> float:
         return evaluate_vqe_energy(architecture, problem, params, backend=backend)
@@ -1439,24 +1570,30 @@ def optimize_vqe_energy(
     mode = str(init_mode).strip().lower()
     starts: List[np.ndarray] = []
     start_count = max(1, int(n_starts))
-    if mode in {"zero", "zeros"}:
+    if mode in {THETA_INIT_ZERO_DIAGNOSTIC, "zeros"}:
         starts = [np.zeros(n_params, dtype=float) for _ in range(start_count)]
-    elif mode in {"random", "uniform"}:
+    elif mode in {THETA_INIT_RANDOM_UNIFORM_PI, "random", "uniform"}:
         starts = [rng.uniform(-float(init_scale), float(init_scale), size=n_params) for _ in range(start_count)]
     elif mode in {"zero_then_random", "mixed"}:
         starts = [np.zeros(n_params, dtype=float)]
         for _ in range(start_count - 1):
             starts.append(rng.uniform(-float(init_scale), float(init_scale), size=n_params))
     else:
-        raise ValueError("init_mode must be one of: zero, random, zero_then_random")
+        raise ValueError("init_mode must be one of: random_uniform_pi, zero, zero_then_random")
 
-    for start in starts:
+    for start_index, start in enumerate(starts):
+        start_time = perf_counter()
         if n_params == 0:
             energy = objective(start)
             nfev = 1
             params = start
         elif minimize is not None:
-            result = minimize(objective, start, method="COBYLA", options={"maxiter": budget, "rhobeg": 1.0})
+            result = minimize(
+                objective,
+                start,
+                method="COBYLA",
+                options={"maxiter": budget, "rhobeg": V3_COBYLA_RHOBEG, "tol": V3_COBYLA_TOL},
+            )
             energy = float(result.fun)
             nfev = int(getattr(result, "nfev", budget))
             params = np.asarray(result.x, dtype=float)
@@ -1468,6 +1605,17 @@ def optimize_vqe_energy(
             energy, params = min(scored, key=lambda item: item[0])
             nfev = len(scored)
         total_evals += nfev
+        per_start.append(
+            {
+                "start_index": start_index,
+                "seed": int(seed),
+                "energy": float(energy),
+                "nfev": int(nfev),
+                "walltime_s": float(perf_counter() - start_time),
+                "init_mode": mode,
+                "init_l2": float(np.linalg.norm(start)) if n_params else 0.0,
+            }
+        )
         if energy < best_energy:
             best_energy = energy
             best_params = params.copy()
@@ -1478,7 +1626,15 @@ def optimize_vqe_energy(
         best_parameters=[float(value) for value in best_params],
         evaluations=total_evals,
         n_starts=len(starts),
-        metadata={"optimizer": "COBYLA" if minimize is not None else "budgeted_random_search", "budget_per_start": budget},
+        metadata={
+            "optimizer": "COBYLA" if minimize is not None else "budgeted_random_search",
+            "budget_per_start": budget,
+            "nfev": total_evals,
+            "per_start": per_start,
+            "theta_init_mode": mode,
+            "cobyla_rhobeg": V3_COBYLA_RHOBEG,
+            "cobyla_tol": V3_COBYLA_TOL,
+        },
     )
 
 
@@ -1499,6 +1655,57 @@ def optimize_h2_energy(
         max_evaluations=max_evaluations,
         backend=backend,
     )
+
+
+def diagnose_theta_randomness(
+    architecture: ArchitectureSpec,
+    problem: VQEDemoProblem,
+    n_trials: int = 4,
+    seed: int = 2026,
+    evals_per_param: int = 20,
+    maxfev: Optional[int] = None,
+    init_mode: str = THETA_INIT_RANDOM_UNIFORM_PI,
+    backend: Optional[Backend] = None,
+) -> Dict[str, Any]:
+    """Phase-0 guardrail: verify independent random theta trajectories are not identical."""
+    backend = backend or resolve_qas_backend()
+    n_params = parameter_count(architecture.circuit)
+    budget = int(maxfev) if maxfev is not None else v3_screening_maxfev(n_params)
+    results: List[VQEOptimizationResult] = []
+    for trial in range(max(1, int(n_trials))):
+        results.append(
+            optimize_vqe_energy(
+                architecture,
+                problem,
+                seed=int(seed) + trial,
+                n_starts=1,
+                evals_per_param=evals_per_param,
+                max_evaluations=budget,
+                budget_override=budget,
+                backend=backend,
+                init_mode=init_mode,
+            )
+        )
+    energies = [float(result.energy) for result in results]
+    init_l2 = [
+        float(result.metadata.get("per_start", [{}])[0].get("init_l2", 0.0))
+        for result in results
+    ]
+    nfev = [int(result.evaluations) for result in results]
+    return {
+        "architecture": architecture.name,
+        "problem_name": problem.name,
+        "theta_init_mode": init_mode,
+        "n_trials": len(results),
+        "n_params": n_params,
+        "budget_per_trial": budget,
+        "energies": energies,
+        "energy_std": float(np.std(np.asarray(energies, dtype=float))),
+        "init_l2": init_l2,
+        "init_l2_std": float(np.std(np.asarray(init_l2, dtype=float))),
+        "nfev": nfev,
+        "passes_randomness_guard": bool(len(set(round(value, 12) for value in init_l2)) > 1 or n_params == 0),
+    }
 
 
 def _sample_masks(masks: Sequence[HEAMask], limit: int, seed: int) -> List[HEAMask]:
@@ -1898,6 +2105,7 @@ def run_ising4_budget_sweep(
             n_starts=final_n_starts,
             evals_per_param=fair_evals_per_param,
             max_evaluations=fair_budget,
+            budget_override=fair_budget,
             backend=backend,
         )
         mask = HEAMask(*sa_best.architecture.metadata["hea_mask"])
@@ -1940,6 +2148,7 @@ def run_ising4_budget_sweep(
             n_starts=final_n_starts,
             evals_per_param=fair_evals_per_param,
             max_evaluations=fair_budget,
+            budget_override=fair_budget,
             backend=backend,
         )
         result.metadata["source"] = architecture.metadata.get("source", "candidate")
@@ -2029,6 +2238,7 @@ def run_ising4_multistart_sa(
             n_starts=final_n_starts,
             evals_per_param=fair_evals_per_param,
             max_evaluations=fair_budget,
+            budget_override=fair_budget,
             backend=backend,
         )
         best_mask = HEAMask(*sa_best.architecture.metadata["hea_mask"])
@@ -2072,6 +2282,7 @@ def run_ising4_multistart_sa(
             n_starts=final_n_starts,
             evals_per_param=fair_evals_per_param,
             max_evaluations=fair_budget,
+            budget_override=fair_budget,
             backend=backend,
         )
         result.metadata["source"] = architecture.metadata.get("source", "candidate")
@@ -2110,7 +2321,7 @@ def run_ising4_fitness_correlation(
     short_n_starts: int = 1,
     short_evals_per_param: int = 8,
     short_max_evaluations: int = 40,
-    fair_n_starts: int = 3,
+    fair_n_starts: int = 1,
     fair_evals_per_param: int = 20,
     fair_min_evaluations: int = 40,
     overlap_k: int = 5,
@@ -2144,6 +2355,7 @@ def run_ising4_fitness_correlation(
             n_starts=fair_n_starts,
             evals_per_param=fair_evals_per_param,
             max_evaluations=fair_budget,
+            budget_override=fair_budget,
             backend=backend,
         )
         rows.append(
@@ -2187,7 +2399,7 @@ def run_ising4_fitness_budget_sweep(
     stage1_keep_top: int = 16,
     short_n_starts: int = 1,
     short_evals_per_param: int = 1000,
-    fair_n_starts: int = 3,
+    fair_n_starts: int = 1,
     fair_evals_per_param: int = 20,
     fair_min_evaluations: int = 40,
     overlap_k: int = 5,
@@ -2213,6 +2425,7 @@ def run_ising4_fitness_budget_sweep(
             n_starts=fair_n_starts,
             evals_per_param=fair_evals_per_param,
             max_evaluations=fair_budget,
+            budget_override=fair_budget,
             backend=backend,
         )
         item = VQEFitnessBudgetRow(
@@ -2274,10 +2487,10 @@ def run_ising4_b2_reliability_experiment(
     b2_n_starts: int = 1,
     b2_evals_per_param: int = 20,
     b2_max_evaluations: int = 400,
-    fair_n_starts: int = 3,
+    fair_n_starts: int = 1,
     fair_evals_per_param: int = 20,
     fair_min_evaluations: int = 80,
-    adaptive_fair_starts: bool = True,
+    adaptive_fair_starts: bool = False,
     fair_params_per_start: int = 15,
     overlap_k: int = 5,
     include_aware_neighbors: bool = True,
@@ -2386,6 +2599,7 @@ def run_ising4_b2_reliability_experiment(
             n_starts=starts,
             evals_per_param=fair_evals_per_param,
             max_evaluations=fair_budget,
+            budget_override=fair_budget,
             backend=backend,
         )
         b1 = b1_by_name[architecture.name]
@@ -2452,10 +2666,10 @@ def run_ising4_b2_reliability_experiment(
 def run_ising4_full_enumeration_baseline(
     seed: int = 2026,
     candidate_limit: Optional[int] = None,
-    fair_n_starts: int = 3,
+    fair_n_starts: int = 1,
     fair_evals_per_param: int = 20,
     fair_min_evaluations: int = 80,
-    adaptive_fair_starts: bool = True,
+    adaptive_fair_starts: bool = False,
     fair_params_per_start: int = 15,
     include_bad_baseline: bool = True,
     backend: Optional[NumpyBackend] = None,
@@ -2495,6 +2709,7 @@ def run_ising4_full_enumeration_baseline(
             n_starts=starts,
             evals_per_param=fair_evals_per_param,
             max_evaluations=fair_budget,
+            budget_override=fair_budget,
             backend=backend,
         )
         result.metadata["source"] = architecture.metadata.get("source", "full_enumeration")
@@ -2524,10 +2739,10 @@ def run_ising4_fair_vqe_stability_experiment(
     top_k: int = 5,
     repeats: int = 5,
     candidate_limit: Optional[int] = 24,
-    fair_n_starts: int = 3,
+    fair_n_starts: int = 1,
     fair_evals_per_param: int = 20,
     fair_min_evaluations: int = 80,
-    adaptive_fair_starts: bool = True,
+    adaptive_fair_starts: bool = False,
     fair_params_per_start: int = 15,
     backend: Optional[NumpyBackend] = None,
 ) -> VQEFairStabilityReport:
@@ -2577,7 +2792,7 @@ def run_tfim_priority_seed_validation(
     fair_max_evaluations: int = 3000,
     adaptive_fair_starts: bool = False,
     fair_params_per_start: int = 20,
-    init_mode: str = "zero_then_random",
+    init_mode: str = THETA_INIT_RANDOM_UNIFORM_PI,
     init_scale: float = float(np.pi),
     only_name: Optional[str] = None,
     priority_layers: Optional[Sequence[int]] = None,
@@ -2622,6 +2837,7 @@ def run_tfim_priority_seed_validation(
                 n_starts=starts,
                 evals_per_param=fair_evals_per_param,
                 max_evaluations=fair_budget,
+                budget_override=fair_budget,
                 backend=backend,
                 init_mode=init_mode,
                 init_scale=init_scale,
@@ -2679,12 +2895,12 @@ def run_tfim_full_enumeration_baseline(
     seed: int = 2026,
     candidate_limit: Optional[int] = None,
     fair_n_starts: int = 1,
-    fair_evals_per_param: int = 30,
-    fair_min_evaluations: int = 120,
-    fair_max_evaluations: int = 3000,
+    fair_evals_per_param: int = 200,
+    fair_min_evaluations: int = 1000,
+    fair_max_evaluations: int = 1_000_000,
     adaptive_fair_starts: bool = False,
     fair_params_per_start: int = 20,
-    init_mode: str = "zero_then_random",
+    init_mode: str = THETA_INIT_RANDOM_UNIFORM_PI,
     init_scale: float = float(np.pi),
     backend: Optional[Backend] = None,
 ) -> VQEEnumerationReport:
@@ -2713,6 +2929,7 @@ def run_tfim_full_enumeration_baseline(
             n_starts=starts,
             evals_per_param=fair_evals_per_param,
             max_evaluations=fair_budget,
+            budget_override=fair_budget,
             backend=backend,
             init_mode=init_mode,
             init_scale=init_scale,
@@ -2754,15 +2971,15 @@ def run_tfim_stage1_stage2_search(
     stage2_rounds: int = 2,
     neighbors_per_parent: int = 2,
     b2_n_starts: int = 1,
-    b2_evals_per_param: int = 20,
-    b2_max_evaluations: int = 600,
+    b2_evals_per_param: int = 80,
+    b2_max_evaluations: int = 1_000_000,
     fair_repeats: int = 5,
-    fair_n_starts: int = 3,
-    fair_evals_per_param: int = 30,
-    fair_min_evaluations: int = 120,
-    fair_max_evaluations: int = 3000,
+    fair_n_starts: int = 1,
+    fair_evals_per_param: int = 200,
+    fair_min_evaluations: int = 1000,
+    fair_max_evaluations: int = 1_000_000,
     fair_params_per_start: int = 20,
-    init_mode: str = "zero_then_random",
+    init_mode: str = THETA_INIT_RANDOM_UNIFORM_PI,
     init_scale: float = float(np.pi),
     include_priority_seeds: bool = True,
     priority_layers: Optional[Sequence[int]] = None,
@@ -2832,6 +3049,7 @@ def run_tfim_stage1_stage2_search(
                 n_starts=b2_n_starts,
                 evals_per_param=b2_evals_per_param,
                 max_evaluations=b2_budget,
+                budget_override=b2_budget,
                 backend=backend,
                 init_mode=init_mode,
                 init_scale=init_scale,
@@ -2866,6 +3084,7 @@ def run_tfim_stage1_stage2_search(
                 n_starts=starts,
                 evals_per_param=fair_evals_per_param,
                 max_evaluations=fair_budget,
+                budget_override=fair_budget,
                 backend=backend,
                 init_mode=init_mode,
                 init_scale=init_scale,
@@ -2873,6 +3092,7 @@ def run_tfim_stage1_stage2_search(
             energies.append(float(result.energy))
             evaluations.append(int(result.evaluations))
         array = np.asarray(energies, dtype=float)
+        basin_threshold = float(np.min(array)) + 0.005
         final_rows.append(
             VQEFairStabilityRow(
                 rank=rank,
@@ -2884,6 +3104,9 @@ def run_tfim_stage1_stage2_search(
                 n_params=parameter_count(architecture.circuit),
                 repeat_energies=energies,
                 repeat_evaluations=evaluations,
+                absolute_sr_10mha=float(np.mean(array < problem.reference_energy + 0.010)),
+                absolute_sr_20mha=float(np.mean(array < problem.reference_energy + 0.020)),
+                posthoc_basin_sr_5mha=float(np.mean(array < basin_threshold)),
             )
         )
     final_rows.sort(key=lambda row: (row.best_energy, row.architecture.name))
@@ -2938,7 +3161,7 @@ def _run_fair_stability_for_architectures(
     fair_params_per_start: int,
     backend: Backend,
     metadata: Optional[Dict[str, Any]] = None,
-    init_mode: str = "zero_then_random",
+    init_mode: str = THETA_INIT_RANDOM_UNIFORM_PI,
     init_scale: float = float(np.pi),
 ) -> VQEFairStabilityReport:
     rows: List[VQEFairStabilityRow] = []
@@ -2960,6 +3183,7 @@ def _run_fair_stability_for_architectures(
                 n_starts=starts,
                 evals_per_param=fair_evals_per_param,
                 max_evaluations=fair_budget,
+                budget_override=fair_budget,
                 backend=backend,
                 init_mode=init_mode,
                 init_scale=init_scale,
@@ -2967,6 +3191,7 @@ def _run_fair_stability_for_architectures(
             energies.append(float(repeated.energy))
             evaluations.append(int(repeated.evaluations))
         array = np.asarray(energies, dtype=float)
+        basin_threshold = float(np.min(array)) + 0.005
         rows.append(
             VQEFairStabilityRow(
                 rank=rank,
@@ -2978,6 +3203,9 @@ def _run_fair_stability_for_architectures(
                 n_params=parameter_count(architecture.circuit),
                 repeat_energies=energies,
                 repeat_evaluations=evaluations,
+                absolute_sr_10mha=float(np.mean(array < problem.reference_energy + 0.010)),
+                absolute_sr_20mha=float(np.mean(array < problem.reference_energy + 0.020)),
+                posthoc_basin_sr_5mha=float(np.mean(array < basin_threshold)),
             )
         )
     rows.sort(key=lambda row: (row.best_energy, row.architecture.name))
@@ -3018,10 +3246,10 @@ def run_ising4_final_multiseed_validation(
     b2_n_starts: int = 1,
     b2_evals_per_param: int = 20,
     b2_max_evaluations: int = 400,
-    fair_n_starts: int = 3,
+    fair_n_starts: int = 1,
     fair_evals_per_param: int = 20,
     fair_min_evaluations: int = 80,
-    adaptive_fair_starts: bool = True,
+    adaptive_fair_starts: bool = False,
     fair_params_per_start: int = 15,
     include_aware_neighbors: bool = True,
     include_priority_seeds: bool = True,
@@ -3108,6 +3336,7 @@ def run_ising4_trainability_prior_demo(
             n_starts=final_n_starts,
             evals_per_param=fair_evals_per_param,
             max_evaluations=fair_budget,
+            budget_override=fair_budget,
             backend=backend,
         )
         result.metadata["source"] = architecture.metadata.get("source", "trainability_top")
@@ -3134,6 +3363,7 @@ def run_ising4_trainability_prior_demo(
         n_starts=final_n_starts,
         evals_per_param=fair_evals_per_param,
         max_evaluations=fair_budget,
+        budget_override=fair_budget,
         backend=backend,
     )
     sa_final.metadata["source"] = "trainability_seeded_sa"
@@ -3148,6 +3378,7 @@ def run_ising4_trainability_prior_demo(
             n_starts=final_n_starts,
             evals_per_param=fair_evals_per_param,
             max_evaluations=fair_budget,
+            budget_override=fair_budget,
             backend=backend,
         )
         result.metadata["source"] = architecture.metadata.get("source", "baseline")
@@ -3192,6 +3423,12 @@ __all__ = [
     "ROTATION_BLOCKS",
     "SAStep",
     "Stage1Row",
+    "TFIMReferenceAlignmentReport",
+    "TFIMReferenceAlignmentRow",
+    "THETA_INIT_RANDOM_UNIFORM_PI",
+    "THETA_INIT_ZERO_DIAGNOSTIC",
+    "V3_COBYLA_RHOBEG",
+    "V3_COBYLA_TOL",
     "VQEB2ReliabilityReport",
     "VQEDemoProblem",
     "VQEEnumerationReport",
@@ -3209,6 +3446,7 @@ __all__ = [
     "exact_ground_energy",
     "get_structure_family",
     "derive_priority_seed_masks",
+    "diagnose_theta_randomness",
     "h2_demo_problem",
     "hamiltonian_matrix",
     "hamiltonian_aware_mask_preferences",
@@ -3234,7 +3472,12 @@ __all__ = [
     "stratified_stage1_pool",
     "tfim_chain_demo_problem",
     "tfim_chain_hamiltonian",
+    "tfim_open_chain_free_fermion_ground_energy",
     "update_beam",
+    "validate_tfim_reference_alignment",
+    "v3_final_maxfev",
+    "v3_screening_maxfev",
+    "v3_top_k",
     "run_vqe_hea_demo",
     "run_vqe_ising4_demo",
     "zero_cost_guardrail",
