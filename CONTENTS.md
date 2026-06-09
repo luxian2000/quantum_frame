@@ -36,6 +36,7 @@ quantum_frame/
 |   |   |-- result_npu_2/
 |   |   `-- result_npu_3/
 |   |-- LiH/
+|   |-- MaxCut/
 |   `-- visual_outputs/
 |-- docs/
 `-- tests/

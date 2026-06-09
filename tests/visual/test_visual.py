@@ -175,6 +175,39 @@ def test_plot_u2_u3_show_smaller_parameter_sublabels(plt):
     assert u3_label.get_position()[1] < 0.0
 
 
+def test_plot_fits_gate_text_to_box_size(plt):
+    circuit = Circuit(
+        {"type": "identity", "n_qubits": 1},
+        rz(123.456789, 0),
+        u2(123.456789, 234.567891, 1),
+        u3(123.456789, 234.567891, 345.678912, 2),
+        rzz(123.456789, 0, 2),
+        n_qubits=3,
+    )
+
+    fig, ax = plot(circuit, layered=False, save=False, fontsize=60)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+
+    marked = [
+        text for text in ax.texts
+        if getattr(text, "_aicir_max_width_data", None) is not None
+        and getattr(text, "_aicir_max_height_data", None) is not None
+    ]
+    assert marked
+    for text in marked:
+        max_width_data = text._aicir_max_width_data
+        max_height_data = text._aicir_max_height_data
+        x, y = text.get_position()
+        left = ax.transData.transform((x - max_width_data / 2, y))[0]
+        right = ax.transData.transform((x + max_width_data / 2, y))[0]
+        bottom = ax.transData.transform((x, y - max_height_data / 2))[1]
+        top = ax.transData.transform((x, y + max_height_data / 2))[1]
+        extent = text.get_window_extent(renderer=renderer)
+        assert extent.width <= abs(right - left) + 1.0
+        assert extent.height <= abs(top - bottom) + 1.0
+
+
 def test_plot_rzz_gate_label_is_rzz(plt):
     circuit = Circuit(rzz(np.pi / 2, 0, 1), n_qubits=2)
 
