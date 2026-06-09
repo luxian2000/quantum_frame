@@ -76,6 +76,13 @@ def _write_enumeration_csv(path: Path, report: Any) -> None:
             )
 
 
+def _enum_prefix(output_dir: Path, n_qubits: int, shard_index: int, num_shards: int) -> Path:
+    base = f"phase1_uniform_enum_{n_qubits}q"
+    if int(num_shards) > 1:
+        base = f"{base}_shard{int(shard_index)}of{int(num_shards)}"
+    return output_dir / base
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="VQE-QAS TFIM v3 reference alignment and uniform enumeration")
     parser.add_argument("--mode", choices=("reference", "enumerate", "all"), default="all")
@@ -94,6 +101,9 @@ def main() -> None:
     parser.add_argument("--dtype", choices=("complex128", "complex64"), default="complex128")
     parser.add_argument("--output-dir", default="outputs/vqe_tfim_v3_scaling")
     parser.add_argument("--top-k", type=int, default=12)
+    parser.add_argument("--num-shards", type=int, default=1)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
     scales = _parse_int_list(args.scales)
@@ -122,7 +132,13 @@ def main() -> None:
     if args.mode in {"enumerate", "all"}:
         backend = resolve_qas_backend(args.backend, fallback_to_cpu=not args.no_fallback_to_cpu, dtype=args.dtype)
         for n_qubits in scales:
-            print(f"\nRunning uniform enumeration: n={n_qubits}, backend={backend.name}", flush=True)
+            prefix = _enum_prefix(output_dir, n_qubits, args.shard_index, args.num_shards)
+            checkpoint_path = str(prefix.with_suffix(".partial.csv"))
+            print(
+                f"\nRunning uniform enumeration: n={n_qubits}, backend={backend.name}, "
+                f"shard={args.shard_index}/{args.num_shards}, checkpoint={checkpoint_path}",
+                flush=True,
+            )
             report = run_tfim_full_enumeration_baseline(
                 n_qubits=n_qubits,
                 J=args.J,
@@ -136,11 +152,14 @@ def main() -> None:
                 fair_max_evaluations=args.fair_max_evals,
                 adaptive_fair_starts=False,
                 init_mode=args.init_mode,
+                shard_index=args.shard_index,
+                num_shards=args.num_shards,
+                verbose=args.verbose,
+                checkpoint_path=checkpoint_path,
                 backend=backend,
             )
             lines = report.summary_lines(top_k=args.top_k)
             print("\n".join(lines), flush=True)
-            prefix = output_dir / f"phase1_uniform_enum_{n_qubits}q"
             _write_text(prefix.with_suffix(".md"), lines)
             _write_enumeration_csv(prefix.with_suffix(".csv"), report)
             output_dir.mkdir(parents=True, exist_ok=True)

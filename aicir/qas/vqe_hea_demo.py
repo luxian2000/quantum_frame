@@ -8,7 +8,9 @@ zero-cost guardrail -> simulated annealing with short-step VQE energy -> final V
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from math import exp
 from time import perf_counter
 from typing import Any, Dict, Iterable, List, Optional, Sequence
@@ -1717,6 +1719,64 @@ def _sample_masks(masks: Sequence[HEAMask], limit: int, seed: int) -> List[HEAMa
     return [masks[index] for index in indices]
 
 
+def _shard_items(items: Sequence[Any], shard_index: int = 0, num_shards: int = 1) -> List[Any]:
+    shard_count = max(1, int(num_shards))
+    shard = int(shard_index)
+    if shard < 0 or shard >= shard_count:
+        raise ValueError(f"shard_index must be in [0, {shard_count}), got {shard}")
+    return [item for index, item in enumerate(items) if index % shard_count == shard]
+
+
+def _append_vqe_checkpoint_row(
+    checkpoint_path: Optional[str],
+    result: VQEOptimizationResult,
+    problem: VQEDemoProblem,
+    candidate_index: int,
+    shard_index: int,
+    num_shards: int,
+) -> None:
+    if checkpoint_path is None:
+        return
+    path = Path(checkpoint_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "candidate_index",
+        "name",
+        "family",
+        "energy",
+        "delta_ref",
+        "n_params",
+        "nfev",
+        "n_starts",
+        "theta_init_mode",
+        "budget_per_start",
+        "shard_index",
+        "num_shards",
+    ]
+    write_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(
+            {
+                "candidate_index": int(candidate_index),
+                "name": result.architecture.name,
+                "family": get_structure_family(result.architecture),
+                "energy": f"{result.energy:.12f}",
+                "delta_ref": f"{result.energy - problem.reference_energy:.12f}",
+                "n_params": parameter_count(result.architecture.circuit),
+                "nfev": int(result.evaluations),
+                "n_starts": int(result.n_starts),
+                "theta_init_mode": result.metadata.get("theta_init_mode", ""),
+                "budget_per_start": result.metadata.get("budget_per_start", ""),
+                "shard_index": int(shard_index),
+                "num_shards": int(num_shards),
+            }
+        )
+        handle.flush()
+
+
 def zero_cost_guardrail(
     candidates: Sequence[ArchitectureSpec],
     n_samples: int = 6,
@@ -2902,6 +2962,10 @@ def run_tfim_full_enumeration_baseline(
     fair_params_per_start: int = 20,
     init_mode: str = THETA_INIT_RANDOM_UNIFORM_PI,
     init_scale: float = float(np.pi),
+    shard_index: int = 0,
+    num_shards: int = 1,
+    verbose: bool = False,
+    checkpoint_path: Optional[str] = None,
     backend: Optional[Backend] = None,
 ) -> VQEEnumerationReport:
     """Budget-capped fair-VQE baseline over the explicit TFIM HEA-mask space."""
@@ -2911,6 +2975,8 @@ def run_tfim_full_enumeration_baseline(
     masks = enumerate_hea_masks(problem.n_qubits)
     if candidate_limit is not None:
         masks = _sample_masks(masks, int(candidate_limit), seed)
+    unsharded_candidate_count = len(masks)
+    masks = _shard_items(masks, shard_index=shard_index, num_shards=num_shards)
     candidates = _dedupe_architectures([architecture_from_hea_mask(mask, backend=backend) for mask in masks])
 
     results: List[VQEOptimizationResult] = []
@@ -2925,7 +2991,7 @@ def run_tfim_full_enumeration_baseline(
         result = optimize_vqe_energy(
             architecture,
             problem,
-            seed=seed + 17000 + index,
+            seed=seed + 17000 + int(shard_index) * 100000 + index,
             n_starts=starts,
             evals_per_param=fair_evals_per_param,
             max_evaluations=fair_budget,
@@ -2936,6 +3002,21 @@ def run_tfim_full_enumeration_baseline(
         )
         result.metadata["source"] = "tfim_full_enumeration"
         results.append(result)
+        _append_vqe_checkpoint_row(
+            checkpoint_path=checkpoint_path,
+            result=result,
+            problem=problem,
+            candidate_index=index,
+            shard_index=shard_index,
+            num_shards=num_shards,
+        )
+        if verbose:
+            print(
+                f"completed n={n_qubits} shard={shard_index}/{num_shards} "
+                f"candidate={index}/{len(candidates)} energy={result.energy:.12f} "
+                f"nfev={result.evaluations} name={architecture.name}",
+                flush=True,
+            )
     results.sort(key=lambda result: (result.energy, result.architecture.name))
 
     return VQEEnumerationReport(
@@ -2946,6 +3027,11 @@ def run_tfim_full_enumeration_baseline(
             "reference_energy": problem.reference_energy,
             "seed": seed,
             "candidate_limit": candidate_limit,
+            "unsharded_candidate_count": unsharded_candidate_count,
+            "candidate_count": len(candidates),
+            "shard_index": int(shard_index),
+            "num_shards": int(num_shards),
+            "checkpoint_path": checkpoint_path,
             "fair_n_starts": fair_n_starts,
             "fair_evals_per_param": fair_evals_per_param,
             "fair_min_evaluations": fair_min_evaluations,
