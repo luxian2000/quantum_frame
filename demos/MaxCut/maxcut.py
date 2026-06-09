@@ -115,8 +115,61 @@ def exact_ground_energy(hamiltonian: Hamiltonian, backend: NumpyBackend) -> floa
     return float(np.linalg.eigvalsh(matrix).min())
 
 
-def plot_graph_and_circuit(graph: nx.Graph, circuit: Circuit, path: Path, metrics: dict) -> None:
-    """把随机图和 VQE 线路画在同一张 PNG 里：上方为图，下方为线路。"""
+def vqe_cut_partition(
+    circuit: Circuit, graph: nx.Graph, backend: NumpyBackend
+) -> Tuple[dict, float]:
+    """从 VQE 末态读出割划分（采样/取整方式）。
+
+    构造线路末态后，在概率显著的比特串中挑选割值最大的那个作为划分结果，
+    比单纯用能量期望 ⟨H⟩ 更贴近 MaxCut 的实际读出方式。返回
+    ``(assignment, sampled_cut)``：``assignment[node] ∈ {0, 1}`` 为节点所属集合。
+    """
+    n_qubits = graph.number_of_nodes()
+    state = State.zero_state(n_qubits, backend)
+    data = state.data
+    for gate in circuit.gates:
+        evolved = apply_gate_to_state(gate, data, n_qubits, backend)
+        if evolved is None:
+            data = backend.apply_unitary(data, gate_to_matrix(gate, cir_qubits=n_qubits, backend=backend))
+        else:
+            data = evolved
+    probs = np.abs(np.asarray(backend.to_numpy(data)).reshape(-1)) ** 2
+
+    def bits_of(index: int) -> List[int]:
+        # 量子比特 i 对应基态串的第 i 位（高位在前）。
+        return [(index >> (n_qubits - 1 - k)) & 1 for k in range(n_qubits)]
+
+    def cut_value(bits: List[int]) -> float:
+        return sum(
+            float(d.get("weight", 1.0))
+            for i, j, d in graph.edges(data=True)
+            if bits[int(i)] != bits[int(j)]
+        )
+
+    best_cut = -1.0
+    best_bits = bits_of(int(np.argmax(probs)))
+    for index in np.flatnonzero(probs > 1e-6):
+        bits = bits_of(int(index))
+        cut = cut_value(bits)
+        if cut > best_cut:
+            best_cut = cut
+            best_bits = bits
+    assignment = {node: best_bits[int(node)] for node in graph.nodes()}
+    return assignment, float(best_cut)
+
+
+def plot_graph_and_circuit(
+    graph: nx.Graph,
+    circuit: Circuit,
+    path: Path,
+    metrics: dict,
+    partition: dict | None = None,
+) -> None:
+    """把随机图和 VQE 线路画在同一张 PNG 里：上方为图，下方为线路。
+
+    若给定 ``partition``（``node -> {0, 1}`` 的割划分），则按所属集合为
+    节点上两种颜色，并把被割开的边高亮显示。
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -129,8 +182,27 @@ def plot_graph_and_circuit(graph: nx.Graph, circuit: Circuit, path: Path, metric
 
     # 上：随机图（节点即量子比特，边即 ZZ 项）。
     layout = nx.spring_layout(graph, seed=1)
-    nx.draw_networkx_edges(graph, layout, ax=graph_ax, edge_color="#9AA0A6", width=2.0)
-    nx.draw_networkx_nodes(graph, layout, ax=graph_ax, node_color="#A7D2A1", edgecolors="#4F8A45", node_size=900)
+
+    # 两个集合的配色：集合 0 绿色，集合 1 橙色。
+    SET_COLORS = ("#A7D2A1", "#F2B66D")
+    SET_EDGES = ("#4F8A45", "#C77B1F")
+    if partition is not None:
+        node_color = [SET_COLORS[int(partition[node])] for node in graph.nodes()]
+        node_edge = [SET_EDGES[int(partition[node])] for node in graph.nodes()]
+        # 被割开的边（两端属于不同集合）用实线高亮，其余边淡化。
+        cut_edges = [(i, j) for i, j in graph.edges() if partition[i] != partition[j]]
+        uncut_edges = [(i, j) for i, j in graph.edges() if partition[i] == partition[j]]
+        nx.draw_networkx_edges(graph, layout, ax=graph_ax, edgelist=uncut_edges,
+                               edge_color="#D5D8DC", width=1.5)
+        nx.draw_networkx_edges(graph, layout, ax=graph_ax, edgelist=cut_edges,
+                               edge_color="#5B6066", width=2.4, style="dashed")
+    else:
+        node_color = "#A7D2A1"
+        node_edge = "#4F8A45"
+        nx.draw_networkx_edges(graph, layout, ax=graph_ax, edge_color="#9AA0A6", width=2.0)
+
+    nx.draw_networkx_nodes(graph, layout, ax=graph_ax, node_color=node_color,
+                           edgecolors=node_edge, linewidths=2.0, node_size=900)
     nx.draw_networkx_labels(graph, layout, ax=graph_ax, font_size=14, font_color="#1B3A16")
     graph_ax.set_title(
         f"Random graph: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges  "
@@ -275,8 +347,10 @@ def main() -> None:
     )
     print(f"       已写入 {HAMILTONIAN_PY}")
 
-    # 4) 把随机图和 VQE 线路画到同一张 PNG
-    plot_graph_and_circuit(graph, best_circuit, CIRCUIT_PNG, metrics)
+    # 4) 把随机图和 VQE 线路画到同一张 PNG（按割划分给节点上两种颜色）
+    partition, sampled_cut = vqe_cut_partition(best_circuit, graph, backend)
+    print(f"       采样读出割值（最佳比特串）= {sampled_cut:.3f}。")
+    plot_graph_and_circuit(graph, best_circuit, CIRCUIT_PNG, metrics, partition=partition)
     print(f"[4/4] 已绘制随机图 + VQE 线路到 {CIRCUIT_PNG}")
 
 

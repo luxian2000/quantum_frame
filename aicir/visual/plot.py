@@ -81,8 +81,8 @@ _FAMILY: dict[str, str] = {
 
 # Geometry, in data units (the axes use an equal aspect ratio).
 _BOX = 0.62          # gate-box side length
-_DOT = 0.10          # control-dot radius
-_OPLUS = 0.22        # CNOT target circle radius
+_OPLUS = _BOX / 4    # CNOT 空心圆半径：直径 = _BOX / 2（方块边长的一半）
+_DOT = _BOX / 8      # 控制点半径：直径 = _BOX / 4（空心圆直径的一半）
 _ROUND = 0.12        # corner rounding of gate boxes
 _INNER_SUBLABEL_OFFSET = 0.236  # golden-ratio lower text position inside a gate box
 
@@ -176,6 +176,21 @@ def _yy(qubit: int, n_qubits: int) -> float:
     return float(n_qubits - 1 - qubit)
 
 
+def _fit_label_fontsize(label: str, fontsize: float, width: float = _BOX) -> float:
+    """缩小多字符标签的字号，使 ``Rzz``/``Rxx`` 等文字随方块大小自适应。
+
+    单字符标签（如 ``X``）按基准字号显示；字符越多，字号越小，使文字
+    始终落在方块内部。字号同时随方块宽度 ``width`` 等比缩放。
+    """
+    n_chars = len(label)
+    if n_chars <= 1:
+        fit = 1.0
+    else:
+        # 2 字符及以上统一按 2 字符基准缩放，使 "Rzz"/"Rxx" 与 "Rx" 字号相同。
+        fit = 1.5 / min(n_chars, 2)
+    return fontsize * fit * (width / _BOX)
+
+
 def _draw_box(ax, x, y, label, facecolor, edgecolor, *, fontsize, sublabel=None,
               sublabel_inside=False,
               sublabel_scale=0.62,
@@ -195,37 +210,47 @@ def _draw_box(ax, x, y, label, facecolor, edgecolor, *, fontsize, sublabel=None,
     )
     ax.add_patch(patch)
     label_y = y + height * 0.14 if sublabel and sublabel_inside else y
-    ax.text(x, label_y, label, ha="center", va="center", fontsize=fontsize,
+    ax.text(x, label_y, label, ha="center", va="center",
+            fontsize=_fit_label_fontsize(label, fontsize, width),
             color=edgecolor, fontweight="bold", zorder=4)
     if sublabel:
+        # 角度文字的字号随方块宽度等比缩放
+        sub_fs = fontsize * sublabel_scale * (width / _BOX)
         if sublabel_inside:
             ax.text(x, y - height * _INNER_SUBLABEL_OFFSET, sublabel, ha="center", va="center",
-                    fontsize=fontsize * sublabel_scale, color=edgecolor,
+                    fontsize=sub_fs, color=edgecolor,
                     zorder=5)
         else:
-            ax.text(x, y - height / 2 - 0.04, sublabel, ha="center", va="top",
-                    fontsize=fontsize * sublabel_scale, color=edgecolor, zorder=5,
+            # 与方块底边的间距随高度缩放
+            gap = height * 0.065
+            ax.text(x, y - height / 2 - gap, sublabel, ha="center", va="top",
+                    fontsize=sub_fs, color=edgecolor, zorder=5,
                     bbox=dict(boxstyle="round,pad=0.05", facecolor="white",
                               edgecolor="none"))
 
 
-def _draw_control(ax, x, y, color):
+_DEFAULT_FONTSIZE = 15  # 与 plot() 的默认值保持一致
+
+
+def _draw_control(ax, x, y, color, fontsize=_DEFAULT_FONTSIZE):
     from matplotlib.patches import Circle
 
-    ax.add_patch(Circle((x, y), _DOT, facecolor=color, edgecolor=color, zorder=4))
+    r = _DOT * (fontsize / _DEFAULT_FONTSIZE)
+    ax.add_patch(Circle((x, y), r, facecolor=color, edgecolor=color, zorder=4))
 
 
-def _draw_oplus(ax, x, y, color):
+def _draw_oplus(ax, x, y, color, fontsize=_DEFAULT_FONTSIZE):
     from matplotlib.patches import Circle
 
-    ax.add_patch(Circle((x, y), _OPLUS, facecolor="white", edgecolor=color,
+    r = _OPLUS * (fontsize / _DEFAULT_FONTSIZE)
+    ax.add_patch(Circle((x, y), r, facecolor="white", edgecolor=color,
                          linewidth=1.6, zorder=4))
-    ax.plot([x - _OPLUS, x + _OPLUS], [y, y], color=color, linewidth=1.6, zorder=5)
-    ax.plot([x, x], [y - _OPLUS, y + _OPLUS], color=color, linewidth=1.6, zorder=5)
+    ax.plot([x - r, x + r], [y, y], color=color, linewidth=1.6, zorder=5)
+    ax.plot([x, x], [y - r, y + r], color=color, linewidth=1.6, zorder=5)
 
 
-def _draw_swap_mark(ax, x, y, color):
-    d = _OPLUS * 0.8
+def _draw_swap_mark(ax, x, y, color, fontsize=_DEFAULT_FONTSIZE):
+    d = _OPLUS * 0.8 * (fontsize / _DEFAULT_FONTSIZE)
     ax.plot([x - d, x + d], [y - d, y + d], color=color, linewidth=2.0, zorder=4)
     ax.plot([x - d, x + d], [y + d, y - d], color=color, linewidth=2.0, zorder=4)
 
@@ -274,8 +299,8 @@ def _render_gate(ax, gate, x, n_qubits, fontsize):
     if gate_type == "swap":
         q1, q2 = int(gate["qubit_1"]), int(gate["qubit_2"])
         _draw_connector(ax, x, min(q1, q2), max(q1, q2), n_qubits, edgecolor)
-        _draw_swap_mark(ax, x, _yy(q1, n_qubits), edgecolor)
-        _draw_swap_mark(ax, x, _yy(q2, n_qubits), edgecolor)
+        _draw_swap_mark(ax, x, _yy(q1, n_qubits), edgecolor, fontsize=fontsize)
+        _draw_swap_mark(ax, x, _yy(q2, n_qubits), edgecolor, fontsize=fontsize)
         return
 
     if gate_type in {"rzz", "rxx"}:
@@ -299,9 +324,9 @@ def _render_gate(ax, gate, x, n_qubits, fontsize):
         involved = controls + [target]
         _draw_connector(ax, x, min(involved), max(involved), n_qubits, edgecolor)
         for c in controls:
-            _draw_control(ax, x, _yy(c, n_qubits), edgecolor)
+            _draw_control(ax, x, _yy(c, n_qubits), edgecolor, fontsize=fontsize)
         if gate_type in {"cx", "cnot", "toffoli", "ccnot"}:
-            _draw_oplus(ax, x, _yy(target, n_qubits), edgecolor)
+            _draw_oplus(ax, x, _yy(target, n_qubits), edgecolor, fontsize=fontsize)
         else:
             _draw_box(ax, x, _yy(target, n_qubits), _gate_label(gate),
                       facecolor, edgecolor, fontsize=fontsize,
