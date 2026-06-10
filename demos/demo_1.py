@@ -1,17 +1,18 @@
 from aicir import (
     Circuit, Measure, NumpyBackend,
-    hadamard, cnot, pauli_x, cry, rz, rzz, s_gate, swap, u3, u2, rxx, measure,
+    hadamard, cnot, pauli_x, cry, rz, rzz, s_gate, swap, u3, u2, rxx, measure, cz
 )
 import numpy as np
 
 cir = Circuit(
     hadamard(0),
     u2(0.4, 0.5, 3),
-    cry(np.pi / 3, 0, [1, 2]),
+    cry(np.pi / 3, 0, [1, 3, 2]),
     rz(0.5, 1),
+    cz(2, [3]),
     rxx(np.pi / 4, 2, 3),
     u3(0.1, 0.2, 0.3, 2),
-    cnot(1, [0, 2, 3]),
+    cnot(1, [0, 3]),
     cnot(2, [0]),
     swap(0, 3),
     pauli_x(3),
