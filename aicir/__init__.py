@@ -45,6 +45,10 @@ _export(
     ]
 )
 
+from .ir import Operation
+
+_export(["Operation"])
+
 try:
     from .channel.noise import (
         AmplitudeDampingChannel,
@@ -180,11 +184,16 @@ else:
 
 for _module_name in [
     "chemistry",
+    "devices",
     "encoder",
+    "gates",
+    "ir",
     "metrics",
     "optimization",
+    "primitives",
     "qas",
     "qml",
+    "transpile",
     "universal",
     "visual",
     "vqc",

@@ -11,6 +11,8 @@
 
 `aicir.optimizer.circuit.optimize_basic` 实现了一组简单的局部门级化简与合并规则，用于消除明显的冗余门并合并可合并的旋转门，目的是减小导出后电路的体积并改善可读性。`optimize_circuit(circuit)` 是面向 `Circuit` 对象的专用入口，返回优化后的新 `Circuit`，保留 `n_qubits` 和已绑定 backend。
 
+线路级优化正在迁移到 `aicir.transpile`。当前 `optimize_circuit(circuit)` 内部委托给 `aicir.transpile.default_optimization_pipeline()`；旧接口保持可用，新代码如果需要自定义 pass 顺序，建议直接使用 `aicir.transpile.PassManager`。
+
 这些优化可接受多种输入形式并保持输出类型：
 - `Circuit` / `list[gate_dict]` / dict(`gates`, `n_qubits`)（记作 dict 路径）
 - OpenQASM 文本（记作 qasm 路径）
