@@ -15,6 +15,7 @@ import sys
 
 import numpy as np
 
+from ..ir import normalize_gate
 from .gates import gate_to_matrix, identity
 
 
@@ -471,7 +472,7 @@ class Circuit:
     """量子电路类：支持门序构建、拼接和矩阵生成。"""
 
     def __init__(self, *gates, n_qubits=None, backend=None):
-        self.gates = list(gates)
+        self.gates = [normalize_gate(gate) for gate in gates]
         self.n_qubits = _infer_n_qubits_from_gates(self.gates) if n_qubits is None else n_qubits
         self._backend = backend
 
@@ -486,11 +487,11 @@ class Circuit:
         return Circuit(*self.gates, *other.gates, n_qubits=self.n_qubits, backend=backend)
 
     def append(self, gate):
-        self.gates.append(gate)
+        self.gates.append(normalize_gate(gate))
         return self
 
     def extend(self, *gates):
-        self.gates.extend(gates)
+        self.gates.extend(normalize_gate(gate) for gate in gates)
         return self
 
     @property

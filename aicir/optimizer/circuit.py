@@ -604,8 +604,7 @@ def optimize_basic(
 
     if kind == "dict":
         if isinstance(obj, Circuit):
-            optimized = _optimize_gate_dict_list_fixed_point(obj.gates)
-            return Circuit(*optimized, n_qubits=obj.n_qubits, backend=obj.backend)
+            return optimize_circuit(obj)
         if isinstance(obj, list):
             return _optimize_gate_dict_list_fixed_point(obj)
         if isinstance(obj, dict) and "gates" in obj:
@@ -668,9 +667,9 @@ def optimize_circuit(
 
     if not isinstance(circuit, Circuit):
         raise TypeError("optimize_circuit 输入必须是 Circuit")
-    optimized = _optimize_gate_dict_list_fixed_point(
-        circuit.gates,
+    from ..transpile import default_optimization_pipeline
+
+    return default_optimization_pipeline(
         max_rounds=max_rounds,
         max_reorder_hops=max_reorder_hops,
-    )
-    return Circuit(*optimized, n_qubits=circuit.n_qubits, backend=circuit.backend)
+    ).run(circuit)

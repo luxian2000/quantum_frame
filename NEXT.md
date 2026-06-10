@@ -31,6 +31,50 @@
 
 主要短板是：核心线路表示仍以门字典列表为主，类型约束和元信息不足；编译优化还不是 pass pipeline；后端、噪声、测量、梯度、硬件约束之间缺少统一的执行抽象。
 
+## 目标目录结构
+
+后续架构调整建议采用“新增清晰架构层，旧路径保持兼容”的方式推进。目标结构如下：
+
+```text
+aicir/
+|-- core/              # 保留：Circuit、Parameter、基础构造入口
+|   `-- io/            # QASM/JSON 等基础序列化
+|-- ir/                # 新增：Operation、Measurement、Observable、CircuitIR
+|-- gates/             # 新增：GateSpec 注册表、门元信息、分解规则
+|-- transpile/         # 新增：Pass、PassManager、线路编译与优化
+|   `-- passes/        # 新增：验证、规范化、消去、合并、分解、布局、路由等 pass
+|-- devices/           # 新增：Target、设备能力、连接拓扑、硬件约束
+|-- backends/          # 长期建议从 channel/backends 拆出
+|-- noise/             # 长期建议从 channel/noise 拆出
+|-- observables/       # 长期建议从 channel/operators 拆出
+|-- primitives/        # 新增：Sampler、Estimator、统一执行结果
+|-- qnode/             # 新增：QNode、expval、probs、sample
+|-- qml/               # 保留：梯度方法；新增 diff method 注册表
+|-- optimizer/         # 保留：经典参数优化；线路优化逐步迁到 transpile
+|-- measure/           # 保留兼容；底层逐步委托 primitives
+|-- vqc/               # 保留：VQE/QAOA/VQD/SSVQE，逐步调用 Estimator/QNode
+|-- qas/               # 保留：架构搜索，逐步接入 Target/GateSpec
+|-- metrics/           # 保留：评分指标，逐步接入 Target/GateSpec
+|-- interop/           # 新增：Qiskit、PennyLane、QASM3 互转
+|-- visual/
+|-- chemistry/
+|-- encoder/
+|-- optimization/
+|-- universal/
+`-- wireless/
+```
+
+第一批已落地的目录应聚焦底层抽象，不移动旧模块：
+
+```text
+aicir/ir/
+aicir/gates/
+aicir/transpile/
+aicir/transpile/passes/
+aicir/devices/
+aicir/primitives/
+```
+
 ## 改进方向
 
 ### 1. 建立正式的线路中间表示
@@ -204,8 +248,8 @@ GateSpec(
 
 优先级最高，风险较低。
 
-1. 新增 typed `Operation`，保留门字典兼容入口。
-2. 新增 `Pass` / `PassManager`，把现有线路优化规则拆成 pass。
+1. 新增 typed `Operation`，保留门字典兼容入口。已落地：`aicir.ir.Operation` 支持与现有门字典互转，`Circuit` 构造、`append`、`extend` 已可接收 `Operation` 并继续保存现有门字典 surface。
+2. 新增 `Pass` / `PassManager`，把现有线路优化规则拆成 pass。已落地：`aicir.transpile` 提供 `TransformationPass`、`PassManager`、`default_optimization_pipeline`，并提供 `CancelInversePass`、`MergeRotationsPass`、`CommuteSingleQubitPass` 等第一批本地优化 pass；`optimize_circuit` 已委托给默认 pipeline。
 3. 新增 `Sampler` / `Estimator` primitives，先包装现有 `Measure` 和 `PauliEstimator`。
 4. 让 `BasicVQE` 和 `BasicQAOA` 优先调用 `Estimator`。
 

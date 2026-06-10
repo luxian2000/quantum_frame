@@ -6,6 +6,10 @@
 
 ### Added
 
+- 新增第一批架构演进目录占位：`aicir.ir`、`aicir.gates`、`aicir.transpile`、`aicir.transpile.passes`、`aicir.devices`、`aicir.primitives`，用于后续 typed IR、GateSpec、pass pipeline、Target 和 Sampler/Estimator primitives 迁移。
+- `NEXT.md` 记录 `aicir` 目标目录结构和第一批已落地目录。
+- 新增 typed IR `Operation`：支持从现有门字典构造、转换回门字典、通过 `normalize_gate` 兼容旧入口；`Circuit` 构造、`append`、`extend` 现在可接收 `Operation`，同时内部继续保存现有门字典格式。
+- 新增 `aicir.transpile` pass pipeline：提供 `TransformationPass`、`PassManager`、`default_optimization_pipeline`，以及 `ValidatePass`、`CanonicalizePass`、`CancelInversePass`、`MergeRotationsPass`、`CommuteSingleQubitPass`；`optimize_circuit` 和 `optimize_basic(Circuit)` 继续保留旧接口并委托给默认 pipeline。
 - 新增 `aicir.optimizer.optimize_circuit` 公开入口，用于直接优化 `Circuit` 对象并保留 `n_qubits` 与 backend。
 - 扩展 `aicir.optimizer.circuit` 的 dict/Circuit 路径：支持有限安全重排，可跨过不同量子比特的单比特门，以及已知可交换的 CNOT 模式来消去冗余门或合并 `rx/ry/rz`。
 
