@@ -16,6 +16,7 @@ import numpy as np
 from ..channel.backends.base import Backend
 from ..core.circuit import Circuit
 from ..core.state import StateVector
+from ..ir import circuit_gate_dicts, circuit_instructions, instruction_name, instruction_parameter
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -27,8 +28,8 @@ def _get_parametrized_gate_indices(circuit: Circuit) -> List[int]:
     返回电路中所有包含 'parameter' 字段的门的索引。
     """
     indices = []
-    for i, gate in enumerate(circuit.gates):
-        if "parameter" in gate:
+    for i, gate in enumerate(circuit_instructions(circuit)):
+        if instruction_parameter(gate) is not None:
             indices.append(i)
     return indices
 
@@ -45,7 +46,7 @@ def _replace_circuit_parameters(circuit: Circuit, params: np.ndarray) -> Circuit
     返回:
         新的 Circuit 对象，所有参数化门的参数已更新
     """
-    gates_copy = deepcopy(list(circuit.gates))
+    gates_copy = deepcopy(circuit_gate_dicts(circuit))
     param_idx = 0
 
     for i, gate in enumerate(gates_copy):
@@ -72,7 +73,7 @@ def _replace_circuit_parameters(circuit: Circuit, params: np.ndarray) -> Circuit
             ]
             param_idx += 3
 
-    return Circuit(*gates_copy, n_qubits=circuit.n_qubits)
+    return Circuit(*gates_copy, n_qubits=circuit.n_qubits, backend=getattr(circuit, "backend", None))
 
 
 def _compute_fidelity(sv1: StateVector, sv2: StateVector, backend: Backend) -> float:
@@ -97,9 +98,9 @@ def _compute_fidelity(sv1: StateVector, sv2: StateVector, backend: Backend) -> f
 def _count_total_parameters(circuit: Circuit, param_indices: List[int]) -> int:
     """统计电路中所有参数化门的总参数数量。"""
     total_params = 0
+    gates = tuple(circuit_instructions(circuit))
     for idx in param_indices:
-        gate = circuit.gates[idx]
-        gate_type = gate["type"]
+        gate_type = instruction_name(gates[idx])
         if gate_type in ("rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"):
             total_params += 1
         elif gate_type == "u2":

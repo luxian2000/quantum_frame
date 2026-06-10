@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from ..core.circuit import Circuit
+from ..ir import circuit_gate_dicts, has_circuit_instructions
 from .base import TransformationPass
 
 
@@ -62,16 +63,18 @@ class PassManager:
             raise ValueError("max_rounds must be positive")
 
     def run(self, circuit: Circuit) -> Circuit:
+        if not hasattr(circuit, "n_qubits") or not has_circuit_instructions(circuit):
+            raise TypeError("PassManager.run expects a Circuit or CircuitIR-like object")
         if not isinstance(circuit, Circuit):
-            raise TypeError("PassManager.run expects a Circuit")
+            circuit = Circuit(*circuit_gate_dicts(circuit), n_qubits=int(circuit.n_qubits))
 
         current = circuit
         rounds = self.max_rounds if self.fixed_point else 1
         for _ in range(rounds):
-            before = list(current.gates)
+            before = circuit_gate_dicts(current)
             for item in self.passes:
                 current = item.run(current)
-            if not self.fixed_point or current.gates == before:
+            if not self.fixed_point or circuit_gate_dicts(current) == before:
                 return current
         return current
 

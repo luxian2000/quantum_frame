@@ -9,6 +9,8 @@ from typing import Any
 
 import numpy as np
 
+from ..ir import circuit_instructions, instruction_name, instruction_to_gate_dict
+
 
 def _as_scalar(value: Any, *, label: str) -> float:
     # Accept backend-native tensors in addition to numpy arrays and Python
@@ -517,6 +519,7 @@ def _ad_gate_local_matrix_and_axes(gate, backend):
         _unitary_parameter_matrix,
     )
 
+    gate = instruction_to_gate_dict(gate)
     gate_type = gate["type"]
     if gate_type in ("identity", "I"):
         return None, None
@@ -551,6 +554,7 @@ def _ad_generator_local_and_axes(gate):
     """Return ``(generator_matrix, axes)`` for a differentiable gate."""
     from aicir.core.gates import _normalized_control_data
 
+    gate = instruction_to_gate_dict(gate)
     gate_type = gate["type"]
     if gate_type == "rzz":
         zz = np.diag([1.0, -1.0, -1.0, 1.0]).astype(_CDTYPE)
@@ -618,7 +622,7 @@ def ad(circuit, observable, *, backend=None, return_value: bool = False):
         raise ValueError(f"circuit has unbound parameter(s): {names}; call bind_parameters(...) first")
 
     n_qubits = int(circuit.n_qubits)
-    gates = list(circuit.gates)
+    gates = list(circuit_instructions(circuit))
 
     if hasattr(observable, "to_matrix"):
         operator = observable.to_matrix(bk)
@@ -640,7 +644,7 @@ def ad(circuit, observable, *, backend=None, return_value: bool = False):
     phi = psi  # walks backward as |ψ_k>
     grads_reversed: list[float] = []
     for gate, (matrix, axes) in zip(reversed(gates), reversed(cached)):
-        if gate["type"] in _AD_DIFFERENTIABLE:
+        if instruction_name(gate) in _AD_DIFFERENTIABLE:
             gen, gen_axes = _ad_generator_local_and_axes(gate)
             g_phi = _ad_apply(bk, gen, gen_axes, n_qubits, phi)  # G_k |ψ_k>
             overlap = bk.to_numpy(bk.inner_product(lam, g_phi))  # <λ_k| G_k |ψ_k>

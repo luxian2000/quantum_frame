@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from ..channel.backends.base import Backend
 from ..core.circuit import Circuit
+from ..ir import circuit_instruction_count
 from ._utils import count_parameters, count_two_qubit_gates
 
 
@@ -81,7 +82,7 @@ class ArchitectureSpec:
 
     @property
     def n_gates(self) -> int:
-        return len(self.circuit.gates)
+        return circuit_instruction_count(self.circuit)
 
     @property
     def two_qubit_gate_count(self) -> int:

@@ -12,6 +12,8 @@ from typing import Iterable
 import numpy as np
 import torch
 
+from ..ir.operation import normalize_gate
+
 _CDTYPE = np.complex64
 
 KET_0 = np.array([[1.0 + 0.0j], [0.0 + 0.0j]], dtype=_CDTYPE)
@@ -402,6 +404,7 @@ def _torch_base_matrix(entries, dtype, device):
 
 
 def _single_qubit_base_for_gate_backend(gate, backend):
+    gate = normalize_gate(gate)
     parameter = gate.get("parameter", None)
     if not _contains_torch_tensor(parameter):
         return _single_qubit_base_for_gate(gate)
@@ -687,6 +690,7 @@ def _apply_local_matrix_to_state(state, local_matrix, axes, n_qubits, backend):
 
 
 def _single_qubit_base_for_gate(gate):
+    gate = normalize_gate(gate)
     gate_type = gate["type"]
     gate_parameter = gate.get("parameter", None)
 
@@ -783,6 +787,7 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
     返回后端原生态向量；若门类型无法局部展开则返回 None，调用方可回退到
     gate_to_matrix + apply_unitary。
     """
+    gate = normalize_gate(gate)
     gate_type = gate["type"]
 
     if gate_type in ["identity", "I"]:
@@ -908,6 +913,7 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
 
 
 def gate_to_matrix(gate, cir_qubits=1, backend=None):
+    gate = normalize_gate(gate)
     gate_type = gate["type"]
     gate_parameter = gate.get("parameter", None)
 

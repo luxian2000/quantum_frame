@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ...core.circuit import Circuit
+from ...ir import circuit_gate_dicts
 from ..base import TransformationPass
 from ._local_rewrite import circuit_from_gates, commute_single_qubit_gates
 
@@ -18,5 +19,5 @@ class CommuteSingleQubitPass(TransformationPass):
     def run(self, circuit: Circuit) -> Circuit:
         return circuit_from_gates(
             circuit,
-            commute_single_qubit_gates(circuit.gates, max_reorder_hops=self.max_reorder_hops),
+            commute_single_qubit_gates(circuit_gate_dicts(circuit), max_reorder_hops=self.max_reorder_hops),
         )

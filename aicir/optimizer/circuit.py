@@ -10,6 +10,12 @@ from typing import Any, Iterable
 import numpy as np
 
 from ..core.circuit import Circuit
+from ..ir import (
+    has_circuit_instructions,
+    instruction_controls,
+    instruction_qubits,
+    instruction_to_gate_dict,
+)
 
 
 _DEFAULT_MAX_ROUNDS = 64
@@ -42,42 +48,14 @@ def _gate_family_from_name(name: str) -> str | None:
 
 
 def _normalize_control_states(gate: dict[str, Any]) -> tuple[int, ...]:
-    controls = list(gate.get("control_qubits", []) or [])
+    gate = instruction_to_gate_dict(gate)
+    controls = tuple(int(q) for q in instruction_controls(gate))
     raw = gate.get("control_states")
-    if raw is None:
-        return tuple(1 for _ in controls)
-    return tuple(int(x) for x in raw)
-
-
-def _extend_qubits(qubits: list[int], values: Any) -> None:
-    if isinstance(values, (list, tuple, set)):
-        qubits.extend(int(qubit) for qubit in values)
-    else:
-        qubits.append(int(values))
+    return tuple(1 for _ in controls) if raw is None else tuple(int(x) for x in raw)
 
 
 def _gate_qubits(gate: dict[str, Any]) -> list[int]:
-    qubits: list[int] = []
-
-    target = gate.get("target_qubit")
-    if target is not None:
-        qubits.append(int(target))
-
-    controls = gate.get("control_qubits")
-    if controls is not None:
-        _extend_qubits(qubits, controls)
-
-    for key in ("qubit_1", "qubit_2"):
-        qubit = gate.get(key)
-        if qubit is not None:
-            qubits.append(int(qubit))
-
-    for key in ("qubits", "targets"):
-        values = gate.get(key)
-        if values is not None:
-            _extend_qubits(qubits, values)
-
-    return sorted(set(qubits))
+    return sorted(set(int(q) for q in (*instruction_qubits(gate), *instruction_controls(gate))))
 
 
 def _is_single_qubit_gate(gate: dict[str, Any]) -> bool:
@@ -237,6 +215,7 @@ def _optimize_gate_dict_list_fixed_point(
     max_reorder_hops: int = _DEFAULT_MAX_REORDER_HOPS,
 ) -> list[dict[str, Any]]:
     current = copy.deepcopy(list(gates))
+    current = [instruction_to_gate_dict(gate) for gate in current]
     for _ in range(max_rounds):
         nxt = _optimize_gate_dict_list(current, max_reorder_hops=max_reorder_hops)
         if nxt == current:
@@ -597,13 +576,18 @@ def optimize_basic(
     if kind is None:
         if isinstance(obj, str):
             kind = "qasm"
-        elif isinstance(obj, Circuit) or isinstance(obj, list) or (isinstance(obj, dict) and "gates" in obj):
+        elif (
+            isinstance(obj, Circuit)
+            or (hasattr(obj, "n_qubits") and has_circuit_instructions(obj))
+            or isinstance(obj, list)
+            or (isinstance(obj, dict) and "gates" in obj)
+        ):
             kind = "dict"
         else:
             kind = "dag"
 
     if kind == "dict":
-        if isinstance(obj, Circuit):
+        if isinstance(obj, Circuit) or (hasattr(obj, "n_qubits") and has_circuit_instructions(obj)):
             return optimize_circuit(obj)
         if isinstance(obj, list):
             return _optimize_gate_dict_list_fixed_point(obj)
@@ -665,8 +649,8 @@ def optimize_circuit(
     and the bound backend.
     """
 
-    if not isinstance(circuit, Circuit):
-        raise TypeError("optimize_circuit 输入必须是 Circuit")
+    if not hasattr(circuit, "n_qubits") or not has_circuit_instructions(circuit):
+        raise TypeError("optimize_circuit 输入必须是 Circuit 或 CircuitIR-like 对象")
     from ..transpile import default_optimization_pipeline
 
     return default_optimization_pipeline(

@@ -13,6 +13,7 @@ from ...core.circuit import Circuit
 from ...core.density import DensityMatrix
 from ...core.gates import gate_to_matrix
 from ...core.state import State
+from ...ir import circuit_instruction_count, circuit_instructions, instruction_name
 
 
 @dataclass
@@ -58,7 +59,7 @@ def evolve_density_gatewise(
     noise_model: Optional[NoiseModel] = None,
 ) -> DensityMatrix:
     rho = initial_state.to_density_matrix()
-    for gate in circuit.gates:
+    for gate in circuit_instructions(circuit):
         gate_unitary = gate_to_matrix(gate, cir_qubits=circuit.n_qubits, backend=backend)
         rho = rho.evolve(gate_unitary)
         if noise_model is not None:
@@ -67,7 +68,7 @@ def evolve_density_gatewise(
                     rho.data,
                     n_qubits=circuit.n_qubits,
                     backend=backend,
-                    gate_type=gate.get("type"),
+                    gate_type=instruction_name(gate),
                     gate=gate,
                 ),
                 circuit.n_qubits,
@@ -117,8 +118,8 @@ def noise_sensitivity(
     avg_fidelity_loss = 1.0 - fidelity_noisy
 
     n_gates_by_type: Dict[str, int] = {}
-    for gate in circuit.gates:
-        gate_type = gate.get("type", "unknown")
+    for gate in circuit_instructions(circuit):
+        gate_type = instruction_name(gate)
         n_gates_by_type[gate_type] = n_gates_by_type.get(gate_type, 0) + 1
 
     return NoiseSensitivityResult(
@@ -129,7 +130,7 @@ def noise_sensitivity(
         noisy_avg_fidelity=fidelity_noisy,
         avg_fidelity_loss=avg_fidelity_loss,
         gate_type_sensitivity=analyze_gate_type_sensitivity(circuit, noise_model),
-        n_gates_total=len(circuit.gates),
+        n_gates_total=circuit_instruction_count(circuit),
         n_gates_by_type=n_gates_by_type,
         noise_strength=estimate_noise_strength(noise_model) if noise_model else 0.0,
     )
@@ -139,8 +140,9 @@ def analyze_gate_type_sensitivity(circuit: Circuit, noise_model: Optional[NoiseM
     if noise_model is None:
         return {}
     sensitivity: Dict[str, float] = {}
-    for gate_type in {gate.get("type", "unknown") for gate in circuit.gates}:
-        count = sum(1 for gate in circuit.gates if gate.get("type", "unknown") == gate_type)
+    names = [instruction_name(gate) for gate in circuit_instructions(circuit)]
+    for gate_type in set(names):
+        count = sum(1 for name in names if name == gate_type)
         if gate_type in {"cx", "cnot", "cy", "cz", "rzz", "rxx", "swap", "crx", "cry", "crz"}:
             sensitivity[gate_type] = 0.02 * count
         elif gate_type in {"rx", "ry", "rz", "u2", "u3"}:

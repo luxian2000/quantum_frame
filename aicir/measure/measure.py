@@ -6,7 +6,6 @@ aicir/measure/measure.py
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -14,13 +13,14 @@ import numpy as np
 from ..core.gates import apply_gate_to_state, gate_to_matrix
 from ..core.density import DensityMatrix
 from ..core.state import StateVector
+from ..ir import circuit_instructions, has_circuit_instructions, instruction_name, instruction_qubits
 from .result import Result
 from .sampler import Sampler
 
 
 def _is_measure_gate(gate) -> bool:
     """True for in-circuit measurement markers (see :func:`aicir.measure`)."""
-    return isinstance(gate, Mapping) and gate.get("type") in ("measure", "measurement")
+    return instruction_name(gate).lower() in {"measure", "measurement"}
 
 
 def _readout_qubits(circuit, n_qubits: int) -> Tuple[bool, List[int]]:
@@ -33,14 +33,13 @@ def _readout_qubits(circuit, n_qubits: int) -> Tuple[bool, List[int]]:
     """
     measured: set[int] = set()
     has_measure = False
-    for gate in getattr(circuit, "gates", []):
+    if not has_circuit_instructions(circuit):
+        return False, list(range(n_qubits))
+    for gate in circuit_instructions(circuit):
         if not _is_measure_gate(gate):
             continue
         has_measure = True
-        qubits = gate.get("qubits")
-        if not qubits and "target_qubit" in gate:
-            qubits = [gate["target_qubit"]]
-        measured.update(int(q) for q in (qubits or []))
+        measured.update(int(q) for q in instruction_qubits(gate))
     if not has_measure or not measured:
         return has_measure, list(range(n_qubits))
     return True, sorted(measured)
@@ -135,8 +134,7 @@ class Measure:
 
     @staticmethod
     def _has_gate_sequence(circuit) -> bool:
-        gates = getattr(circuit, "gates", None)
-        return isinstance(gates, Sequence)
+        return has_circuit_instructions(circuit)
 
     def _build_initial_state(self, n_qubits: int, backend, initial_state=None) -> StateVector:
         if initial_state is None:
@@ -181,7 +179,7 @@ class Measure:
 
     def _evolve_state_vector_gatewise(self, circuit, sv0: StateVector, backend) -> StateVector:
         sv = sv0
-        for gate in circuit.gates:
+        for gate in circuit_instructions(circuit):
             if _is_measure_gate(gate):
                 continue
             new_data = apply_gate_to_state(gate, sv.data, sv.n_qubits, backend)
@@ -200,7 +198,7 @@ class Measure:
         noise_model=None,
     ) -> DensityMatrix:
         rho = rho0
-        for gate in circuit.gates:
+        for gate in circuit_instructions(circuit):
             if _is_measure_gate(gate):
                 continue
             gate_unitary = gate_to_matrix(gate, cir_qubits=rho.n_qubits, backend=backend)
@@ -210,7 +208,7 @@ class Measure:
                     rho.data,
                     n_qubits=rho.n_qubits,
                     backend=backend,
-                    gate_type=gate.get("type"),
+                    gate_type=instruction_name(gate),
                 )
                 rho = DensityMatrix(rho_noisy, rho.n_qubits, backend)
         return rho
