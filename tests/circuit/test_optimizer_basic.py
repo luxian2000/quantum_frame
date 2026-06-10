@@ -122,6 +122,84 @@ def test_optimize_basic_dict_merges_adjacent_rotations():
     assert np.isclose(float(out.gates[1]["parameter"]), 0.9)
 
 
+def test_optimize_basic_dict_safe_limited_reorder_for_single_qubit_gates():
+    circuit = Circuit(
+        {"type": "pauli_x", "target_qubit": 1},
+        {"type": "pauli_x", "target_qubit": 0},
+        {"type": "pauli_x", "target_qubit": 1},
+        n_qubits=2,
+    )
+
+    out = optimize_basic(circuit)
+
+    assert isinstance(out, Circuit)
+    assert out.gates == [{"type": "pauli_x", "target_qubit": 0}]
+
+
+def test_optimize_basic_dict_safe_limited_reorder_merges_rotations():
+    circuit = Circuit(
+        {"type": "rz", "target_qubit": 1, "parameter": 0.1},
+        {"type": "pauli_x", "target_qubit": 0},
+        {"type": "rz", "target_qubit": 1, "parameter": 0.2},
+        n_qubits=2,
+    )
+
+    out = optimize_basic(circuit)
+
+    assert isinstance(out, Circuit)
+    assert len(out.gates) == 2
+    assert out.gates[0]["type"] == "rz"
+    assert out.gates[0]["target_qubit"] == 1
+    assert np.isclose(float(out.gates[0]["parameter"]), 0.3)
+    assert out.gates[1] == {"type": "pauli_x", "target_qubit": 0}
+
+
+def test_optimize_basic_dict_safe_limited_reorder_crosses_commuting_cnot_target_x():
+    circuit = Circuit(
+        {"type": "pauli_x", "target_qubit": 1},
+        {"type": "cx", "control_qubits": [0], "control_states": [1], "target_qubit": 1},
+        {"type": "pauli_x", "target_qubit": 1},
+        n_qubits=2,
+    )
+
+    out = optimize_basic(circuit)
+
+    assert isinstance(out, Circuit)
+    assert out.gates == [
+        {"type": "cx", "control_qubits": [0], "control_states": [1], "target_qubit": 1}
+    ]
+
+
+def test_optimize_basic_dict_safe_limited_reorder_not_cross_non_commuting_cnot_control_x():
+    circuit = Circuit(
+        {"type": "pauli_x", "target_qubit": 0},
+        {"type": "cx", "control_qubits": [0], "control_states": [1], "target_qubit": 1},
+        {"type": "pauli_x", "target_qubit": 0},
+        n_qubits=2,
+    )
+
+    out = optimize_basic(circuit)
+
+    assert isinstance(out, Circuit)
+    assert out.gates == circuit.gates
+
+
+def test_optimize_circuit_public_entry_optimizes_circuit_objects():
+    from aicir.optimizer import optimize_circuit
+
+    circuit = Circuit(
+        {"type": "hadamard", "target_qubit": 0},
+        {"type": "hadamard", "target_qubit": 0},
+        n_qubits=1,
+    )
+
+    out = optimize_circuit(circuit)
+
+    assert isinstance(out, Circuit)
+    assert out.gates == []
+    assert out.n_qubits == 1
+
+
 def test_optimize_basic_qasm_merges_adjacent_rotations():
     qasm = """OPENQASM 3.0;
 include \"stdgates.inc\";
