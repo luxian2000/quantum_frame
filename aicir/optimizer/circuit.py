@@ -12,6 +12,10 @@ import numpy as np
 from ..core.circuit import Circuit
 
 
+_DEFAULT_MAX_ROUNDS = 64
+_DEFAULT_MAX_REORDER_HOPS = 8
+
+
 def _gate_family_from_name(name: str) -> str | None:
     low = str(name).strip().lower()
     if low in {"pauli_x", "x"}:
@@ -76,6 +80,50 @@ def _gate_qubits(gate: dict[str, Any]) -> list[int]:
     return sorted(set(qubits))
 
 
+def _is_single_qubit_gate(gate: dict[str, Any]) -> bool:
+    fam = _gate_family_from_name(gate.get("type", ""))
+    if fam not in {"x", "y", "z", "h", "s", "sdg", "rx", "ry", "rz"}:
+        return False
+    if gate.get("target_qubit") is None:
+        return False
+    if gate.get("control_qubits") or gate.get("qubit_1") is not None or gate.get("qubit_2") is not None:
+        return False
+    if gate.get("qubits") is not None or gate.get("targets") is not None:
+        return False
+    return True
+
+
+def _cnot_control_target(gate: dict[str, Any]) -> tuple[int, int] | None:
+    fam = _gate_family_from_name(gate.get("type", ""))
+    if fam != "cnot" or gate.get("target_qubit") is None:
+        return None
+    controls = tuple(int(x) for x in (gate.get("control_qubits", []) or []))
+    if len(controls) != 1:
+        return None
+    return controls[0], int(gate["target_qubit"])
+
+
+def _is_cnot_gate(gate: dict[str, Any]) -> bool:
+    return _cnot_control_target(gate) is not None
+
+
+def _single_qubit_commutes_with_cnot_gate(single: dict[str, Any], cnot: dict[str, Any]) -> bool:
+    if not _is_single_qubit_gate(single):
+        return False
+    pair = _cnot_control_target(cnot)
+    if pair is None:
+        return False
+
+    ctrl, targ = pair
+    q = int(single["target_qubit"])
+    fam = _gate_family_from_name(single.get("type", ""))
+    if q == ctrl and fam in {"z", "s", "sdg", "rz"}:
+        return True
+    if q == targ and fam in {"x", "rx"}:
+        return True
+    return False
+
+
 def _cancel_gate_pair(prev: dict[str, Any], curr: dict[str, Any]) -> bool:
     pf = _gate_family_from_name(prev.get("type", ""))
     cf = _gate_family_from_name(curr.get("type", ""))
@@ -106,46 +154,91 @@ def _cancel_gate_pair(prev: dict[str, Any], curr: dict[str, Any]) -> bool:
     return False
 
 
-def _optimize_gate_dict_list(gates: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def _try_merge_rotation_at(gates: list[dict[str, Any]], index: int, gate: dict[str, Any]) -> bool:
+    prev = gates[index]
+    gf = _gate_family_from_name(gate.get("type", ""))
+    pf = _gate_family_from_name(prev.get("type", ""))
+    if (
+        gf in {"rx", "ry", "rz"}
+        and pf == gf
+        and int(prev.get("target_qubit", -1)) == int(gate.get("target_qubit", -1))
+        and not (prev.get("control_qubits") or [])
+        and not (gate.get("control_qubits") or [])
+    ):
+        prev_param = float(prev.get("parameter", 0.0))
+        curr_param = float(gate.get("parameter", 0.0))
+        merged_param = prev_param + curr_param
+        if np.isclose(merged_param, 0.0, atol=1e-15):
+            del gates[index]
+        else:
+            prev["parameter"] = merged_param
+        return True
+    return False
+
+
+def _try_consume_against_gate_at(gates: list[dict[str, Any]], index: int, gate: dict[str, Any]) -> bool:
+    if _cancel_gate_pair(gates[index], gate):
+        del gates[index]
+        return True
+    return _try_merge_rotation_at(gates, index, gate)
+
+
+def _consume_single_qubit_gate_by_lookback(
+    gates: list[dict[str, Any]], gate: dict[str, Any], *, max_reorder_hops: int
+) -> bool:
+    hops = 0
+    idx = len(gates) - 1
+    while idx >= 0 and hops < max_reorder_hops:
+        prev = gates[idx]
+
+        if _is_cnot_gate(prev):
+            if _single_qubit_commutes_with_cnot_gate(gate, prev):
+                hops += 1
+                idx -= 1
+                continue
+            break
+
+        if not _is_single_qubit_gate(prev):
+            break
+
+        if int(prev["target_qubit"]) != int(gate["target_qubit"]):
+            hops += 1
+            idx -= 1
+            continue
+
+        return _try_consume_against_gate_at(gates, idx, gate)
+
+    return False
+
+
+def _optimize_gate_dict_list(
+    gates: Iterable[dict[str, Any]], *, max_reorder_hops: int = _DEFAULT_MAX_REORDER_HOPS
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for g in gates:
         gate = copy.deepcopy(g)
 
-        # Merge adjacent single-qubit rotations on the same qubit:
-        # rx(a); rx(b) -> rx(a+b), similarly for ry/rz.
-        gf = _gate_family_from_name(gate.get("type", ""))
-        if out and gf in {"rx", "ry", "rz"}:
-            prev = out[-1]
-            pf = _gate_family_from_name(prev.get("type", ""))
-            if (
-                pf == gf
-                and int(prev.get("target_qubit", -1)) == int(gate.get("target_qubit", -1))
-                and not (prev.get("control_qubits") or [])
-                and not (gate.get("control_qubits") or [])
-            ):
-                prev_param = float(prev.get("parameter", 0.0))
-                curr_param = float(gate.get("parameter", 0.0))
-                merged_param = prev_param + curr_param
-                # If the merged angle is effectively 0, drop the gate pair.
-                if np.isclose(merged_param, 0.0, atol=1e-15):
-                    out.pop()
-                else:
-                    prev["parameter"] = merged_param
-                continue
+        if _is_single_qubit_gate(gate) and _consume_single_qubit_gate_by_lookback(
+            out, gate, max_reorder_hops=max_reorder_hops
+        ):
+            continue
 
-        if out and _cancel_gate_pair(out[-1], gate):
-            out.pop()
-        else:
-            out.append(gate)
+        if out and _try_consume_against_gate_at(out, len(out) - 1, gate):
+            continue
+
+        out.append(gate)
     return out
 
 
 def _optimize_gate_dict_list_fixed_point(
-    gates: Iterable[dict[str, Any]], *, max_rounds: int = 64
+    gates: Iterable[dict[str, Any]],
+    *,
+    max_rounds: int = _DEFAULT_MAX_ROUNDS,
+    max_reorder_hops: int = _DEFAULT_MAX_REORDER_HOPS,
 ) -> list[dict[str, Any]]:
     current = copy.deepcopy(list(gates))
     for _ in range(max_rounds):
-        nxt = _optimize_gate_dict_list(current)
+        nxt = _optimize_gate_dict_list(current, max_reorder_hops=max_reorder_hops)
         if nxt == current:
             return nxt
         current = nxt
@@ -558,3 +651,26 @@ def optimize_basic(
         raise TypeError("dag 输入需为 (X,A,type_onehot) 或含 X/A/type_onehot 的 dict")
 
     raise ValueError(f"不支持的 input_type: {kind}")
+
+
+def optimize_circuit(
+    circuit: Circuit,
+    *,
+    max_rounds: int = _DEFAULT_MAX_ROUNDS,
+    max_reorder_hops: int = _DEFAULT_MAX_REORDER_HOPS,
+) -> Circuit:
+    """Return an optimized copy of a :class:`~aicir.core.circuit.Circuit`.
+
+    The method applies the same conservative local rewrite rules as
+    :func:`optimize_basic` on the Circuit/dict path and preserves ``n_qubits``
+    and the bound backend.
+    """
+
+    if not isinstance(circuit, Circuit):
+        raise TypeError("optimize_circuit 输入必须是 Circuit")
+    optimized = _optimize_gate_dict_list_fixed_point(
+        circuit.gates,
+        max_rounds=max_rounds,
+        max_reorder_hops=max_reorder_hops,
+    )
+    return Circuit(*optimized, n_qubits=circuit.n_qubits, backend=circuit.backend)
