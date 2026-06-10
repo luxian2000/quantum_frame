@@ -27,6 +27,7 @@ from ..core.circuit import (
 )
 from ..core.io.json_io import circuit_from_json, circuit_from_json_dict, load_circuit_json
 from ..core.io.qasm import circuit_from_qasm, load_circuit_qasm
+from ..ir import circuit_gate_dicts, has_circuit_instructions
 from .utils import require_matplotlib
 
 
@@ -212,7 +213,7 @@ def _pack_layers(circuit: Any) -> list[int]:
     n_qubits = int(circuit.n_qubits)
     next_available = [0] * n_qubits
     columns: list[int] = []
-    for gate in circuit.gates:
+    for gate in circuit_gate_dicts(circuit):
         touched = _gate_qubits(gate, n_qubits)
         span = set(range(min(touched), max(touched) + 1))
         col = max(next_available[q] for q in span)
@@ -414,7 +415,7 @@ def _render_figure(
     """Draw an already-resolved ``Circuit`` and return ``(fig, ax)``."""
     plt = require_matplotlib()
     n_qubits = int(circuit.n_qubits)
-    gates = list(circuit.gates)
+    gates = circuit_gate_dicts(circuit)
 
     if layered and gates:
         columns = _pack_layers(circuit)
@@ -485,11 +486,11 @@ def _coerce_circuit(source: Any) -> tuple[Any, str | None]:
     """
     # Named wrapper around a circuit (e.g. QAS ArchitectureSpec).
     inner = getattr(source, "circuit", None)
-    if inner is not None and hasattr(inner, "gates") and hasattr(inner, "n_qubits"):
+    if inner is not None and hasattr(inner, "n_qubits") and has_circuit_instructions(inner):
         return inner, getattr(source, "name", None)
 
-    # A Circuit (or any object exposing gates/n_qubits).
-    if hasattr(source, "gates") and hasattr(source, "n_qubits"):
+    # A CircuitIR, Circuit, or any object exposing typed operations/gates.
+    if hasattr(source, "n_qubits") and has_circuit_instructions(source):
         return source, getattr(source, "name", None)
 
     # Mapping forms: circuit-JSON dict or a single gate dict.

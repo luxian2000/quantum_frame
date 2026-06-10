@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from ...core.circuit import Circuit
+from ...ir import instruction_to_gate_dict
 
 
 def _gate_family_from_name(name: str) -> str | None:
@@ -180,11 +181,15 @@ def _consume_single_qubit_gate_by_lookback(
 
 
 def _copy_gate(gate: dict[str, Any]) -> dict[str, Any]:
-    return dict(gate)
+    return dict(instruction_to_gate_dict(gate))
 
 
 def circuit_from_gates(circuit: Circuit, gates: Iterable[dict[str, Any]]) -> Circuit:
-    return Circuit(*[_copy_gate(gate) for gate in gates], n_qubits=circuit.n_qubits, backend=circuit.backend)
+    return Circuit(
+        *[_copy_gate(gate) for gate in gates],
+        n_qubits=circuit.n_qubits,
+        backend=getattr(circuit, "backend", None),
+    )
 
 
 def cancel_inverse_gates(gates: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

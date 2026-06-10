@@ -10,13 +10,14 @@ import numpy as np
 from ..channel.backends.numpy_backend import NumpyBackend
 from ..core.circuit import Circuit
 from ..core.gates import apply_gate_to_state
+from ..ir import circuit_gate_dicts, circuit_instruction_count, circuit_instructions, instruction_parameter
 from ._utils import count_gate_families, depth_proxy
 
 
 def structure_proxy(circuit: Circuit) -> float:
     """Low-cost trainability proxy based on depth, entangling density, and parameter density."""
     n_qubits = int(circuit.n_qubits)
-    n_gates = len(circuit.gates)
+    n_gates = circuit_instruction_count(circuit)
     single_qubit_ops, two_qubit_ops = count_gate_families(circuit)
     circuit_depth_proxy = depth_proxy(circuit) if n_qubits > 0 else 1.0
     two_qubit_ratio = two_qubit_ops / n_gates if n_gates > 0 else 0.0
@@ -40,10 +41,10 @@ def structure_proxy_details(circuit: Circuit) -> Dict[str, Any]:
 
 def _parameter_slices(circuit: Circuit) -> List[tuple[int, Optional[tuple[int, ...]], int]]:
     slices: List[tuple[int, Optional[tuple[int, ...]], int]] = []
-    for gate_index, gate in enumerate(circuit.gates):
-        if "parameter" not in gate or gate.get("parameter") is None:
+    for gate_index, gate in enumerate(circuit_instructions(circuit)):
+        parameter = instruction_parameter(gate)
+        if parameter is None:
             continue
-        parameter = gate["parameter"]
         if isinstance(parameter, (list, tuple, np.ndarray)):
             array = np.asarray(parameter, dtype=float)
             for flat_index in range(array.size):
@@ -54,7 +55,7 @@ def _parameter_slices(circuit: Circuit) -> List[tuple[int, Optional[tuple[int, .
 
 
 def _bind_parameter_values(circuit: Circuit, values: Sequence[float]) -> Circuit:
-    gates = deepcopy(circuit.gates)
+    gates = deepcopy(circuit_gate_dicts(circuit))
     cursor = 0
     for gate in gates:
         if "parameter" not in gate or gate.get("parameter") is None:
@@ -70,7 +71,7 @@ def _bind_parameter_values(circuit: Circuit, values: Sequence[float]) -> Circuit
             cursor += 1
     if cursor != len(values):
         raise ValueError(f"Expected {cursor} parameters, got {len(values)}")
-    return Circuit(*gates, n_qubits=circuit.n_qubits, backend=circuit.backend)
+    return Circuit(*gates, n_qubits=circuit.n_qubits, backend=getattr(circuit, "backend", None))
 
 
 def _z_expectations_from_probabilities(probabilities: np.ndarray, n_qubits: int) -> np.ndarray:
@@ -88,9 +89,9 @@ def _z_expectations_from_probabilities(probabilities: np.ndarray, n_qubits: int)
 
 
 def _simulate_probabilities(circuit: Circuit, backend: Optional[NumpyBackend] = None) -> np.ndarray:
-    bk = backend or circuit.backend or NumpyBackend()
+    bk = backend or getattr(circuit, "backend", None) or NumpyBackend()
     state = bk.zeros_state(int(circuit.n_qubits))
-    for gate in circuit.gates:
+    for gate in circuit_instructions(circuit):
         state = apply_gate_to_state(gate, state, int(circuit.n_qubits), bk)
     return bk.to_numpy(bk.measure_probs(state)).reshape(-1)
 

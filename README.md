@@ -127,7 +127,7 @@ print(U.shape)   # (4, 4)
 
 #### typed IR 可选入口
 
-`aicir.ir` 提供 `Operation`、`Measurement`、`Observable`、`CircuitIR` 四个轻量中间表示。旧的门字典入口仍然可用；这些类型主要用于后续编译、测量、可观测量和跨模块执行接口逐步统一。
+`aicir.ir` 提供 `Operation`、`Measurement`、`Observable`、`CircuitIR` 四个轻量中间表示。旧的门字典入口仍然可用；`Circuit` 继续保留 `.gates` 门字典 surface，同时提供 `.operations` 和 `.ir` typed IR 视图。JSON/QASM/DAG、绘图、测量、transpile/optimizer、QML 伴随梯度、metrics、noise 和 QAS 的主要内部路径可直接消费 typed IR，并在需要旧格式时显式生成兼容门字典视图。
 
 ```python
 from aicir import Circuit, CircuitIR, Measurement, Observable, Operation

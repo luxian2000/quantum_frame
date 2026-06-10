@@ -88,7 +88,7 @@ aicir/primitives/
 
 兼容策略：继续允许用户传入门字典，内部先规范化为 typed IR。公开 API 可长期保留门字典入口，内部实现逐步迁移到 typed IR。
 
-当前状态：`Operation`、`Measurement`、`Observable`、`CircuitIR` 已作为 `aicir.ir` 的第一批 typed IR 落地；`Circuit` 仍继续保存原有门字典 surface。
+当前状态：`Operation`、`Measurement`、`Observable`、`CircuitIR` 已作为 `aicir.ir` 的 typed IR 落地；`aicir.ir` 还提供统一访问 helper，将 `CircuitIR`、`Circuit.operations` 和旧 `Circuit.gates` 规范化为 typed instruction 序列。`Circuit` 继续保留 `.gates` 门字典公开 surface 以兼容旧代码，同时提供 `.operations` 和 `.ir` typed IR 视图。JSON/QASM/DAG 导出、绘图、测量、Pauli 估计、transpile/optimizer、QML 伴随梯度、metrics、noise 和 QAS 的主要内部读取路径已迁移为优先消费 typed IR，并在需要旧格式的兼容层显式生成门字典视图。
 
 ### 2. 新增 `aicir.transpile` 编译层
 
@@ -250,7 +250,7 @@ GateSpec(
 
 优先级最高，风险较低。
 
-1. 新增 typed IR，保留门字典兼容入口。已落地：`aicir.ir.Operation` 支持与现有门字典互转，`Measurement` 支持测量声明与现有 `measure` 门字典互转，`Observable` 支持包装 Pauli string、Hamiltonian 和 dense matrix，`CircuitIR` 支持从现有 `Circuit` 构造并转回 `Circuit`；`Circuit` 构造、`append`、`extend` 已可接收 `Operation` 和 `Measurement`，并继续保存现有门字典 surface。
+1. 新增 typed IR，保留门字典兼容入口。已落地：`aicir.ir.Operation` 支持与现有门字典互转，`Measurement` 支持测量声明与现有 `measure` 门字典互转，`Observable` 支持包装 Pauli string、Hamiltonian 和 dense matrix，`CircuitIR` 支持从现有 `Circuit` 构造并转回 `Circuit`；`Circuit` 构造、`append`、`extend` 已可接收 `Operation` 和 `Measurement`，并继续保存现有门字典 surface；`Circuit.operations` / `Circuit.ir` typed IR 视图和 `aicir.ir` 访问 helper 已接入 JSON/QASM/DAG、绘图、测量、Pauli 估计、transpile/optimizer、QML 伴随梯度、metrics、noise、QAS 等主要内部路径。
 2. 新增 `Pass` / `PassManager`，把现有线路优化规则拆成 pass。已落地：`aicir.transpile` 提供 `TransformationPass`、`PassManager`、`default_optimization_pipeline`，并提供 `CancelInversePass`、`MergeRotationsPass`、`CommuteSingleQubitPass` 等第一批本地优化 pass；`optimize_circuit` 已委托给默认 pipeline。
 3. 新增 `Sampler` / `Estimator` primitives，先包装现有 `Measure` 和 `PauliEstimator`。
 4. 让 `BasicVQE` 和 `BasicQAOA` 优先调用 `Estimator`。

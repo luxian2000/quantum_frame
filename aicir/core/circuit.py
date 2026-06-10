@@ -15,7 +15,7 @@ import sys
 
 import numpy as np
 
-from ..ir import normalize_gate
+from ..ir import CircuitIR, normalize_gate
 from .gates import gate_to_matrix, identity
 
 
@@ -475,6 +475,18 @@ class Circuit:
         self.gates = [normalize_gate(gate) for gate in gates]
         self.n_qubits = _infer_n_qubits_from_gates(self.gates) if n_qubits is None else n_qubits
         self._backend = backend
+
+    @property
+    def operations(self):
+        """Typed IR view of the current gate list."""
+
+        return CircuitIR.from_circuit(self).operations
+
+    @property
+    def ir(self):
+        """Circuit-level typed IR view while preserving the ``gates`` surface."""
+
+        return CircuitIR.from_circuit(self)
 
     def __add__(self, other):
         if not isinstance(other, Circuit):

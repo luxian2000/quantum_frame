@@ -10,6 +10,7 @@ from typing import List
 
 import numpy as np
 
+from ...ir import circuit_instructions, instruction_name, instruction_qubits, instruction_to_gate_dict
 from ..circuit import Circuit
 
 
@@ -18,15 +19,8 @@ from ..circuit import Circuit
 # ---------------------------------------------------------------------------
 
 def _gate_name(gate: dict) -> str:
-    """从 aicir 门字典中返回门类型名称（即 gate["type"]）。"""
-    return gate["type"]
-
-
-def _extend_qubits(qubits: List[int], values) -> None:
-    if isinstance(values, (list, tuple, set)):
-        qubits.extend(int(qubit) for qubit in values)
-    else:
-        qubits.append(int(values))
+    """返回 typed instruction 的门类型名称。"""
+    return instruction_name(gate)
 
 
 def _gate_qubits(gate: dict, circuit_n_qubits: int) -> List[int]:
@@ -39,30 +33,16 @@ def _gate_qubits(gate: dict, circuit_n_qubits: int) -> List[int]:
     - swap/rzz/rxx：qubit_1, qubit_2
     - identity/I：range(n_qubits)
     """
-    gate_type = gate["type"]
+    gate_dict = instruction_to_gate_dict(gate)
+    gate_type = instruction_name(gate)
 
     if gate_type in ("identity", "I", "unitary"):
-        return list(range(int(gate.get("n_qubits", circuit_n_qubits))))
+        return list(range(int(gate_dict.get("n_qubits", circuit_n_qubits))))
 
-    qubits = []
-
-    target = gate.get("target_qubit")
-    if target is not None:
-        qubits.append(int(target))
-
-    controls = gate.get("control_qubits")
+    qubits = [int(q) for q in instruction_qubits(gate)]
+    controls = gate_dict.get("control_qubits")
     if controls is not None:
-        _extend_qubits(qubits, controls)
-
-    for key in ("qubit_1", "qubit_2"):
-        qubit = gate.get(key)
-        if qubit is not None:
-            qubits.append(int(qubit))
-
-    for key in ("qubits", "targets"):
-        values = gate.get(key)
-        if values is not None:
-            _extend_qubits(qubits, values)
+        qubits.extend(int(q) for q in controls)
 
     if not qubits:
         return list(range(int(circuit_n_qubits)))
@@ -95,7 +75,7 @@ def circuit_to_dag(
                      仅类型 one-hot 部分（START/END 行全零）。
     """
     n_qubits = circuit.n_qubits
-    gate_list = list(circuit.gates)
+    gate_list = list(circuit_instructions(circuit))
 
     # ---- 1. 节点列表初始化 ----
     # 节点索引：0 = START，1..N = 门节点，N+1 = END

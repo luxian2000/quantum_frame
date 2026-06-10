@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 from typing import Dict, List
 
+from ...ir import circuit_gate_dicts, has_circuit_instructions
 from ..circuit import Circuit
 
 _QASM2_HEADER = 'OPENQASM 2.0;\ninclude "qelib1.inc";\n'
@@ -170,7 +171,7 @@ def _control_state_wrapper_lines(controls: List[int], control_states: List[int])
 def _qasm3_required_ancilla_count(circuit: Circuit) -> int:
     """计算 QASM 3.0 导出多控 crx/cry/crz 所需的最大辅助比特数。"""
     max_ancillas = 0
-    for gate in circuit.gates:
+    for gate in circuit_gate_dicts(circuit):
         gtype = _normalize_gate_type_for_export(gate["type"])
         if gtype not in {"crx", "cry", "crz"}:
             continue
@@ -205,8 +206,8 @@ def _append_qasm3_multi_control_rotation(
 
 def circuit_to_qasm(circuit: Circuit, version: str = "2.0") -> str:
     """将 Circuit 导出为 OpenQASM 字符串，支持 2.0 和 3.0。"""
-    if not hasattr(circuit, "n_qubits") or not hasattr(circuit, "gates"):
-        raise TypeError("circuit 需要具备 n_qubits 和 gates 属性")
+    if not hasattr(circuit, "n_qubits") or not has_circuit_instructions(circuit):
+        raise TypeError("circuit 需要具备 n_qubits 和 typed IR operations 或 gates 序列")
 
     version_norm = str(version).strip()
     if version_norm not in {"2.0", "3.0"}:
@@ -223,7 +224,7 @@ def circuit_to_qasm(circuit: Circuit, version: str = "2.0") -> str:
         if ancilla_count > 0:
             lines.append(f"qubit[{ancilla_count}] anc;")
 
-    for gate in circuit.gates:
+    for gate in circuit_gate_dicts(circuit):
         gtype = _normalize_gate_type_for_export(gate["type"])
         controls, control_states = _normalized_control_data(gate)
         pre_lines, post_lines = _control_state_wrapper_lines(controls, control_states)

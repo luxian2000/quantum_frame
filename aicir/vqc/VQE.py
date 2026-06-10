@@ -16,6 +16,7 @@ import numpy as np
 from ..channel.backends.numpy_backend import NumpyBackend
 from ..channel.operators import Hamiltonian
 from ..core.circuit import Circuit
+from ..ir import circuit_gate_dicts
 from ..measure import Measure
 from ..qml.deriv import psr
 
@@ -302,7 +303,7 @@ class BasicVQE:
             names = ", ".join(parameter.name for parameter in circuit.parameters)
             raise ValueError(f"ansatz circuit has unbound parameter(s): {names}")
         if circuit.backend is None and self.backend is not None:
-            circuit = Circuit(*list(circuit.gates), n_qubits=circuit.n_qubits, backend=self.backend)
+            circuit = Circuit(*circuit_gate_dicts(circuit), n_qubits=circuit.n_qubits, backend=self.backend)
         return circuit
 
     def _measure_circuit_exact(self, params: np.ndarray, *, return_state: bool) -> tuple[float, Any]:
