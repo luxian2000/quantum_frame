@@ -1,4 +1,4 @@
-from .circuit import optimize_basic
+from .circuit import optimize_basic, optimize_circuit
 from .params import (
     Adam,
     COBYLA,
@@ -21,5 +21,6 @@ __all__ = [
     "ScipyMinimize",
     "minimize",
     "optimize_basic",
+    "optimize_circuit",
     "scipy_minimize",
 ]
