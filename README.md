@@ -29,8 +29,8 @@ from aicir import (
     measure,     # 线路内测量标记（测量机制二）
 )
 
-# 电路、 typed operation 与参数占位符
-from aicir import Circuit, Operation, Parameter
+# 电路、 typed IR 与参数占位符
+from aicir import Circuit, CircuitIR, Measurement, Observable, Operation, Parameter
 
 # 测量
 from aicir import Measure, Result
@@ -123,6 +123,26 @@ full = part_a + part_b
 # 获取电路酉矩阵（numpy complex64，2^n × 2^n）
 U = full.unitary()
 print(U.shape)   # (4, 4)
+```
+
+#### typed IR 可选入口
+
+`aicir.ir` 提供 `Operation`、`Measurement`、`Observable`、`CircuitIR` 四个轻量中间表示。旧的门字典入口仍然可用；这些类型主要用于后续编译、测量、可观测量和跨模块执行接口逐步统一。
+
+```python
+from aicir import Circuit, CircuitIR, Measurement, Observable, Operation
+
+cir = Circuit(
+    Operation("hadamard", qubits=(0,)),
+    Operation("cx", qubits=(1,), controls=(0,)),
+    Measurement((0, 1)),
+    n_qubits=2,
+)
+
+ir = CircuitIR.from_circuit(cir, classical_bits=(0, 1))
+restored = ir.to_circuit()
+
+zz = Observable.pauli("ZZ", coefficient=1.0, n_qubits=2)
 ```
 
 ### 2.3 更多门用法示例

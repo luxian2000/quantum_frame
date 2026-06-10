@@ -138,10 +138,14 @@ class Operation:
 
 
 def normalize_gate(gate: Operation | Mapping[str, Any]) -> dict[str, Any]:
-    """Return a gate dictionary from either an ``Operation`` or mapping."""
+    """Return a gate dictionary from a typed IR object or mapping."""
 
     if isinstance(gate, Operation):
         return gate.to_dict()
+    from .measurement import Measurement
+
+    if isinstance(gate, Measurement):
+        return gate.to_dict()
     if isinstance(gate, Mapping):
         return dict(gate)
-    raise TypeError("gate must be an Operation or mapping")
+    raise TypeError("gate must be an Operation, Measurement, or mapping")
