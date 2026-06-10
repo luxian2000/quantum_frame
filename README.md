@@ -1135,7 +1135,7 @@ QAS/metrics 相关公共函数：
 | `aicir/core/io`   | [`aicir/core/io/README.md`](aicir/core/io/README.md)     | OpenQASM 导出行为、受控旋转门和多控旋转门分解规则。                                 |
 | `aicir/metrics`   | [`aicir/metrics/README.md`](aicir/metrics/README.md)     | 任务无关的量子线路评分指标，供 QAS、VQE ansatz 筛选等架构层任务复用。               |
 | `aicir/optimization/qubo` | [`aicir/optimization/qubo/README.md`](aicir/optimization/qubo/README.md) | QUBO 建模、Ising/Hamiltonian 转换、BasicQAOA 矩阵入口与结果解码。 |
-| `aicir/optimizer` | [`aicir/optimizer/README.md`](aicir/optimizer/README.md) | `aicir.optimizer.basic` 的本地化简规则、旋转门合并和固定点优化策略。              |
+| `aicir/optimizer` | [`aicir/optimizer/README.md`](aicir/optimizer/README.md) | `aicir.optimizer.circuit` 的线路化简、旋转门合并和固定点优化策略。              |
 | `aicir/qas`       | [`aicir/qas/README.md`](aicir/qas/README.md)             | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。                             |
 | `aicir/qml`       | [`aicir/qml/README.md`](aicir/qml/README.md)             | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。            |
 | `aicir/vqc`       | [`aicir/vqc/README.md`](aicir/vqc/README.md)             | VQE、QAOA、VQD、SSVQE 等基础变分算法实现，以及可复用的参数化线路 ansatz 模板。      |
