@@ -86,7 +86,9 @@ aicir/primitives/
 - `Observable`：Pauli string、Hamiltonian、dense matrix 等可观测量。
 - `CircuitIR`：保存 operation 序列、qubit 数、classical bits、metadata。
 
-兼容策略：继续允许用户传入门字典，内部先规范化为 `Operation`。公开 API 可长期保留门字典入口，内部实现逐步迁移到 typed IR。
+兼容策略：继续允许用户传入门字典，内部先规范化为 typed IR。公开 API 可长期保留门字典入口，内部实现逐步迁移到 typed IR。
+
+当前状态：`Operation`、`Measurement`、`Observable`、`CircuitIR` 已作为 `aicir.ir` 的第一批 typed IR 落地；`Circuit` 仍继续保存原有门字典 surface。
 
 ### 2. 新增 `aicir.transpile` 编译层
 
@@ -248,7 +250,7 @@ GateSpec(
 
 优先级最高，风险较低。
 
-1. 新增 typed `Operation`，保留门字典兼容入口。已落地：`aicir.ir.Operation` 支持与现有门字典互转，`Circuit` 构造、`append`、`extend` 已可接收 `Operation` 并继续保存现有门字典 surface。
+1. 新增 typed IR，保留门字典兼容入口。已落地：`aicir.ir.Operation` 支持与现有门字典互转，`Measurement` 支持测量声明与现有 `measure` 门字典互转，`Observable` 支持包装 Pauli string、Hamiltonian 和 dense matrix，`CircuitIR` 支持从现有 `Circuit` 构造并转回 `Circuit`；`Circuit` 构造、`append`、`extend` 已可接收 `Operation` 和 `Measurement`，并继续保存现有门字典 surface。
 2. 新增 `Pass` / `PassManager`，把现有线路优化规则拆成 pass。已落地：`aicir.transpile` 提供 `TransformationPass`、`PassManager`、`default_optimization_pipeline`，并提供 `CancelInversePass`、`MergeRotationsPass`、`CommuteSingleQubitPass` 等第一批本地优化 pass；`optimize_circuit` 已委托给默认 pipeline。
 3. 新增 `Sampler` / `Estimator` primitives，先包装现有 `Measure` 和 `PauliEstimator`。
 4. 让 `BasicVQE` 和 `BasicQAOA` 优先调用 `Estimator`。

@@ -45,9 +45,9 @@ _export(
     ]
 )
 
-from .ir import Operation
+from .ir import CircuitIR, Measurement, Observable, Operation
 
-_export(["Operation"])
+_export(["CircuitIR", "Measurement", "Observable", "Operation"])
 
 try:
     from .channel.noise import (
