@@ -163,6 +163,8 @@ values = estimator.run(circuits, observables, parameter_values=params)
 
 这样 VQE、QAOA、QAS、metrics 都可以依赖 primitives，而不是各自处理测量、Hamiltonian 和 counts。
 
+当前状态：第一片已落地。`aicir.primitives` 提供 `BaseSampler`/`BaseEstimator` 接口、最小统一结果对象 `SampleResult`/`EstimateResult`（第 9 节切片），以及三个实现：`ShotSampler`（包装 `Measure`，支持显式 `measure_qubits` 与内嵌 measure 门）、`StatevectorEstimator`（精确态向量期望，拒绝 `shots=`）、`ShotEstimator`（包装 `PauliEstimator` 的分组/基变换/shot 分配，并暴露 `estimate()` 直通方法，可直接作 `BasicVQE(energy_estimator=...)` 注入）。约定：接收已绑定参数的电路；单入参返回单结果、序列返回列表；单个可观测量可广播。`Noisy*`/`Backend*` 变体、`parameter_values=` 延迟绑定与 `vqc`/`qas`/`metrics` 的切换尚未开始。
+
 ### 5. 增加 PennyLane 风格 `QNode`
 
 建议新增轻量 QNode，用于统一“量子函数 + 设备 + 测量 + 梯度”：
@@ -223,6 +225,8 @@ GateSpec(
 - `visual` 可从 spec 获取显示名称和参数格式。
 - `qas` 可从 spec 生成搜索动作空间。
 
+当前状态：第一片已落地。`aicir.gates` 提供 `GateSpec`（门名/别名/目标比特数/参数个数/是否受控/QASM 名）与注册表 API（`register_gate`/`unregister_gate`/`get_gate_spec`/`registered_gate_names`/`canonical_gate_name`），内置门集已全部注册；`num_qubits`/`num_params` 为 `None` 表示可变（`unitary`、`measure`、整寄存器 `identity`）。消费方已接入四处：`aicir.ir.Operation` 构造期按 spec 校验目标比特数/参数个数/控制位（未注册门名保持宽松）；`aicir.transpile.ValidatePass` 结合 `n_qubits` 做越界/冲突/重复比特实质校验；`aicir.transpile.CanonicalizePass` 把别名门名重写为规范名；QASM 导出名由 `GateSpec.qasm_name` 派生（别名经 `canonical_gate_name` 归一，导入表由导出表反推）。`matrix`/`generator`/`decomposition` 字段及 `gate_to_matrix`/visual/qml/qas 的元信息迁移尚未开始。
+
 ### 8. 强化跨框架互操作
 
 建议新增互操作层：
@@ -252,8 +256,8 @@ GateSpec(
 
 1. 新增 typed IR，保留门字典兼容入口。已落地：`aicir.ir.Operation` 支持与现有门字典互转，`Measurement` 支持测量声明与现有 `measure` 门字典互转，`Observable` 支持包装 Pauli string、Hamiltonian 和 dense matrix，`CircuitIR` 支持从现有 `Circuit` 构造并转回 `Circuit`；`Circuit` 构造、`append`、`extend` 已可接收 `Operation` 和 `Measurement`，并继续保存现有门字典 surface；`Circuit.operations` / `Circuit.ir` typed IR 视图和 `aicir.ir` 访问 helper 已接入 JSON/QASM/DAG、绘图、测量、Pauli 估计、transpile/optimizer、QML 伴随梯度、metrics、noise、QAS 等主要内部路径。
 2. 新增 `Pass` / `PassManager`，把现有线路优化规则拆成 pass。已落地：`aicir.transpile` 提供 `TransformationPass`、`PassManager`、`default_optimization_pipeline`，并提供 `CancelInversePass`、`MergeRotationsPass`、`CommuteSingleQubitPass` 等第一批本地优化 pass；`optimize_circuit` 已委托给默认 pipeline。
-3. 新增 `Sampler` / `Estimator` primitives，先包装现有 `Measure` 和 `PauliEstimator`。
-4. 让 `BasicVQE` 和 `BasicQAOA` 优先调用 `Estimator`。
+3. 新增 `Sampler` / `Estimator` primitives，先包装现有 `Measure` 和 `PauliEstimator`。已落地：`aicir.primitives` 提供 `ShotSampler`/`StatevectorEstimator`/`ShotEstimator` 与统一结果对象（见第 4 节当前状态）。
+4. 让 `BasicVQE` 和 `BasicQAOA` 优先调用 `Estimator`。部分可用：`BasicVQE(energy_estimator=ShotEstimator(...))` 已可直接注入（estimate 直通契约）；默认路径切换尚未开始。
 
 ### 第二阶段：硬件目标和门注册表
 
