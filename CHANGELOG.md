@@ -2,6 +2,14 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-11
+
+### Changed
+
+- 门工厂函数（`pauli_x`/`hadamard`/`rx`/`cx`/`swap`/`rzz`/`u3`/`u2` 等）**签名与参数顺序完全不变**，但返回值由裸门字典升级为类型化 `Operation`；`measure(...)` 返回 `Measurement`。构造期即校验（量子比特下标、控制位/控制态长度等）。`Circuit` 内部存储的门字典与旧版完全一致，下游消费方无需改动。
+- `Operation`/`Measurement` 新增旧门字典**只读**兼容层：支持 `gate["type"]`、`.get()`、`in`、`dict(gate)`、`len`/迭代等读取，以及与旧门字典的双向 `==` 比较；写入（`gate[...] = ...`）抛出 `TypeError`（对象不可变）。
+- `aicir.visual` 的 `plot(...)`/`show(...)` 来源归一化现接受类型化指令（单个 `Operation`/`Measurement` 或其序列）。
+
 ## 2026-06-10
 
 ### Added

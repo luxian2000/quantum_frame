@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from .operation import _as_int_tuple
+from .operation import LegacyGateView, _as_int_tuple
 
 
 _KNOWN_MEASUREMENT_KEYS = {
@@ -21,7 +21,7 @@ _KNOWN_MEASUREMENT_KEYS = {
 
 
 @dataclass(frozen=True)
-class Measurement:
+class Measurement(LegacyGateView):
     """Typed representation of an in-circuit measurement declaration."""
 
     qubits: tuple[int, ...] = ()
@@ -87,6 +87,26 @@ class Measurement:
             classical_bits=classical_bits,
             metadata=metadata,
         )
+
+    def __eq__(self, other: object) -> bool:
+        # 与旧 measure 门字典可直接比较相等；类型化对象之间按字段比较。
+        if isinstance(other, Measurement):
+            return (
+                self.qubits,
+                self.measurement_type,
+                self.return_type,
+                self.classical_bits,
+                self.metadata,
+            ) == (
+                other.qubits,
+                other.measurement_type,
+                other.return_type,
+                other.classical_bits,
+                other.metadata,
+            )
+        if isinstance(other, Mapping):
+            return self.to_dict() == dict(other)
+        return NotImplemented
 
     def to_dict(self) -> dict[str, Any]:
         """Convert this measurement to the existing measure-gate surface."""
