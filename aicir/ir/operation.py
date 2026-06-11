@@ -18,6 +18,7 @@ _KNOWN_GATE_KEYS = {
     "control_qubits",
     "control_states",
     "parameter",
+    "label",
 }
 
 
@@ -52,6 +53,7 @@ class Operation:
     params: tuple[Any, ...] = ()
     controls: tuple[int, ...] = ()
     control_states: tuple[int, ...] = ()
+    label: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -66,6 +68,7 @@ class Operation:
             raise ValueError("control_states length must match controls length")
         object.__setattr__(self, "control_states", states)
         object.__setattr__(self, "params", tuple(self.params))
+        object.__setattr__(self, "label", None if self.label is None else str(self.label))
         object.__setattr__(self, "metadata", dict(self.metadata))
 
     @classmethod
@@ -97,6 +100,7 @@ class Operation:
             control_states = tuple(1 for _ in controls)
 
         params = _parameter_tuple(gate["parameter"]) if "parameter" in gate else ()
+        label = gate.get("label")
         metadata = {key: value for key, value in gate.items() if key not in _KNOWN_GATE_KEYS}
 
         return cls(
@@ -105,6 +109,7 @@ class Operation:
             params=params,
             controls=controls,
             control_states=control_states,
+            label=None if label is None else str(label),
             metadata=metadata,
         )
 
@@ -131,6 +136,9 @@ class Operation:
 
         if self.params:
             gate["parameter"] = self.params[0] if len(self.params) == 1 else list(self.params)
+
+        if self.label is not None:
+            gate["label"] = self.label
 
         for key, value in self.metadata.items():
             gate[key] = value

@@ -23,6 +23,7 @@ def test_operation_round_trips_existing_gate_dict_with_metadata():
         "qubit_2": 2,
         "parameter": 0.5,
         "label": "zz-block",
+        "origin": "ansatz",
     }
 
     op = Operation.from_dict(gate)
@@ -30,8 +31,28 @@ def test_operation_round_trips_existing_gate_dict_with_metadata():
     assert op.name == "rzz"
     assert op.qubits == (0, 2)
     assert op.params == (0.5,)
-    assert op.metadata == {"label": "zz-block"}
+    assert op.label == "zz-block"
+    assert op.metadata == {"origin": "ansatz"}
     assert op.to_dict() == gate
+
+
+def test_operation_label_is_an_explicit_field():
+    op = Operation("rx", qubits=(0,), params=(0.1,), label="layer0")
+
+    assert op.label == "layer0"
+    assert "label" not in op.metadata
+    assert op.to_dict() == {
+        "type": "rx",
+        "target_qubit": 0,
+        "parameter": 0.1,
+        "label": "layer0",
+    }
+    assert Operation.from_dict(op.to_dict()) == op
+
+    unlabeled = Operation("rx", qubits=(0,), params=(0.1,))
+
+    assert unlabeled.label is None
+    assert "label" not in unlabeled.to_dict()
 
 
 def test_operation_can_build_circuit_without_changing_gate_dict_surface():
