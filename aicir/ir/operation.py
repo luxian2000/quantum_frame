@@ -39,8 +39,55 @@ def _parameter_tuple(value: Any) -> tuple[Any, ...]:
     return (value,)
 
 
+class LegacyGateView:
+    """旧门字典的只读访问兼容层。
+
+    工厂函数返回类型化 IR 之后，仍有少量代码以旧字典键
+    （``gate["type"]``、``gate.get("parameter")`` 等）读取门信息。
+    本混入类把这些读取委托给 :meth:`to_dict`，使类型化对象在
+    *只读* 场景下可以当旧字典使用；写入仍被禁止（对象不可变）。
+    """
+
+    def to_dict(self) -> dict[str, Any]:  # pragma: no cover - 由子类实现
+        raise NotImplementedError
+
+    def __getitem__(self, key: str) -> Any:
+        return self.to_dict()[key]
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.to_dict().get(key, default)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.to_dict()
+
+    def keys(self):
+        return self.to_dict().keys()
+
+    def values(self):
+        return self.to_dict().values()
+
+    def items(self):
+        return self.to_dict().items()
+
+    def __iter__(self):
+        return iter(self.to_dict())
+
+    def __len__(self) -> int:
+        return len(self.to_dict())
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        raise TypeError(
+            f"{type(self).__name__} is immutable; use dataclasses.replace or to_dict()"
+        )
+
+    def __delitem__(self, key: str) -> None:
+        raise TypeError(
+            f"{type(self).__name__} is immutable; use dataclasses.replace or to_dict()"
+        )
+
+
 @dataclass(frozen=True)
-class Operation:
+class Operation(LegacyGateView):
     """Typed representation of one circuit operation.
 
     ``Operation`` is intentionally small: it captures the common gate fields
@@ -112,6 +159,30 @@ class Operation:
             label=None if label is None else str(label),
             metadata=metadata,
         )
+
+    def __eq__(self, other: object) -> bool:
+        # 与旧门字典可直接比较相等（双向，经由反射比较），类型化对象之间按字段比较。
+        if isinstance(other, Operation):
+            return (
+                self.name,
+                self.qubits,
+                self.params,
+                self.controls,
+                self.control_states,
+                self.label,
+                self.metadata,
+            ) == (
+                other.name,
+                other.qubits,
+                other.params,
+                other.controls,
+                other.control_states,
+                other.label,
+                other.metadata,
+            )
+        if isinstance(other, Mapping):
+            return self.to_dict() == dict(other)
+        return NotImplemented
 
     def to_dict(self) -> dict[str, Any]:
         """Convert this operation to the existing gate-dictionary surface."""

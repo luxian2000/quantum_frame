@@ -15,7 +15,7 @@ import sys
 
 import numpy as np
 
-from ..ir import CircuitIR, normalize_gate
+from ..ir import CircuitIR, Measurement, Operation, normalize_gate
 from .gates import gate_to_matrix, identity
 
 
@@ -604,124 +604,107 @@ def circuit(*gates, n_qubits=1, backend=None):
     return Circuit(*gates, n_qubits=n_qubits, backend=backend).unitary(backend=backend)
 
 
+# ---------------------------------------------------------------------------
+# 门工厂：签名与参数顺序保持旧字典时代不变，返回值升级为类型化 Operation。
+# Operation 支持旧字典键的只读访问（gate["type"] 等），Circuit 内部存储不变。
+# ---------------------------------------------------------------------------
+
+
+def _controls(control_qubits, control_states):
+    """归一化控制位与控制态参数；控制态缺省时与旧工厂一致地补 1。"""
+    controls = tuple(control_qubits)
+    if control_states is None:
+        states = tuple(1 for _ in controls)
+    else:
+        states = tuple(control_states)
+    return controls, states
+
+
 def pauli_x(target_qubit=0):
-    return {"type": "pauli_x", "target_qubit": target_qubit}
+    return Operation("pauli_x", qubits=(target_qubit,))
 
 
 def pauli_y(target_qubit=0):
-    return {"type": "pauli_y", "target_qubit": target_qubit}
+    return Operation("pauli_y", qubits=(target_qubit,))
 
 
 def pauli_z(target_qubit=0):
-    return {"type": "pauli_z", "target_qubit": target_qubit}
+    return Operation("pauli_z", qubits=(target_qubit,))
 
 
 def hadamard(target_qubit=0):
-    return {"type": "hadamard", "target_qubit": target_qubit}
+    return Operation("hadamard", qubits=(target_qubit,))
 
 
 def rx(theta, target_qubit=0):
-    return {"type": "rx", "target_qubit": target_qubit, "parameter": theta}
+    return Operation("rx", qubits=(target_qubit,), params=(theta,))
 
 
 def ry(theta, target_qubit=0):
-    return {"type": "ry", "target_qubit": target_qubit, "parameter": theta}
+    return Operation("ry", qubits=(target_qubit,), params=(theta,))
 
 
 def rz(theta, target_qubit=0):
-    return {"type": "rz", "target_qubit": target_qubit, "parameter": theta}
+    return Operation("rz", qubits=(target_qubit,), params=(theta,))
 
 
 def s_gate(target_qubit=0):
-    return {"type": "s_gate", "target_qubit": target_qubit}
+    return Operation("s_gate", qubits=(target_qubit,))
 
 
 def t_gate(target_qubit=0):
-    return {"type": "t_gate", "target_qubit": target_qubit}
+    return Operation("t_gate", qubits=(target_qubit,))
 
 
 def cx(target_qubit, control_qubits, control_states=None):
-    if control_states is None:
-        control_states = [1] * len(control_qubits)
-    return {
-        "type": "cx",
-        "target_qubit": target_qubit,
-        "control_qubits": control_qubits,
-        "control_states": control_states,
-    }
+    controls, states = _controls(control_qubits, control_states)
+    return Operation("cx", qubits=(target_qubit,), controls=controls, control_states=states)
 
 
 cnot = cx
 
 
 def cy(target_qubit, control_qubits, control_states=None):
-    if control_states is None:
-        control_states = [1] * len(control_qubits)
-    return {
-        "type": "cy",
-        "target_qubit": target_qubit,
-        "control_qubits": control_qubits,
-        "control_states": control_states,
-    }
+    controls, states = _controls(control_qubits, control_states)
+    return Operation("cy", qubits=(target_qubit,), controls=controls, control_states=states)
 
 
 def cz(target_qubit, control_qubits, control_states=None):
-    if control_states is None:
-        control_states = [1] * len(control_qubits)
-    return {
-        "type": "cz",
-        "target_qubit": target_qubit,
-        "control_qubits": control_qubits,
-        "control_states": control_states,
-    }
+    controls, states = _controls(control_qubits, control_states)
+    return Operation("cz", qubits=(target_qubit,), controls=controls, control_states=states)
 
 
 def crx(theta, target_qubit, control_qubits, control_states=None):
-    if control_states is None:
-        control_states = [1] * len(control_qubits)
-    return {
-        "type": "crx",
-        "target_qubit": target_qubit,
-        "control_qubits": control_qubits,
-        "parameter": theta,
-        "control_states": control_states,
-    }
+    controls, states = _controls(control_qubits, control_states)
+    return Operation(
+        "crx", qubits=(target_qubit,), params=(theta,), controls=controls, control_states=states
+    )
 
 
 def cry(theta, target_qubit, control_qubits, control_states=None):
-    if control_states is None:
-        control_states = [1] * len(control_qubits)
-    return {
-        "type": "cry",
-        "target_qubit": target_qubit,
-        "control_qubits": control_qubits,
-        "parameter": theta,
-        "control_states": control_states,
-    }
+    controls, states = _controls(control_qubits, control_states)
+    return Operation(
+        "cry", qubits=(target_qubit,), params=(theta,), controls=controls, control_states=states
+    )
 
 
 def crz(theta, target_qubit, control_qubits, control_states=None):
-    if control_states is None:
-        control_states = [1] * len(control_qubits)
-    return {
-        "type": "crz",
-        "target_qubit": target_qubit,
-        "control_qubits": control_qubits,
-        "parameter": theta,
-        "control_states": control_states,
-    }
+    controls, states = _controls(control_qubits, control_states)
+    return Operation(
+        "crz", qubits=(target_qubit,), params=(theta,), controls=controls, control_states=states
+    )
 
 
 def swap(qubit_1=0, qubit_2=1):
-    return {"type": "swap", "qubit_1": qubit_1, "qubit_2": qubit_2}
+    return Operation("swap", qubits=(qubit_1, qubit_2))
 
 
 def rzz(theta, qubit_1=0, qubit_2=1):
-    return {"type": "rzz", "qubit_1": qubit_1, "qubit_2": qubit_2, "parameter": theta}
+    return Operation("rzz", qubits=(qubit_1, qubit_2), params=(theta,))
 
 
 def rxx(theta, qubit_1=0, qubit_2=1):
-    return {"type": "rxx", "qubit_1": qubit_1, "qubit_2": qubit_2, "parameter": theta}
+    return Operation("rxx", qubits=(qubit_1, qubit_2), params=(theta,))
 
 
 ms_gate = rxx
@@ -729,18 +712,18 @@ molmer_sorensen = rxx
 
 
 def toffoli(target_qubit=2, control_qubits=(0, 1)):
-    return {"type": "toffoli", "target_qubit": target_qubit, "control_qubits": list(control_qubits)}
+    return Operation("toffoli", qubits=(target_qubit,), controls=tuple(control_qubits))
 
 
 ccnot = toffoli
 
 
 def u3(theta, phi, lam, target_qubit=0):
-    return {"type": "u3", "target_qubit": target_qubit, "parameter": [theta, phi, lam]}
+    return Operation("u3", qubits=(target_qubit,), params=(theta, phi, lam))
 
 
 def u2(phi, lam, target_qubit=0):
-    return {"type": "u2", "target_qubit": target_qubit, "parameter": [phi, lam]}
+    return Operation("u2", qubits=(target_qubit,), params=(phi, lam))
 
 
 def measure(*qubits):
@@ -772,7 +755,7 @@ def measure(*qubits):
             flat.extend(int(value) for value in qubit)
         else:
             flat.append(int(qubit))
-    return {"type": "measure", "qubits": flat}
+    return Measurement(tuple(flat))
 
 
 __all__ = [

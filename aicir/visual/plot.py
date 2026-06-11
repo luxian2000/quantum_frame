@@ -27,7 +27,7 @@ from ..core.circuit import (
 )
 from ..core.io.json_io import circuit_from_json, circuit_from_json_dict, load_circuit_json
 from ..core.io.qasm import circuit_from_qasm, load_circuit_qasm
-from ..ir import circuit_gate_dicts, has_circuit_instructions
+from ..ir import Measurement, Operation, circuit_gate_dicts, has_circuit_instructions
 from .utils import require_matplotlib
 
 
@@ -501,9 +501,15 @@ def _coerce_circuit(source: Any) -> tuple[Any, str | None]:
             return Circuit(source), None
         raise TypeError("dict is neither a circuit-JSON dict nor a gate dict")
 
-    # A sequence of gate dicts.
+    # A single typed instruction (factories now return Operation/Measurement).
+    if isinstance(source, (Operation, Measurement)):
+        return Circuit(source), None
+
+    # A sequence of gate dicts or typed instructions.
     if isinstance(source, (list, tuple)):
-        if source and all(isinstance(g, dict) and "type" in g for g in source):
+        if source and all(
+            isinstance(g, (dict, Operation, Measurement)) and "type" in g for g in source
+        ):
             return Circuit(*source), None
         raise TypeError("sequence must be non-empty gate dicts with a 'type' key")
 
