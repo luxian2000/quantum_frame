@@ -15,6 +15,7 @@ import sys
 
 import numpy as np
 
+from ..gates import canonical_gate_name, get_gate_spec
 from ..ir import CircuitIR, Measurement, Operation, normalize_gate
 from .gates import gate_to_matrix, identity
 
@@ -119,9 +120,9 @@ def _measure_gate_qubits(gate):
 
 
 def _required_n_qubits_from_gate(gate):
-    gate_type = gate["type"]
+    gate_type = canonical_gate_name(gate["type"])
 
-    if gate_type in ("measure", "measurement"):
+    if gate_type == "measure":
         measured = _measure_gate_qubits(gate)
         # An empty measure() (read out all qubits) imposes no lower bound; the
         # unitary gates determine the circuit width.
@@ -167,31 +168,7 @@ def _required_n_qubits_from_gate(gate):
         if values is not None:
             extend_qubits(explicit_qubits, values)
 
-    if gate_type in [
-        "pauli_x",
-        "X",
-        "pauli_y",
-        "Y",
-        "pauli_z",
-        "Z",
-        "hadamard",
-        "H",
-        "s_gate",
-        "S",
-        "t_gate",
-        "T",
-        "rx",
-        "ry",
-        "rz",
-        "u3",
-        "u2",
-    ]:
-        return max(explicit_qubits) + 1
-    if gate_type in ["cnot", "cx", "cz", "cy", "crx", "cry", "crz"]:
-        return max(explicit_qubits) + 1
-    if gate_type in ["toffoli", "ccnot"]:
-        return max(explicit_qubits) + 1
-    if gate_type in ["identity", "I"]:
+    if gate_type == "identity":
         return gate["n_qubits"]
     if explicit_qubits:
         return max(explicit_qubits) + 1
@@ -205,44 +182,19 @@ def _infer_n_qubits_from_gates(gates):
 
 
 def _single_gate_symbol(gate_type):
-    symbols = {
-        "pauli_x": "X",
-        "X": "X",
-        "pauli_y": "Y",
-        "Y": "Y",
-        "pauli_z": "Z",
-        "Z": "Z",
-        "hadamard": "H",
-        "H": "H",
-        "s_gate": "S",
-        "S": "S",
-        "t_gate": "T",
-        "T": "T",
-        "rx": "Rx",
-        "ry": "Ry",
-        "rz": "Rz",
-        "u2": "U2",
-        "u3": "U3",
-        "identity": "I",
-        "I": "I",
-        "unitary": "U",
-    }
-    return symbols.get(gate_type)
+    """非受控门的显示符号，单一来源为 GateSpec.symbol（别名自动解析）。"""
+    spec = get_gate_spec(gate_type)
+    if spec is None or spec.controlled:
+        return None
+    return spec.symbol
 
 
 def _controlled_target_symbol(gate_type):
-    symbols = {
-        "cnot": "X",
-        "cx": "X",
-        "cy": "Y",
-        "cz": "Z",
-        "crx": "Rx",
-        "cry": "Ry",
-        "crz": "Rz",
-        "toffoli": "X",
-        "ccnot": "X",
-    }
-    return symbols.get(gate_type)
+    """受控门目标位的显示符号，单一来源为 GateSpec.symbol。"""
+    spec = get_gate_spec(gate_type)
+    if spec is None or not spec.controlled:
+        return None
+    return spec.symbol
 
 
 def _token(symbol):
@@ -359,9 +311,9 @@ def _gate_to_column(gate, n_qubits):
     qubit_col = [_wire_cell()] * n_qubits
     between_col = [_blank_cell()] * max(0, n_qubits - 1)
     angle_col = [_blank_cell()] * max(0, n_qubits - 1)
-    gate_type = gate["type"]
+    gate_type = canonical_gate_name(gate["type"])
 
-    if gate_type in ["identity", "I"]:
+    if gate_type == "identity":
         qubit_col = [_symbol_cell("I")] * n_qubits
         return qubit_col, between_col, angle_col
 

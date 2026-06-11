@@ -225,7 +225,7 @@ GateSpec(
 - `visual` 可从 spec 获取显示名称和参数格式。
 - `qas` 可从 spec 生成搜索动作空间。
 
-当前状态：第一片已落地。`aicir.gates` 提供 `GateSpec`（门名/别名/目标比特数/参数个数/是否受控/QASM 名）与注册表 API（`register_gate`/`unregister_gate`/`get_gate_spec`/`registered_gate_names`/`canonical_gate_name`），内置门集已全部注册；`num_qubits`/`num_params` 为 `None` 表示可变（`unitary`、`measure`、整寄存器 `identity`）。消费方已接入四处：`aicir.ir.Operation` 构造期按 spec 校验目标比特数/参数个数/控制位（未注册门名保持宽松）；`aicir.transpile.ValidatePass` 结合 `n_qubits` 做越界/冲突/重复比特实质校验；`aicir.transpile.CanonicalizePass` 把别名门名重写为规范名；QASM 导出名由 `GateSpec.qasm_name` 派生（别名经 `canonical_gate_name` 归一，导入表由导出表反推）。`matrix`/`generator`/`decomposition` 字段及 `gate_to_matrix`/visual/qml/qas 的元信息迁移尚未开始。
+当前状态：第一、二片已落地。`aicir.gates` 提供 `GateSpec`（门名/别名/目标比特数/参数个数/是否受控/QASM 名/显示符号）与注册表 API（`register_gate`/`unregister_gate`/`get_gate_spec`/`registered_gate_names`/`canonical_gate_name`），内置门集已全部注册；`num_qubits`/`num_params` 为 `None` 表示可变（`unitary`、`measure`、整寄存器 `identity`）。消费方已接入六处：`aicir.ir.Operation` 构造期按 spec 校验（未注册门名保持宽松）；`ValidatePass` 实质校验；`CanonicalizePass` 别名归一；QASM 导出名由 `GateSpec.qasm_name` 派生；矩阵路径（`gate_to_matrix`/`apply_gate_to_state` 等）入口经 `canonical_gate_name` 归一后按规范名分发；ASCII 与 matplotlib 绘图符号/配色族由 `GateSpec.symbol` 与规范名派生（注册自定义门可携带 symbol 直接显示）。尚未迁移：`matrix`/`generator`/`decomposition` 字段；`metrics`/`qas` 评分中的别名容忍集合（`DEFAULT_NATIVE_GATES`、双比特门判定等）属评分语义，留待单独处理。
 
 ### 8. 强化跨框架互操作
 

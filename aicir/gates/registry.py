@@ -74,32 +74,33 @@ def canonical_gate_name(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 _STANDARD_GATES = (
-    GateSpec("pauli_x", 1, 0, aliases=("X",), qasm_name="x"),
-    GateSpec("pauli_y", 1, 0, aliases=("Y",), qasm_name="y"),
-    GateSpec("pauli_z", 1, 0, aliases=("Z",), qasm_name="z"),
-    GateSpec("hadamard", 1, 0, aliases=("H",), qasm_name="h"),
-    GateSpec("s_gate", 1, 0, aliases=("S",), qasm_name="s"),
-    GateSpec("t_gate", 1, 0, aliases=("T",), qasm_name="t"),
+    GateSpec("pauli_x", 1, 0, aliases=("X",), qasm_name="x", symbol="X"),
+    GateSpec("pauli_y", 1, 0, aliases=("Y",), qasm_name="y", symbol="Y"),
+    GateSpec("pauli_z", 1, 0, aliases=("Z",), qasm_name="z", symbol="Z"),
+    GateSpec("hadamard", 1, 0, aliases=("H",), qasm_name="h", symbol="H"),
+    GateSpec("s_gate", 1, 0, aliases=("S",), qasm_name="s", symbol="S"),
+    GateSpec("t_gate", 1, 0, aliases=("T",), qasm_name="t", symbol="T"),
     # identity 允许整寄存器形式 {"type": "identity", "n_qubits": n}（QAS 动作空间），
     # 因此目标比特数可变。
-    GateSpec("identity", None, 0, aliases=("I",), qasm_name="id"),
-    GateSpec("rx", 1, 1, qasm_name="rx"),
-    GateSpec("ry", 1, 1, qasm_name="ry"),
-    GateSpec("rz", 1, 1, qasm_name="rz"),
-    GateSpec("u2", 1, 2, qasm_name="u2"),
-    GateSpec("u3", 1, 3, qasm_name="u3"),
-    GateSpec("cx", 1, 0, aliases=("cnot",), controlled=True, qasm_name="cx"),
-    GateSpec("cy", 1, 0, controlled=True, qasm_name="cy"),
-    GateSpec("cz", 1, 0, controlled=True, qasm_name="cz"),
-    GateSpec("crx", 1, 1, controlled=True, qasm_name="crx"),
-    GateSpec("cry", 1, 1, controlled=True, qasm_name="cry"),
-    GateSpec("crz", 1, 1, controlled=True, qasm_name="crz"),
-    GateSpec("toffoli", 1, 0, aliases=("ccnot",), controlled=True, qasm_name="ccx"),
+    GateSpec("identity", None, 0, aliases=("I",), qasm_name="id", symbol="I"),
+    GateSpec("rx", 1, 1, qasm_name="rx", symbol="Rx"),
+    GateSpec("ry", 1, 1, qasm_name="ry", symbol="Ry"),
+    GateSpec("rz", 1, 1, qasm_name="rz", symbol="Rz"),
+    GateSpec("u2", 1, 2, qasm_name="u2", symbol="U2"),
+    GateSpec("u3", 1, 3, qasm_name="u3", symbol="U3"),
+    GateSpec("cx", 1, 0, aliases=("cnot",), controlled=True, qasm_name="cx", symbol="X"),
+    GateSpec("cy", 1, 0, controlled=True, qasm_name="cy", symbol="Y"),
+    GateSpec("cz", 1, 0, controlled=True, qasm_name="cz", symbol="Z"),
+    GateSpec("crx", 1, 1, controlled=True, qasm_name="crx", symbol="Rx"),
+    GateSpec("cry", 1, 1, controlled=True, qasm_name="cry", symbol="Ry"),
+    GateSpec("crz", 1, 1, controlled=True, qasm_name="crz", symbol="Rz"),
+    GateSpec("toffoli", 1, 0, aliases=("ccnot",), controlled=True, qasm_name="ccx", symbol="X"),
+    # swap/rzz/rxx/measure 在绘图中特殊绘制，不携带 symbol。
     GateSpec("swap", 2, 0, qasm_name="swap"),
     GateSpec("rzz", 2, 1, qasm_name="rzz"),
     GateSpec("rxx", 2, 1, qasm_name="rxx"),
     # unitary 的矩阵经 "parameter" 携带，但绘图占位场景允许缺省，故参数个数可变。
-    GateSpec("unitary", None, None),
+    GateSpec("unitary", None, None, symbol="U"),
     GateSpec("measure", None, 0, aliases=("measurement",)),
 )
 

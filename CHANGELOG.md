@@ -12,6 +12,8 @@
 - 新增 `aicir.gates.canonical_gate_name`：把别名门名（`X`/`cnot`/`ccnot`/`measurement` 等）解析为规范名，未注册名称原样返回。
 - `aicir.transpile.CanonicalizePass` 升级为实质规范化：把门字典中的别名 `type` 重写为 GateSpec 规范名；原先仅做 round-trip 复制。
 - QASM 导出门名改以 GateSpec 注册表为单一来源：`core/io/qasm.py` 的导出表由 `GateSpec.qasm_name` 派生，别名键（`X`/`cnot`/`ccnot` 等）从表中移除，导出时先经 `canonical_gate_name` 归一；导入表由导出表反推。导出结果与旧版完全一致（有回归测试钉住）。
+- `GateSpec` 新增 `symbol` 字段（绘图显示符号，受控门为目标位符号），ASCII 与 matplotlib 绘图的符号/配色族查询改以注册表为单一来源：`_single_gate_symbol`/`_controlled_target_symbol` 由 `GateSpec.symbol` 派生（注册自定义门可携带 symbol 直接显示），`visual/plot.py` 的 `_FAMILY` 配色表只保留规范名键。
+- 矩阵路径统一别名处理：`gate_to_matrix`/`apply_gate_to_state`/`_single_qubit_base_for_gate` 等在入口经 `canonical_gate_name` 归一后分发，全部 `["pauli_x", "X"]`/`["cnot", "cx"]`/`["toffoli", "ccnot"]` 式别名分支收敛为规范名（别名与规范名共享矩阵缓存）。行为与旧版完全一致（有别名等价回归测试钉住）。
 - 新增 `aicir.primitives`（NEXT.md 第 4 节第一片）：`BaseSampler`/`BaseEstimator` 接口与最小统一结果对象 `SampleResult`/`EstimateResult`（第 9 节切片）；`ShotSampler` 包装 `Measure`，`StatevectorEstimator` 提供精确态向量期望，`ShotEstimator` 包装 `PauliEstimator` 并暴露 `estimate()` 直通方法（可直接作 `BasicVQE(energy_estimator=...)` 注入）。约定：接收已绑定参数的电路，单入参返回单结果、序列返回列表，单个可观测量可广播。
 
 ### Changed

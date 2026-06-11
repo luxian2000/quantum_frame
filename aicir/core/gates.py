@@ -12,6 +12,7 @@ from typing import Iterable
 import numpy as np
 import torch
 
+from ..gates import canonical_gate_name
 from ..ir.operation import normalize_gate
 
 _CDTYPE = np.complex64
@@ -409,7 +410,7 @@ def _single_qubit_base_for_gate_backend(gate, backend):
     if not _contains_torch_tensor(parameter):
         return _single_qubit_base_for_gate(gate)
 
-    gate_type = gate["type"]
+    gate_type = canonical_gate_name(gate["type"])
     ref = _first_torch_tensor(parameter)
     backend_dtype = getattr(backend, "_dtype", torch.complex64)
     dtype = _torch_complex_dtype(backend_dtype)
@@ -691,24 +692,24 @@ def _apply_local_matrix_to_state(state, local_matrix, axes, n_qubits, backend):
 
 def _single_qubit_base_for_gate(gate):
     gate = normalize_gate(gate)
-    gate_type = gate["type"]
+    gate_type = canonical_gate_name(gate["type"])
     gate_parameter = gate.get("parameter", None)
 
-    if gate_type in ["pauli_x", "X", "cnot", "cx", "toffoli", "ccnot"]:
+    if gate_type in ["pauli_x", "cx", "toffoli"]:
         return np.array([[0.0 + 0.0j, 1.0 + 0.0j], [1.0 + 0.0j, 0.0 + 0.0j]], dtype=_CDTYPE)
-    if gate_type in ["pauli_y", "Y", "cy"]:
+    if gate_type in ["pauli_y", "cy"]:
         return np.array([[0.0 + 0.0j, -1j], [1j, 0.0 + 0.0j]], dtype=_CDTYPE)
-    if gate_type in ["pauli_z", "Z", "cz"]:
+    if gate_type in ["pauli_z", "cz"]:
         return np.array([[1.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, -1.0 + 0.0j]], dtype=_CDTYPE)
-    if gate_type in ["hadamard", "H"]:
+    if gate_type == "hadamard":
         sqrt2_inv = 1.0 / math.sqrt(2.0)
         return np.array(
             [[sqrt2_inv + 0.0j, sqrt2_inv + 0.0j], [sqrt2_inv + 0.0j, -sqrt2_inv + 0.0j]],
             dtype=_CDTYPE,
         )
-    if gate_type in ["s_gate", "S"]:
+    if gate_type == "s_gate":
         return np.array([[1.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, 1j]], dtype=_CDTYPE)
-    if gate_type in ["t_gate", "T"]:
+    if gate_type == "t_gate":
         return np.array([[1.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, np.exp(1j * math.pi / 4.0)]], dtype=_CDTYPE)
     if gate_type in ["rx", "crx"]:
         t = float(gate_parameter)
@@ -788,9 +789,9 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
     gate_to_matrix + apply_unitary。
     """
     gate = normalize_gate(gate)
-    gate_type = gate["type"]
+    gate_type = canonical_gate_name(gate["type"])
 
-    if gate_type in ["identity", "I"]:
+    if gate_type == "identity":
         return state
 
     if gate_type == "unitary":
@@ -817,17 +818,11 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
 
     if gate_type in [
         "pauli_x",
-        "X",
         "pauli_y",
-        "Y",
         "pauli_z",
-        "Z",
         "hadamard",
-        "H",
         "s_gate",
-        "S",
         "t_gate",
-        "T",
         "rx",
         "ry",
         "rz",
@@ -845,7 +840,7 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
             backend,
         )
 
-    if gate_type in ["cnot", "cx", "cy", "cz", "crx", "cry", "crz"]:
+    if gate_type in ["cx", "cy", "cz", "crx", "cry", "crz"]:
         controls, control_states = _normalized_control_data(gate)
         base = _single_qubit_base_for_gate_backend(gate, backend)
         local = _controlled_local_from_base(base, control_states)
@@ -865,7 +860,7 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
             backend,
         )
 
-    if gate_type in ["toffoli", "ccnot"]:
+    if gate_type == "toffoli":
         controls, control_states = _normalized_control_data(gate)
         base = _single_qubit_base_for_gate(gate)
         local = _controlled_local_from_base(base, control_states)
@@ -914,7 +909,7 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
 
 def gate_to_matrix(gate, cir_qubits=1, backend=None):
     gate = normalize_gate(gate)
-    gate_type = gate["type"]
+    gate_type = canonical_gate_name(gate["type"])
     gate_parameter = gate.get("parameter", None)
 
     if gate_type == "unitary":
@@ -944,22 +939,22 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
         return gate_matrix
 
     if backend is None:
-        if gate_type in ["pauli_x", "X"]:
+        if gate_type == "pauli_x":
             gate_qubits = gate["target_qubit"] + 1
             gate_matrix = _pauli_x(gate["target_qubit"])
-        elif gate_type in ["pauli_y", "Y"]:
+        elif gate_type == "pauli_y":
             gate_qubits = gate["target_qubit"] + 1
             gate_matrix = _pauli_y(gate["target_qubit"])
-        elif gate_type in ["pauli_z", "Z"]:
+        elif gate_type == "pauli_z":
             gate_qubits = gate["target_qubit"] + 1
             gate_matrix = _pauli_z(gate["target_qubit"])
-        elif gate_type in ["hadamard", "H"]:
+        elif gate_type == "hadamard":
             gate_qubits = gate["target_qubit"] + 1
             gate_matrix = _hadamard(gate["target_qubit"])
-        elif gate_type in ["s_gate", "S"]:
+        elif gate_type == "s_gate":
             gate_qubits = gate["target_qubit"] + 1
             gate_matrix = _s_gate(gate["target_qubit"])
-        elif gate_type in ["t_gate", "T"]:
+        elif gate_type == "t_gate":
             gate_qubits = gate["target_qubit"] + 1
             gate_matrix = _t_gate(gate["target_qubit"])
         elif gate_type == "rx":
@@ -977,7 +972,7 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
         elif gate_type == "u2":
             gate_qubits = gate["target_qubit"] + 1
             gate_matrix = _u2(gate_parameter[0], gate_parameter[1], gate["target_qubit"])
-        elif gate_type in ["cnot", "cx"]:
+        elif gate_type == "cx":
             controls, control_states = _normalized_control_data(gate)
             gate_qubits = max(gate["target_qubit"], max(controls)) + 1
             gate_matrix = _cx(gate["target_qubit"], controls, control_states)
@@ -1004,11 +999,11 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
         elif gate_type == "swap":
             gate_qubits = max(gate["qubit_1"], gate["qubit_2"]) + 1
             gate_matrix = _swap(gate["qubit_1"], gate["qubit_2"])
-        elif gate_type in ["toffoli", "ccnot"]:
+        elif gate_type == "toffoli":
             controls, control_states = _normalized_control_data(gate)
             gate_qubits = max([gate["target_qubit"]] + controls) + 1
             gate_matrix = _toffoli(gate["target_qubit"], controls, control_states)
-        elif gate_type in ["identity", "I"]:
+        elif gate_type == "identity":
             return identity(cir_qubits)
         elif gate_type in {"rzz", "rxx"}:
             local = _rzz(gate_parameter) if gate_type == "rzz" else _rxx(gate_parameter)
@@ -1020,19 +1015,19 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
         else:
             raise ValueError(f"不支持的门类型: {gate_type}")
     else:
-        if gate_type in ["pauli_x", "X"]:
+        if gate_type == "pauli_x":
             gate_qubits = gate["target_qubit"] + 1
             base = np.array([[0.0 + 0.0j, 1.0 + 0.0j], [1.0 + 0.0j, 0.0 + 0.0j]], dtype=_CDTYPE)
             gate_matrix = _single_qubit_from_base_backend(base, gate["target_qubit"], backend)
-        elif gate_type in ["pauli_y", "Y"]:
+        elif gate_type == "pauli_y":
             gate_qubits = gate["target_qubit"] + 1
             base = np.array([[0.0 + 0.0j, -1j], [1j, 0.0 + 0.0j]], dtype=_CDTYPE)
             gate_matrix = _single_qubit_from_base_backend(base, gate["target_qubit"], backend)
-        elif gate_type in ["pauli_z", "Z"]:
+        elif gate_type == "pauli_z":
             gate_qubits = gate["target_qubit"] + 1
             base = np.array([[1.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, -1.0 + 0.0j]], dtype=_CDTYPE)
             gate_matrix = _single_qubit_from_base_backend(base, gate["target_qubit"], backend)
-        elif gate_type in ["hadamard", "H"]:
+        elif gate_type == "hadamard":
             gate_qubits = gate["target_qubit"] + 1
             sqrt2_inv = 1.0 / math.sqrt(2.0)
             base = np.array(
@@ -1040,11 +1035,11 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
                 dtype=_CDTYPE,
             )
             gate_matrix = _single_qubit_from_base_backend(base, gate["target_qubit"], backend)
-        elif gate_type in ["s_gate", "S"]:
+        elif gate_type == "s_gate":
             gate_qubits = gate["target_qubit"] + 1
             base = np.array([[1.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, 1j]], dtype=_CDTYPE)
             gate_matrix = _single_qubit_from_base_backend(base, gate["target_qubit"], backend)
-        elif gate_type in ["t_gate", "T"]:
+        elif gate_type == "t_gate":
             gate_qubits = gate["target_qubit"] + 1
             t_val = np.exp(1j * math.pi / 4.0)
             base = np.array([[1.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, t_val]], dtype=_CDTYPE)
@@ -1069,7 +1064,7 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
             gate_qubits = gate["target_qubit"] + 1
             base = _single_qubit_base_for_gate_backend(gate, backend)
             gate_matrix = _single_qubit_from_base_backend(base, gate["target_qubit"], backend)
-        elif gate_type in ["cnot", "cx"]:
+        elif gate_type == "cx":
             controls, control_states = _normalized_control_data(gate)
             gate_qubits = max(gate["target_qubit"], max(controls)) + 1
             base = np.array([[0.0 + 0.0j, 1.0 + 0.0j], [1.0 + 0.0j, 0.0 + 0.0j]], dtype=_CDTYPE)
@@ -1102,11 +1097,11 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
         elif gate_type == "swap":
             gate_qubits = max(gate["qubit_1"], gate["qubit_2"]) + 1
             gate_matrix = _swap_backend(gate["qubit_1"], gate["qubit_2"], backend)
-        elif gate_type in ["toffoli", "ccnot"]:
+        elif gate_type == "toffoli":
             controls, control_states = _normalized_control_data(gate)
             gate_qubits = max([gate["target_qubit"]] + controls) + 1
             gate_matrix = _toffoli_backend(gate["target_qubit"], controls, control_states, backend)
-        elif gate_type in ["identity", "I"]:
+        elif gate_type == "identity":
             return backend.eye(1 << cir_qubits)
         elif gate_type in {"rzz", "rxx"}:
             local = _rzz_backend(gate_parameter, backend) if gate_type == "rzz" else _rxx_backend(gate_parameter, backend)

@@ -26,6 +26,8 @@ canonical_gate_name("cnot")        # "cx"；未注册名称原样返回
 - `controlled`：是否必须携带至少一个控制位（`cx`/`cy`/`cz`/`crx`/`cry`/`crz`/`toffoli`）。
 - `aliases`：等价的门字典 `type` 写法（`"X"`、`"cnot"`、`"ccnot"` 等）。
 - `qasm_name`：OpenQASM 导出名（`core/io/qasm.py` 的导出表由此派生）。
+- `symbol`：ASCII/matplotlib 绘图显示符号（受控门为目标位符号）；`None`
+  表示特殊绘制（swap/rzz/rxx/measure）或退回通用 fallback。
 
 ## 当前消费方
 
@@ -35,6 +37,11 @@ canonical_gate_name("cnot")        # "cx"；未注册名称原样返回
 - `aicir.transpile.CanonicalizePass`：把别名门名（`X`/`cnot`/`ccnot`）重写为规范名。
 - `aicir.core.io.qasm`：QASM 导出名以 `GateSpec.qasm_name` 为单一来源，
   别名经 `canonical_gate_name` 归一，导入表由导出表反推。
+- `aicir.core.gates` 矩阵路径（`gate_to_matrix`/`apply_gate_to_state` 等）：
+  入口经 `canonical_gate_name` 归一后按规范名分发，别名与规范名共享矩阵缓存。
+- 绘图：ASCII（`core/circuit.py`）与 matplotlib（`visual/plot.py`）的显示
+  符号/配色族由 `GateSpec.symbol` 与规范名派生；注册自定义门时携带
+  `symbol` 即可在绘图中直接显示。
 
 ## 注册自定义门
 
@@ -47,5 +54,6 @@ register_gate(GateSpec(name="my_iswap", num_qubits=2, num_params=0))
 
 ## 后续方向（尚未实现）
 
-`matrix`/`generator`/`decomposition` 字段与让 `gate_to_matrix`、
-`visual`、`qml`、`qas` 改为从注册表读取元信息，见 NEXT.md 第 7 节。
+`matrix`/`generator`/`decomposition` 字段（矩阵构造仍由 `gate_to_matrix`
+负责）；`metrics`/`qas` 评分中的别名容忍集合（`DEFAULT_NATIVE_GATES`、
+双比特门判定等）属评分语义，留待单独处理。见 NEXT.md 第 7 节。

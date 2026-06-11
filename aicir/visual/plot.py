@@ -27,6 +27,7 @@ from ..core.circuit import (
 )
 from ..core.io.json_io import circuit_from_json, circuit_from_json_dict, load_circuit_json
 from ..core.io.qasm import circuit_from_qasm, load_circuit_qasm
+from ..gates import canonical_gate_name
 from ..ir import Measurement, Operation, circuit_gate_dicts, has_circuit_instructions
 from .utils import require_matplotlib
 
@@ -46,25 +47,18 @@ _PALETTE: dict[str, tuple[str, str]] = {
     "default": ("#E2E2E2", "#888888"),
 }
 
+# 键为 GateSpec 规范名；别名（X/cnot/ccnot 等）在查询时经 canonical_gate_name 归一。
 _FAMILY: dict[str, str] = {
     "hadamard": "hadamard",
-    "H": "hadamard",
     "pauli_x": "pauli",
-    "X": "pauli",
     "pauli_y": "pauli",
-    "Y": "pauli",
     "pauli_z": "pauli",
-    "Z": "pauli",
     "cx": "pauli",
-    "cnot": "pauli",
     "cy": "pauli",
     "cz": "pauli",
     "toffoli": "pauli",
-    "ccnot": "pauli",
     "s_gate": "phase",
-    "S": "phase",
     "t_gate": "phase",
-    "T": "phase",
     "rx": "rotation",
     "ry": "rotation",
     "rz": "rotation",
@@ -77,7 +71,6 @@ _FAMILY: dict[str, str] = {
     "u3": "unitary",
     "unitary": "unitary",
     "measure": "measure",
-    "measurement": "measure",
 }
 
 # Geometry, in data units (the axes use an equal aspect ratio).
@@ -143,7 +136,7 @@ def _fit_marked_texts(ax, *, min_fontsize: float = 1.0) -> None:
 
 
 def _style_for(gate_type: str) -> tuple[str, str]:
-    return _PALETTE[_FAMILY.get(gate_type, "default")]
+    return _PALETTE[_FAMILY.get(canonical_gate_name(gate_type), "default")]
 
 
 def _measure_targets(gate: dict) -> list[int]:
@@ -192,7 +185,7 @@ def _sublabel_scale(gate: dict) -> float:
 
 def _gate_qubits(gate: dict, n_qubits: int) -> list[int]:
     """All wires a gate touches (used for layer packing)."""
-    gate_type = gate["type"]
+    gate_type = canonical_gate_name(gate["type"])
     if gate_type in {"swap", "rzz", "rxx"}:
         return [int(gate["qubit_1"]), int(gate["qubit_2"])]
     if gate_type in {"identity", "I", "unitary"}:
@@ -332,7 +325,7 @@ def _draw_connector(ax, x, q_lo, q_hi, n_qubits, color):
 
 
 def _render_gate(ax, gate, x, n_qubits, fontsize):
-    gate_type = gate["type"]
+    gate_type = canonical_gate_name(gate["type"])
     facecolor, edgecolor = _style_for(gate_type)
 
     if gate_type in {"measure", "measurement"}:
@@ -383,7 +376,7 @@ def _render_gate(ax, gate, x, n_qubits, fontsize):
         _draw_connector(ax, x, min(involved), max(involved), n_qubits, edgecolor)
         for c in controls:
             _draw_control(ax, x, _yy(c, n_qubits), edgecolor, fontsize=fontsize)
-        if gate_type in {"cx", "cnot", "toffoli", "ccnot"}:
+        if gate_type in {"cx", "toffoli"}:
             _draw_oplus(ax, x, _yy(target, n_qubits), edgecolor, fontsize=fontsize)
         else:
             _draw_box(ax, x, _yy(target, n_qubits), _gate_label(gate),
