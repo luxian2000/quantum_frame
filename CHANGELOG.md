@@ -4,6 +4,16 @@
 
 ## 2026-06-11
 
+### Added
+
+- 新增 `aicir.gates` GateSpec 注册表（NEXT.md 第 7 节第一片）：`GateSpec`（门名/别名/目标比特数/参数个数/是否受控/QASM 名）、`register_gate`/`unregister_gate`/`get_gate_spec`/`registered_gate_names`；内置门集已全部注册。`num_qubits`/`num_params` 为 `None` 表示可变（`unitary`、`measure`、整寄存器 `identity`）。
+- `Operation` 构造期接入 GateSpec 校验：已注册门检查目标比特数、参数个数与控制位要求，未注册门名保持宽松（自定义门不受限）。
+- `aicir.transpile.ValidatePass` 升级为实质校验：qubit/控制位越界（相对 `n_qubits`）、目标与控制比特冲突、重复比特；原先仅做 round-trip 规范化。
+- 新增 `aicir.gates.canonical_gate_name`：把别名门名（`X`/`cnot`/`ccnot`/`measurement` 等）解析为规范名，未注册名称原样返回。
+- `aicir.transpile.CanonicalizePass` 升级为实质规范化：把门字典中的别名 `type` 重写为 GateSpec 规范名；原先仅做 round-trip 复制。
+- QASM 导出门名改以 GateSpec 注册表为单一来源：`core/io/qasm.py` 的导出表由 `GateSpec.qasm_name` 派生，别名键（`X`/`cnot`/`ccnot` 等）从表中移除，导出时先经 `canonical_gate_name` 归一；导入表由导出表反推。导出结果与旧版完全一致（有回归测试钉住）。
+- 新增 `aicir.primitives`（NEXT.md 第 4 节第一片）：`BaseSampler`/`BaseEstimator` 接口与最小统一结果对象 `SampleResult`/`EstimateResult`（第 9 节切片）；`ShotSampler` 包装 `Measure`，`StatevectorEstimator` 提供精确态向量期望，`ShotEstimator` 包装 `PauliEstimator` 并暴露 `estimate()` 直通方法（可直接作 `BasicVQE(energy_estimator=...)` 注入）。约定：接收已绑定参数的电路，单入参返回单结果、序列返回列表，单个可观测量可广播。
+
 ### Changed
 
 - 门工厂函数（`pauli_x`/`hadamard`/`rx`/`cx`/`swap`/`rzz`/`u3`/`u2` 等）**签名与参数顺序完全不变**，但返回值由裸门字典升级为类型化 `Operation`；`measure(...)` 返回 `Measurement`。构造期即校验（量子比特下标、控制位/控制态长度等）。`Circuit` 内部存储的门字典与旧版完全一致，下游消费方无需改动。

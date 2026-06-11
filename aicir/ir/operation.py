@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..gates import get_gate_spec
+
 
 _PAIR_QUBIT_GATES = {"swap", "rzz", "rxx"}
 _KNOWN_GATE_KEYS = {
@@ -117,6 +119,26 @@ class Operation(LegacyGateView):
         object.__setattr__(self, "params", tuple(self.params))
         object.__setattr__(self, "label", None if self.label is None else str(self.label))
         object.__setattr__(self, "metadata", dict(self.metadata))
+        self._validate_against_spec()
+
+    def _validate_against_spec(self) -> None:
+        """对已注册门按 GateSpec 校验目标比特数/参数个数/控制位；未注册门保持宽松。"""
+
+        spec = get_gate_spec(self.name)
+        if spec is None:
+            return
+        if spec.num_qubits is not None and len(self.qubits) != spec.num_qubits:
+            raise ValueError(
+                f"gate '{self.name}' expects {spec.num_qubits} target qubit(s), "
+                f"got {len(self.qubits)}"
+            )
+        if spec.num_params is not None and len(self.params) != spec.num_params:
+            raise ValueError(
+                f"gate '{self.name}' expects {spec.num_params} parameter(s), "
+                f"got {len(self.params)}"
+            )
+        if spec.controlled and not self.controls:
+            raise ValueError(f"gate '{self.name}' requires at least one control qubit")
 
     @classmethod
     def from_dict(cls, gate: Mapping[str, Any]) -> "Operation":
