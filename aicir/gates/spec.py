@@ -25,6 +25,8 @@ class GateSpec:
     - ``aliases``：等价的 ``type`` 写法（如 ``"X"``、``"cnot"``）。
     - ``controlled``：是否必须携带至少一个控制位。
     - ``qasm_name``：OpenQASM 导出名；``None`` 表示暂未约定。
+    - ``symbol``：ASCII/绘图显示符号（受控门为目标位符号）；``None``
+      表示特殊绘制（swap/rzz/rxx/measure）或退回通用 fallback。
     """
 
     name: str
@@ -33,6 +35,7 @@ class GateSpec:
     aliases: tuple[str, ...] = ()
     controlled: bool = False
     qasm_name: str | None = None
+    symbol: str | None = None
 
     def __post_init__(self) -> None:
         name = str(self.name).strip()
