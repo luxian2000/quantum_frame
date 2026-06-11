@@ -15,7 +15,8 @@ from aicir import GPUBackend, NumpyBackend, NPUBackend
 # 量子态（规范路径）
 from aicir.core import StateVector, DensityMatrix
 
-# 量子门（构造函数，返回门字典）
+# 量子门（构造函数；签名与参数顺序不变，返回类型化 Operation，
+# 支持旧门字典的只读访问与 == 比较，见 2.1 节说明）
 from aicir import (
     pauli_x, pauli_y, pauli_z,
     hadamard,
@@ -26,7 +27,7 @@ from aicir import (
     swap, rzz, rxx, ms_gate,
     toffoli, ccnot,
     u2, u3,
-    measure,     # 线路内测量标记（测量机制二）
+    measure,     # 线路内测量标记（测量机制二），返回 Measurement
 )
 
 # 电路、 typed IR 与参数占位符
@@ -60,13 +61,19 @@ from aicir.qml import psr, spsr, multipsr
 
 # 线路编译与优化 pass pipeline
 from aicir.transpile import PassManager, default_optimization_pipeline
+
+# 门元信息注册表（GateSpec）
+from aicir.gates import GateSpec, get_gate_spec, register_gate, canonical_gate_name
+
+# Sampler / Estimator primitives（统一执行入口）
+from aicir.primitives import ShotSampler, StatevectorEstimator, ShotEstimator
 ```
 
 ---
 
 ## 2. 量子线路的搭建
 
-### 2.1 门字典速查
+### 2.1 门构造函数速查
 
 | 函数                        | 参数                             | 说明            |
 | --------------------------- | -------------------------------- | --------------- |
@@ -97,40 +104,55 @@ from aicir.transpile import PassManager, default_optimization_pipeline
 
 `toffoli` / `ccnot` 的矩阵构造与逐门执行路径支持任意数量控制位，也支持门字典中的 `control_states`；导出为 OpenQASM `ccx` 时仍只适用于两个控制位。
 
+门构造函数的**签名与参数顺序与旧版完全一致**，但返回值已由裸门字典升级为类型化 `Operation`（`measure(...)` 返回 `Measurement`）：
+
+- **构造期校验**：量子比特下标、控制位/控制态长度，以及按 GateSpec 注册表检查目标比特数、参数个数与控制位要求（见 2.5 节），错误在调用处立即报出。
+- **旧字典只读兼容**：`gate["type"]`、`.get("parameter")`、`in`、`dict(gate)`、迭代等读取照常可用，且与旧门字典可直接 `==` 比较；写入（`gate[...] = ...`）会抛 `TypeError`（对象不可变）。
+- **`Circuit` 内部存储不变**：仍是与旧版完全一致的门字典列表（`circuit.gates`），下游代码无需改动。
+
 ### 2.2 构建电路
 
-```python
-from aicir import Circuit, hadamard, cnot, cx, ry, rz
+推荐的方式是在构造 `Circuit` 时直接传入门列表，并显式给出 `n_qubits`——这样电路宽度明确、不依赖自动推断，也不涉及后端继承等隐式行为：
 
-# 方式一：构造时直接传入门列表（自动推断 n_qubits）
+```python
+from aicir import Circuit, hadamard, cnot, rz
+
 cir = Circuit(
     hadamard(0),
     cnot(1, [0]),      # 目标比特=1，控制比特=[0]
     rz(0.5, 1),
-    n_qubits=2,        # 也可手动指定
+    n_qubits=2,        # 显式指定电路宽度
 )
 
-# 方式二：先构造空电路，再逐步追加
-cir = Circuit(hadamard(0), n_qubits=3)
-cir.append(cx(1, [0]))
-cir.extend(ry(1.2, 2), rz(0.3, 2))
-
-# 方式三：两段电路拼接
-part_a = Circuit(hadamard(0), n_qubits=2)
-part_b = Circuit(cnot(1, [0]), n_qubits=2)
-full = part_a + part_b
-
 # 获取电路酉矩阵（numpy complex64，2^n × 2^n）
-U = full.unitary()
+U = cir.unitary()
 print(U.shape)   # (4, 4)
 ```
 
-#### typed IR 可选入口
-
-`aicir.ir` 提供 `Operation`、`Measurement`、`Observable`、`CircuitIR` 四个轻量中间表示。旧的门字典入口仍然可用；`Circuit` 继续保留 `.gates` 门字典 surface，同时提供 `.operations` 和 `.ir` typed IR 视图。JSON/QASM/DAG、绘图、测量、transpile/optimizer、QML 伴随梯度、metrics、noise 和 QAS 的主要内部路径可直接消费 typed IR，并在需要旧格式时显式生成兼容门字典视图。
+同一种方式可容纳全部门类型。下面的例子覆盖单比特/旋转/通用单比特/受控/双比特旋转/SWAP/多控门，参数顺序与 2.1 节速查表一致：
 
 ```python
-from aicir import Circuit, CircuitIR, Measurement, Observable, Operation
+import math
+from aicir import Circuit, rx, ry, u2, u3, crx, rzz, rxx, swap, toffoli
+
+cir = Circuit(
+    rx(math.pi / 2, 0),              # Rx(π/2) 作用在 qubit 0
+    ry(math.pi / 4, 1),              # Ry(π/4) 作用在 qubit 1
+    u2(math.pi / 3, math.pi / 5, 0), # U2 门
+    u3(math.pi, 0, math.pi, 2),      # U3(π, 0, π) ≡ X 门，作用在 qubit 2
+    crx(math.pi / 2, 2, [1]),        # 受控 Rx，控制=qubit1，目标=qubit2
+    rzz(math.pi / 3, 0, 2),          # RZZ 作用在 qubit0 和 qubit2
+    rxx(math.pi / 3, 0, 1),          # RXX / Mølmer-Sørensen 作用在 qubit0 和 qubit1
+    swap(0, 1),                      # SWAP qubit0 和 qubit1
+    toffoli(2, [0, 1]),              # Toffoli，控制=[0,1]，目标=qubit2
+    n_qubits=3,
+)
+```
+
+门构造函数返回的是 typed IR 对象（`Operation`，`measure(...)` 为 `Measurement`），也可以直接用 `Operation(...)` 显式构造，程序化生成线路时更方便：
+
+```python
+from aicir import Circuit, Operation, Measurement
 
 cir = Circuit(
     Operation("hadamard", qubits=(0,)),
@@ -138,34 +160,11 @@ cir = Circuit(
     Measurement((0, 1)),
     n_qubits=2,
 )
-
-ir = CircuitIR.from_circuit(cir, classical_bits=(0, 1))
-restored = ir.to_circuit()
-
-zz = Observable.pauli("ZZ", coefficient=1.0, n_qubits=2)
 ```
 
-### 2.3 更多门用法示例
+`Circuit` 继续保留 `.gates` 门字典 surface（内部存储不变），同时提供 `.operations` 和 `.ir` typed IR 视图；`aicir.ir` 另有 `Observable`/`CircuitIR` 用于可观测量与线路级 IR。
 
-```python
-import math
-from aicir import Circuit, rx, ry, rz, u2, u3, crx, rzz, rxx, swap, toffoli
-
-cir = Circuit(
-    rx(math.pi / 2, 0),             # Rx(π/2) 作用在 qubit 0
-    ry(math.pi / 4, 1),             # Ry(π/4) 作用在 qubit 1
-    u2(math.pi / 3, math.pi / 5, 0), # U2 门，保留 type="u2"
-    u3(math.pi, 0, math.pi, 2),     # U3(π, 0, π) ≡ X 门，作用在 qubit 2
-    crx(math.pi / 2, 2, [1]),       # 受控 Rx，控制=qubit1，目标=qubit2
-    rzz(math.pi / 3, 0, 2),         # RZZ 作用在 qubit0 和 qubit2
-    rxx(math.pi / 3, 0, 1),         # RXX / Mølmer-Sørensen 作用在 qubit0 和 qubit1
-    swap(0, 1),                     # SWAP qubit0 和 qubit1
-    toffoli(2, [0, 1]),             # Toffoli，控制=[0,1]，目标=qubit2
-    n_qubits=3,
-)
-```
-
-### 2.4 参数化量子线路
+### 2.3 参数化量子线路
 
 `Parameter` 可作为旋转门参数的符号占位符，用于构建量子神经网络、VQE、QAOA 等可训练线路模板。模板电路在绑定参数前只保存门字典，不会生成数值矩阵。
 
@@ -215,7 +214,7 @@ template.bind_parameters({"theta0": 0.2, "theta1": 0.5}, inplace=True)
 - 如果要使用 PyTorch autograd，可直接把 Torch 标量张量作为门参数，并调用 `Circuit.unitary(backend=GPUBackend(...))`。当前 `rx`/`ry`/`rz`/`u2`/`u3`、受控旋转门、`rzz`/`rxx` 和自定义 `unitary` 的 Torch 参数会保留计算图。
 - 导出 QASM 前应先把所有符号参数绑定为数值。JSON 导出支持 `Parameter`、NumPy 标量/数组、复数和 Torch 张量数值；Torch 张量在 JSON 读回后会恢复为普通数值或列表，不会恢复为带计算图的 Tensor。
 
-### 2.5 自定义 unitary、identity 与 Torch 自动微分
+### 2.4 自定义 unitary、identity 与 Torch 自动微分
 
 可以用门字典直接加入自定义酉矩阵：
 
@@ -256,6 +255,24 @@ loss = torch.real(U[0, 0])
 loss.backward()
 print(theta.grad)
 ```
+
+### 2.5 GateSpec 门元信息注册表
+
+`aicir.gates` 是门元信息的单一来源：每个门的目标比特数、参数个数、别名、QASM 导出名和绘图符号只在注册表里登记一次，`Operation` 构造期校验、`transpile` 的 `ValidatePass`/`CanonicalizePass`、QASM 导出、矩阵路径与绘图都从这里读取。
+
+```python
+from aicir.gates import GateSpec, get_gate_spec, register_gate, canonical_gate_name
+
+get_gate_spec("rz")            # GateSpec(name="rz", num_qubits=1, num_params=1, symbol="Rz", ...)
+get_gate_spec("X")             # 别名解析 → pauli_x 的 spec
+canonical_gate_name("cnot")    # "cx"
+get_gate_spec("not_a_gate")    # None：未注册门保持宽松（自定义门不受限）
+
+# 注册自定义门：之后 Operation 构造会按 spec 校验，绘图直接使用 symbol
+register_gate(GateSpec(name="my_iswap", num_qubits=2, num_params=0, symbol="iS"))
+```
+
+详见 [`aicir/gates/README.md`](aicir/gates/README.md)。
 
 ---
 
@@ -383,6 +400,29 @@ print(counts)   # {'|00>': 512}
 | `summary()`             | `str`                    | 单行摘要字符串                                          |
 
 机制二下 `result.metadata["measured_qubits"]` 为被读出的比特下标列表（如 `[1, 2, 3]`）；机制一下为 `None`。
+
+### 3.7 Sampler / Estimator primitives（统一执行入口）
+
+`aicir.primitives` 把采样与期望值估计统一为 primitives，算法层无需各自处理测量、Hamiltonian 和 counts：
+
+```python
+from aicir import Circuit, Hamiltonian, hadamard, cx, pauli_x
+from aicir.primitives import ShotSampler, StatevectorEstimator, ShotEstimator
+
+bell = Circuit(hadamard(0), cx(1, [0]), n_qubits=2)
+ham = Hamiltonian(n_qubits=1, terms=[("Z", 1.0)])
+
+sample = ShotSampler(shots=1024).run(bell)
+# SampleResult(counts={'|00>': ..., '|11>': ...}, probs=..., shots=1024, measured_qubits=(0, 1))
+
+exact = StatevectorEstimator().run(Circuit(pauli_x(0), n_qubits=1), ham)
+# EstimateResult(value=-1.0, shots=None)  # 精确路径
+
+noisy = ShotEstimator(shots=4096).run(Circuit(pauli_x(0), n_qubits=1), ham)
+# EstimateResult(value≈-1.0, variance=..., shots=4096, term_results=(...))
+```
+
+约定：接收**已绑定参数**的电路；单个电路入参返回单个结果，序列入参返回结果列表；Estimator 支持单个可观测量广播到多个电路。`ShotEstimator` 包装 `PauliEstimator`（qubit-wise commuting 分组、基变换测量、shot 分配），并暴露 `estimate(circuit, hamiltonian)` 直通方法，可直接作为 `BasicVQE(energy_estimator=...)` 注入。详见 [`aicir/primitives/README.md`](aicir/primitives/README.md)。
 
 ---
 
@@ -566,7 +606,7 @@ backend = GPUBackend(device=torch.device("cuda"), dtype=torch.complex128)  # 自
 | `device` | 有 CUDA 用 `cuda`，否则 `cpu` | 接收字符串或 `torch.device` |
 | `dtype` | `torch.complex64` | 复数精度，可设 `torch.complex128` 提高精度 |
 
-- **支持 PyTorch autograd**：把 Torch 标量张量作为门参数（`rx/ry/rz/u2/u3`、受控旋转、`rzz/rxx`、自定义 `unitary`）即可保留计算图，用于 VQE/QAOA/QML 训练（见 2.5 节与第 7 节）。
+- **支持 PyTorch autograd**：把 Torch 标量张量作为门参数（`rx/ry/rz/u2/u3`、受控旋转、`rzz/rxx`、自定义 `unitary`）即可保留计算图，用于 VQE/QAOA/QML 训练（见 2.4 节与第 7 节）。
 - **支持 CUDA GPU 加速**：把 `device` 指向 GPU 即可，门矩阵构造与态演化都在 GPU 上完成。
 
 ### 5.3 NPUBackend（Ascend NPU）
@@ -722,11 +762,11 @@ backend = NPUBackend(device="npu:0", fallback_to_cpu=False)
 
 ### 5.8 运行示例
 
-仓库示例脚本：`demo_npu.py`
+仓库示例脚本：`demos/demo_npu.py`
 
 ```bash
-python demo_npu.py
-python demo_npu.py --shots 2048 --allow-cpu-fallback
+python demos/demo_npu.py
+python demos/demo_npu.py --shots 2048 --allow-cpu-fallback
 ```
 
 ### 5.9 分布式环境（多卡/多节点）
@@ -746,10 +786,10 @@ print(backend.runtime_context)
 
 ```bash
 # 单卡验证
-python demo_npu.py
+python demos/demo_npu.py
 
 # 允许 CPU 回退（本地调试用）
-python demo_npu.py --allow-cpu-fallback
+python demos/demo_npu.py --allow-cpu-fallback
 
 # 多卡分布式启动
 torchrun --nproc_per_node=4 your_script.py
@@ -796,7 +836,7 @@ print(f"summary : {result.summary()}")
 使用新路径 smoke 脚本进行全链路验证（单门、受控门、参数门、density matrix）：
 
 ```bash
-python smoke_npu_new_path.py --shots 512
+python tests/smoke_npu_new_path.py --shots 512
 ```
 
 示例输出：
@@ -1156,9 +1196,11 @@ QAS/metrics 相关公共函数：
 | ------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `aicir/chemistry` | [`aicir/chemistry/README.md`](aicir/chemistry/README.md) | 小型固定设置的分子 qubit Hamiltonian 预置，用于 VQE 示例、单元测试和算法原型验证。  |
 | `aicir/core/io`   | [`aicir/core/io/README.md`](aicir/core/io/README.md)     | OpenQASM 导出行为、受控旋转门和多控旋转门分解规则。                                 |
+| `aicir/gates`     | [`aicir/gates/README.md`](aicir/gates/README.md)         | GateSpec 门元信息注册表：目标比特数/参数个数/别名/QASM 名/绘图符号的单一来源。 |
 | `aicir/metrics`   | [`aicir/metrics/README.md`](aicir/metrics/README.md)     | 任务无关的量子线路评分指标，供 QAS、VQE ansatz 筛选等架构层任务复用。               |
 | `aicir/optimization/qubo` | [`aicir/optimization/qubo/README.md`](aicir/optimization/qubo/README.md) | QUBO 建模、Ising/Hamiltonian 转换、BasicQAOA 矩阵入口与结果解码。 |
 | `aicir/optimizer` | [`aicir/optimizer/README.md`](aicir/optimizer/README.md) | `aicir.optimizer.circuit` 的线路化简、旋转门合并和固定点优化策略。              |
+| `aicir/primitives` | [`aicir/primitives/README.md`](aicir/primitives/README.md) | Sampler/Estimator primitives 统一执行入口与 `SampleResult`/`EstimateResult` 结果对象。 |
 | `aicir/qas`       | [`aicir/qas/README.md`](aicir/qas/README.md)             | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。                             |
 | `aicir/qml`       | [`aicir/qml/README.md`](aicir/qml/README.md)             | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。            |
 | `aicir/transpile` | [`aicir/transpile/README.md`](aicir/transpile/README.md) | 线路编译与优化流水线，包含 `PassManager` 和本地线路化简 pass。                    |
