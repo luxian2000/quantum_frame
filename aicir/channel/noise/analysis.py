@@ -10,7 +10,6 @@ import numpy as np
 from ..backends.base import Backend
 from .model import NoiseModel
 from ...core.circuit import Circuit
-from ...core.density import DensityMatrix
 from ...core.gates import gate_to_matrix
 from ...core.state import State
 from ...ir import circuit_instruction_count, circuit_instructions, instruction_name
@@ -57,13 +56,13 @@ def evolve_density_gatewise(
     backend: Backend,
     initial_state: State,
     noise_model: Optional[NoiseModel] = None,
-) -> DensityMatrix:
+) -> State:
     rho = initial_state.to_density_matrix()
     for gate in circuit_instructions(circuit):
         gate_unitary = gate_to_matrix(gate, cir_qubits=circuit.n_qubits, backend=backend)
         rho = rho.evolve(gate_unitary)
         if noise_model is not None:
-            rho = DensityMatrix(
+            rho = State(
                 noise_model.apply(
                     rho.data,
                     n_qubits=circuit.n_qubits,
