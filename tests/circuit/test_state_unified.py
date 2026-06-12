@@ -112,3 +112,21 @@ def test_array_none_is_memoized_for_mixed_state():
     s = State.from_matrix(rho)
     assert s.array is None
     assert s.array is None  # 第二次仍为 None（命中缓存路径）
+
+
+def test_default_numpy_backend_used_when_omitted():
+    from aicir.channel.backends import NumpyBackend
+
+    s = State.zero_state(1)
+    assert isinstance(s.backend, NumpyBackend)
+
+
+def test_mixed_state_with_offdiagonal_ket_lists_all_terms():
+    # [[0.6, 0.2], [0.2, 0.4]] 是真混合态（纯度=0.6<1），非对角元非零；
+    # .array 返回 None，强制走 _format_density_ket 路径，四项 |i><j| 均应出现。
+    rho = np.array([[0.6, 0.2], [0.2, 0.4]], dtype=np.complex64)
+    s = State.from_matrix(rho)
+    assert s.array is None  # 确认是混合态，array 为 None
+    ket = s.ket
+    for sub in ("|0><0|", "|0><1|", "|1><0|", "|1><1|"):
+        assert sub in ket

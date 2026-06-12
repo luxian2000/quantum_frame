@@ -18,6 +18,11 @@
 - **破坏性**：`Measure.run`/`run_density_matrix` 的 `shots` 默认值由 `None` 改为 `1`；`shots=None`/`0` 表示不测量（无论是否传 `measure_qubits`）。
 - **破坏性**：`result.final_state` 语义由"演化末态"改为"测量后的态"：`shots=None`/`0` 时与 `state` 相同；`shots=1` 时为坍缩后的态（子集读出时仅含未被测比特）；`shots>1` 时为对被测比特求偏迹后的约化密度矩阵（SV 路径为 `(2^m, 2^m)` 二维，DM 路径为 flatten；读出全部比特时无剩余比特，为 `None`）。需要演化末态请改用 `result.state`（内部消费方 `BasicVQE.ansatz_state`、`StatevectorEstimator` 已随之切换）。
 - `shots` 为负数时显式抛出 `ValueError`。
+- **破坏性**：统一量子态表示为单一 `State` 类，删除 `StateVector` 与 `DensityMatrix` 两个公开名称（顶层 `aicir` 与 `aicir.core` 不再导出它们）。
+  - 新增 `State.from_matrix(...)` 从密度矩阵构造；`from_array`/`from_matrix`/`zero_state` 的 `backend` 改为可选（默认 `NumpyBackend`），`from_array`/`from_matrix` 可省略 `n_qubits`（按长度/形状推断）。
+  - 新增属性 `.array`（纯态振幅向量，混合态为 `None`）、`.matrix`（密度矩阵）、`.ket`（Dirac 记号：纯态超叠加、混合态 Σρ_ij|i><j| 展开），均可直接打印。
+  - 新增 `.is_density` 判定属性；密度矩阵方法（`purity`/`partial_trace`/`eigenvalues`/`von_neumann_entropy`/`is_pure`/`maximally_mixed`）并入 `State`。
+  - 迁移指引：`isinstance(x, DensityMatrix)` 改用 `x.is_density`；`DensityMatrix(...)` 改用 `State.from_matrix(...)`；`StateVector(...)` 改用 `State(...)` / `State.from_array(...)`。
 
 ## 2026-06-11
 
