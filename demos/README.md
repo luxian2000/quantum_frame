@@ -25,6 +25,16 @@ H2 VQE with shot-based Pauli-term energy estimation:
 python -m demos.vqe_h2_demo --estimator pauli --optimizer spsa --shots 4096
 ```
 
+Train a 6-qubit QCNN classifier on the local MNIST dataset in `/Volumes/Right/DataSpace/MNIST`:
+
+```bash
+python -m demos.mnist.qcnn_demo
+```
+
+This demo uses a 6-qubit QCNN feature extractor + 10-class softmax head
+trained with cross-entropy. It saves the trained model and all figures to
+`demos/mnist/`, and writes a 10-sample random test prediction panel.
+
 Construct and inspect a PySCF/Qiskit Nature H2O active-space Hamiltonian:
 
 ```bash
