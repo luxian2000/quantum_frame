@@ -237,7 +237,7 @@ GateSpec(
 
 目的不是依赖外部框架，而是让用户可以把 `aicir` 的轻量研究线路带入 Qiskit 硬件生态，或把 PennyLane/Qiskit 的线路导入 `aicir` 做本地模拟、QAS 和自定义指标评估。
 
-当前状态：Qiskit 第一片已在 `aicir.core.io.qiskit_io` 落地。提供 `circuit_to_qiskit`/`circuit_from_qiskit` 和短别名 `to_qiskit`/`from_qiskit`，并从 `aicir.core.io`、`aicir.core`、顶层 `aicir` 导出。`qiskit` 保持可选依赖，仅在调用互操作函数时导入；当前支持基础门、参数旋转、受控门、`swap`、`rzz/rxx`、`u2/u3`、`ccx` 和线路内 `measure` 标记。PennyLane 互操作与更完整的 QASM3 互转仍未开始。
+当前状态：Qiskit 与 PennyLane 第一片已落地。Qiskit 路径位于 `aicir.core.io.qiskit_io`，提供 `circuit_to_qiskit`/`circuit_from_qiskit` 和短别名 `to_qiskit`/`from_qiskit`；PennyLane 路径位于 `aicir.core.io.pennylane_io`，提供 `circuit_to_pennylane`/`circuit_from_pennylane` 和短别名 `to_pennylane`/`from_pennylane`。两者都从 `aicir.core.io`、`aicir.core`、顶层 `aicir` 导出，并保持对应框架为可选依赖，仅在调用互操作函数时导入。当前支持基础门、参数旋转、受控门、`swap`、`rzz/rxx`、`u2/u3`、`ccx` 等基础幺正门；Qiskit 路径额外支持线路内 `measure` 标记，PennyLane 路径暂不转换 aicir 线路内 `measure`。更完整的 QASM3 互转仍未开始。
 
 ### 9. 统一结果对象和 metadata
 

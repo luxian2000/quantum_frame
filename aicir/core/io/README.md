@@ -1,6 +1,6 @@
 # aicir.core.io
 
-本文档说明 `aicir.core.io` 中 OpenQASM 与 Qiskit 互操作的当前行为。
+本文档说明 `aicir.core.io` 中 OpenQASM、Qiskit 与 PennyLane 互操作的当前行为。
 
 ## QASM 导出行为概览
 
@@ -50,3 +50,18 @@
 - 线路内测量标记：Qiskit `measure` 与 aicir `measure(...)` 互转
 
 暂不支持 Qiskit 自定义门和未绑定符号参数。
+
+## PennyLane 互操作
+
+`pennylane_io.py` 提供 `circuit_to_pennylane` / `circuit_from_pennylane`，以及短别名 `to_pennylane` / `from_pennylane`。`pennylane` 是可选依赖，导入 `aicir` 不会强制导入 PennyLane；只有调用这些函数时才检查依赖。
+
+当前支持门集与 QASM/Qiskit 第一批互操作面基本一致：
+
+- 基础单比特门：`PauliX/PauliY/PauliZ/Hadamard/S/T`
+- 参数旋转：`RX/RY/RZ`
+- 通用单比特门：`U2/U3`
+- 受控门：`CNOT/CY/CZ/CRX/CRY/CRZ/Toffoli`
+- 双比特门：`SWAP/IsingZZ/IsingXX`（对应 aicir `swap/rzz/rxx`）
+- 整体恒等门：`Identity`
+
+暂不支持 PennyLane 自定义门、未绑定符号参数和 aicir 线路内 `measure` 标记。

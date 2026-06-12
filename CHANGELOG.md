@@ -7,6 +7,7 @@
 ### Added
 
 - 新增 Qiskit 互操作入口（NEXT.md 第 8 节第一片）：`circuit_to_qiskit`/`circuit_from_qiskit` 以及短别名 `to_qiskit`/`from_qiskit`，位于 `aicir.core.io.qiskit_io` 并从 `aicir.core.io`、`aicir.core`、顶层 `aicir` 导出。`qiskit` 为可选依赖，仅在调用互操作函数时导入；当前支持基础门、参数旋转、受控门、`swap`、`rzz/rxx`、`u2/u3`、`ccx` 和线路内 `measure` 标记。
+- 新增 PennyLane 互操作入口（NEXT.md 第 8 节第一片）：`circuit_to_pennylane`/`circuit_from_pennylane` 以及短别名 `to_pennylane`/`from_pennylane`，位于 `aicir.core.io.pennylane_io` 并从 `aicir.core.io`、`aicir.core`、顶层 `aicir` 导出。`pennylane` 为可选依赖，仅在调用互操作函数时导入；当前支持基础门、参数旋转、受控门、`swap`、`rzz/rxx`（PennyLane `IsingZZ`/`IsingXX`）、`u2/u3`、`ccx` 和 `identity`。
 - `Result` 新增 `state` 字段：始终返回测量前的完整末态（SV 路径为态向量，DM 路径为 flatten 密度矩阵），不受采样影响。
 - `Result` 新增 `output` 字段：`shots=1` 单次测量结果——被测比特上 Z⊗…⊗Z 关联投影测量的本征值（±1，实现为对各被测比特分别做 Z 基投影后取乘积，与联合宇称测量的 ±1 分布一致且保证其余比特为纯态）；坍缩到的具体基态见 `counts` / `final_state`。
 - `result.metadata` 新增 `final_state_kind`（`'state_vector'`/`'density_matrix'`/`None`）与 `final_state_qubits`（`final_state` 所描述的比特下标）。
