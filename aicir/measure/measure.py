@@ -12,7 +12,13 @@ import numpy as np
 
 from ..core.gates import apply_gate_to_state, gate_to_matrix
 from ..core.state import State
-from ..ir import circuit_instructions, has_circuit_instructions, instruction_name, instruction_qubits
+from ..ir import (
+    circuit_instructions,
+    has_circuit_instructions,
+    instruction_controls,
+    instruction_name,
+    instruction_qubits,
+)
 from .result import Result
 from .sampler import Sampler
 
@@ -20,6 +26,83 @@ from .sampler import Sampler
 def _is_measure_gate(gate) -> bool:
     """True for in-circuit measurement markers (see :func:`aicir.measure`)."""
     return instruction_name(gate).lower() in {"measure", "measurement"}
+
+
+def _is_reset_gate(gate) -> bool:
+    """True for in-circuit reset markers (see :func:`aicir.reset`)."""
+    return instruction_name(gate).lower() == "reset"
+
+
+def _marker_qubits(gate, n_qubits: int) -> List[int]:
+    """Return marker qubits; an empty marker means all qubits."""
+    qubits = [int(q) for q in instruction_qubits(gate)]
+    if not qubits:
+        return list(range(n_qubits))
+    for q in qubits:
+        if q < 0 or q >= n_qubits:
+            raise ValueError(f"{instruction_name(gate)} 含越界比特下标 {q}（n_qubits={n_qubits}）")
+    return qubits
+
+
+def _touched_quantum_qubits(gate) -> set[int]:
+    """Return qubits touched by a unitary gate."""
+    return {int(q) for q in (*instruction_qubits(gate), *instruction_controls(gate))}
+
+
+def _assert_reset_allowed(targets: List[int], measured: set[int], blocked: set[int]) -> None:
+    for qubit in targets:
+        if qubit not in measured:
+            raise ValueError(f"reset({qubit}) 前必须先有 measure({qubit})")
+        if qubit in blocked:
+            raise ValueError(f"measure({qubit}) 与 reset({qubit}) 之间不能对该比特施加量子门")
+
+
+def _reset_state_vector(state: State, qubit: int, backend) -> State:
+    """Reset one qubit to |0> in the state-vector execution path."""
+    n_qubits = state.n_qubits
+    psi = backend.to_numpy(state.data).reshape([2] * n_qubits)
+    zero_slice: List[object] = [slice(None)] * n_qubits
+    one_slice: List[object] = [slice(None)] * n_qubits
+    zero_slice[qubit] = 0
+    one_slice[qubit] = 1
+
+    zero = psi[tuple(zero_slice)]
+    one = psi[tuple(one_slice)]
+    reset_substate = np.sqrt(np.abs(zero) ** 2 + np.abs(one) ** 2).astype(psi.dtype, copy=False)
+
+    reset_tensor = np.zeros_like(psi)
+    reset_tensor[tuple(zero_slice)] = reset_substate
+    flat = reset_tensor.reshape(-1, 1)
+    norm = np.linalg.norm(flat)
+    if norm > 0:
+        flat = flat / norm
+    return State(backend.cast(flat), n_qubits, backend, bit_order=state.bit_order)
+
+
+def _replace_bit(index: int, n_qubits: int, qubit: int, bit: int) -> int:
+    mask = 1 << (n_qubits - 1 - qubit)
+    return (index | mask) if bit else (index & ~mask)
+
+
+def _reset_density_matrix_state(state: State, qubit: int, backend) -> State:
+    """Apply the reset channel rho -> |0><0| on one qubit in density-matrix mode."""
+    n_qubits = state.n_qubits
+    rho = backend.to_numpy(state.data).reshape(1 << n_qubits, 1 << n_qubits)
+    reset_rho = np.zeros_like(rho)
+    dim = 1 << n_qubits
+    mask = 1 << (n_qubits - 1 - qubit)
+    for row in range(dim):
+        if row & mask:
+            continue
+        row0 = _replace_bit(row, n_qubits, qubit, 0)
+        row1 = _replace_bit(row, n_qubits, qubit, 1)
+        for col in range(dim):
+            if col & mask:
+                continue
+            col0 = _replace_bit(col, n_qubits, qubit, 0)
+            col1 = _replace_bit(col, n_qubits, qubit, 1)
+            reset_rho[row, col] = rho[row0, col0] + rho[row1, col1]
+    return State(backend.cast(reset_rho), n_qubits, backend)
 
 
 def _readout_qubits(circuit, n_qubits: int) -> Tuple[bool, List[int]]:
@@ -341,11 +424,28 @@ class Measure:
         sv = sv0
         snap_indices = snap_indices or set()
         snapshot_states: Dict[int, np.ndarray] = {}
+        measured_for_reset: set[int] = set()
+        blocked_for_reset: set[int] = set()
         for gate_index, gate in enumerate(instructions):
             if _is_measure_gate(gate):
+                targets = _marker_qubits(gate, sv.n_qubits)
+                measured_for_reset.update(targets)
+                blocked_for_reset.difference_update(targets)
                 if gate_index in snap_indices:
                     snapshot_states[gate_index] = sv.to_numpy().copy()
                 continue
+            if _is_reset_gate(gate):
+                targets = _marker_qubits(gate, sv.n_qubits)
+                _assert_reset_allowed(targets, measured_for_reset, blocked_for_reset)
+                for target in targets:
+                    sv = _reset_state_vector(sv, target, backend)
+                    measured_for_reset.discard(target)
+                    blocked_for_reset.discard(target)
+                if gate_index in snap_indices:
+                    snapshot_states[gate_index] = sv.to_numpy().copy()
+                continue
+            touched = _touched_quantum_qubits(gate)
+            blocked_for_reset.update(q for q in touched if q in measured_for_reset)
             new_data = apply_gate_to_state(gate, sv.data, sv.n_qubits, backend)
             if new_data is None:
                 gm = gate_to_matrix(gate, cir_qubits=sv.n_qubits, backend=backend)
@@ -364,9 +464,24 @@ class Measure:
         noise_model=None,
     ) -> State:
         rho = rho0
+        measured_for_reset: set[int] = set()
+        blocked_for_reset: set[int] = set()
         for gate in circuit_instructions(circuit):
             if _is_measure_gate(gate):
+                targets = _marker_qubits(gate, rho.n_qubits)
+                measured_for_reset.update(targets)
+                blocked_for_reset.difference_update(targets)
                 continue
+            if _is_reset_gate(gate):
+                targets = _marker_qubits(gate, rho.n_qubits)
+                _assert_reset_allowed(targets, measured_for_reset, blocked_for_reset)
+                for target in targets:
+                    rho = _reset_density_matrix_state(rho, target, backend)
+                    measured_for_reset.discard(target)
+                    blocked_for_reset.discard(target)
+                continue
+            touched = _touched_quantum_qubits(gate)
+            blocked_for_reset.update(q for q in touched if q in measured_for_reset)
             gate_unitary = gate_to_matrix(gate, cir_qubits=rho.n_qubits, backend=backend)
             rho = rho.evolve(gate_unitary)
             if noise_model is not None:

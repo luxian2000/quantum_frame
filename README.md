@@ -261,10 +261,12 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 | `ms_gate(θ, q1, q2)`     | 角度, qubit_1, qubit_2           | `rxx` 的别名  |
 | `toffoli(t, [c0,c1,...])` | target, control_list             | 多控制 X 门     |
 | `ccnot(t, [c0,c1,...])`   | target, control_list             | 同 toffoli      |
+| `measure(q...)`           | qubit list                       | 线路内测量标记  |
+| `reset(q...)`             | qubit list                       | 测量后重置为零态 |
 
 `toffoli` / `ccnot` 的矩阵构造与逐门执行路径支持任意数量控制位，也支持门字典中的 `control_states`；导出为 OpenQASM `ccx` 时仍只适用于两个控制位。
 
-门构造函数的**签名与参数顺序与旧版完全一致**，但返回值已由裸门字典升级为类型化 `Operation`（`measure(...)` 返回 `Measurement`）：
+门构造函数的**签名与参数顺序与旧版完全一致**，但返回值已由裸门字典升级为类型化 `Operation`（`measure(...)` / `reset(...)` 返回 `Measurement`）：
 
 - **构造期校验**：量子比特下标、控制位/控制态长度，以及按 GateSpec 注册表检查目标比特数、参数个数与控制位要求（见 3.6 节），错误在调用处立即报出。
 - **旧字典只读兼容**：`gate["type"]`、`.get("parameter")`、`in`、`dict(gate)`、迭代等读取照常可用，且与旧门字典可直接 `==` 比较；写入（`gate[...] = ...`）会抛 `TypeError`（对象不可变）。
@@ -599,7 +601,7 @@ print(result.final_state)       # None（result.state 仍是完整末态）
 
 ### 4.2 机制二：线路内嵌测量
 
-`measure(*qubits)` 是一个门构造器，将测量目标嵌入电路定义。`Measure.run()` 会跳过这些标记门做酉演化，然后对指定比特输出边缘分布（marginal）计数。
+`measure(*qubits)` 是一个门构造器，将测量目标嵌入电路定义。`Measure.run()` 会识别这些标记门并对指定比特输出边缘分布（marginal）计数。
 
 ```python
 from aicir import Circuit, Measure, NumpyBackend, hadamard, cnot, rz, measure
@@ -623,6 +625,28 @@ measure(0)            # 读取 qubit 0，输出 1 比特计数
 measure(1, 2, 3)      # 读取 qubit 1、2、3，输出 3 比特计数
 measure([0, 1])       # 可迭代形式，与 measure(0, 1) 等价
 measure()             # 空参数 = 读取全部比特（与机制一行为一致）
+```
+
+`reset(*qubits)` 与 `measure(*qubits)` 的参数格式相同，用于把指定比特重置为 `|0>`。每个 `reset(q)` 都必须满足两个条件：
+
+- 在门序列更早位置已经出现过 `measure(q)`；
+- 从这次 `measure(q)` 到 `reset(q)` 之间，不能有任何量子门作用在 `q` 上。
+
+在 matplotlib 线路图中，`reset(q)` 会画成与 `measure(q)` 同色的虚线，并标注 `Reset`；`Reset` 标签字号与 `Rz` 门主标签一致，虚线使用更大的 dash 间距。如果同一比特后面还有量子门，虚线连接 `measure(q)` 与后续门，否则虚线延伸到线路末端。reset 虚线区间不会再叠加普通实线；当后续门是 CNOT、SWAP 等没有完整方框的门时，虚线停在该门的虚拟方框左边界，虚拟方框内部恢复普通实线。
+
+```python
+from aicir import Circuit, Measure, NumpyBackend, measure, pauli_x, reset
+
+cir = Circuit(
+    pauli_x(0),
+    measure(0),
+    reset(0),      # qubit 0 被设置回 |0>
+    n_qubits=1,
+)
+
+result = Measure(NumpyBackend()).run(cir, shots=None)
+print(result.state)          # [1.+0.j, 0.+0.j]
+print(result.probabilities)  # [1., 0.]
 ```
 
 当电路中含多个 `measure` 门时，以**最早出现**的为准（后续同比特的 `measure` 不影响结果）。`measure` 是纯粹的读出标记，不会在电路中途对态向量做投影坍缩——演化始终是全局酉的；末端读出仍遵循 §4.1 的 shots 语义（例如 `shots=1` 时 `result.final_state` 给出按读出结果坍缩后的态，`result.state` 始终是演化末态）。
@@ -684,7 +708,7 @@ print(counts)   # {'|00>': 512}
 | `state`                 | `np.ndarray` or `None` | 测量前完整末态（SV 路径为向量；DM 路径为 flatten 后密度矩阵）                                                                                                      |
 | `final_state`           | `np.ndarray` or `None` | 测量后的态，随 shots 变化（见 §4.1）：`None`/`0` 与 `state` 相同；`1` 为坍缩态；`>1` 为约化密度矩阵（SV 路径为 `(2^m, 2^m)` 二维；DM 路径为 flatten） |
 | `output`                | `int` or `None`        | 单次（shots=1）测量结果：被测比特上 Z⊗…⊗Z 的本征值 ±1（具体基态见 `counts`）                                                                                 |
-| `snap(index)`           | `np.ndarray` or `None` | 返回 §4.1 `snap` 记录的第 `index` 个门后的完整态；未记录时返回 `None`                                                                                         |
+| `snap(index)`           | `np.ndarray` or `None` | 返回 §4.1 `snap` 记录的第 `index` 个门后的完整态；未记录时返回 `None`                                                                                       |
 | `most_probable()`       | `(str, float)`           | 最高概率基态及其概率                                                                                                                                               |
 | `summary()`             | `str`                    | 单行摘要字符串                                                                                                                                                     |
 
@@ -1477,7 +1501,7 @@ mixed = multipsr(objective_2d, params, parameter_indices=[(0, 0), (1, 0)])
 
 ## 9. 可视化模块
 
-`aicir.visual` 提供第一阶段的轻量可视化工具，用于查看量子线路、量子态概率/振幅和密度矩阵。文本线路图与门统计不依赖额外图形库；绘图函数会在调用时按需导入 `matplotlib`。
+`aicir.visual` 提供第一阶段的轻量可视化工具，用于查看量子线路、量子态概率/振幅和密度矩阵。文本线路图与门统计不依赖额外图形库；绘图函数会在调用时按需导入 `matplotlib`。matplotlib 图中的 `reset` 会以与 `measure` 同色、标注 `Reset` 的虚线显示；`Reset` 字号与 `Rz` 门主标签一致，虚线 dash 间距更大。虚线连接 `measure(q)` 与后续同一比特量子门，没有后续量子门时延伸到线路末端，且不再叠加普通实线。若后续门没有完整方框，reset 虚线按虚拟方框左边界停止，虚拟方框内用普通实线。
 
 ```python
 import numpy as np

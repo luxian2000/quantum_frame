@@ -44,6 +44,7 @@ _PALETTE: dict[str, tuple[str, str]] = {
     "rotation": ("#CBE8C6", "#4C9A4A"),
     "unitary": ("#D8CCEC", "#7E57C2"),
     "measure": ("#F3C6DC", "#C2549B"),
+    "reset": ("#C7E9E4", "#2F8F83"),
     "default": ("#E2E2E2", "#888888"),
 }
 
@@ -71,6 +72,7 @@ _FAMILY: dict[str, str] = {
     "u3": "unitary",
     "unitary": "unitary",
     "measure": "measure",
+    "reset": "reset",
 }
 
 # Geometry, in data units (the axes use an equal aspect ratio).
@@ -147,6 +149,11 @@ def _measure_targets(gate: dict) -> list[int]:
     return [int(q) for q in (qubits or [])]
 
 
+def _reset_targets(gate: dict, n_qubits: int) -> list[int]:
+    """Qubits a reset gate targets; empty reset() means every qubit."""
+    return _measure_targets(gate) or list(range(n_qubits))
+
+
 def _pretty_angle(value: Any) -> str:
     """Format an angle, preferring ``π`` fractions over decimals."""
     text = _format_angle_value(value)
@@ -192,6 +199,8 @@ def _gate_qubits(gate: dict, n_qubits: int) -> list[int]:
         return list(range(n_qubits))
     if gate_type in {"measure", "measurement"}:
         return _measure_targets(gate) or [0]
+    if gate_type == "reset":
+        return _reset_targets(gate, n_qubits)
     qubits: list[int] = []
     controls = gate.get("control_qubits")
     if controls:
@@ -214,6 +223,93 @@ def _pack_layers(circuit: Any) -> list[int]:
             next_available[q] = col + 1
         columns.append(col)
     return columns
+
+
+def _gate_draws_box_on_qubit(gate: dict, qubit: int, n_qubits: int) -> bool:
+    """Whether rendering covers ``qubit`` with a box-shaped gate body."""
+    gate_type = canonical_gate_name(gate["type"])
+    if gate_type in {"identity", "I"}:
+        return True
+    if gate_type == "unitary":
+        return qubit < int(gate.get("n_qubits", n_qubits))
+    if gate_type in {"rzz", "rxx"}:
+        return qubit in {int(gate["qubit_1"]), int(gate["qubit_2"])}
+    if gate_type == "swap":
+        return False
+
+    target = gate.get("target_qubit")
+    if target is None:
+        return False
+    target = int(target)
+    controls = [int(q) for q in gate.get("control_qubits", [])]
+    if controls:
+        return qubit == target and gate_type not in {"cx", "toffoli"}
+    return qubit == target
+
+
+def _next_quantum_gate_column(
+    gates: list[dict],
+    columns: list[int],
+    start: int,
+    qubit: int,
+    n_qubits: int,
+) -> float | None:
+    """Return where a reset dash should stop before the next quantum gate."""
+    for gate, col in zip(gates[start:], columns[start:]):
+        gate_type = canonical_gate_name(gate["type"])
+        if gate_type in {"measure", "measurement", "reset"}:
+            continue
+        if qubit in _gate_qubits(gate, n_qubits):
+            if _gate_draws_box_on_qubit(gate, qubit, n_qubits):
+                return float(col)
+            return float(col) - _BOX / 2
+    return None
+
+
+def _reset_link_targets(
+    gates: list[dict],
+    columns: list[int],
+    n_qubits: int,
+    default_end: float,
+) -> dict[int, dict[int, tuple[float, float]]]:
+    """Map reset gate index/target to the measure->reset dashed span."""
+    measured_col: dict[int, float] = {}
+    links: dict[int, dict[int, tuple[float, float]]] = {}
+    for index, (gate, col) in enumerate(zip(gates, columns)):
+        gate_type = canonical_gate_name(gate["type"])
+        if gate_type in {"measure", "measurement"}:
+            for q in (_measure_targets(gate) or list(range(n_qubits))):
+                measured_col[int(q)] = float(col)
+            continue
+        if gate_type == "reset":
+            for q in _reset_targets(gate, n_qubits):
+                start_col = measured_col.pop(q, None)
+                end_col = (
+                    _next_quantum_gate_column(gates, columns, index + 1, q, n_qubits)
+                    or default_end
+                )
+                if start_col is not None:
+                    links.setdefault(index, {})[q] = (start_col, end_col)
+            continue
+        for q in _gate_qubits(gate, n_qubits):
+            measured_col.pop(q, None)
+    return links
+
+
+def _wire_segments(x_left: float, x_right: float, blocked: list[tuple[float, float]]):
+    """Yield solid wire segments, excluding reset dashed spans."""
+    intervals = sorted(
+        (max(x_left, min(a, b)), min(x_right, max(a, b)))
+        for a, b in blocked
+        if max(x_left, min(a, b)) < min(x_right, max(a, b))
+    )
+    cursor = x_left
+    for start, end in intervals:
+        if start > cursor:
+            yield cursor, start
+        cursor = max(cursor, end)
+    if cursor < x_right:
+        yield cursor, x_right
 
 
 # --- Primitive shapes -----------------------------------------------------
@@ -321,16 +417,31 @@ def _draw_connector(ax, x, q_lo, q_hi, n_qubits, color):
             linewidth=1.8, zorder=2)
 
 
+def _draw_reset_link(ax, x_start, x_end, y, color, fontsize):
+    ax.plot([x_start, x_end], [y, y], color=color, linewidth=1.7,
+            linestyle=(0, (5, 5)), zorder=2.6)
+    label = ax.text((x_start + x_end) / 2, y + 0.18, "Reset",
+                    ha="center", va="center", fontsize=_fit_label_fontsize("Rz", fontsize),
+                    color=color, fontweight="bold", zorder=5,
+                    bbox=dict(boxstyle="round,pad=0.08", facecolor="white",
+                              edgecolor="none", alpha=0.9))
+    _mark_max_text_size(label, abs(x_end - x_start) * 0.85, _BOX * 0.45)
+
+
 # --- Per-gate dispatch ----------------------------------------------------
 
 
-def _render_gate(ax, gate, x, n_qubits, fontsize):
+def _render_gate(ax, gate, x, n_qubits, fontsize, reset_link_targets=None):
     gate_type = canonical_gate_name(gate["type"])
     facecolor, edgecolor = _style_for(gate_type)
+    reset_link_targets = reset_link_targets or set()
 
     if gate_type in {"measure", "measurement"}:
         for target in (_measure_targets(gate) or [0]):
             _draw_measure(ax, x, _yy(target, n_qubits), facecolor, edgecolor)
+        return
+
+    if gate_type == "reset":
         return
 
     if gate_type in {"identity", "I"}:
@@ -424,26 +535,50 @@ def _render_figure(
         fig = ax.figure
 
     x_left, x_right = -0.85, n_cols - 1 + 0.85
+    reset_links = _reset_link_targets(gates, columns, n_qubits, x_right) if gates else {}
 
-    # Find the leftmost measurement column for each qubit (wire ends there).
+    # Find terminal measurement columns for each qubit. A reset consumes the
+    # preceding measurement marker and lets the wire continue.
     measure_col: dict[int, float] = {}
     for gate, col in zip(gates, columns):
-        if gate["type"] in {"measure", "measurement"}:
-            for q in _measure_targets(gate):
-                if q not in measure_col or col < measure_col[q]:
-                    measure_col[q] = float(col)
+        gate_type = canonical_gate_name(gate["type"])
+        if gate_type in {"measure", "measurement"}:
+            for q in (_measure_targets(gate) or list(range(n_qubits))):
+                measure_col.setdefault(q, float(col))
+        elif gate_type == "reset":
+            for q in _reset_targets(gate, n_qubits):
+                measure_col.pop(q, None)
 
     for q in range(n_qubits):
         y = _yy(q, n_qubits)
         wire_end = measure_col[q] if q in measure_col else x_right
-        ax.plot([x_left, wire_end], [y, y], color=wire_color, linewidth=1.4,
-                zorder=1)
+        blocked = [
+            span
+            for targets in reset_links.values()
+            for target, span in targets.items()
+            if target == q
+        ]
+        for seg_start, seg_end in _wire_segments(x_left, wire_end, blocked):
+            ax.plot([seg_start, seg_end], [y, y], color=wire_color, linewidth=1.4,
+                    zorder=1)
         label = qubit_labels[q] if qubit_labels else f"q{q}"
         ax.text(x_left - 0.15, y, label, ha="right", va="center",
                 fontsize=fontsize * 0.8, color="#444444")
 
-    for gate, col in zip(gates, columns):
-        _render_gate(ax, gate, float(col), n_qubits, fontsize)
+    _, reset_edge = _style_for("measure")
+    for targets in reset_links.values():
+        for target, (x_start, x_end) in targets.items():
+            _draw_reset_link(ax, x_start, x_end, _yy(target, n_qubits), reset_edge, fontsize)
+
+    for index, (gate, col) in enumerate(zip(gates, columns)):
+        _render_gate(
+            ax,
+            gate,
+            float(col),
+            n_qubits,
+            fontsize,
+            reset_link_targets=set(reset_links.get(index, {})),
+        )
 
     ax.set_xlim(x_left - 0.9, x_right + 0.3)
     ax.set_ylim(-0.9, n_qubits - 1 + 0.9)

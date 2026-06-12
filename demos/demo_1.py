@@ -1,6 +1,6 @@
 from aicir import (
     Circuit, Measure, NumpyBackend,
-    hadamard, cnot, pauli_x, cry, rz, rzz, s_gate, swap, u3, u2, rxx, measure, cz
+    hadamard, cnot, pauli_x, cry, rz, rzz, s_gate, swap, u3, u2, rxx, measure, cz, reset
 )
 import numpy as np
 
@@ -15,12 +15,13 @@ cir = Circuit(
     rxx(np.pi / 4, 2, 3),
     u3(0.1, 0.2, 0.3, 2),
     cnot(1, [0, 3]),
-    cnot(2, [0]),
+    measure(0),
+    reset(0),
+    pauli_x(0),
     swap(0, 3),
     pauli_x(3),
     s_gate(2),
     rzz(np.pi / 3, 0, 3),
-    measure(1, 3)
 )
 
 cir.plot()
