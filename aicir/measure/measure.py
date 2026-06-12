@@ -60,6 +60,28 @@ def _normalize_measure_qubits(measure_qubits, n_qubits: int) -> List[int]:
     return qubits
 
 
+def _normalize_snap_indices(snap, n_gates: int) -> set[int]:
+    """Validate gate indices whose post-gate states should be recorded."""
+    if snap is None:
+        return set()
+    if isinstance(snap, (int, np.integer)) and not isinstance(snap, bool):
+        snap = [snap]
+    try:
+        raw_indices = list(snap)
+    except TypeError as exc:
+        raise TypeError("snap 必须是整数或整数序列") from exc
+
+    indices: set[int] = set()
+    for raw in raw_indices:
+        if isinstance(raw, bool) or not isinstance(raw, (int, np.integer)):
+            raise TypeError("snap 必须只包含整数门序号")
+        idx = int(raw)
+        if idx < 0 or idx >= n_gates:
+            raise ValueError(f"snap 含越界门序号 {idx}（门数量={n_gates}）")
+        indices.add(idx)
+    return indices
+
+
 def _resolve_readout(circuit, n_qubits: int, measure_qubits=None) -> Tuple[Optional[List[int]], List[int]]:
     """Resolve readout qubits while enforcing measurement-mechanism exclusivity.
 
@@ -309,10 +331,20 @@ class Measure:
         # target device/dtype, backend.cast can return without host round-trip.
         return backend.cast(unitary_raw)
 
-    def _evolve_state_vector_gatewise(self, circuit, sv0: State, backend) -> State:
+    def _evolve_state_vector_gatewise(
+        self,
+        instructions,
+        sv0: State,
+        backend,
+        snap_indices: Optional[set[int]] = None,
+    ) -> Tuple[State, Dict[int, np.ndarray]]:
         sv = sv0
-        for gate in circuit_instructions(circuit):
+        snap_indices = snap_indices or set()
+        snapshot_states: Dict[int, np.ndarray] = {}
+        for gate_index, gate in enumerate(instructions):
             if _is_measure_gate(gate):
+                if gate_index in snap_indices:
+                    snapshot_states[gate_index] = sv.to_numpy().copy()
                 continue
             new_data = apply_gate_to_state(gate, sv.data, sv.n_qubits, backend)
             if new_data is None:
@@ -320,7 +352,9 @@ class Measure:
                 sv = sv.evolve(gm)
             else:
                 sv = State(new_data, sv.n_qubits, backend, bit_order=sv.bit_order)
-        return sv
+            if gate_index in snap_indices:
+                snapshot_states[gate_index] = sv.to_numpy().copy()
+        return sv, snapshot_states
 
     def _evolve_density_matrix_gatewise(
         self,
@@ -353,6 +387,7 @@ class Measure:
         observables: Optional[Dict[str, object]] = None,
         return_state: bool = True,
         measure_qubits: Optional[Sequence[int]] = None,
+        snap: Optional[Sequence[int]] = None,
     ) -> Result:
         """
         测量一个电路，返回统一结果对象。
@@ -372,6 +407,8 @@ class Measure:
                 与电路内嵌的 measure() 门（机制二/Approach 2）互斥，二者不可同时使用。
                 shots=1 且指定子集时，对这些比特做 Z⊗...⊗Z 关联投影测量，
                 final_state 仅含未被测比特
+            snap: 可选门序号列表（从 0 开始）；记录这些门作用结束后的完整态，
+                可通过 result.snap(index) 读取。None 表示不记录。
         """
         if not hasattr(circuit, "n_qubits"):
             raise TypeError("circuit 需要具备 n_qubits 属性")
@@ -387,10 +424,20 @@ class Measure:
 
         sv0 = self._build_initial_state(n_qubits, backend, initial_state=initial_state)
 
+        snapshot_states: Dict[int, np.ndarray] = {}
         if self._has_gate_sequence(circuit):
             # Preferred execution path: apply each gate directly on the state.
-            sv = self._evolve_state_vector_gatewise(circuit, sv0, backend)
+            instructions = circuit_instructions(circuit)
+            snap_indices = _normalize_snap_indices(snap, len(instructions))
+            sv, snapshot_states = self._evolve_state_vector_gatewise(
+                instructions,
+                sv0,
+                backend,
+                snap_indices=snap_indices,
+            )
         else:
+            if snap is not None:
+                raise ValueError("snap 需要电路提供 gates/operations 门序列")
             unitary = self._circuit_unitary_on_backend(circuit, backend)
             sv = sv0.evolve(unitary)
         probs_backend = sv.probabilities()
@@ -448,6 +495,7 @@ class Measure:
             final_state=final_state_np,
             state=state_np,
             output=output,
+            snapshot_states=snapshot_states,
             metadata={
                 "measure": "Measure",
                 "circuit_type": type(circuit).__name__,
@@ -455,6 +503,7 @@ class Measure:
                 "measured_qubits": report_qubits,
                 "final_state_kind": final_kind,
                 "final_state_qubits": final_qubits,
+                "snap_indices": sorted(snapshot_states),
             },
         )
 
@@ -631,6 +680,7 @@ class Measure:
                     observables=run_observables,
                     return_state=run_return_state,
                     measure_qubits=opts.get("measure_qubits"),
+                    snap=opts.get("snap"),
                 )
             else:
                 result = self.run_density_matrix(
