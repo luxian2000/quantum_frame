@@ -534,18 +534,18 @@ aicir 提供两种量子测量机制，可按需选用。
 
 `Measure` 对象绑定一个后端，`run()` 返回统一的 `Result` 对象。
 
-### 4.1 机制一：独立测量（shots 语义）
+### 4.1 机制一：线路末端测量
 
 `measure.run(cir, shots=1, measure_qubits=None)` —— `shots` 默认 `1`，`measure_qubits` 默认 `None`（读取全部比特）。
 
 `result.state` 始终返回**测量前**的完整末态（酉演化结果，不受采样影响）；`result.final_state` 返回**测量后**的量子态，随 `shots` 变化：
 
-| `shots`         | `measure_qubits` | 行为                                                                   | `result.final_state`                                      | `result.output`       |
-| ----------------- | ------------------ | ---------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------- |
-| `None` 或 `0` | （任意）           | 不测量，仅计算概率                                                     | 与 `result.state` 相同                                    | `None`                |
-| `1`             | `None`（全部）   | 对全部比特做单次投影测量                                               | 坍缩后的基态                                                | 本征值 `+1` / `-1`  |
-| `1`             | `[a, b, …, c]`  | 对这些比特做$Z_a{\otimes}Z_b{\otimes}\dots{\otimes}Z_c$ 关联投影测量 | 其余比特的坍缩纯态                                          | 本征值 `+1` / `-1`  |
-| `>1`            | （任意）           | 采样统计                                                               | 对被测比特求偏迹后的约化密度矩阵（无剩余比特时为 `None`） | `None`                |
+| `shots`         | `measure_qubits` | 行为                                                                   | `result.final_state`                                      | `result.output`      |
+| ----------------- | ------------------ | ---------------------------------------------------------------------- | ----------------------------------------------------------- | ---------------------- |
+| `None` 或 `0` | （任意）           | 不测量，仅计算概率                                                     | 与 `result.state` 相同                                    | `None`               |
+| `1`             | `None`（全部）   | 对全部比特做单次投影测量                                               | 坍缩后的基态                                                | 本征值 `+1` / `-1` |
+| `1`             | `[a, b, …, c]`  | 对这些比特做$Z_a{\otimes}Z_b{\otimes}\dots{\otimes}Z_c$ 关联投影测量 | 其余比特的坍缩纯态                                          | 本征值 `+1` / `-1` |
+| `>1`            | （任意）           | 采样统计                                                               | 对被测比特求偏迹后的约化密度矩阵（无剩余比特时为 `None`） | `None`               |
 
 `shots=1` 时 `output` 统一为被测比特上 $Z{\otimes}\dots{\otimes}Z$ 的本征值（测得 `1` 的个数为偶数时 `+1`，奇数时 `-1`）；坍缩到的具体基态可由 `counts`（单条记录）或 `final_state` 读出。
 
@@ -590,7 +590,7 @@ print(result.most_probable())   # ('|00>', 0.5)
 print(result.final_state)       # None（result.state 仍是完整末态）
 ```
 
-### 4.2 机制二：线路内嵌测量门
+### 4.2 机制二：线路内嵌测量
 
 `measure(*qubits)` 是一个门构造器，将测量目标嵌入电路定义。`Measure.run()` 会跳过这些标记门做酉演化，然后对指定比特输出边缘分布（marginal）计数。
 
@@ -667,18 +667,18 @@ print(counts)   # {'|00>': 512}
 
 ### 4.6 Result 对象字段速查
 
-| 字段                      | 类型                         | 说明                                                                                                                                                               |
-| ------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `probabilities`         | `np.ndarray`               | 各基态概率，shape `(2^n,)`                                                                                                                                       |
-| `counts`                | `dict` or `None`         | `{'\|00>': N, ...}` 采样计数                                                                                                                                      |
-| `shots`                 | `int` or `None`          | 采样次数                                                                                                                                                           |
-| `expectation_values`    | `dict`                     | `{name: float}` 期望值                                                                                                                                           |
-| `expectation_variances` | `dict`                     | `{name: float}` 方差                                                                                                                                             |
-| `state`                 | `np.ndarray` or `None`   | 测量前完整末态（SV 路径为向量；DM 路径为 flatten 后密度矩阵）                                                                                                      |
-| `final_state`           | `np.ndarray` or `None`   | 测量后的态，随 shots 变化（见 §4.1）：`None`/`0` 与 `state` 相同；`1` 为坍缩态；`>1` 为约化密度矩阵（SV 路径为 `(2^m, 2^m)` 二维；DM 路径为 flatten） |
-| `output`                | `int` or `None`          | 单次（shots=1）测量结果：被测比特上 Z⊗…⊗Z 的本征值 ±1（具体基态见 `counts`）                                                                                       |
-| `most_probable()`       | `(str, float)`             | 最高概率基态及其概率                                                                                                                                               |
-| `summary()`             | `str`                      | 单行摘要字符串                                                                                                                                                     |
+| 字段                      | 类型                       | 说明                                                                                                                                                               |
+| ------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `probabilities`         | `np.ndarray`             | 各基态概率，shape `(2^n,)`                                                                                                                                       |
+| `counts`                | `dict` or `None`       | `{'\|00>': N, ...}` 采样计数                                                                                                                                      |
+| `shots`                 | `int` or `None`        | 采样次数                                                                                                                                                           |
+| `expectation_values`    | `dict`                   | `{name: float}` 期望值                                                                                                                                           |
+| `expectation_variances` | `dict`                   | `{name: float}` 方差                                                                                                                                             |
+| `state`                 | `np.ndarray` or `None` | 测量前完整末态（SV 路径为向量；DM 路径为 flatten 后密度矩阵）                                                                                                      |
+| `final_state`           | `np.ndarray` or `None` | 测量后的态，随 shots 变化（见 §4.1）：`None`/`0` 与 `state` 相同；`1` 为坍缩态；`>1` 为约化密度矩阵（SV 路径为 `(2^m, 2^m)` 二维；DM 路径为 flatten） |
+| `output`                | `int` or `None`        | 单次（shots=1）测量结果：被测比特上 Z⊗…⊗Z 的本征值 ±1（具体基态见 `counts`）                                                                                 |
+| `most_probable()`       | `(str, float)`           | 最高概率基态及其概率                                                                                                                                               |
+| `summary()`             | `str`                    | 单行摘要字符串                                                                                                                                                     |
 
 `result.metadata` 中与读出相关的键：`measured_qubits`（被读出的比特下标列表；机制一默认全读时为 `None`）、`final_state_kind`（`'state_vector'` / `'density_matrix'` / `None`）、`final_state_qubits`（`final_state` 所描述的比特下标列表）。
 
