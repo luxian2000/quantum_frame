@@ -69,6 +69,8 @@ from aicir import (
     circuit_from_qasm,
     load_circuit_qasm, save_circuit_qasm,
     save_circuit_qasm3,
+    circuit_to_qiskit, circuit_from_qiskit,
+    to_qiskit, from_qiskit,
 )
 
 # QML 梯度工具
@@ -1116,6 +1118,42 @@ aicir 在 3.0 模式下的主要差异：
 
 > **当前不支持**：`if`、`reset`、`opaque`、自定义 `gate`、`cp`/`cu` 系列门。
 > `measure` 和 `barrier` 语句在导入时会被跳过。
+
+### 7.6 与 Qiskit 互转
+
+`qiskit` 是可选依赖：导入 `aicir` 不要求安装 Qiskit，只有调用互转函数时才会检查。
+
+```python
+import math
+from qiskit import QuantumCircuit
+from aicir import Circuit, cnot, hadamard, rz, circuit_from_qiskit, circuit_to_qiskit
+
+cir = Circuit(
+    hadamard(0),
+    cnot(1, [0]),
+    rz(math.pi / 4, 1),
+    n_qubits=2,
+)
+
+qc = circuit_to_qiskit(cir)      # aicir Circuit -> qiskit.QuantumCircuit
+cir2 = circuit_from_qiskit(qc)   # qiskit.QuantumCircuit -> aicir Circuit
+
+qc2 = QuantumCircuit(2)
+qc2.h(0)
+qc2.cx(0, 1)
+cir3 = circuit_from_qiskit(qc2)
+```
+
+也可以使用 `NEXT.md` 第 8 节中的短别名：
+
+```python
+from aicir import to_qiskit, from_qiskit
+
+qc = to_qiskit(cir)
+cir2 = from_qiskit(qc)
+```
+
+当前 Qiskit 互操作支持基础单比特门、参数旋转门、`u2`/`u3`、`cx/cy/cz`、`crx/cry/crz`、`swap`、`rzz/rxx`、`ccx` 和线路内 `measure` 标记；暂不支持 Qiskit 自定义门和未绑定符号参数。
 
 ---
 

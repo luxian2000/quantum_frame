@@ -121,6 +121,7 @@ try:
         save_circuit_qasm,
         save_circuit_qasm3,
     )
+    from .core.io.qiskit_io import circuit_from_qiskit, circuit_to_qiskit, from_qiskit, to_qiskit
 except ModuleNotFoundError as exc:
     if not _is_missing_torch(exc):
         raise
@@ -169,6 +170,10 @@ else:
             "save_circuit_qasm",
             "save_circuit_qasm3",
             "load_circuit_qasm",
+            "circuit_to_qiskit",
+            "circuit_from_qiskit",
+            "to_qiskit",
+            "from_qiskit",
         ]
     )
 

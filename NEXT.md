@@ -237,6 +237,8 @@ GateSpec(
 
 目的不是依赖外部框架，而是让用户可以把 `aicir` 的轻量研究线路带入 Qiskit 硬件生态，或把 PennyLane/Qiskit 的线路导入 `aicir` 做本地模拟、QAS 和自定义指标评估。
 
+当前状态：Qiskit 第一片已在 `aicir.core.io.qiskit_io` 落地。提供 `circuit_to_qiskit`/`circuit_from_qiskit` 和短别名 `to_qiskit`/`from_qiskit`，并从 `aicir.core.io`、`aicir.core`、顶层 `aicir` 导出。`qiskit` 保持可选依赖，仅在调用互操作函数时导入；当前支持基础门、参数旋转、受控门、`swap`、`rzz/rxx`、`u2/u3`、`ccx` 和线路内 `measure` 标记。PennyLane 互操作与更完整的 QASM3 互转仍未开始。
+
 ### 9. 统一结果对象和 metadata
 
 建议为执行结果建立统一数据模型：
