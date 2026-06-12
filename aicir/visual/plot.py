@@ -261,7 +261,7 @@ def _draw_box(ax, x, y, label, facecolor, edgecolor, *, fontsize, sublabel=None,
     label_text = ax.text(x, label_y, label, ha="center", va="center",
                          fontsize=_fit_label_fontsize(label, fontsize, width),
                          color=edgecolor, fontweight="bold", zorder=4)
-    _mark_max_text_size(label_text, width * 0.8, height * 0.7)
+    _mark_max_text_size(label_text, width * 0.8, height * 0.75)
     if sublabel:
         # 角度文字的字号随方块宽度等比缩放
         sub_fs = fontsize * sublabel_scale * (width / _BOX)
@@ -269,7 +269,7 @@ def _draw_box(ax, x, y, label, facecolor, edgecolor, *, fontsize, sublabel=None,
             sub_text = ax.text(x, y - height * _INNER_SUBLABEL_OFFSET, sublabel,
                                ha="center", va="center", fontsize=sub_fs,
                                color=edgecolor, zorder=5)
-            _mark_max_text_size(sub_text, width * 0.8, height * 0.7)
+            _mark_max_text_size(sub_text, width * 0.8, height * 0.75)
         else:
             # 与方块底边保持固定的 0.04 data-unit 间距。
             gap = height * (0.04 / _BOX)
