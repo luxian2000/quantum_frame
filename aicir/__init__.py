@@ -128,6 +128,7 @@ try:
         to_pennylane,
     )
     from .core.io.qiskit_io import circuit_from_qiskit, circuit_to_qiskit, from_qiskit, to_qiskit
+    from .core.io.wuyue_io import circuit_from_wuyue, circuit_to_wuyue, from_wuyue, to_wuyue
 except ModuleNotFoundError as exc:
     if not _is_missing_torch(exc):
         raise
@@ -184,6 +185,10 @@ else:
             "circuit_from_pennylane",
             "to_pennylane",
             "from_pennylane",
+            "circuit_to_wuyue",
+            "circuit_from_wuyue",
+            "to_wuyue",
+            "from_wuyue",
         ]
     )
 

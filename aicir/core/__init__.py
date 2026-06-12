@@ -47,6 +47,7 @@ from .io.pennylane_io import (
     from_pennylane,
     to_pennylane,
 )
+from .io.wuyue_io import circuit_from_wuyue, circuit_to_wuyue, from_wuyue, to_wuyue
 
 __all__ = [
     "Circuit",
@@ -99,4 +100,8 @@ __all__ = [
     "circuit_from_pennylane",
     "to_pennylane",
     "from_pennylane",
+    "circuit_to_wuyue",
+    "circuit_from_wuyue",
+    "to_wuyue",
+    "from_wuyue",
 ]

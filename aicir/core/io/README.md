@@ -1,6 +1,6 @@
 # aicir.core.io
 
-本文档说明 `aicir.core.io` 中 OpenQASM、Qiskit 与 PennyLane 互操作的当前行为。
+本文档说明 `aicir.core.io` 中 OpenQASM、Qiskit、PennyLane 与 WuYue 互操作的当前行为。
 
 ## QASM 导出行为概览
 
@@ -65,3 +65,19 @@
 - 整体恒等门：`Identity`
 
 暂不支持 PennyLane 自定义门、未绑定符号参数和 aicir 线路内 `measure` 标记。
+
+## WuYue 互操作
+
+`wuyue_io.py` 提供 `circuit_to_wuyue` / `circuit_from_wuyue`，以及短别名 `to_wuyue` / `from_wuyue`。`wuyue` 是可选依赖，导入 `aicir` 不会强制导入 WuYue SDK；只有调用这些函数时才检查依赖。
+
+当前支持 WuYue 原生门集中与 aicir 基础门直接对应的部分：
+
+- 基础单比特门：`X/Y/Z/H/S/T`
+- 参数旋转：`RX/RY/RZ`
+- 通用单比特门：`U2/U3`
+- 受控门：`CX/CZ/TOFFOLI`
+- 双比特门：`SWAP/IsingZZ`（对应 aicir `swap/rzz`）
+- 整体恒等门：aicir `identity` 导出为每个量子位上的 WuYue `I`
+- 线路内测量标记：WuYue `MEASURE` 与 aicir `measure(...)` 互转
+
+受 WuYue 当前原生门集限制，暂不支持 `cy`、`crx/cry/crz`、`rxx`、自定义门和未绑定符号参数。WuYue SDK 不接受 0 位经典寄存器；当 aicir 线路没有测量时，导出的 WuYue `QuantumCircuit` 会保留 1 位经典寄存器占位。
