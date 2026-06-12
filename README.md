@@ -71,6 +71,8 @@ from aicir import (
     save_circuit_qasm3,
     circuit_to_qiskit, circuit_from_qiskit,
     to_qiskit, from_qiskit,
+    circuit_to_pennylane, circuit_from_pennylane,
+    to_pennylane, from_pennylane,
 )
 
 # QML 梯度工具
@@ -1154,6 +1156,43 @@ cir2 = from_qiskit(qc)
 ```
 
 当前 Qiskit 互操作支持基础单比特门、参数旋转门、`u2`/`u3`、`cx/cy/cz`、`crx/cry/crz`、`swap`、`rzz/rxx`、`ccx` 和线路内 `measure` 标记；暂不支持 Qiskit 自定义门和未绑定符号参数。
+
+### 7.7 与 PennyLane 互转
+
+`pennylane` 是可选依赖：导入 `aicir` 不要求安装 PennyLane，只有调用互转函数时才会检查。
+
+```python
+import math
+import pennylane as qml
+from aicir import Circuit, cnot, hadamard, rz, circuit_from_pennylane, circuit_to_pennylane
+
+cir = Circuit(
+    hadamard(0),
+    cnot(1, [0]),
+    rz(math.pi / 4, 1),
+    n_qubits=2,
+)
+
+script = circuit_to_pennylane(cir)        # aicir Circuit -> pennylane QuantumScript
+cir2 = circuit_from_pennylane(script)     # pennylane QuantumScript -> aicir Circuit
+
+script2 = qml.tape.QuantumScript(
+    [qml.Hadamard(wires=0), qml.CNOT(wires=[0, 1])],
+    [],
+)
+cir3 = circuit_from_pennylane(script2)
+```
+
+也可以使用 `NEXT.md` 第 8 节中的短别名：
+
+```python
+from aicir import to_pennylane, from_pennylane
+
+script = to_pennylane(cir)
+cir2 = from_pennylane(script)
+```
+
+当前 PennyLane 互操作支持基础单比特门、参数旋转门、`u2`/`u3`、`cx/cy/cz`、`crx/cry/crz`、`swap`、`rzz/rxx`（对应 PennyLane 的 `IsingZZ`/`IsingXX`）、`ccx` 和 `identity`。暂不支持 PennyLane 自定义门、未绑定符号参数和 aicir 线路内 `measure` 标记。
 
 ---
 

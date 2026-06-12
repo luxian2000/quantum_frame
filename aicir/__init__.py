@@ -121,6 +121,12 @@ try:
         save_circuit_qasm,
         save_circuit_qasm3,
     )
+    from .core.io.pennylane_io import (
+        circuit_from_pennylane,
+        circuit_to_pennylane,
+        from_pennylane,
+        to_pennylane,
+    )
     from .core.io.qiskit_io import circuit_from_qiskit, circuit_to_qiskit, from_qiskit, to_qiskit
 except ModuleNotFoundError as exc:
     if not _is_missing_torch(exc):
@@ -174,6 +180,10 @@ else:
             "circuit_from_qiskit",
             "to_qiskit",
             "from_qiskit",
+            "circuit_to_pennylane",
+            "circuit_from_pennylane",
+            "to_pennylane",
+            "from_pennylane",
         ]
     )
 
