@@ -8,6 +8,7 @@ from aicir.channel.backends import NumpyBackend
 from aicir.channel.operators import Hamiltonian
 from aicir.core.circuit import crx, rxx, swap, toffoli
 from aicir.core.gates import apply_gate_to_state, gate_to_matrix
+from aicir.core.state import State
 from aicir.measure.result import Result
 
 
@@ -235,6 +236,24 @@ class TestMeasure(unittest.TestCase):
         result = self.measure.run(circ, shots=1000)
 
         self.assertEqual(result.metadata["measured_qubits"], [0])
+
+    def test_build_initial_state_rejects_density_form(self):
+        """密度矩阵形态 State 传入态矢路径应抛出 TypeError。"""
+        backend = NumpyBackend()
+        m = Measure(backend)
+        density_state = State.zero_state(1, backend).to_density_matrix()
+        with self.assertRaises(TypeError) as ctx:
+            m._build_initial_state(1, backend, initial_state=density_state)
+        self.assertIn("密度矩阵形态", str(ctx.exception))
+
+    def test_build_initial_density_matrix_rejects_vector_form(self):
+        """向量形态 State 传入密度矩阵路径应抛出 TypeError。"""
+        backend = NumpyBackend()
+        m = Measure(backend)
+        vector_state = State.zero_state(1, backend)
+        with self.assertRaises(TypeError) as ctx:
+            m._build_initial_density_matrix(1, backend, initial_density_matrix=vector_state)
+        self.assertIn("向量形态", str(ctx.exception))
 
 
 if __name__ == "__main__":

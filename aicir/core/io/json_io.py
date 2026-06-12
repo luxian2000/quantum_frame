@@ -5,7 +5,7 @@ Circuit 的 JSON 序列化与反序列化。
 
 与当前仓库的 `Circuit` 对象兼容：
 - circuit.n_qubits
-- circuit.gates (list[dict])
+- typed IR operations 或 circuit.gates (list[dict])
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from typing import Any, Dict
 
 import numpy as np
 
+from ...ir import circuit_gate_dicts, has_circuit_instructions
 from ..circuit import Circuit, Parameter
 
 try:
@@ -73,14 +74,14 @@ def _restore_json_value(value: Any) -> Any:
 
 def circuit_to_json_dict(circuit: Circuit) -> Dict[str, Any]:
     """将 Circuit 转换为可 JSON 序列化的 Python 字典。"""
-    if not hasattr(circuit, "n_qubits") or not hasattr(circuit, "gates"):
-        raise TypeError("circuit 需要具备 n_qubits 和 gates 属性")
+    if not hasattr(circuit, "n_qubits") or not has_circuit_instructions(circuit):
+        raise TypeError("circuit 需要具备 n_qubits 和 typed IR operations 或 gates 序列")
 
     return {
         "format": "aicir.circuit",
         "version": _FORMAT_VERSION,
         "n_qubits": int(circuit.n_qubits),
-        "gates": _jsonable_value(list(circuit.gates)),
+        "gates": _jsonable_value(circuit_gate_dicts(circuit)),
     }
 
 

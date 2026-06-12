@@ -535,7 +535,7 @@ $$
 
 - numpy 态向量
 - Torch/NPU 后端张量（如 `state.data`）
-- aicir `State` / `StateVector` 对象
+- aicir `State` 对象
 
 设备张量会在 QFIM 求解前 detach 并移动到主机，用 NumPy 完成小规模线性求解，避免依赖 NPU 的复杂矩阵求逆支持；目标函数返回的 NPU/Torch 标量仍可被 `psr` / `fd` / `spsa` / `auto` 路径正常处理。
 

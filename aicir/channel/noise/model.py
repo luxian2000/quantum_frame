@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence, Set
+from typing import Any, List, Optional, Sequence, Set
+
+from ...ir import instruction_controls, instruction_name, instruction_qubits
 
 
 @dataclass
@@ -43,24 +45,12 @@ class NoiseModel:
             return False
         return gate_type in rule.after_gates
 
-    def _gate_qubits(self, gate: Optional[dict]) -> Set[int]:
+    def _gate_qubits(self, gate: Optional[Any]) -> Set[int]:
         if not gate:
             return set()
-        qubits: Set[int] = set()
-        target = gate.get("target_qubit")
-        if target is not None:
-            qubits.add(int(target))
-        for key in ("control_qubits", "qubit_1", "qubit_2", "qubits", "targets"):
-            values = gate.get(key)
-            if values is None:
-                continue
-            if isinstance(values, (list, tuple, set)):
-                qubits.update(int(q) for q in values)
-            else:
-                qubits.add(int(values))
-        return qubits
+        return {int(q) for q in (*instruction_qubits(gate), *instruction_controls(gate))}
 
-    def _should_apply_to_gate(self, rule: NoiseRule, gate: Optional[dict]) -> bool:
+    def _should_apply_to_gate(self, rule: NoiseRule, gate: Optional[Any]) -> bool:
         if not rule.exclude_gate_qubits:
             return True
         target_qubit = getattr(rule.channel, "target_qubit", None)
@@ -68,10 +58,10 @@ class NoiseModel:
             return True
         return int(target_qubit) not in self._gate_qubits(gate)
 
-    def apply(self, rho, n_qubits: int, backend, gate_type: Optional[str] = None, gate: Optional[dict] = None):
+    def apply(self, rho, n_qubits: int, backend, gate_type: Optional[str] = None, gate: Optional[Any] = None):
         """Apply all matching noise rules to a density matrix."""
         if gate_type is None and gate is not None:
-            gate_type = gate.get("type")
+            gate_type = instruction_name(gate)
         out = rho
         for rule in self.rules:
             if not self._match_rule(rule, gate_type):

@@ -25,6 +25,12 @@ import numpy as np
 from ..core.circuit import Circuit
 from ..channel.backends.base import Backend
 from ..channel.noise.model import NoiseModel
+from ..ir import (
+    circuit_instruction_count,
+    circuit_instructions,
+    instruction_name,
+    instruction_parameter,
+)
 
 from ..metrics.expressibility import (
     KL_Haar_divergence,
@@ -120,7 +126,7 @@ class ExpressibilityScore:
         Returns:
             float: Score where 1 = most expressive (closest to Haar)
         """
-        if not any("parameter" in gate for gate in circuit.gates):
+        if not any(instruction_parameter(gate) is not None for gate in circuit_instructions(circuit)):
             return self._structural_proxy(circuit)
 
         try:
@@ -145,13 +151,13 @@ class ExpressibilityScore:
 
     def _structural_proxy(self, circuit: Circuit) -> float:
         """Fast fallback for non-parameterized or invalid intermediate circuits."""
-        n_gates = len(circuit.gates)
+        n_gates = circuit_instruction_count(circuit)
         if n_gates == 0:
             return 0.0
         two_qubit = sum(
             1
-            for gate in circuit.gates
-            if gate.get("type") in {"cx", "cnot", "cy", "cz", "crx", "cry", "crz", "swap", "toffoli", "ccnot", "rzz", "rxx"}
+            for gate in circuit_instructions(circuit)
+            if instruction_name(gate) in {"cx", "cnot", "cy", "cz", "crx", "cry", "crz", "swap", "toffoli", "ccnot", "rzz", "rxx"}
         )
         entangling_ratio = two_qubit / n_gates
         depth_proxy = n_gates / max(1, circuit.n_qubits)
@@ -227,14 +233,14 @@ class TrainabilityScore:
             float: Score where 1 = most trainable
         """
         n_qubits = circuit.n_qubits
-        n_gates = len(circuit.gates)
+        n_gates = circuit_instruction_count(circuit)
 
         # Count gate types
         single_qubit_ops = 0
         two_qubit_ops = 0
 
-        for gate in circuit.gates:
-            gate_type = gate.get("type", "")
+        for gate in circuit_instructions(circuit):
+            gate_type = instruction_name(gate)
             if gate_type in {"cx", "cnot", "cy", "cz", "crx", "cry", "crz",
                             "swap", "toffoli", "ccnot", "rzz", "rxx"}:
                 two_qubit_ops += 1
@@ -425,12 +431,12 @@ class HardwareEfficiencyScore:
         """
         # Factor 1: Native gate ratio
         native_count = 0
-        for gate in circuit.gates:
-            gate_type = gate.get("type", "")
+        for gate in circuit_instructions(circuit):
+            gate_type = instruction_name(gate)
             if gate_type in self.native_gates:
                 native_count += 1
 
-        n_gates = len(circuit.gates)
+        n_gates = circuit_instruction_count(circuit)
         if n_gates > 0:
             native_ratio = native_count / n_gates
         else:
@@ -443,9 +449,9 @@ class HardwareEfficiencyScore:
         # Factor 3: 2-qubit gate efficiency
         # Fewer 2-qubit gates = better for most hardware
         two_qubit_count = sum(
-            1 for g in circuit.gates
-            if g.get("type") in {"cx", "cnot", "cy", "cz", "crx", "cry", "crz",
-                                "swap", "toffoli", "ccnot", "rzz", "rxx"}
+            1 for g in circuit_instructions(circuit)
+            if instruction_name(g) in {"cx", "cnot", "cy", "cz", "crx", "cry", "crz",
+                                       "swap", "toffoli", "ccnot", "rzz", "rxx"}
         )
 
         if circuit.n_qubits > 0:
@@ -568,7 +574,7 @@ class MultiObjectiveReward:
         - Large circuit depth
         - Many 2-qubit operations
         """
-        n_gates = len(circuit.gates)
+        n_gates = circuit_instruction_count(circuit)
 
         # Normalize by qubit count
         if circuit.n_qubits > 0:
@@ -578,9 +584,9 @@ class MultiObjectiveReward:
 
         # Count 2-qubit gates
         two_qubit = sum(
-            1 for g in circuit.gates
-            if g.get("type") in {"cx", "cnot", "cy", "cz", "crx", "cry", "crz",
-                                "swap", "toffoli", "ccnot", "rzz", "rxx"}
+            1 for g in circuit_instructions(circuit)
+            if instruction_name(g) in {"cx", "cnot", "cy", "cz", "crx", "cry", "crz",
+                                       "swap", "toffoli", "ccnot", "rzz", "rxx"}
         )
 
         # Combined penalty
@@ -713,4 +719,3 @@ __all__ = [
     "MultiObjectiveReward",
     "QASRewardWrapper",
 ]
-

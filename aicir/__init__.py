@@ -45,6 +45,10 @@ _export(
     ]
 )
 
+from .ir import CircuitIR, Measurement, Observable, Operation
+
+_export(["CircuitIR", "Measurement", "Observable", "Operation"])
+
 try:
     from .channel.noise import (
         AmplitudeDampingChannel,
@@ -70,8 +74,7 @@ else:
     )
 
 try:
-    from .core.state import State, StateVector
-    from .core.density import DensityMatrix
+    from .core.state import State
     from .core import (
         Circuit,
         Parameter,
@@ -117,6 +120,14 @@ try:
         save_circuit_qasm,
         save_circuit_qasm3,
     )
+    from .core.io.pennylane_io import (
+        circuit_from_pennylane,
+        circuit_to_pennylane,
+        from_pennylane,
+        to_pennylane,
+    )
+    from .core.io.qiskit_io import circuit_from_qiskit, circuit_to_qiskit, from_qiskit, to_qiskit
+    from .core.io.wuyue_io import circuit_from_wuyue, circuit_to_wuyue, from_wuyue, to_wuyue
 except ModuleNotFoundError as exc:
     if not _is_missing_torch(exc):
         raise
@@ -124,8 +135,6 @@ else:
     _export(
         [
             "State",
-            "StateVector",
-            "DensityMatrix",
             "Circuit",
             "Parameter",
             "circuit",
@@ -165,6 +174,18 @@ else:
             "save_circuit_qasm",
             "save_circuit_qasm3",
             "load_circuit_qasm",
+            "circuit_to_qiskit",
+            "circuit_from_qiskit",
+            "to_qiskit",
+            "from_qiskit",
+            "circuit_to_pennylane",
+            "circuit_from_pennylane",
+            "to_pennylane",
+            "from_pennylane",
+            "circuit_to_wuyue",
+            "circuit_from_wuyue",
+            "to_wuyue",
+            "from_wuyue",
         ]
     )
 
@@ -180,11 +201,16 @@ else:
 
 for _module_name in [
     "chemistry",
+    "devices",
     "encoder",
+    "gates",
+    "ir",
     "metrics",
     "optimization",
+    "primitives",
     "qas",
     "qml",
+    "transpile",
     "universal",
     "visual",
     "vqc",

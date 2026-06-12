@@ -29,8 +29,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from .backends.base import Backend
-    from ..core.state import StateVector
-    from ..core.density import DensityMatrix
+    from ..core.state import State
 
 # ── 单比特泡利矩阵（NumPy 常量，用于构造复杂算符）──────────────────────
 _I = np.array([[1, 0], [0, 1]], dtype=np.complex64)
@@ -260,7 +259,7 @@ class Hamiltonian:
         H03 = Hamiltonian(n_qubits=4, terms=[("ZZ", [0, 3], -1.0)])
 
         mat = H.to_matrix(bk)
-        print(H.expectation(sv, bk))   # sv 是 StateVector
+        print(H.expectation(sv, bk))   # sv 是 State
     """
 
     def __init__(
@@ -390,29 +389,25 @@ class Hamiltonian:
 
     def expectation(
         self,
-        state: Union["StateVector", "DensityMatrix"],
+        state: "State",
         backend: "Backend",
     ) -> float:
         """
         计算量子态对哈密顿量的期望值。
 
         参数:
-            state:   StateVector 或 DensityMatrix 实例
+            state:   State 实例（向量或密度矩阵形态）
             backend: 计算后端
         返回:
             实数期望值
         """
-        from ..core.state import StateVector
-        from ..core.density import DensityMatrix
+        from ..core.state import State
 
         H_mat = self.to_matrix(backend)
-        if isinstance(state, StateVector):
+        if isinstance(state, State):
             return state.expectation(H_mat)
-        elif isinstance(state, DensityMatrix):
-            return state.expectation(H_mat)
-        else:
-            # 兼容原始后端张量（态向量）
-            return backend.expectation_sv(state, H_mat)
+        # 兼容原始后端张量（态向量）
+        return backend.expectation_sv(state, H_mat)
 
     @property
     def terms(self) -> List[PauliString]:

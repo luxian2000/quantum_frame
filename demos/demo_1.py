@@ -4,12 +4,14 @@ from aicir import (
 )
 import numpy as np
 
+# Gate factories keep their original signatures but now return typed
+# Operation/Measurement IR objects (validated, immutable, dict-read compatible).
 cir = Circuit(
     hadamard(0),
     u2(0.4, 0.5, 3),
-    cry(np.pi / 3, 0, [1, 3, 2]),
+    cry(np.pi / 3, 0, [2, 3]),
     rz(0.5, 1),
-    cz(2, [3]),
+    cz(2, [1, 3]),
     rxx(np.pi / 4, 2, 3),
     u3(0.1, 0.2, 0.3, 2),
     cnot(1, [0, 3]),
@@ -25,7 +27,7 @@ cir.plot()
 
 # Second measurement mechanism: the in-circuit measure() gate decides which
 # qubits are read out, so Measure.run needs no separate measurement targets.
-# Counts come back over qubits 1, 2, 3 only (3-bit strings).
+# Counts come back over qubits 1 and 3 only (2-bit strings).
 result = Measure(NumpyBackend()).run(cir, shots=1024)
 print(result.summary())
 print("measured qubits:", result.metadata["measured_qubits"])

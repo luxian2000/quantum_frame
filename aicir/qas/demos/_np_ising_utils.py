@@ -375,7 +375,13 @@ def solve_ground_state_qas(
 
         if best is None or energy < best.energy:
             backend = result.best_circuit.backend
-            probs = np.asarray(Measure(backend).run(result.best_circuit, shots=0).probabilities)
+            # shots=None 走"仅取概率、不测量"路径（新测量语义，见 README §4.3）；
+            # 这里只需要概率分布，return_state=False 避免无谓地构造 state/final_state。
+            probs = np.asarray(
+                Measure(backend)
+                .run(result.best_circuit, shots=None, return_state=False)
+                .probabilities
+            )
             best = QASSolution(
                 energy=energy,
                 probabilities=probs,
