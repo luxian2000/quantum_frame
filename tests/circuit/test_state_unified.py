@@ -21,3 +21,8 @@ def test_from_matrix_builds_density_form():
 def test_from_array_rejects_non_power_of_two():
     with pytest.raises(ValueError):
         State.from_array([1, 0, 0])
+
+
+def test_from_array_rejects_empty():
+    with pytest.raises(ValueError):
+        State.from_array([])
