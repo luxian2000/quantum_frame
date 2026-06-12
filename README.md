@@ -266,7 +266,7 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 
 门构造函数的**签名与参数顺序与旧版完全一致**，但返回值已由裸门字典升级为类型化 `Operation`（`measure(...)` 返回 `Measurement`）：
 
-- **构造期校验**：量子比特下标、控制位/控制态长度，以及按 GateSpec 注册表检查目标比特数、参数个数与控制位要求（见 3.5 节），错误在调用处立即报出。
+- **构造期校验**：量子比特下标、控制位/控制态长度，以及按 GateSpec 注册表检查目标比特数、参数个数与控制位要求（见 3.6 节），错误在调用处立即报出。
 - **旧字典只读兼容**：`gate["type"]`、`.get("parameter")`、`in`、`dict(gate)`、迭代等读取照常可用，且与旧门字典可直接 `==` 比较；写入（`gate[...] = ...`）会抛 `TypeError`（对象不可变）。
 - **`Circuit` 内部存储不变**：仍是与旧版完全一致的门字典列表（`circuit.gates`），下游代码无需改动。
 
@@ -324,7 +324,93 @@ cir = Circuit(
 
 `Circuit` 继续保留 `.gates` 门字典 surface（内部存储不变），同时提供 `.operations` 和 `.ir` typed IR 视图；`aicir.ir` 另有 `Observable`/`CircuitIR` 用于可观测量与线路级 IR。
 
-### 3.3 参数化量子线路
+### 3.3 让 Circuit 作用于 State
+
+`aicir` 里“把线路作用到量子态上”有三种常用途径；它们底层都对应同一个数学对象，但适用场景不同。
+
+**方式一：显式取酉矩阵，再用 `State.evolve(...)` 演化**
+
+这是最直接、最适合教学或算法 demo 的写法。`Circuit.unitary()` 返回线路酉矩阵，`State.evolve(U)` 对纯态执行 `U|ψ>`，对密度矩阵执行 `UρU†`。`Circuit.matrix()` 只是 `unitary()` 的别名。
+
+```python
+from aicir import Circuit, NumpyBackend, hadamard, cnot
+from aicir.core import State
+
+backend = NumpyBackend()
+
+cir = Circuit(
+    hadamard(0),
+    cnot(1, [0]),
+    n_qubits=2,
+    backend=backend,
+)
+
+psi0 = State.from_array([0, 1, 0, 0], backend=backend)  # |01>
+
+U = cir.unitary()             # 或 cir.matrix()
+psi1 = psi0.evolve(U)
+
+print(psi1.ket)               # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
+print(psi1.probabilities())   # [0.  0.5 0.5 0. ]
+```
+
+如果初态已经是矩阵形态 `State`，同样可以直接演化：
+
+```python
+rho0 = psi0.to_density_matrix()
+rho1 = rho0.evolve(cir.unitary())
+
+print(rho1.is_density)   # True
+print(rho1.matrix.shape) # (4, 4)
+```
+
+**方式二：通过 `Measure.run(..., initial_state=...)` 执行纯态线路**
+
+如果你接下来本来就要测量、取概率、取期望值或读取 `Result`，可以直接把初态通过 `initial_state` 传给 `Measure.run(...)`。当 `shots=None` 或 `0` 时，不做采样，`result.state` / `result.final_state` 就是完整末态。
+
+```python
+from aicir import Measure
+
+result = Measure(backend).run(
+    cir,
+    shots=None,
+    initial_state=psi0,
+    return_state=True,
+)
+
+psi1 = State.from_array(result.final_state, backend=backend)
+print(psi1.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
+```
+
+这种方式的好处是线路执行与后续读出在同一个接口里完成；如果后面改成 `shots=1024`、加入 `observables=...` 或读取 `counts`，调用方式不需要重写。
+
+**方式三：通过 `Measure.run_density_matrix(..., initial_density_matrix=...)` 执行矩阵形态初态**
+
+噪声分析、混合态传播或显式密度矩阵初态，使用密度矩阵路径更合适。这里传入的 `State` 必须已经是矩阵形态（可由 `.to_density_matrix()` 得到）。
+
+```python
+rho0 = psi0.to_density_matrix()
+
+result = Measure(backend).run_density_matrix(
+    cir,
+    shots=None,
+    initial_density_matrix=rho0,
+    return_state=True,
+)
+
+rho1 = State.from_matrix(result.final_state, backend=backend)
+print(rho1.is_density)        # True
+print(rho1.probabilities())   # [0.  0.5 0.5 0. ]
+```
+
+使用建议：
+
+- 只想清楚地表达“线路作用到态上”时，优先用 `State.evolve(circuit.unitary())`。
+- 后续还要测量、采样、算期望值时，优先用 `Measure.run(..., initial_state=...)`。
+- 初态本身是混合态，或需要密度矩阵语义时，用 `run_density_matrix(..., initial_density_matrix=...)`。
+- 若电路绑定了 `backend`，`unitary()` 与 `Measure.run(...)` 会优先沿该后端执行；对大线路通常比先在 CPU 组装再搬运更合适（见第 6.6 节）。
+
+### 3.4 参数化量子线路
 
 `Parameter` 可作为旋转门参数的符号占位符，用于构建量子神经网络、VQE、QAOA 等可训练线路模板。模板电路在绑定参数前只保存门字典，不会生成数值矩阵。
 
@@ -374,7 +460,7 @@ template.bind_parameters({"theta0": 0.2, "theta1": 0.5}, inplace=True)
 - 如果要使用 PyTorch autograd，可直接把 Torch 标量张量作为门参数，并调用 `Circuit.unitary(backend=GPUBackend(...))`。当前 `rx`/`ry`/`rz`/`u2`/`u3`、受控旋转门、`rzz`/`rxx` 和自定义 `unitary` 的 Torch 参数会保留计算图。
 - 导出 QASM 前应先把所有符号参数绑定为数值。JSON 导出支持 `Parameter`、NumPy 标量/数组、复数和 Torch 张量数值；Torch 张量在 JSON 读回后会恢复为普通数值或列表，不会恢复为带计算图的 Tensor。
 
-### 3.4 自定义 unitary、identity 与 Torch 自动微分
+### 3.5 自定义 unitary、identity 与 Torch 自动微分
 
 可以用门字典直接加入自定义酉矩阵：
 
@@ -416,7 +502,7 @@ loss.backward()
 print(theta.grad)
 ```
 
-### 3.5 GateSpec 门元信息注册表
+### 3.6 GateSpec 门元信息注册表
 
 `aicir.gates` 是门元信息的单一来源：每个门的目标比特数、参数个数、别名、QASM 导出名和绘图符号只在注册表里登记一次，`Operation` 构造期校验、`transpile` 的 `ValidatePass`/`CanonicalizePass`、QASM 导出、矩阵路径与绘图都从这里读取。
 
