@@ -320,7 +320,7 @@ class State:
         return State(new_data, self._n_qubits, bk, bit_order=self._bit_order)
 
     def probabilities(self):
-        """计算基测量概率。向量形态返回后端张量；矩阵形态返回 numpy。"""
+        """计算基测量概率。向量形态返回后端张量；矩阵形态返回 numpy 数组。调用方不应假定返回类型为后端张量。"""
         if self._kind == "vector":
             return self._backend.measure_probs(self._data)
         diag = self._backend.to_numpy(self._backend.real(self._data.diagonal()))
@@ -356,11 +356,17 @@ class State:
 
     def inner_product(self, other: "State"):
         """
-        计算内积 ⟨self|other⟩。
+        计算内积 ⟨self|other⟩（仅适用于向量形态纯态）。
+
+        矩阵形态不支持此操作：对密度矩阵调用此方法会静默计算
+        Tr(ρ†σ)（Hilbert–Schmidt 内积）而非量子态内积，因此予以拒绝。
+        密度矩阵的相关量请改用 expectation / purity 等方法。
 
         返回:
             复数标量张量
         """
+        if self._kind == "matrix" or other._kind == "matrix":
+            raise TypeError("inner_product 仅支持向量形态纯态；密度矩阵请改用 expectation / purity 等")
         if self._n_qubits != other._n_qubits:
             raise ValueError("内积要求两态具有相同 n_qubits")
         return self._backend.inner_product(self._data, other._data)
@@ -407,6 +413,7 @@ class State:
     def norm(self) -> float:
         """
         计算态向量的范数（归一化时应约等于 1.0）。
+        矩阵形态下返回对角线归一化结果（恒约为 1.0）。
         """
         probs_np = self._backend.to_numpy(self.probabilities()).real
         return float(probs_np.sum()) ** 0.5
