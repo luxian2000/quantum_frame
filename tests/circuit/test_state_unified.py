@@ -130,3 +130,12 @@ def test_mixed_state_with_offdiagonal_ket_lists_all_terms():
     ket = s.ket
     for sub in ("|0><0|", "|0><1|", "|1><0|", "|1><1|"):
         assert sub in ket
+
+
+def test_inner_product_rejects_matrix_form():
+    a = State.zero_state(1)
+    b = State.from_array([1, 0], n_qubits=1).to_density_matrix()
+    with pytest.raises(TypeError):
+        a.inner_product(b)
+    with pytest.raises(TypeError):
+        b.inner_product(a)
