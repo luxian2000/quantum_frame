@@ -46,6 +46,7 @@ from .io.pennylane_io import (
     circuit_to_pennylane,
     from_pennylane,
     to_pennylane,
+)
 
 __all__ = [
     "Circuit",
