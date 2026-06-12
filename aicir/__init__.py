@@ -74,8 +74,7 @@ else:
     )
 
 try:
-    from .core.state import State, StateVector
-    from .core.density import DensityMatrix
+    from .core.state import State
     from .core import (
         Circuit,
         Parameter,
@@ -136,8 +135,6 @@ else:
     _export(
         [
             "State",
-            "StateVector",
-            "DensityMatrix",
             "Circuit",
             "Parameter",
             "circuit",

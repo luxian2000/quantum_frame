@@ -29,8 +29,7 @@ from .circuit import (
     u2,
     u3,
 )
-from .state import State, StateVector
-from .density import DensityMatrix
+from .state import State
 from .io.json_io import circuit_from_json, circuit_to_json, load_circuit_json, save_circuit_json
 from .io.qasm import (
     circuit_from_qasm,
@@ -52,8 +51,6 @@ __all__ = [
     "Circuit",
     "Parameter",
     "State",
-    "StateVector",
-    "DensityMatrix",
     "circuit",
     "pauli_x",
     "pauli_y",
