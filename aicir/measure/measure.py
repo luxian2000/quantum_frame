@@ -11,8 +11,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 import numpy as np
 
 from ..core.gates import apply_gate_to_state, gate_to_matrix
-from ..core.density import DensityMatrix
-from ..core.state import StateVector
+from ..core.state import State
 from ..ir import circuit_instructions, has_circuit_instructions, instruction_name, instruction_qubits
 from .result import Result
 from .sampler import Sampler
@@ -258,32 +257,35 @@ class Measure:
     def _has_gate_sequence(circuit) -> bool:
         return has_circuit_instructions(circuit)
 
-    def _build_initial_state(self, n_qubits: int, backend, initial_state=None) -> StateVector:
+    def _build_initial_state(self, n_qubits: int, backend, initial_state=None) -> State:
         if initial_state is None:
-            return StateVector.zero_state(n_qubits, backend)
+            return State.zero_state(n_qubits, backend)
 
-        if isinstance(initial_state, StateVector):
+        if isinstance(initial_state, State):
             if initial_state.n_qubits != n_qubits:
                 raise ValueError("initial_state.n_qubits 与电路 n_qubits 不一致")
             return initial_state
 
-        return StateVector(initial_state, n_qubits, backend)
+        return State(initial_state, n_qubits, backend)
 
     def _build_initial_density_matrix(
         self,
         n_qubits: int,
         backend,
         initial_density_matrix=None,
-    ) -> DensityMatrix:
+    ) -> State:
         if initial_density_matrix is None:
-            return DensityMatrix.zero_state(n_qubits, backend)
+            dim = 1 << n_qubits
+            rho = np.zeros((dim, dim), dtype=np.complex64)
+            rho[0, 0] = 1.0 + 0j
+            return State.from_matrix(rho, n_qubits, backend)
 
-        if isinstance(initial_density_matrix, DensityMatrix):
+        if isinstance(initial_density_matrix, State) and initial_density_matrix.is_density:
             if initial_density_matrix.n_qubits != n_qubits:
                 raise ValueError("initial_density_matrix.n_qubits 与电路 n_qubits 不一致")
             return initial_density_matrix
 
-        return DensityMatrix(initial_density_matrix, n_qubits, backend)
+        return State.from_matrix(initial_density_matrix, n_qubits, backend)
 
     def _circuit_unitary_on_backend(self, circuit, backend):
         """
@@ -299,7 +301,7 @@ class Measure:
         # target device/dtype, backend.cast can return without host round-trip.
         return backend.cast(unitary_raw)
 
-    def _evolve_state_vector_gatewise(self, circuit, sv0: StateVector, backend) -> StateVector:
+    def _evolve_state_vector_gatewise(self, circuit, sv0: State, backend) -> State:
         sv = sv0
         for gate in circuit_instructions(circuit):
             if _is_measure_gate(gate):
@@ -309,16 +311,16 @@ class Measure:
                 gm = gate_to_matrix(gate, cir_qubits=sv.n_qubits, backend=backend)
                 sv = sv.evolve(gm)
             else:
-                sv = StateVector(new_data, sv.n_qubits, backend, bit_order=sv.bit_order)
+                sv = State(new_data, sv.n_qubits, backend, bit_order=sv.bit_order)
         return sv
 
     def _evolve_density_matrix_gatewise(
         self,
         circuit,
-        rho0: DensityMatrix,
+        rho0: State,
         backend,
         noise_model=None,
-    ) -> DensityMatrix:
+    ) -> State:
         rho = rho0
         for gate in circuit_instructions(circuit):
             if _is_measure_gate(gate):
@@ -332,7 +334,7 @@ class Measure:
                     backend=backend,
                     gate_type=instruction_name(gate),
                 )
-                rho = DensityMatrix(rho_noisy, rho.n_qubits, backend)
+                rho = State(rho_noisy, rho.n_qubits, backend)
         return rho
 
     def run(
