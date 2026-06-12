@@ -258,8 +258,11 @@ class BasicVQE:
     def ansatz_state(self, params: np.ndarray) -> np.ndarray:
         if self.ansatz is not None:
             _, measurement = self._measure_circuit_exact(params, return_state=True)
-            final_state = None if measurement is None else measurement.final_state
-            return None if final_state is None else np.asarray(final_state)
+            # 取测量前的完整末态；shots>0 时 final_state 已是坍缩/约化后的态
+            state = None if measurement is None else getattr(measurement, "state", None)
+            if state is None and measurement is not None:
+                state = measurement.final_state
+            return None if state is None else np.asarray(state)
 
         theta = self._normalize_params(params)
         state = np.zeros(1 << self.n_qubits, dtype=np.complex128)

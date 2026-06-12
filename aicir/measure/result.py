@@ -14,7 +14,18 @@ import numpy as np
 
 @dataclass
 class Result:
-    """一次电路测量的统一结果容器。"""
+    """一次电路测量的统一结果容器。
+
+    字段语义（机制一，详见 README §4.1）：
+
+    - ``state``：测量前的完整末态（酉演化结果），不受采样影响；
+    - ``final_state``：测量后的量子态——
+      shots=None/0 时与 ``state`` 相同；
+      shots=1 时为坍缩后的态（子集读出时仅含未被测比特）；
+      shots>1 时为对被测比特求偏迹后的约化密度矩阵（无剩余比特则为 None）；
+    - ``output``：单次（shots=1）测量结果——被测比特上 Z⊗...⊗Z 关联测量
+      的本征值（+1 或 -1）；坍缩到的具体基态见 ``counts`` / ``final_state``。
+    """
 
     n_qubits: int
     backend_name: str
@@ -25,6 +36,8 @@ class Result:
     expectation_variances: Dict[str, float] = field(default_factory=dict)
     final_state: Optional[np.ndarray] = None
     metadata: Dict[str, object] = field(default_factory=dict)
+    state: Optional[np.ndarray] = None
+    output: Optional[object] = None
 
     def most_probable(self):
         idx = int(np.argmax(self.probabilities))

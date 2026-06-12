@@ -23,7 +23,7 @@ class StatevectorEstimator(BaseEstimator):
 
     def _expectation(self, circuit, observable) -> float:
         result = Measure(self.backend).run(circuit, shots=None, return_state=True)
-        state = self.backend.cast(result.final_state)
+        state = self.backend.cast(result.state)
         if hasattr(observable, "to_matrix"):
             matrix = observable.to_matrix(self.backend)
         else:

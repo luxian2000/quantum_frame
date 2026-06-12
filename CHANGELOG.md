@@ -2,6 +2,20 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-12
+
+### Added
+
+- `Result` 新增 `state` 字段：始终返回测量前的完整末态（SV 路径为态向量，DM 路径为 flatten 密度矩阵），不受采样影响。
+- `Result` 新增 `output` 字段：`shots=1` 单次测量结果——被测比特上 Z⊗…⊗Z 关联投影测量的本征值（±1，实现为对各被测比特分别做 Z 基投影后取乘积，与联合宇称测量的 ±1 分布一致且保证其余比特为纯态）；坍缩到的具体基态见 `counts` / `final_state`。
+- `result.metadata` 新增 `final_state_kind`（`'state_vector'`/`'density_matrix'`/`None`）与 `final_state_qubits`（`final_state` 所描述的比特下标）。
+
+### Changed
+
+- **破坏性**：`Measure.run`/`run_density_matrix` 的 `shots` 默认值由 `None` 改为 `1`；`shots=None`/`0` 表示不测量（无论是否传 `measure_qubits`）。
+- **破坏性**：`result.final_state` 语义由"演化末态"改为"测量后的态"：`shots=None`/`0` 时与 `state` 相同；`shots=1` 时为坍缩后的态（子集读出时仅含未被测比特）；`shots>1` 时为对被测比特求偏迹后的约化密度矩阵（SV 路径为 `(2^m, 2^m)` 二维，DM 路径为 flatten；读出全部比特时无剩余比特，为 `None`）。需要演化末态请改用 `result.state`（内部消费方 `BasicVQE.ansatz_state`、`StatevectorEstimator` 已随之切换）。
+- `shots` 为负数时显式抛出 `ValueError`。
+
 ## 2026-06-11
 
 ### Added
