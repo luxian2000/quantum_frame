@@ -3,7 +3,7 @@ from unittest import mock
 
 import numpy as np
 
-from aicir import NumpyBackend, State, StateVector, TorchBackend
+from aicir import NumpyBackend, State, TorchBackend
 
 
 class TestState(unittest.TestCase):
@@ -40,8 +40,11 @@ class TestState(unittest.TestCase):
         self.assertEqual(restored.bit_order, "msb")
         np.testing.assert_allclose(restored.to_numpy(), state.to_numpy())
 
-    def test_statevector_remains_alias(self):
-        self.assertIs(StateVector, State)
+    def test_legacy_names_removed(self):
+        with self.assertRaises(ImportError):
+            from aicir import StateVector  # noqa: F401
+        with self.assertRaises(ImportError):
+            from aicir import DensityMatrix  # noqa: F401
 
     def test_backend_native_tensor_construction_does_not_round_trip_through_numpy(self):
         backend = TorchBackend(device="cpu")
@@ -51,6 +54,6 @@ class TestState(unittest.TestCase):
             "to_numpy",
             side_effect=AssertionError("State should not copy backend-native tensors through NumPy"),
         ):
-            state = StateVector.zero_state(2, backend)
+            state = State.zero_state(2, backend)
 
         self.assertEqual(tuple(state.data.shape), (4, 1))

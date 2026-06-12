@@ -135,7 +135,41 @@ print(psi.format())  # 1/\sqrt{2}|00>+1/\sqrt{2}|11>
 
 如果直接调用 `StateVector(data, n_qubits, backend)`，构造器只检查形状，不会自动归一化；因此面向用户代码时优先使用 `from_array(...)`。
 
-### 2.3 从纯态构建密度矩阵
+### 2.3 打印量子态
+
+纯态可以直接 `print(psi)`，默认输出 ket 叠加形式；如果需要明确控制端序或过滤很小的振幅，可调用 `psi.format(...)`。需要数值数组时使用 `psi.to_numpy()`；需要测量概率时使用 `psi.probabilities()`。
+
+```python
+import numpy as np
+from aicir import NumpyBackend
+from aicir.core import StateVector
+
+backend = NumpyBackend()
+
+psi = StateVector.from_array(
+    np.array([1, 0, 0, 1], dtype=np.complex64),
+    n_qubits=2,
+    backend=backend,
+)
+
+print(psi)                 # 1/\sqrt{2}|00>+1/\sqrt{2}|11>
+print(psi.format())        # 1/\sqrt{2}|00>+1/\sqrt{2}|11>
+print(psi.to_numpy())      # 态向量的一维复数数组
+print(psi.probabilities()) # [0.5 0.  0.  0.5]
+```
+
+密度矩阵直接 `print(rho)` 会输出对象摘要；如果要查看完整矩阵、对角概率或纯度，分别使用 `rho.to_numpy()`、`rho.probabilities()`、`rho.purity()`。
+
+```python
+rho = psi.to_density_matrix()
+
+print(rho)                 # DensityMatrix(n_qubits=2, backend=NumpyBackend(dtype=complex64))
+print(rho.to_numpy())      # 2^n x 2^n 复数矩阵
+print(rho.probabilities()) # [0.5 0.  0.  0.5]
+print(rho.purity())        # 纯态密度矩阵约为 1.0
+```
+
+### 2.4 从纯态构建密度矩阵
 
 纯态可以直接转换为密度矩阵：
 
@@ -168,7 +202,7 @@ rho = DensityMatrix.from_array(
 )
 ```
 
-### 2.4 用指定初态执行线路
+### 2.5 用指定初态执行线路
 
 `Measure.run(...)` 可通过 `initial_state` 指定纯态初态；不需要采样时传 `shots=None`，返回值中的 `final_state` 就是线路演化后的完整末态。
 
@@ -198,7 +232,13 @@ result = Measure(backend).run(
     return_state=True,
 )
 
-print(result.final_state)
+# result.final_state 是 numpy 态向量；重新封装为 StateVector 后可按 ket 形式打印。
+final_psi = StateVector.from_array(
+    result.final_state,
+    n_qubits=result.n_qubits,
+    backend=backend,
+)
+print(final_psi.format())  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 ```
 
 密度矩阵路径可使用 `Measure.run_density_matrix(..., initial_density_matrix=...)`，适合噪声模型或混合态演化。

@@ -18,7 +18,6 @@ import numpy as np
 
 if TYPE_CHECKING:
     from ..channel.backends.base import Backend
-    from .density import DensityMatrix
 
 
 _MIXED_SENTINEL = object()
@@ -470,4 +469,3 @@ class State:
         )
 
 
-StateVector = State
