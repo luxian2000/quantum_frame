@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import torch
 
-from aicir import Circuit, Measure, TorchBackend, cnot, hadamard, measure, ry
+from aicir import Circuit, Measure, TorchBackend, cnot, hadamard, measure, pauli_x, reset, ry
 from aicir.channel.backends import NumpyBackend
 from aicir.channel.operators import Hamiltonian
 from aicir.core.circuit import crx, rxx, swap, toffoli
@@ -236,6 +236,36 @@ class TestMeasure(unittest.TestCase):
         result = self.measure.run(circ, shots=1000)
 
         self.assertEqual(result.metadata["measured_qubits"], [0])
+
+    def test_reset_sets_measured_qubit_to_zero(self):
+        circ = Circuit(pauli_x(0), measure(0), reset(0), n_qubits=1)
+
+        result = self.measure.run(circ, shots=None)
+
+        np.testing.assert_allclose(result.state.reshape(-1), [1.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(result.probabilities, [1.0, 0.0], atol=1e-6)
+
+    def test_reset_density_matrix_sets_measured_qubit_to_zero(self):
+        circ = Circuit(pauli_x(0), measure(0), reset(0), n_qubits=1)
+
+        result = self.measure.run_density_matrix(circ, shots=None)
+
+        np.testing.assert_allclose(
+            result.state.reshape(2, 2),
+            np.array([[1.0 + 0.0j, 0.0], [0.0, 0.0]], dtype=np.complex64),
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(result.probabilities, [1.0, 0.0], atol=1e-6)
+
+    def test_reset_requires_previous_measure_on_same_qubit(self):
+        with self.assertRaises(ValueError):
+            self.measure.run(Circuit(reset(0), n_qubits=1), shots=None)
+
+    def test_reset_rejects_gate_between_measure_and_reset(self):
+        circ = Circuit(measure(0), hadamard(0), reset(0), n_qubits=1)
+
+        with self.assertRaises(ValueError):
+            self.measure.run(circ, shots=None)
 
     def test_build_initial_state_rejects_density_form(self):
         """密度矩阵形态 State 传入态矢路径应抛出 TypeError。"""

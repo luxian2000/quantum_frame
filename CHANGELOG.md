@@ -12,6 +12,7 @@
 - `Result` 新增 `state` 字段：始终返回测量前的完整末态（SV 路径为态向量，DM 路径为 flatten 密度矩阵），不受采样影响。
 - `Result` 新增 `output` 字段：`shots=1` 单次测量结果——被测比特上 Z⊗…⊗Z 关联投影测量的本征值（±1，实现为对各被测比特分别做 Z 基投影后取乘积，与联合宇称测量的 ±1 分布一致且保证其余比特为纯态）；坍缩到的具体基态见 `counts` / `final_state`。
 - `result.metadata` 新增 `final_state_kind`（`'state_vector'`/`'density_matrix'`/`None`）与 `final_state_qubits`（`final_state` 所描述的比特下标）。
+- 新增线路内 `reset(*qubits)` 标记，与 `measure(*qubits)` 参数格式一致；每个 reset 目标必须先有同一比特的 `measure`，且二者之间不能有任何量子门作用于该比特。`Measure.run()`/`run_density_matrix()` 支持 reset 执行语义；matplotlib 线路图以与 `measure` 同色、标注 `Reset` 的虚线表示 reset，`Reset` 字号与 `Rz` 门主标签一致且虚线 dash 间距更大；虚线区间不叠加普通实线，没有后续量子门时延伸到线路末端；遇到 CNOT/SWAP 等无完整方框的后续门时，虚线停在虚拟方框左边界，虚拟方框内部恢复普通实线。
 
 ### Changed
 

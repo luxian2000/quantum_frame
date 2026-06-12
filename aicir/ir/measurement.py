@@ -1,4 +1,4 @@
-"""Typed measurement IR with compatibility helpers for measure gates."""
+"""Typed measurement/reset IR with compatibility helpers for circuit markers."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ _KNOWN_MEASUREMENT_KEYS = {
 
 @dataclass(frozen=True)
 class Measurement(LegacyGateView):
-    """Typed representation of an in-circuit measurement declaration."""
+    """Typed representation of an in-circuit measurement-like declaration."""
 
     qubits: tuple[int, ...] = ()
     measurement_type: str = "measure"
@@ -56,8 +56,8 @@ class Measurement(LegacyGateView):
         if not isinstance(gate, Mapping):
             raise TypeError("Measurement.from_dict expects a mapping")
         measurement_type = str(gate.get("type", "measure"))
-        if measurement_type.lower() not in {"measure", "measurement"}:
-            raise ValueError("measurement gate type must be 'measure' or 'measurement'")
+        if measurement_type.lower() not in {"measure", "measurement", "reset"}:
+            raise ValueError("measurement gate type must be 'measure', 'measurement', or 'reset'")
 
         if "qubits" in gate:
             qubits = _as_int_tuple(gate["qubits"], label="qubits")

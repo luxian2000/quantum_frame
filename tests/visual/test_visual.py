@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from aicir import Circuit, cnot, crz, cz, hadamard, rxx, rzz, rx, rz, s_gate, swap, toffoli, u2, u3
+from aicir import Circuit, cnot, crz, cz, hadamard, measure, reset, rxx, rzz, rx, rz, s_gate, swap, toffoli, u2, u3
 from aicir.visual import (
     circuit_to_text,
     draw_circuit,
@@ -26,6 +26,14 @@ def test_circuit_to_text_and_draw_circuit_text():
     assert "X" in diagram
     assert "Rzz" in diagram
     assert "pi/2" in diagram
+
+
+def test_circuit_to_text_shows_reset_marker():
+    circuit = Circuit(measure(0), reset(0), n_qubits=1)
+
+    diagram = circuit_to_text(circuit)
+
+    assert "|0>" in diagram
 
 
 def test_gate_histogram_counts_gate_types():
@@ -375,3 +383,81 @@ def test_plot_handles_measurement_and_unitary(plt):
 
     assert fig is ax.figure
     assert len(ax.patches) > 0
+
+
+def test_plot_handles_reset_marker(plt):
+    circuit = Circuit(measure(0), reset(0), n_qubits=1)
+
+    fig, ax = plot(circuit, save=False)
+
+    labels = [text.get_text() for text in ax.texts]
+    dashed = [line for line in ax.lines if line.get_linestyle() == "--"]
+    measure_edge = sys.modules["aicir.visual.plot"]._style_for("measure")[1]
+
+    assert fig is ax.figure
+    assert "Reset" in labels
+    assert "|0>" not in labels
+    assert len(dashed) == 1
+    assert dashed[0].get_color() == measure_edge
+
+
+def test_plot_draws_reset_as_dashed_link_before_next_gate(plt):
+    circuit = Circuit(measure(0), reset(0), rz(0.2, 0), n_qubits=1)
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    labels = [text.get_text() for text in ax.texts]
+    dashed = [line for line in ax.lines if line.get_linestyle() == "--"]
+    measure_edge = sys.modules["aicir.visual.plot"]._style_for("measure")[1]
+
+    assert fig is ax.figure
+    assert "Reset" in labels
+    assert "|0>" not in labels
+    assert len(dashed) == 1
+    assert dashed[0].get_color() == measure_edge
+    assert dashed[0]._unscaled_dash_pattern == (0, (5, 5))
+    np.testing.assert_allclose(dashed[0].get_xdata(), [0.0, 2.0], atol=1e-6)
+    np.testing.assert_allclose(dashed[0].get_ydata(), [0.0, 0.0], atol=1e-6)
+    text_by_label = {text.get_text(): text for text in ax.texts}
+    assert text_by_label["Reset"].get_fontsize() == pytest.approx(text_by_label["Rz"].get_fontsize())
+
+    solid_wire_overlaps = []
+    for line in ax.lines:
+        if line.get_linestyle() not in {"-", "solid"}:
+            continue
+        xdata = np.asarray(line.get_xdata(), dtype=float)
+        ydata = np.asarray(line.get_ydata(), dtype=float)
+        if xdata.shape != (2,) or ydata.shape != (2,):
+            continue
+        if not np.allclose(ydata, [0.0, 0.0], atol=1e-6):
+            continue
+        if min(xdata) <= 0.0 and max(xdata) >= 2.0:
+            solid_wire_overlaps.append(line)
+    assert solid_wire_overlaps == []
+
+
+@pytest.mark.parametrize("next_gate", [cnot(1, [0]), swap(0, 1)])
+def test_plot_reset_dash_stops_at_virtual_box_for_boxless_next_gate(plt, next_gate):
+    circuit = Circuit(measure(0), reset(0), next_gate, n_qubits=2)
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    box = sys.modules["aicir.visual.plot"]._BOX
+    dashed = [line for line in ax.lines if line.get_linestyle() == "--"]
+    solid_segments = []
+    for line in ax.lines:
+        if line.get_linestyle() not in {"-", "solid"}:
+            continue
+        xdata = np.asarray(line.get_xdata(), dtype=float)
+        ydata = np.asarray(line.get_ydata(), dtype=float)
+        if xdata.shape != (2,) or ydata.shape != (2,):
+            continue
+        if np.allclose(ydata, [1.0, 1.0], atol=1e-6):
+            solid_segments.append((min(xdata), max(xdata)))
+
+    expected_stop = 2.0 - box / 2
+    assert fig is ax.figure
+    assert len(dashed) == 1
+    np.testing.assert_allclose(dashed[0].get_xdata(), [0.0, expected_stop], atol=1e-6)
+    np.testing.assert_allclose(dashed[0].get_ydata(), [1.0, 1.0], atol=1e-6)
+    assert any(np.isclose(start, expected_stop) and end > 2.0 for start, end in solid_segments)

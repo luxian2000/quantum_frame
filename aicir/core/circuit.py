@@ -111,8 +111,13 @@ def _is_measure_gate(gate):
     return isinstance(gate, Mapping) and gate.get("type") in ("measure", "measurement")
 
 
+def _is_reset_gate(gate):
+    """True for in-circuit reset markers (see :func:`reset`)."""
+    return isinstance(gate, Mapping) and gate.get("type") == "reset"
+
+
 def _measure_gate_qubits(gate):
-    """Qubits a measure gate reads out; empty list means 'all qubits'."""
+    """Qubits a marker gate targets; empty list means 'all qubits'."""
     qubits = gate.get("qubits")
     if not qubits and "target_qubit" in gate:
         qubits = [gate["target_qubit"]]
@@ -122,10 +127,10 @@ def _measure_gate_qubits(gate):
 def _required_n_qubits_from_gate(gate):
     gate_type = canonical_gate_name(gate["type"])
 
-    if gate_type == "measure":
+    if gate_type in {"measure", "reset"}:
         measured = _measure_gate_qubits(gate)
-        # An empty measure() (read out all qubits) imposes no lower bound; the
-        # unitary gates determine the circuit width.
+        # An empty measure()/reset() (all qubits) imposes no lower bound; the
+        # other gates determine the circuit width.
         return (max(measured) + 1) if measured else 0
 
     if gate_type == "unitary":
@@ -350,6 +355,12 @@ def _gate_to_column(gate, n_qubits):
             angle_col[row_idx] = _angle_cell(label)
         return qubit_col, between_col, angle_col
 
+    if gate_type == "reset":
+        targets = _measure_gate_qubits(gate) or list(range(n_qubits))
+        for target in targets:
+            qubit_col[int(target)] = _symbol_cell("|0>")
+        return qubit_col, between_col, angle_col
+
     controls = [int(q) for q in gate.get("control_qubits", [])]
 
     if controls:
@@ -508,6 +519,8 @@ class Circuit:
         for gate in self.gates:
             if _is_measure_gate(gate):
                 continue
+            if _is_reset_gate(gate):
+                raise ValueError("reset 是非酉操作，不能用于 Circuit.unitary()/matrix()")
             gm = gate_to_matrix(gate, self.n_qubits, backend=backend)
             if backend is None:
                 circuit_matrix = np.matmul(gm, circuit_matrix)
@@ -701,13 +714,28 @@ def measure(*qubits):
     circuit normally and reads out the marked qubits at the end. It does not
     collapse the state mid-circuit.
     """
+    return Measurement(_flat_marker_qubits(qubits))
+
+
+def _flat_marker_qubits(qubits):
     flat = []
     for qubit in qubits:
         if isinstance(qubit, (list, tuple, set, range)):
             flat.extend(int(value) for value in qubit)
         else:
             flat.append(int(qubit))
-    return Measurement(tuple(flat))
+    return tuple(flat)
+
+
+def reset(*qubits):
+    """In-circuit reset marker.
+
+    Accepted argument forms match :func:`measure`: ``reset(0)``,
+    ``reset(0, 1)``, ``reset([0, 1])`` and ``reset()``. During execution, each
+    reset target must have a preceding ``measure`` marker on the same qubit, and
+    no quantum gate may touch that qubit between the matching measure and reset.
+    """
+    return Measurement(_flat_marker_qubits(qubits), measurement_type="reset")
 
 
 __all__ = [
@@ -740,4 +768,5 @@ __all__ = [
     "u3",
     "u2",
     "measure",
+    "reset",
 ]
