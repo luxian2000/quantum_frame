@@ -21,6 +21,9 @@ if TYPE_CHECKING:
     from .density import DensityMatrix
 
 
+_MIXED_SENTINEL = object()
+
+
 def _normalize_bit_order(bit_order: Optional[str], default: str = "msb") -> str:
     order = default if bit_order is None else bit_order.lower()
     if order not in {"lsb", "msb"}:
@@ -246,7 +249,9 @@ class State:
 
     @property
     def array(self):
-        """纯态返回 numpy (2^n,) 振幅向量；混合态返回 None。"""
+        """纯态返回 numpy (2^n,) 振幅向量；混合态返回 None（结果会缓存）。"""
+        if self._array_cache is _MIXED_SENTINEL:
+            return None
         if self._array_cache is not None:
             return self._array_cache
         if self._kind == "vector":
@@ -254,6 +259,7 @@ class State:
             return self._array_cache
         rho = self.matrix
         if not self.is_pure():
+            self._array_cache = _MIXED_SENTINEL
             return None
         evals, evecs = np.linalg.eigh(rho)
         idx = int(np.argmax(evals.real))
@@ -272,7 +278,10 @@ class State:
 
     @property
     def ket(self) -> str:
-        """可打印 Dirac 记号：纯态 Σaᵢ|i>；混合态 Σρ_ij|i><j|。"""
+        """可打印 Dirac 记号：纯态 Σaᵢ|i>；混合态 Σρ_ij|i><j|。
+
+        若需指定端序，请改用 format(bit_order=...)。
+        """
         return self.format()
 
     @property

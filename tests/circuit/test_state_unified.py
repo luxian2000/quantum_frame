@@ -91,3 +91,24 @@ def test_matrix_form_state_is_printable_via_str():
     s = State.from_matrix(rho)
     text = str(s)  # 不应抛异常
     assert "><" in text
+
+
+def test_mixed_state_ket_with_complex_offdiagonal_terms():
+    # 含复数非对角元的混合密度矩阵（|+y><+y| 与 |-y><-y| 的不等权混合，纯度≈0.58）
+    # 覆盖 _format_density_ket 复数分支
+    py = np.array([1, 1j], dtype=np.complex64) / np.sqrt(2)
+    my = np.array([1, -1j], dtype=np.complex64) / np.sqrt(2)
+    rho = (0.7 * np.outer(py, py.conj()) + 0.3 * np.outer(my, my.conj())).astype(np.complex64)
+    s = State.from_matrix(rho)
+    assert s.is_pure() is False  # 确认是混合态
+    ket = s.ket
+    # 所有四个矩阵元均非零，应全部出现
+    for sub in ("|0><0|", "|0><1|", "|1><0|", "|1><1|"):
+        assert sub in ket
+
+
+def test_array_none_is_memoized_for_mixed_state():
+    rho = np.array([[0.5, 0], [0, 0.5]], dtype=np.complex64)
+    s = State.from_matrix(rho)
+    assert s.array is None
+    assert s.array is None  # 第二次仍为 None（命中缓存路径）
