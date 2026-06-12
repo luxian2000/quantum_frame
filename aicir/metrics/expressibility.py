@@ -15,7 +15,7 @@ import numpy as np
 
 from ..channel.backends.base import Backend
 from ..core.circuit import Circuit
-from ..core.state import StateVector
+from ..core.state import State
 from ..ir import circuit_gate_dicts, circuit_instructions, instruction_name, instruction_parameter
 
 
@@ -76,7 +76,7 @@ def _replace_circuit_parameters(circuit: Circuit, params: np.ndarray) -> Circuit
     return Circuit(*gates_copy, n_qubits=circuit.n_qubits, backend=getattr(circuit, "backend", None))
 
 
-def _compute_fidelity(sv1: StateVector, sv2: StateVector, backend: Backend) -> float:
+def _compute_fidelity(sv1: State, sv2: State, backend: Backend) -> float:
     """
     计算两个量子态之间的保真度。
     
@@ -158,7 +158,7 @@ def KL_Haar_relative(
     total_params = _count_total_parameters(cir, param_indices)
 
     # ──────────── 第 2 步：初始态 ────────────────────────────
-    zero_state = StateVector.zero_state(n_qubits, backend)
+    zero_state = State.zero_state(n_qubits, backend)
 
     # ──────────── 第 3 步：采样保真度 ──────────────────────
     fidelity_list = []
@@ -279,7 +279,7 @@ def MMD_relative(
 
     # |+>^N = (1/sqrt(2^N)) * sum_i |i>
     plus_state_data = np.ones(dim, dtype=np.complex64) / np.sqrt(dim)
-    plus_state = StateVector.from_array(plus_state_data, n_qubits=n_qubits, backend=backend)
+    plus_state = State.from_array(plus_state_data, n_qubits=n_qubits, backend=backend)
 
     # X: 从参数化电路诱导分布采样得到的概率向量
     x_samples = np.zeros((samples, dim), dtype=np.float64)
