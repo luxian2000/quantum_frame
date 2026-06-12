@@ -16,6 +16,7 @@ import numpy as np
 from ..channel.backends.numpy_backend import NumpyBackend
 from ..channel.operators import Hamiltonian
 from ..core.circuit import Circuit
+from ..ir import circuit_gate_dicts
 from ..measure import Measure
 from ..qml.deriv import psr
 
@@ -257,8 +258,11 @@ class BasicVQE:
     def ansatz_state(self, params: np.ndarray) -> np.ndarray:
         if self.ansatz is not None:
             _, measurement = self._measure_circuit_exact(params, return_state=True)
-            final_state = None if measurement is None else measurement.final_state
-            return None if final_state is None else np.asarray(final_state)
+            # 取测量前的完整末态；shots>0 时 final_state 已是坍缩/约化后的态
+            state = None if measurement is None else getattr(measurement, "state", None)
+            if state is None and measurement is not None:
+                state = measurement.final_state
+            return None if state is None else np.asarray(state)
 
         theta = self._normalize_params(params)
         state = np.zeros(1 << self.n_qubits, dtype=np.complex128)
@@ -302,7 +306,7 @@ class BasicVQE:
             names = ", ".join(parameter.name for parameter in circuit.parameters)
             raise ValueError(f"ansatz circuit has unbound parameter(s): {names}")
         if circuit.backend is None and self.backend is not None:
-            circuit = Circuit(*list(circuit.gates), n_qubits=circuit.n_qubits, backend=self.backend)
+            circuit = Circuit(*circuit_gate_dicts(circuit), n_qubits=circuit.n_qubits, backend=self.backend)
         return circuit
 
     def _measure_circuit_exact(self, params: np.ndarray, *, return_state: bool) -> tuple[float, Any]:

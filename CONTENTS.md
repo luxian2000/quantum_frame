@@ -12,17 +12,23 @@ quantum_frame/
 |   |-- chemistry/
 |   |-- core/
 |   |   `-- io/
+|   |-- devices/
 |   |-- encoder/
 |   |   `-- demos/
+|   |-- gates/
+|   |-- ir/
 |   |-- measure/
 |   |-- metrics/
 |   |-- optimization/
 |   |   |-- qubo/
 |   |   `-- sb/
 |   |-- optimizer/
+|   |-- primitives/
 |   |-- qas/
 |   |   `-- demos/
 |   |-- qml/
+|   |-- transpile/
+|   |   `-- passes/
 |   |-- universal/
 |   |-- visual/
 |   |-- vqc/

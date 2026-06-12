@@ -9,13 +9,13 @@ from __future__ import annotations
 import argparse
 import numpy as np
 
-from aicir import Circuit, NumpyBackend, StateVector, cnot, hadamard, rz
+from aicir import Circuit, NumpyBackend, State, cnot, hadamard, rz
 from aicir.visual import plot_state_amplitudes, plot_state_phase, plot_state_probs
 
 from ._visual_demo_utils import add_common_visual_args, configure_matplotlib, save_figure
 
 
-def build_bell_phase_state() -> StateVector:
+def build_bell_phase_state() -> State:
     backend = NumpyBackend()
     circuit = Circuit(
         hadamard(0),
@@ -24,7 +24,7 @@ def build_bell_phase_state() -> StateVector:
         n_qubits=2,
         backend=backend,
     )
-    return StateVector.zero_state(2, backend).evolve(circuit.unitary())
+    return State.zero_state(2, backend).evolve(circuit.unitary())
 
 
 def main() -> None:

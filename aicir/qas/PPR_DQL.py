@@ -27,6 +27,7 @@ import torch.nn as nn
 from ..core.circuit import Circuit
 from ..core.gates import gate_to_matrix
 from ..core.state import State
+from ..ir import instruction_name, instruction_to_gate_dict
 
 
 def _normalize_state_vector(vector: np.ndarray) -> np.ndarray:
@@ -75,10 +76,10 @@ def _fidelity(current: np.ndarray, target: np.ndarray) -> float:
 def _validate_action_gates(action_gates: Sequence[Dict[str, Any]], n_qubits: int) -> List[Dict[str, Any]]:
     checked: List[Dict[str, Any]] = []
     for gate in action_gates:
-        if gate.get("type") == "unitary":
+        if instruction_name(gate) == "unitary":
             raise ValueError("action_gates 不能包含 unitary 门")
         gate_to_matrix(gate, cir_qubits=n_qubits, backend=None)
-        checked.append(dict(gate))
+        checked.append(instruction_to_gate_dict(gate))
     if not checked:
         raise ValueError("action_gates 不能为空")
     return checked

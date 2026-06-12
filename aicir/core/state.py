@@ -1,12 +1,13 @@
 """
 aicir/core/state.py
 
-纯量子态 |ψ⟩ 的面向对象封装。
+量子态的统一面向对象封装：纯态（向量形态 (2^n,1)）与混合态（密度矩阵形态 (2^n,2^n)）。
 
 设计原则：
-- 内部数据始终保持列向量形式，shape (2^n, 1)
+- 向量形态内部数据 shape (2^n, 1)，密度矩阵形态 shape (2^n, 2^n)，均为复数类型
 - 所有数值运算委托给注入的 Backend 实例
 - 返回新对象而非原地修改（不可变风格），便于函数式组合
+- `.array` / `.matrix` / `.ket` 提供统一的用户访问接口
 """
 
 from __future__ import annotations
@@ -17,7 +18,9 @@ import numpy as np
 
 if TYPE_CHECKING:
     from ..channel.backends.base import Backend
-    from .density import DensityMatrix
+
+
+_MIXED_SENTINEL = object()
 
 
 def _normalize_bit_order(bit_order: Optional[str], default: str = "msb") -> str:
@@ -70,11 +73,87 @@ def _format_amplitude(value: complex, tol: float) -> str:
     return f"({real:.6g}{sign}{abs(imag):.6g}j)"
 
 
+def _format_ket(amplitudes, n_qubits: int, bit_order: str, atol: float = 1e-6) -> str:
+    """Σ aᵢ|i> 形式。"""
+    terms = []
+    for idx, amplitude in enumerate(amplitudes):
+        if abs(amplitude) < atol:
+            continue
+        coeff = _format_amplitude(amplitude, atol)
+        label = _basis_label(idx, n_qubits, bit_order)
+        terms.append(f"{coeff}|{label}>")
+    if not terms:
+        return "0"
+    expr = terms[0]
+    for term in terms[1:]:
+        expr += term if term.startswith("-") else f"+{term}"
+    return expr
+
+
+def _format_density_amplitude(value: complex, tol: float) -> str:
+    """密度矩阵元素的格式化：实数用十进制，不使用 sqrt 启发式。"""
+    real = float(np.real(value))
+    imag = float(np.imag(value))
+    if abs(imag) < tol:
+        if abs(real - 1.0) < tol:
+            return "1"
+        if abs(real + 1.0) < tol:
+            return "-1"
+        return f"{real:.6g}"
+    if abs(real) < tol:
+        if abs(imag - 1.0) < tol:
+            return "1j"
+        if abs(imag + 1.0) < tol:
+            return "-1j"
+        return f"{imag:.6g}j"
+    sign = "+" if imag >= 0 else "-"
+    return f"({real:.6g}{sign}{abs(imag):.6g}j)"
+
+
+def _format_density_ket(matrix, n_qubits: int, bit_order: str, atol: float = 1e-6) -> str:
+    """Σ ρ_ij|i><j| 形式（遍历所有非零矩阵元）。"""
+    terms = []
+    dim = matrix.shape[0]
+    for i in range(dim):
+        for j in range(dim):
+            val = matrix[i, j]
+            if abs(val) < atol:
+                continue
+            coeff = _format_density_amplitude(val, atol)
+            li = _basis_label(i, n_qubits, bit_order)
+            lj = _basis_label(j, n_qubits, bit_order)
+            terms.append(f"{coeff}|{li}><{lj}|")
+    if not terms:
+        return "0"
+    expr = terms[0]
+    for term in terms[1:]:
+        expr += term if term.startswith("-") else f"+{term}"
+    return expr
+
+
+def _infer_n_qubits(dim: int) -> int:
+    if dim <= 0:
+        raise ValueError(f"维数 {dim} 必须为正整数")
+    n = dim.bit_length() - 1
+    if (1 << n) != dim:
+        raise ValueError(f"维数 {dim} 不是 2 的幂")
+    return n
+
+
+def _default_backend():
+    from ..channel.backends import NumpyBackend
+    return NumpyBackend()
+
+
 class State:
     """
-    纯量子态 |ψ⟩ 的面向对象封装。
+    量子态的面向对象封装，同时支持纯态（向量形态）与混合态（密度矩阵形态）。
 
-    形状约定：内部数据 shape (2^n, 1)，复数类型。
+    形状约定：
+    - 向量形态：内部数据 shape (2^n, 1)，复数类型
+    - 密度矩阵形态：内部数据 shape (2^n, 2^n)，复数类型
+
+    用户接口属性：`.array`（纯态振幅向量）、`.matrix`（密度矩阵）、`.ket`（Dirac 记号字符串）。
 
     示例::
 
@@ -82,83 +161,127 @@ class State:
         from aicir.core import State
 
         bk = GPUBackend()
-        sv = State.zero_state(2, bk)                # |00⟩
+        sv = State.zero_state(2, bk)                # |00⟩（向量形态）
         U  = ...                                    # 某个 4×4 酉矩阵
         sv2 = sv.evolve(U)                          # |ψ'⟩ = U|ψ⟩
+        print(sv2.ket)                              # Dirac 记号
         print(sv2.probabilities())
         print(sv2.measure(shots=1024))
     """
 
-    def __init__(self, data, n_qubits: int, backend: "Backend", bit_order: str = "msb"):
+    def __init__(self, data, n_qubits: int, backend: "Backend" = None, bit_order: str = "msb"):
         """
         参数:
-            data:     后端张量，shape (2^n, 1) 或 (2^n,)
+            data:     后端张量。1D/(2^n,1) 视为纯态向量；(2^n,2^n) 视为密度矩阵
             n_qubits: 量子比特数
-            backend:  计算后端实例
+            backend:  计算后端实例；None 时使用默认 NumpyBackend
         """
-        self._backend = backend
+        self._backend = backend if backend is not None else _default_backend()
         self._n_qubits = n_qubits
         self._bit_order = _normalize_bit_order(bit_order)
+        self._array_cache = None
+        self._matrix_cache = None
 
-        if hasattr(data, "ndim") and data.ndim == 1:
-            data = data.reshape(-1, 1)
-
-        casted = backend.cast(data)
+        casted = self._backend.cast(data)
         if casted is None:
             raise TypeError("backend.cast 返回了 None，无法构造 State")
-        if len(casted.shape) == 1:
+        shape = tuple(int(axis) for axis in casted.shape)
+        dim = 1 << n_qubits
+
+        if len(shape) == 2 and shape[0] == dim and shape[1] == dim and dim > 1:
+            self._kind = "matrix"
+            self._data = casted
+            return
+
+        if len(shape) == 1:
             casted = casted.reshape(-1, 1)
+            shape = tuple(int(axis) for axis in casted.shape)
+        elif len(shape) == 2 and shape[1] != 1:
+            raise ValueError(f"无法识别的数据形状 {shape}（n_qubits={n_qubits}）")
+        self._kind = "vector"
+        if shape[0] != dim:
+            raise ValueError(
+                f"数据长度 {shape[0]} 与 n_qubits={n_qubits} 不符（期望 {dim}）"
+            )
         self._data = casted
 
-        expected = 1 << n_qubits
-        if self._data.shape[0] != expected:
-            raise ValueError(
-                f"数据长度 {self._data.shape[0]} 与 n_qubits={n_qubits} 不符（期望 {expected}）"
-            )
-
     @classmethod
-    def zero_state(
-        cls,
-        n_qubits: int,
-        backend: "Backend",
-        bit_order: str = "msb",
-    ) -> "State":
-        """创建 |0⊗n⟩ 计算基基态。"""
+    def zero_state(cls, n_qubits: int, backend: "Backend" = None, bit_order: str = "msb") -> "State":
+        """创建 |0⊗n⟩ 计算基基态（向量形态）。"""
+        backend = backend if backend is not None else _default_backend()
         data = backend.zeros_state(n_qubits)
         return cls(data, n_qubits, backend, bit_order=bit_order)
 
     @classmethod
-    def from_array(
-        cls,
-        array,
-        n_qubits: int,
-        backend: "Backend",
-        bit_order: str = "msb",
-    ) -> "State":
-        """
-        从 numpy array / list 构造态向量（自动归一化）。
-
-        参数:
-            array:    长度为 2^n 的一维或 (2^n,1) 的复数序列（无需预先归一化）
-            n_qubits: 量子比特数
-            backend:  计算后端
-            bit_order: 基态标签端序
-        """
-        np_array = np.asarray(array, dtype=np.complex64)
-        
-        # 计算范数并进行自动归一化
+    def from_array(cls, array, n_qubits: int = None, backend: "Backend" = None, bit_order: str = "msb") -> "State":
+        """从 numpy array / list 构造态向量（自动归一化）。n_qubits 省略时由长度推断。"""
+        backend = backend if backend is not None else _default_backend()
+        np_array = np.asarray(array, dtype=np.complex64).reshape(-1)
+        if n_qubits is None:
+            n_qubits = _infer_n_qubits(np_array.shape[0])
         norm = float(np.linalg.norm(np_array))
         if norm <= 0:
             raise ValueError("输入数组范数必须大于 0")
-        normalized = np_array / norm
-        
-        data = backend.cast(normalized)
+        data = backend.cast(np_array / norm)
         return cls(data, n_qubits, backend, bit_order=bit_order)
+
+    @classmethod
+    def from_matrix(cls, matrix, n_qubits: int = None, backend: "Backend" = None) -> "State":
+        """从密度矩阵 (2^n,2^n) 构造混合/纯态（matrix 形态）。n_qubits 省略时由形状推断。"""
+        backend = backend if backend is not None else _default_backend()
+        np_m = np.asarray(matrix, dtype=np.complex64)
+        if np_m.ndim != 2 or np_m.shape[0] != np_m.shape[1]:
+            raise ValueError("from_matrix 需要方阵 (2^n, 2^n)")
+        if n_qubits is None:
+            n_qubits = _infer_n_qubits(np_m.shape[0])
+        return cls(backend.cast(np_m), n_qubits, backend)
+
+    @property
+    def is_density(self) -> bool:
+        """当前是否以密度矩阵形态存储。"""
+        return self._kind == "matrix"
 
     @property
     def data(self):
-        """后端原生张量，shape (2^n, 1)。"""
+        """后端原生张量。向量形态 shape (2^n, 1)；密度矩阵形态 shape (2^n, 2^n)。"""
         return self._data
+
+    @property
+    def array(self):
+        """纯态返回 numpy (2^n,) 振幅向量；混合态返回 None（结果会缓存）。"""
+        if self._array_cache is _MIXED_SENTINEL:
+            return None
+        if self._array_cache is not None:
+            return self._array_cache
+        if self._kind == "vector":
+            self._array_cache = self._backend.to_numpy(self._data).reshape(-1)
+            return self._array_cache
+        rho = self.matrix
+        if not self.is_pure():
+            self._array_cache = _MIXED_SENTINEL
+            return None
+        evals, evecs = np.linalg.eigh(rho)
+        idx = int(np.argmax(evals.real))
+        vec = evecs[:, idx]
+        nz = int(np.argmax(np.abs(vec) > 1e-9))
+        phase = np.exp(-1j * np.angle(vec[nz])) if abs(vec[nz]) > 0 else 1.0
+        self._array_cache = (vec * phase).astype(np.complex64)
+        return self._array_cache
+
+    @property
+    def matrix(self) -> np.ndarray:
+        """恒返回 numpy (2^n, 2^n) 密度矩阵。"""
+        if self._matrix_cache is None:
+            self._matrix_cache = self._backend.to_numpy(self._matrix_data())
+        return self._matrix_cache
+
+    @property
+    def ket(self) -> str:
+        """可打印 Dirac 记号：纯态 Σaᵢ|i>；混合态 Σρ_ij|i><j|。
+
+        若需指定端序，请改用 format(bit_order=...)。
+        """
+        return self.format()
 
     @property
     def n_qubits(self) -> int:
@@ -180,40 +303,41 @@ class State:
         """当前状态采用的基态标签端序。"""
         return self._bit_order
 
-    def evolve(self, unitary) -> "State":
-        """
-        将酉矩阵作用于当前态，返回新的 State（不修改原对象）。
+    def _matrix_data(self):
+        """返回密度矩阵形态的后端原生张量（向量形态时计算 |ψ><ψ|）。"""
+        if self._kind == "matrix":
+            return self._data
+        bk = self._backend
+        return bk.matmul(self._data, bk.dagger(self._data))
 
-        参数:
-            unitary: (2^n, 2^n) 酉矩阵（后端原生张量）
-        返回:
-            State — 演化后的新态
-        """
-        new_data = self._backend.apply_unitary(self._data, unitary)
-        return State(new_data, self._n_qubits, self._backend, bit_order=self._bit_order)
+    def evolve(self, unitary) -> "State":
+        """酉演化：向量形态 U|ψ⟩；矩阵形态 UρU†。返回新 State。"""
+        bk = self._backend
+        if self._kind == "vector":
+            new_data = bk.apply_unitary(self._data, unitary)
+        else:
+            new_data = bk.matmul(bk.matmul(unitary, self._data), bk.dagger(unitary))
+        return State(new_data, self._n_qubits, bk, bit_order=self._bit_order)
 
     def probabilities(self):
-        """
-        计算计算基上的测量概率分布。
-
-        返回:
-            shape (2^n,) 实数概率向量（后端原生张量），总和为 1
-        """
-        return self._backend.measure_probs(self._data)
+        """计算基测量概率。向量形态返回后端张量；矩阵形态返回 numpy 数组。调用方不应假定返回类型为后端张量。"""
+        if self._kind == "vector":
+            return self._backend.measure_probs(self._data)
+        diag = self._backend.to_numpy(self._backend.real(self._data.diagonal()))
+        diag = np.clip(np.asarray(diag), 0, None)
+        total = diag.sum()
+        return diag / total if total > 0 else diag
 
     def measure(self, shots: int = 1024, bit_order: Optional[str] = None) -> Dict[str, int]:
-        """
-        模拟 shots 次投影测量，返回各基态出现次数。
-
-        参数:
-            shots: 测量次数（正整数）
-        返回:
-            {"|00⟩": count, "|11⟩": count, ...} 字典（仅含非零项）
-        """
+        """模拟 shots 次测量，返回各基态计数（仅非零项）。"""
         order = _normalize_bit_order(bit_order, default=self._bit_order)
-        probs = self.probabilities()
-        counts_arr = self._backend.sample(probs, shots)
-        counts_np = self._backend.to_numpy(counts_arr).astype(int).reshape(-1)
+        if self._kind == "vector":
+            counts_arr = self._backend.sample(self.probabilities(), shots)
+            counts_np = self._backend.to_numpy(counts_arr).astype(int).reshape(-1)
+        else:
+            probs = self.probabilities()
+            indices = np.random.choice(len(probs), size=shots, p=probs)
+            counts_np = np.bincount(indices, minlength=len(probs))
         return {
             f"|{_basis_label(idx, self._n_qubits, order)}>": int(c)
             for idx, c in enumerate(counts_np)
@@ -221,54 +345,47 @@ class State:
         }
 
     def expectation(self, operator) -> float:
-        """
-        计算期望值 ⟨ψ|O|ψ⟩，返回实数。
-
-        参数:
-            operator: (2^n, 2^n) Hermitian 算符（后端原生张量）
-        """
-        value = self._backend.expectation_sv(self._data, operator)
+        """期望值：向量形态 ⟨ψ|O|ψ⟩；矩阵形态 Tr(ρO)。"""
+        if self._kind == "vector":
+            value = self._backend.expectation_sv(self._data, operator)
+        else:
+            value = self._backend.expectation_dm(self._data, operator)
         if value is None:
-            raise TypeError("backend.expectation_sv 返回了 None")
+            raise TypeError("backend expectation 返回了 None")
         return float(value)
 
     def inner_product(self, other: "State"):
         """
-        计算内积 ⟨self|other⟩。
+        计算内积 ⟨self|other⟩（仅适用于向量形态纯态）。
+
+        矩阵形态不支持此操作：对密度矩阵调用此方法会静默计算
+        Tr(ρ†σ)（Hilbert–Schmidt 内积）而非量子态内积，因此予以拒绝。
+        密度矩阵的相关量请改用 expectation / purity 等方法。
 
         返回:
             复数标量张量
         """
+        if self._kind == "matrix" or other._kind == "matrix":
+            raise TypeError("inner_product 仅支持向量形态纯态；密度矩阵请改用 expectation / purity 等")
         if self._n_qubits != other._n_qubits:
             raise ValueError("内积要求两态具有相同 n_qubits")
         return self._backend.inner_product(self._data, other._data)
 
     def format(self, bit_order: Optional[str] = None, atol: float = 1e-6) -> str:
-        """
-        以 ket 叠加形式格式化量子态，例如：1/\\sqrt{2}|00>+1/\\sqrt{2}|11>。
-        """
+        """格式化为 Dirac 记号。纯态用 ket 叠加；混合态用 ρ_ij|i><j| 展开。"""
         order = _normalize_bit_order(bit_order, default=self._bit_order)
-        amplitudes = self.to_numpy()
-        terms = []
-        for idx, amplitude in enumerate(amplitudes):
-            if abs(amplitude) < atol:
-                continue
-            coeff = _format_amplitude(amplitude, atol)
-            label = _basis_label(idx, self._n_qubits, order)
-            terms.append(f"{coeff}|{label}>")
-
-        if not terms:
-            return "0"
-
-        expression = terms[0]
-        for term in terms[1:]:
-            expression += term if term.startswith("-") else f"+{term}"
-        return expression
+        arr = self.array
+        if arr is None:
+            return _format_density_ket(self.matrix, self._n_qubits, order, atol)
+        return _format_ket(arr, self._n_qubits, order, atol)
 
     def reorder_endianness(self, bit_order: str) -> "State":
         """
         在 LSB / MSB 约定之间转换底层基态顺序，并返回新状态。
+        仅向量形态支持；矩阵形态会抛出 TypeError。
         """
+        if self._kind == "matrix":
+            raise TypeError("矩阵形态 State 不支持端序重排；请先取纯态向量")
         target_order = _normalize_bit_order(bit_order)
         if target_order == self._bit_order or self._n_qubits <= 1:
             return State(self._data, self._n_qubits, self._backend, bit_order=target_order)
@@ -296,25 +413,55 @@ class State:
     def norm(self) -> float:
         """
         计算态向量的范数（归一化时应约等于 1.0）。
+        矩阵形态下返回对角线归一化结果（恒约为 1.0）。
         """
         probs_np = self._backend.to_numpy(self.probabilities()).real
         return float(probs_np.sum()) ** 0.5
 
-    def to_density_matrix(self) -> "DensityMatrix":
-        """
-        将纯态转换为密度矩阵 ρ = |ψ⟩⟨ψ|。
-        """
-        from .density import DensityMatrix
-
+    def partial_trace(self, keep) -> "State":
+        """对子系统求偏迹，返回 matrix 形态 State（形状 2^k×2^k，k=len(keep)）。"""
         bk = self._backend
-        rho = bk.matmul(self._data, bk.dagger(self._data))
-        return DensityMatrix(rho, self._n_qubits, bk)
+        rho_red = bk.partial_trace(self._matrix_data(), keep, self._n_qubits)
+        return State(rho_red, len(keep), bk)
+
+    def purity(self) -> float:
+        """纯度 Tr(ρ²)。向量形态恒为 1.0。"""
+        if self._kind == "vector":
+            return 1.0
+        bk = self._backend
+        val = bk.trace(bk.matmul(self._data, self._data))
+        return float(np.real(bk.to_numpy(val)))
+
+    def eigenvalues(self) -> np.ndarray:
+        """密度矩阵特征值（升序），numpy array。"""
+        return np.linalg.eigvalsh(self._backend.to_numpy(self._matrix_data()))
+
+    def von_neumann_entropy(self) -> float:
+        """冯·诺依曼熵 S(ρ) = -Tr(ρ ln ρ)。"""
+        eigs = self.eigenvalues()
+        eigs = eigs[eigs > 1e-15]
+        return float(-np.sum(eigs * np.log(eigs)))
+
+    def is_pure(self, tol: float = 1e-5) -> bool:
+        """是否纯态（purity ≈ 1）。"""
+        return abs(self.purity() - 1.0) < tol
+
+    @classmethod
+    def maximally_mixed(cls, n_qubits: int, backend: "Backend" = None) -> "State":
+        """最大混合态 ρ = I / 2^n（matrix 形态）。"""
+        backend = backend if backend is not None else _default_backend()
+        dim = 1 << n_qubits
+        rho_np = np.eye(dim, dtype=np.complex64) / dim
+        return cls(backend.cast(rho_np), n_qubits, backend)
+
+    def to_density_matrix(self) -> "State":
+        """转为密度矩阵形态 State：ρ = |ψ⟩⟨ψ|（向量形态）或原样（矩阵形态）。"""
+        return State(self._matrix_data(), self._n_qubits, self._backend)
 
     def to_numpy(self) -> np.ndarray:
-        """
-        导出为 numpy 一维复数数组，shape (2^n,)。
-        """
-        return self._backend.to_numpy(self._data).reshape(-1)
+        """向量形态导出 (2^n,)；矩阵形态导出 (2^n, 2^n)。"""
+        arr = self._backend.to_numpy(self._data)
+        return arr.reshape(-1) if self._kind == "vector" else arr
 
     def __len__(self) -> int:
         return self.dim
@@ -329,4 +476,3 @@ class State:
         )
 
 
-StateVector = State

@@ -32,6 +32,7 @@ from ..channel.backends.npu_backend import NPUBackend
 from ..channel.operators import Hamiltonian
 from ..core.circuit import Circuit, cx, hadamard, rx, ry, rz, rzz
 from ..core.gates import apply_gate_to_state, gate_to_matrix
+from ..ir import circuit_instructions
 from ..qml.deriv import psr
 
 
@@ -532,7 +533,7 @@ class Supernet:
         return state
 
     def simulate_state(self, circuit: Circuit, initial_state: torch.Tensor | None = None) -> torch.Tensor:
-        return self._simulate_gates(circuit.gates, initial_state=initial_state)
+        return self._simulate_gates(circuit_instructions(circuit), initial_state=initial_state)
 
     def _readout_indices(self, qubit: int = 0) -> torch.Tensor:
         qubit = int(qubit)

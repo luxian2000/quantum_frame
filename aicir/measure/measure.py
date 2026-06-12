@@ -6,21 +6,20 @@ aicir/measure/measure.py
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from ..core.gates import apply_gate_to_state, gate_to_matrix
-from ..core.density import DensityMatrix
-from ..core.state import StateVector
+from ..core.state import State
+from ..ir import circuit_instructions, has_circuit_instructions, instruction_name, instruction_qubits
 from .result import Result
 from .sampler import Sampler
 
 
 def _is_measure_gate(gate) -> bool:
     """True for in-circuit measurement markers (see :func:`aicir.measure`)."""
-    return isinstance(gate, Mapping) and gate.get("type") in ("measure", "measurement")
+    return instruction_name(gate).lower() in {"measure", "measurement"}
 
 
 def _readout_qubits(circuit, n_qubits: int) -> Tuple[bool, List[int]]:
@@ -33,14 +32,13 @@ def _readout_qubits(circuit, n_qubits: int) -> Tuple[bool, List[int]]:
     """
     measured: set[int] = set()
     has_measure = False
-    for gate in getattr(circuit, "gates", []):
+    if not has_circuit_instructions(circuit):
+        return False, list(range(n_qubits))
+    for gate in circuit_instructions(circuit):
         if not _is_measure_gate(gate):
             continue
         has_measure = True
-        qubits = gate.get("qubits")
-        if not qubits and "target_qubit" in gate:
-            qubits = [gate["target_qubit"]]
-        measured.update(int(q) for q in (qubits or []))
+        measured.update(int(q) for q in instruction_qubits(gate))
     if not has_measure or not measured:
         return has_measure, list(range(n_qubits))
     return True, sorted(measured)
@@ -107,11 +105,133 @@ def _marginal_counts(probs_np, n_qubits: int, qubits: List[int], backend, shots:
     for qubit in qubits:  # qubit q occupies bit (n-1-q) of the full index
         sub = (sub << 1) | ((index >> (n_qubits - 1 - qubit)) & 1)
     marginal = np.zeros(1 << k, dtype=np.float64)
-    np.add.at(marginal, sub, np.asarray(probs_np, dtype=np.float64).reshape(-1))
+    np.add.at(marginal, sub, np.asarray(probs_np).real.astype(np.float64).reshape(-1))
 
     counts_vec = backend.sample(backend.cast(marginal), shots)
     counts_np = backend.to_numpy(counts_vec).astype(int).reshape(-1)
     return {f"|{idx:0{k}b}>": int(c) for idx, c in enumerate(counts_np) if c > 0}
+
+
+def _single_outcome_index(counts: Dict[str, int]) -> int:
+    """从 shots=1 的计数字典中取出唯一测量结果对应的整数下标。"""
+    label = next(iter(counts))
+    return int(label.strip("|>"), 2)
+
+
+def _parity_eigenvalue(outcome: int) -> int:
+    """Z⊗...⊗Z 关联测量本征值：测得 1 的个数为偶数时 +1，否则 -1。"""
+    return 1 if bin(outcome).count("1") % 2 == 0 else -1
+
+
+def _collapse_state_vector(psi_np, n_qubits: int, readout: List[int], outcome: int):
+    """单次投影测量后的坍缩态向量。
+
+    全比特读出时返回保留原相位的基态；子集读出时各被测比特分别沿 Z 基
+    坍缩，返回其余比特（下标升序）的归一化纯态，shape ``(2^m, 1)``。
+    """
+    psi = np.asarray(psi_np).reshape(-1)
+    k = len(readout)
+    if k == n_qubits:
+        amp = psi[outcome]
+        phase = amp / abs(amp) if abs(amp) > 0 else 1.0
+        collapsed = np.zeros_like(psi)
+        collapsed[outcome] = phase
+        return collapsed.reshape(-1, 1)
+
+    tensor = psi.reshape([2] * n_qubits)
+    slices: List[object] = [slice(None)] * n_qubits
+    for j, qubit in enumerate(readout):  # 子串 MSB 对应 readout 中最小的比特
+        slices[qubit] = (outcome >> (k - 1 - j)) & 1
+    sub = np.ascontiguousarray(tensor[tuple(slices)]).reshape(-1, 1)
+    return sub / np.linalg.norm(sub)
+
+
+def _reduced_density_from_state(psi_np, n_qubits: int, traced_out: List[int]):
+    """纯态对 traced_out 比特求偏迹，返回其余比特的约化密度矩阵 ``(2^m, 2^m)``。"""
+    psi = np.asarray(psi_np).reshape([2] * n_qubits)
+    remaining = [q for q in range(n_qubits) if q not in set(traced_out)]
+    mat = np.transpose(psi, remaining + list(traced_out)).reshape(1 << len(remaining), -1)
+    return mat @ mat.conj().T
+
+
+def _collapse_density_matrix(rho_np, n_qubits: int, readout: List[int], outcome: int):
+    """单次投影测量后的密度矩阵坍缩。
+
+    全比特读出时返回 ``|outcome><outcome|``；子集读出时把被测比特投影到
+    测得值并归一化，同时迹掉被测比特，返回其余比特的密度矩阵。
+    """
+    dim = 1 << n_qubits
+    rho = np.asarray(rho_np).reshape(dim, dim)
+    k = len(readout)
+    if k == n_qubits:
+        collapsed = np.zeros_like(rho)
+        collapsed[outcome, outcome] = 1.0
+        return collapsed
+
+    tensor = rho.reshape([2] * (2 * n_qubits))
+    slices: List[object] = [slice(None)] * (2 * n_qubits)
+    for j, qubit in enumerate(readout):
+        bit = (outcome >> (k - 1 - j)) & 1
+        slices[qubit] = bit
+        slices[n_qubits + qubit] = bit
+    m = n_qubits - k
+    sub = np.ascontiguousarray(tensor[tuple(slices)]).reshape(1 << m, 1 << m)
+    return sub / np.trace(sub)
+
+
+def _reduced_density_from_density(rho_np, n_qubits: int, traced_out: List[int]):
+    """密度矩阵对 traced_out 比特求偏迹，返回其余比特的约化密度矩阵。"""
+    dim = 1 << n_qubits
+    rho = np.asarray(rho_np).reshape(dim, dim).reshape([2] * (2 * n_qubits))
+    remaining = [q for q in range(n_qubits) if q not in set(traced_out)]
+    perm = (
+        remaining
+        + list(traced_out)
+        + [n_qubits + q for q in remaining]
+        + [n_qubits + q for q in traced_out]
+    )
+    m, k = len(remaining), len(traced_out)
+    t = np.transpose(rho, perm).reshape(1 << m, 1 << k, 1 << m, 1 << k)
+    return np.einsum("akbk->ab", t)
+
+
+def _resolve_post_measurement(
+    use_shots: int,
+    n_qubits: int,
+    readout: List[int],
+    counts: Optional[Dict[str, int]],
+    state_np,
+    state_kind: str,
+    collapse_fn,
+    reduce_fn,
+):
+    """按 shots 语义解析 ``(final_state, output, final_state_kind, final_state_qubits)``。
+
+    - use_shots=0：不测量，final_state 即测量前末态 state；
+    - use_shots=1：单次投影测量；output 为被测比特上 Z⊗...⊗Z 的本征值（±1），
+      子集读出时 final_state 仅含未被测比特（坍缩到的基态见 counts）；
+    - use_shots>1：final_state 为对被测比特求偏迹的约化密度矩阵；
+      全比特读出时无剩余比特，final_state 为 None。
+
+    ``state_np`` 为 None（return_state=False）时不计算任何末态，仅产出 output。
+    """
+    full_readout = len(readout) == n_qubits
+    remaining = [q for q in range(n_qubits) if q not in set(readout)]
+
+    if use_shots == 0:
+        return state_np, None, state_kind, list(range(n_qubits))
+
+    if use_shots == 1:
+        outcome = _single_outcome_index(counts)
+        output = _parity_eigenvalue(outcome)
+        qubits = list(range(n_qubits)) if full_readout else remaining
+        final = collapse_fn(outcome) if state_np is not None else None
+        return final, output, state_kind, qubits
+
+    if full_readout:
+        return None, None, None, []
+    final = reduce_fn() if state_np is not None else None
+    return final, None, "density_matrix", remaining
 
 
 class Measure:
@@ -135,35 +255,45 @@ class Measure:
 
     @staticmethod
     def _has_gate_sequence(circuit) -> bool:
-        gates = getattr(circuit, "gates", None)
-        return isinstance(gates, Sequence)
+        return has_circuit_instructions(circuit)
 
-    def _build_initial_state(self, n_qubits: int, backend, initial_state=None) -> StateVector:
+    def _build_initial_state(self, n_qubits: int, backend, initial_state=None) -> State:
         if initial_state is None:
-            return StateVector.zero_state(n_qubits, backend)
+            return State.zero_state(n_qubits, backend)
 
-        if isinstance(initial_state, StateVector):
+        if isinstance(initial_state, State):
+            if initial_state.is_density:
+                raise TypeError(
+                    "initial_state 为密度矩阵形态 State；态矢演化需要向量形态"
+                )
             if initial_state.n_qubits != n_qubits:
                 raise ValueError("initial_state.n_qubits 与电路 n_qubits 不一致")
             return initial_state
 
-        return StateVector(initial_state, n_qubits, backend)
+        return State(initial_state, n_qubits, backend)
 
     def _build_initial_density_matrix(
         self,
         n_qubits: int,
         backend,
         initial_density_matrix=None,
-    ) -> DensityMatrix:
+    ) -> State:
         if initial_density_matrix is None:
-            return DensityMatrix.zero_state(n_qubits, backend)
+            dim = 1 << n_qubits
+            rho = np.zeros((dim, dim), dtype=np.complex64)
+            rho[0, 0] = 1.0 + 0j
+            return State.from_matrix(rho, n_qubits, backend)
 
-        if isinstance(initial_density_matrix, DensityMatrix):
+        if isinstance(initial_density_matrix, State):
+            if not initial_density_matrix.is_density:
+                raise TypeError(
+                    "initial_density_matrix 为向量形态 State；请先调用 .to_density_matrix()"
+                )
             if initial_density_matrix.n_qubits != n_qubits:
                 raise ValueError("initial_density_matrix.n_qubits 与电路 n_qubits 不一致")
             return initial_density_matrix
 
-        return DensityMatrix(initial_density_matrix, n_qubits, backend)
+        return State.from_matrix(initial_density_matrix, n_qubits, backend)
 
     def _circuit_unitary_on_backend(self, circuit, backend):
         """
@@ -179,9 +309,9 @@ class Measure:
         # target device/dtype, backend.cast can return without host round-trip.
         return backend.cast(unitary_raw)
 
-    def _evolve_state_vector_gatewise(self, circuit, sv0: StateVector, backend) -> StateVector:
+    def _evolve_state_vector_gatewise(self, circuit, sv0: State, backend) -> State:
         sv = sv0
-        for gate in circuit.gates:
+        for gate in circuit_instructions(circuit):
             if _is_measure_gate(gate):
                 continue
             new_data = apply_gate_to_state(gate, sv.data, sv.n_qubits, backend)
@@ -189,18 +319,18 @@ class Measure:
                 gm = gate_to_matrix(gate, cir_qubits=sv.n_qubits, backend=backend)
                 sv = sv.evolve(gm)
             else:
-                sv = StateVector(new_data, sv.n_qubits, backend, bit_order=sv.bit_order)
+                sv = State(new_data, sv.n_qubits, backend, bit_order=sv.bit_order)
         return sv
 
     def _evolve_density_matrix_gatewise(
         self,
         circuit,
-        rho0: DensityMatrix,
+        rho0: State,
         backend,
         noise_model=None,
-    ) -> DensityMatrix:
+    ) -> State:
         rho = rho0
-        for gate in circuit.gates:
+        for gate in circuit_instructions(circuit):
             if _is_measure_gate(gate):
                 continue
             gate_unitary = gate_to_matrix(gate, cir_qubits=rho.n_qubits, backend=backend)
@@ -210,15 +340,15 @@ class Measure:
                     rho.data,
                     n_qubits=rho.n_qubits,
                     backend=backend,
-                    gate_type=gate.get("type"),
+                    gate_type=instruction_name(gate),
                 )
-                rho = DensityMatrix(rho_noisy, rho.n_qubits, backend)
+                rho = State(rho_noisy, rho.n_qubits, backend)
         return rho
 
     def run(
         self,
         circuit,
-        shots: Optional[int] = None,
+        shots: Optional[int] = 1,
         initial_state=None,
         observables: Optional[Dict[str, object]] = None,
         return_state: bool = True,
@@ -229,12 +359,19 @@ class Measure:
 
         参数:
             circuit: 必须具有 `n_qubits` 属性和 `unitary()` 方法
-            shots: 采样次数；为 None 或 0 时不采样，仅返回概率
+            shots: 采样次数，默认 1。为 None 或 0 时不测量（仅返回概率与末态），
+                此时 result.final_state 与 result.state 相同；
+                为 1 时做单次投影测量，result.final_state 为坍缩后的态，
+                result.output 为被测比特上 Z⊗...⊗Z 的本征值（±1）；
+                大于 1 时 result.final_state 为对被测比特求偏迹的约化密度矩阵
+                （读出全部比特时无剩余比特，为 None），其余统计字段照常
             initial_state: 初始态（None 表示 |0...0>）
             observables: 可观测量字典 {name: operator_matrix}
-            return_state: 是否在结果中附带最终态向量
+            return_state: 是否在结果中附带 state / final_state
             measure_qubits: 机制一（Approach 1）显式读出比特；None 表示读取全部。
                 与电路内嵌的 measure() 门（机制二/Approach 2）互斥，二者不可同时使用。
+                shots=1 且指定子集时，对这些比特做 Z⊗...⊗Z 关联投影测量，
+                final_state 仅含未被测比特
         """
         if not hasattr(circuit, "n_qubits"):
             raise TypeError("circuit 需要具备 n_qubits 属性")
@@ -265,7 +402,9 @@ class Measure:
         report_qubits, readout = _resolve_readout(circuit, n_qubits, measure_qubits)
 
         counts = None
-        use_shots = shots if shots is not None else 0
+        use_shots = int(shots) if shots else 0
+        if use_shots < 0:
+            raise ValueError("shots 不能为负数")
         if use_shots > 0:
             if len(readout) < n_qubits:
                 counts = _marginal_counts(probs, n_qubits, readout, backend, use_shots)
@@ -286,7 +425,17 @@ class Measure:
                 exp_vals[name] = exp_val
                 exp_vars[name] = max(var, 0.0)
 
-        final_state_np = sv.to_numpy() if return_state else None
+        state_np = sv.to_numpy() if return_state else None
+        final_state_np, output, final_kind, final_qubits = _resolve_post_measurement(
+            use_shots,
+            n_qubits,
+            readout,
+            counts,
+            state_np,
+            "state_vector",
+            collapse_fn=lambda outcome: _collapse_state_vector(state_np, n_qubits, readout, outcome),
+            reduce_fn=lambda: _reduced_density_from_state(state_np, n_qubits, readout),
+        )
 
         return Result(
             n_qubits=n_qubits,
@@ -297,18 +446,22 @@ class Measure:
             expectation_values=exp_vals,
             expectation_variances=exp_vars,
             final_state=final_state_np,
+            state=state_np,
+            output=output,
             metadata={
                 "measure": "Measure",
                 "circuit_type": type(circuit).__name__,
                 "state_mode": "state_vector",
                 "measured_qubits": report_qubits,
+                "final_state_kind": final_kind,
+                "final_state_qubits": final_qubits,
             },
         )
 
     def run_density_matrix(
         self,
         circuit,
-        shots: Optional[int] = None,
+        shots: Optional[int] = 1,
         initial_density_matrix=None,
         observables: Optional[Dict[str, object]] = None,
         noise_model=None,
@@ -318,13 +471,16 @@ class Measure:
         """
         以密度矩阵路径测量一个电路，返回统一结果对象。
 
+        shots 语义与 :meth:`run` 一致（None/0 不测量、1 单次坍缩、>1 偏迹），
+        差别仅在于本路径的 state / final_state 均为 flatten 一维的密度矩阵数据。
+
         参数:
             circuit: 必须具有 `n_qubits` 属性和 `unitary()` 方法
-            shots: 采样次数；为 None 或 0 时不采样，仅返回概率
+            shots: 采样次数，默认 1；为 None 或 0 时不测量，仅返回概率
             initial_density_matrix: 初始密度矩阵（None 表示 |0...0><0...0|）
             observables: 可观测量字典 {name: operator_matrix}
             noise_model: NoiseModel，可选。若提供且电路具有 gates，则在每个门后施加噪声。
-            return_state: 是否在结果中附带最终密度矩阵（flatten 一维）
+            return_state: 是否在结果中附带 state / final_state（flatten 一维）
             measure_qubits: 机制一（Approach 1）显式读出比特；None 表示读取全部。
                 与电路内嵌的 measure() 门（机制二/Approach 2）互斥，二者不可同时使用。
         """
@@ -364,7 +520,9 @@ class Measure:
         report_qubits, readout = _resolve_readout(circuit, n_qubits, measure_qubits)
 
         counts = None
-        use_shots = shots if shots is not None else 0
+        use_shots = int(shots) if shots else 0
+        if use_shots < 0:
+            raise ValueError("shots 不能为负数")
         if use_shots > 0:
             if len(readout) < n_qubits:
                 counts = _marginal_counts(
@@ -387,7 +545,20 @@ class Measure:
                 exp_vals[name] = exp_val
                 exp_vars[name] = max(var, 0.0)
 
-        final_state_np = rho.to_numpy().reshape(-1) if return_state else None
+        rho_np = rho.to_numpy() if return_state else None
+        state_np = rho_np.reshape(-1) if rho_np is not None else None
+        final_state_np, output, final_kind, final_qubits = _resolve_post_measurement(
+            use_shots,
+            n_qubits,
+            readout,
+            counts,
+            state_np,
+            "density_matrix",
+            collapse_fn=lambda outcome: _collapse_density_matrix(
+                rho_np, n_qubits, readout, outcome
+            ).reshape(-1),
+            reduce_fn=lambda: _reduced_density_from_density(rho_np, n_qubits, readout).reshape(-1),
+        )
 
         return Result(
             n_qubits=n_qubits,
@@ -398,12 +569,16 @@ class Measure:
             expectation_values=exp_vals,
             expectation_variances=exp_vars,
             final_state=final_state_np,
+            state=state_np,
+            output=output,
             metadata={
                 "measure": "Measure",
                 "circuit_type": type(circuit).__name__,
                 "state_mode": "density_matrix",
                 "noise_model": type(noise_model).__name__ if noise_model is not None else None,
                 "measured_qubits": report_qubits,
+                "final_state_kind": final_kind,
+                "final_state_qubits": final_qubits,
             },
         )
 

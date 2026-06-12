@@ -7,6 +7,7 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from ...core.circuit import Circuit
+from ...ir import circuit_instructions, instruction_controls, instruction_name, instruction_qubits
 from .ion_trap import ONEQ_GATE_TYPES, TWOQ_GATE_TYPES, load_default_ion_trap_noise_config
 
 
@@ -24,15 +25,15 @@ def ion_trap_error_budget_proxy(circuit: Circuit) -> Tuple[float, Dict[str, Any]
     twoq_gate_count = 0
     measure_count = 0
     reset_count = 0
-    for gate in circuit.gates:
-        gate_type = str(gate.get("type", ""))
+    for gate in circuit_instructions(circuit):
+        gate_type = instruction_name(gate)
         if gate_type == "measure":
             measure_count += 1
         elif gate_type == "reset":
             reset_count += 1
-        elif gate_type in TWOQ_GATE_TYPES or gate.get("control_qubits") or gate_type in {"swap", "rzz", "rxx"}:
+        elif gate_type in TWOQ_GATE_TYPES or instruction_controls(gate) or gate_type in {"swap", "rzz", "rxx"}:
             twoq_gate_count += 1
-        elif gate_type in ONEQ_GATE_TYPES or "target_qubit" in gate:
+        elif gate_type in ONEQ_GATE_TYPES or instruction_qubits(gate):
             oneq_gate_count += 1
 
     n_qubits = int(circuit.n_qubits)

@@ -17,6 +17,7 @@ import numpy as np
 from ..channel.backends.numpy_backend import NumpyBackend
 from ..channel.operators import Hamiltonian
 from ..core.circuit import Circuit, hadamard, rz
+from ..ir import circuit_gate_dicts
 from .measure import Measure
 
 
@@ -273,8 +274,9 @@ def measurement_circuit(circuit: Circuit, basis: str, *, backend=None) -> Circui
 
     if len(basis) != int(circuit.n_qubits):
         raise ValueError("basis length must match circuit.n_qubits")
-    selected_backend = circuit.backend if circuit.backend is not None else backend
-    return Circuit(*list(circuit.gates), *basis_change_gates(basis), n_qubits=circuit.n_qubits, backend=selected_backend)
+    circuit_backend = getattr(circuit, "backend", None)
+    selected_backend = circuit_backend if circuit_backend is not None else backend
+    return Circuit(*circuit_gate_dicts(circuit), *basis_change_gates(basis), n_qubits=circuit.n_qubits, backend=selected_backend)
 
 
 def _bits_from_count_key(key: str, n_qubits: int) -> str:

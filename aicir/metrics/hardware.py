@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Sequence
 import numpy as np
 
 from ..core.circuit import Circuit
+from ..ir import circuit_instruction_count, circuit_instructions, instruction_controls, instruction_qubits
 from ._utils import count_two_qubit_gates, depth_proxy, gate_type
 
 
@@ -32,9 +33,9 @@ def native_depth_twoq_efficiency(
     max_depth: int = 100,
 ) -> float:
     """Native-gate, depth, and two-qubit-density hardware efficiency proxy."""
-    native_set = set(native_gates or DEFAULT_NATIVE_GATES)
-    n_gates = len(circuit.gates)
-    native_count = sum(1 for gate in circuit.gates if gate.get("type", "") in native_set)
+    native_set = {str(gate).lower() for gate in (native_gates or DEFAULT_NATIVE_GATES)}
+    n_gates = circuit_instruction_count(circuit)
+    native_count = sum(1 for gate in circuit_instructions(circuit) if gate_type(gate) in native_set)
     native_ratio = native_count / n_gates if n_gates > 0 else 1.0
     circuit_depth_proxy = depth_proxy(circuit)
     depth_score = min(1.0, float(max_depth) / max(1.0, circuit_depth_proxy * 10.0))
@@ -48,9 +49,9 @@ def native_depth_twoq_efficiency_details(
     native_gates: Optional[Sequence[str]] = None,
     max_depth: int = 100,
 ) -> Dict[str, Any]:
-    native_set = set(native_gates or DEFAULT_NATIVE_GATES)
-    n_gates = len(circuit.gates)
-    native_count = sum(1 for gate in circuit.gates if gate.get("type", "") in native_set)
+    native_set = {str(gate).lower() for gate in (native_gates or DEFAULT_NATIVE_GATES)}
+    n_gates = circuit_instruction_count(circuit)
+    native_count = sum(1 for gate in circuit_instructions(circuit) if gate_type(gate) in native_set)
     return {
         "native_depth_twoq_efficiency_score": native_depth_twoq_efficiency(circuit, native_gates, max_depth),
         "native_gate_count": native_count,
@@ -60,13 +61,14 @@ def native_depth_twoq_efficiency_details(
     }
 
 
-def _two_qubit_edge(gate: dict) -> Optional[tuple[int, int]]:
-    if gate.get("control_qubits") and "target_qubit" in gate:
-        controls = list(gate.get("control_qubits") or [])
-        if len(controls) == 1:
-            return tuple(sorted((int(controls[0]), int(gate["target_qubit"]))))
-    if "qubit_1" in gate and "qubit_2" in gate:
-        return tuple(sorted((int(gate["qubit_1"]), int(gate["qubit_2"]))))
+def _two_qubit_edge(gate) -> Optional[tuple[int, int]]:
+    controls = instruction_controls(gate)
+    qubits = instruction_qubits(gate)
+    if controls and qubits:
+        if len(controls) == 1 and len(qubits) == 1:
+            return tuple(sorted((int(controls[0]), int(qubits[0]))))
+    if len(qubits) == 2:
+        return tuple(sorted((int(qubits[0]), int(qubits[1]))))
     return None
 
 
@@ -125,11 +127,11 @@ def topology_mapping_efficiency_details(
     native_set = {str(gate).lower() for gate in profile.native_gates}
     coupling_edges = {tuple(sorted((int(i), int(j)))) for i, j in profile.coupling_map}
     graph = _adjacency(tuple(coupling_edges))
-    n_gates = len(circuit.gates)
-    native_count = sum(1 for gate in circuit.gates if gate_type(gate) in native_set)
+    n_gates = circuit_instruction_count(circuit)
+    native_count = sum(1 for gate in circuit_instructions(circuit) if gate_type(gate) in native_set)
     non_native_ratio = 1.0 - (native_count / n_gates if n_gates > 0 else 1.0)
 
-    two_qubit_edges = [edge for edge in (_two_qubit_edge(gate) for gate in circuit.gates) if edge is not None]
+    two_qubit_edges = [edge for edge in (_two_qubit_edge(gate) for gate in circuit_instructions(circuit)) if edge is not None]
     two_qubit_count = len(two_qubit_edges)
     connectivity_violations = 0
     routing_distance_cost = 0.0

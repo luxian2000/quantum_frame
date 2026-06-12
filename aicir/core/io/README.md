@@ -1,6 +1,6 @@
 # aicir.core.io
 
-本文档说明 `aicir.core.io.qasm` 在 OpenQASM 导出时对受控旋转门的处理规则，尤其是多控门自动分解逻辑。
+本文档说明 `aicir.core.io` 中 OpenQASM、Qiskit、PennyLane 与 WuYue 互操作的当前行为。
 
 ## QASM 导出行为概览
 
@@ -35,3 +35,49 @@
 ## 与 Demo 的关系
 
 `aicir/encoder/demos/encode_1234_demo.py` 直接调用 `circuit_to_qasm3`。若 BasisEncoder 生成了多控旋转门，导出结果会自动包含 `anc` 辅助寄存器与 `ccx` 分解序列，这是预期行为。
+
+## Qiskit 互操作
+
+`qiskit_io.py` 提供 `circuit_to_qiskit` / `circuit_from_qiskit`，以及短别名 `to_qiskit` / `from_qiskit`。`qiskit` 是可选依赖，导入 `aicir` 不会强制导入 Qiskit；只有调用这些函数时才检查依赖。
+
+当前支持门集与 QASM 第一批互操作面保持一致：
+
+- 基础单比特门：`x/y/z/h/s/t`
+- 参数旋转：`rx/ry/rz`
+- 通用单比特门：`u2/u3`（Qiskit 侧以 `u` 发射）
+- 受控门：`cx/cy/cz/crx/cry/crz/ccx`
+- 双比特门：`swap/rzz/rxx`
+- 线路内测量标记：Qiskit `measure` 与 aicir `measure(...)` 互转
+
+暂不支持 Qiskit 自定义门和未绑定符号参数。
+
+## PennyLane 互操作
+
+`pennylane_io.py` 提供 `circuit_to_pennylane` / `circuit_from_pennylane`，以及短别名 `to_pennylane` / `from_pennylane`。`pennylane` 是可选依赖，导入 `aicir` 不会强制导入 PennyLane；只有调用这些函数时才检查依赖。
+
+当前支持门集与 QASM/Qiskit 第一批互操作面基本一致：
+
+- 基础单比特门：`PauliX/PauliY/PauliZ/Hadamard/S/T`
+- 参数旋转：`RX/RY/RZ`
+- 通用单比特门：`U2/U3`
+- 受控门：`CNOT/CY/CZ/CRX/CRY/CRZ/Toffoli`
+- 双比特门：`SWAP/IsingZZ/IsingXX`（对应 aicir `swap/rzz/rxx`）
+- 整体恒等门：`Identity`
+
+暂不支持 PennyLane 自定义门、未绑定符号参数和 aicir 线路内 `measure` 标记。
+
+## WuYue 互操作
+
+`wuyue_io.py` 提供 `circuit_to_wuyue` / `circuit_from_wuyue`，以及短别名 `to_wuyue` / `from_wuyue`。`wuyue` 是可选依赖，导入 `aicir` 不会强制导入 WuYue SDK；只有调用这些函数时才检查依赖。
+
+当前支持 WuYue 原生门集中与 aicir 基础门直接对应的部分：
+
+- 基础单比特门：`X/Y/Z/H/S/T`
+- 参数旋转：`RX/RY/RZ`
+- 通用单比特门：`U2/U3`
+- 受控门：`CX/CZ/TOFFOLI`
+- 双比特门：`SWAP/IsingZZ`（对应 aicir `swap/rzz`）
+- 整体恒等门：aicir `identity` 导出为每个量子位上的 WuYue `I`
+- 线路内测量标记：WuYue `MEASURE` 与 aicir `measure(...)` 互转
+
+受 WuYue 当前原生门集限制，暂不支持 `cy`、`crx/cry/crz`、`rxx`、自定义门和未绑定符号参数。WuYue SDK 不接受 0 位经典寄存器；当 aicir 线路没有测量时，导出的 WuYue `QuantumCircuit` 会保留 1 位经典寄存器占位。

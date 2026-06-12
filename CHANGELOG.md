@@ -2,12 +2,70 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-12
+
+### Added
+
+- 新增 Qiskit 互操作入口（NEXT.md 第 8 节第一片）：`circuit_to_qiskit`/`circuit_from_qiskit` 以及短别名 `to_qiskit`/`from_qiskit`，位于 `aicir.core.io.qiskit_io` 并从 `aicir.core.io`、`aicir.core`、顶层 `aicir` 导出。`qiskit` 为可选依赖，仅在调用互操作函数时导入；当前支持基础门、参数旋转、受控门、`swap`、`rzz/rxx`、`u2/u3`、`ccx` 和线路内 `measure` 标记。
+- 新增 PennyLane 互操作入口（NEXT.md 第 8 节第一片）：`circuit_to_pennylane`/`circuit_from_pennylane` 以及短别名 `to_pennylane`/`from_pennylane`，位于 `aicir.core.io.pennylane_io` 并从 `aicir.core.io`、`aicir.core`、顶层 `aicir` 导出。`pennylane` 为可选依赖，仅在调用互操作函数时导入；当前支持基础门、参数旋转、受控门、`swap`、`rzz/rxx`（PennyLane `IsingZZ`/`IsingXX`）、`u2/u3`、`ccx` 和 `identity`。
+- 新增 WuYue 互操作入口（NEXT.md 第 8 节第一片）：`circuit_to_wuyue`/`circuit_from_wuyue` 以及短别名 `to_wuyue`/`from_wuyue`，位于 `aicir.core.io.wuyue_io` 并从 `aicir.core.io`、`aicir.core`、顶层 `aicir` 导出。`wuyue` 为可选依赖，仅在调用互操作函数时导入；当前支持 WuYue 原生基础门、参数旋转、`cx/cz`、`swap`、`rzz`（WuYue `IsingZZ`）、`u2/u3`、`ccx`、`identity` 和线路内 `measure` 标记。
+- `Result` 新增 `state` 字段：始终返回测量前的完整末态（SV 路径为态向量，DM 路径为 flatten 密度矩阵），不受采样影响。
+- `Result` 新增 `output` 字段：`shots=1` 单次测量结果——被测比特上 Z⊗…⊗Z 关联投影测量的本征值（±1，实现为对各被测比特分别做 Z 基投影后取乘积，与联合宇称测量的 ±1 分布一致且保证其余比特为纯态）；坍缩到的具体基态见 `counts` / `final_state`。
+- `result.metadata` 新增 `final_state_kind`（`'state_vector'`/`'density_matrix'`/`None`）与 `final_state_qubits`（`final_state` 所描述的比特下标）。
+
+### Changed
+
+- **破坏性**：`Measure.run`/`run_density_matrix` 的 `shots` 默认值由 `None` 改为 `1`；`shots=None`/`0` 表示不测量（无论是否传 `measure_qubits`）。
+- **破坏性**：`result.final_state` 语义由"演化末态"改为"测量后的态"：`shots=None`/`0` 时与 `state` 相同；`shots=1` 时为坍缩后的态（子集读出时仅含未被测比特）；`shots>1` 时为对被测比特求偏迹后的约化密度矩阵（SV 路径为 `(2^m, 2^m)` 二维，DM 路径为 flatten；读出全部比特时无剩余比特，为 `None`）。需要演化末态请改用 `result.state`（内部消费方 `BasicVQE.ansatz_state`、`StatevectorEstimator` 已随之切换）。
+- `shots` 为负数时显式抛出 `ValueError`。
+- **破坏性**：统一量子态表示为单一 `State` 类，删除 `StateVector` 与 `DensityMatrix` 两个公开名称（顶层 `aicir` 与 `aicir.core` 不再导出它们）。
+  - 新增 `State.from_matrix(...)` 从密度矩阵构造；`from_array`/`from_matrix`/`zero_state` 的 `backend` 改为可选（默认 `NumpyBackend`），`from_array`/`from_matrix` 可省略 `n_qubits`（按长度/形状推断）。
+  - 新增属性 `.array`（纯态振幅向量，混合态为 `None`）、`.matrix`（密度矩阵）、`.ket`（Dirac 记号：纯态超叠加、混合态 Σρ_ij|i><j| 展开），均可直接打印。
+  - 新增 `.is_density` 判定属性；密度矩阵方法（`purity`/`partial_trace`/`eigenvalues`/`von_neumann_entropy`/`is_pure`/`maximally_mixed`）并入 `State`。
+  - 迁移指引：`isinstance(x, DensityMatrix)` 改用 `x.is_density`；`DensityMatrix(...)` 改用 `State.from_matrix(...)`；`StateVector(...)` 改用 `State(...)` / `State.from_array(...)`。
+
+## 2026-06-11
+
+### Added
+
+- 新增 `aicir.gates` GateSpec 注册表（NEXT.md 第 7 节第一片）：`GateSpec`（门名/别名/目标比特数/参数个数/是否受控/QASM 名）、`register_gate`/`unregister_gate`/`get_gate_spec`/`registered_gate_names`；内置门集已全部注册。`num_qubits`/`num_params` 为 `None` 表示可变（`unitary`、`measure`、整寄存器 `identity`）。
+- `Operation` 构造期接入 GateSpec 校验：已注册门检查目标比特数、参数个数与控制位要求，未注册门名保持宽松（自定义门不受限）。
+- `aicir.transpile.ValidatePass` 升级为实质校验：qubit/控制位越界（相对 `n_qubits`）、目标与控制比特冲突、重复比特；原先仅做 round-trip 规范化。
+- 新增 `aicir.gates.canonical_gate_name`：把别名门名（`X`/`cnot`/`ccnot`/`measurement` 等）解析为规范名，未注册名称原样返回。
+- `aicir.transpile.CanonicalizePass` 升级为实质规范化：把门字典中的别名 `type` 重写为 GateSpec 规范名；原先仅做 round-trip 复制。
+- QASM 导出门名改以 GateSpec 注册表为单一来源：`core/io/qasm.py` 的导出表由 `GateSpec.qasm_name` 派生，别名键（`X`/`cnot`/`ccnot` 等）从表中移除，导出时先经 `canonical_gate_name` 归一；导入表由导出表反推。导出结果与旧版完全一致（有回归测试钉住）。
+- `GateSpec` 新增 `symbol` 字段（绘图显示符号，受控门为目标位符号），ASCII 与 matplotlib 绘图的符号/配色族查询改以注册表为单一来源：`_single_gate_symbol`/`_controlled_target_symbol` 由 `GateSpec.symbol` 派生（注册自定义门可携带 symbol 直接显示），`visual/plot.py` 的 `_FAMILY` 配色表只保留规范名键。
+- 矩阵路径统一别名处理：`gate_to_matrix`/`apply_gate_to_state`/`_single_qubit_base_for_gate` 等在入口经 `canonical_gate_name` 归一后分发，全部 `["pauli_x", "X"]`/`["cnot", "cx"]`/`["toffoli", "ccnot"]` 式别名分支收敛为规范名（别名与规范名共享矩阵缓存）。行为与旧版完全一致（有别名等价回归测试钉住）。
+- 新增 `aicir.primitives`（NEXT.md 第 4 节第一片）：`BaseSampler`/`BaseEstimator` 接口与最小统一结果对象 `SampleResult`/`EstimateResult`（第 9 节切片）；`ShotSampler` 包装 `Measure`，`StatevectorEstimator` 提供精确态向量期望，`ShotEstimator` 包装 `PauliEstimator` 并暴露 `estimate()` 直通方法（可直接作 `BasicVQE(energy_estimator=...)` 注入）。约定：接收已绑定参数的电路，单入参返回单结果、序列返回列表，单个可观测量可广播。
+
+### Changed
+
+- 门工厂函数（`pauli_x`/`hadamard`/`rx`/`cx`/`swap`/`rzz`/`u3`/`u2` 等）**签名与参数顺序完全不变**，但返回值由裸门字典升级为类型化 `Operation`；`measure(...)` 返回 `Measurement`。构造期即校验（量子比特下标、控制位/控制态长度等）。`Circuit` 内部存储的门字典与旧版完全一致，下游消费方无需改动。
+- `Operation`/`Measurement` 新增旧门字典**只读**兼容层：支持 `gate["type"]`、`.get()`、`in`、`dict(gate)`、`len`/迭代等读取，以及与旧门字典的双向 `==` 比较；写入（`gate[...] = ...`）抛出 `TypeError`（对象不可变）。
+- `aicir.visual` 的 `plot(...)`/`show(...)` 来源归一化现接受类型化指令（单个 `Operation`/`Measurement` 或其序列）。
+
 ## 2026-06-10
 
 ### Added
 
+- `Operation` 新增显式 `label` 字段（默认 `None`），对齐 NEXT.md typed IR 规格；门字典中的 `label` 键现在提升为该字段而不再落入 `metadata`，`to_dict`/`from_dict` 保持 round-trip。
+- 新增第一批架构演进目录占位：`aicir.ir`、`aicir.gates`、`aicir.transpile`、`aicir.transpile.passes`、`aicir.devices`、`aicir.primitives`，用于后续 typed IR、GateSpec、pass pipeline、Target 和 Sampler/Estimator primitives 迁移。
+- `NEXT.md` 记录 `aicir` 目标目录结构和第一批已落地目录。
+- 新增 typed IR `Operation`：支持从现有门字典构造、转换回门字典、通过 `normalize_gate` 兼容旧入口；`Circuit` 构造、`append`、`extend` 现在可接收 `Operation`，同时内部继续保存现有门字典格式。
+- 补齐 typed IR 第一阶段剩余对象：`Measurement` 支持测量声明与现有 `measure` 门字典互转，`Observable` 支持包装 `PauliString`、`Hamiltonian` 和 dense matrix，`CircuitIR` 支持从现有 `Circuit` 构造、转回 `Circuit`，并保留 operation 序列、量子比特数、经典比特和 metadata。
+- 新增 typed IR 访问 helper：`aicir.ir.circuit_instructions`、`circuit_gate_dicts`、`instruction_name`、`instruction_qubits`、`instruction_controls`、`instruction_parameter` 等，用于内部模块统一消费 `CircuitIR`、`Circuit.operations` 和旧 `Circuit.gates`。
+- `Circuit` 新增 `.operations` 与 `.ir` typed IR 视图；`.gates` 继续保留为旧门字典公开 surface。
+- 新增 `aicir.transpile` pass pipeline：提供 `TransformationPass`、`PassManager`、`default_optimization_pipeline`，以及 `ValidatePass`、`CanonicalizePass`、`CancelInversePass`、`MergeRotationsPass`、`CommuteSingleQubitPass`；`optimize_circuit` 和 `optimize_basic(Circuit)` 继续保留旧接口并委托给默认 pipeline。
 - 新增 `aicir.optimizer.optimize_circuit` 公开入口，用于直接优化 `Circuit` 对象并保留 `n_qubits` 与 backend。
 - 扩展 `aicir.optimizer.circuit` 的 dict/Circuit 路径：支持有限安全重排，可跨过不同量子比特的单比特门，以及已知可交换的 CNOT 模式来消去冗余门或合并 `rx/ry/rz`。
+
+### Changed
+
+- JSON/QASM/DAG 导出、绘图、测量、Pauli 估计、transpile/optimizer、QML 伴随梯度、metrics、noise 和 QAS 的主要内部读取路径迁移为优先消费 typed IR；需要旧门字典格式的矩阵、渲染和本地 rewrite 兼容层会显式从 typed instruction 生成门字典视图。
+
+### Tests
+
+- 新增 `tests/circuit/test_typed_ir_internal_migration.py`，覆盖 `CircuitIR` 直接进入 JSON/QASM、绘图、metrics、测量、QML 伴随梯度、transpile/optimizer 和核心门矩阵路径。
 
 ## 2026-06-09
 

@@ -12,6 +12,7 @@ from ..core.circuit import Circuit
 from ..core.io.dag import circuit_to_dag
 from ..core.io.qasm import circuit_to_qasm
 from ..core.state import State
+from ..ir import circuit_instructions, instruction_name
 
 
 def _default_backend(backend):
@@ -44,7 +45,7 @@ def _emit_circuit(circuit, cir):
     if cir == "qasm":
         return circuit_to_qasm(circuit)
     if cir == "dag":
-        gate_types = list(dict.fromkeys(g["type"] for g in circuit.gates))
+        gate_types = list(dict.fromkeys(instruction_name(g) for g in circuit_instructions(circuit)))
         return circuit_to_dag(circuit, gate_types)
     raise ValueError(f"cir must be 'dict', 'qasm' or 'dag', got {cir!r}")
 

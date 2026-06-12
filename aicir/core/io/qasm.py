@@ -19,59 +19,41 @@ import re
 from pathlib import Path
 from typing import Dict, List
 
+from ...gates import canonical_gate_name, get_gate_spec
+from ...ir import circuit_gate_dicts, has_circuit_instructions
 from ..circuit import Circuit
 
 _QASM2_HEADER = 'OPENQASM 2.0;\ninclude "qelib1.inc";\n'
 _QASM3_HEADER = 'OPENQASM 3.0;\ninclude "stdgates.inc";\n'
 
-_SINGLE_NO_PARAM_EXPORT = {
-    "pauli_x": "x",
-    "X": "x",
-    "pauli_y": "y",
-    "Y": "y",
-    "pauli_z": "z",
-    "Z": "z",
-    "hadamard": "h",
-    "H": "h",
-    "s_gate": "s",
-    "S": "s",
-    "t_gate": "t",
-    "T": "t",
-}
+# QASM 导出名以 GateSpec 注册表（aicir.gates）为单一来源；本文件只维护
+# “发射形态”分类（单比特无参/带参/双引用/三引用）。门名别名（X/cnot/ccnot
+# 等）在导出时先经 canonical_gate_name 归一，无需在表中重复列出。
 
-_PARAM_EXPORT = {
-    "rx": "rx",
-    "ry": "ry",
-    "rz": "rz",
-    "u2": "u2",
-}
 
-_DOUBLE_EXPORT = {
-    "cnot": "cx",
-    "cx": "cx",
-    "cy": "cy",
-    "cz": "cz",
-    "swap": "swap",
-    "crx": "crx",
-    "cry": "cry",
-    "crz": "crz",
-    "rzz": "rzz",
-    "rxx": "rxx",
-}
+def _registry_qasm_names(*names: str) -> Dict[str, str]:
+    table: Dict[str, str] = {}
+    for name in names:
+        spec = get_gate_spec(name)
+        if spec is None or spec.qasm_name is None:
+            raise ValueError(f"门 {name!r} 未在 GateSpec 注册表中提供 QASM 导出名")
+        table[name] = spec.qasm_name
+    return table
 
-_THREE_EXPORT = {
-    "toffoli": "ccx",
-    "ccnot": "ccx",
-}
 
-_IMPORT_SINGLE = {
-    "x": "pauli_x",
-    "y": "pauli_y",
-    "z": "pauli_z",
-    "h": "hadamard",
-    "s": "s_gate",
-    "t": "t_gate",
-}
+_SINGLE_NO_PARAM_EXPORT = _registry_qasm_names(
+    "pauli_x", "pauli_y", "pauli_z", "hadamard", "s_gate", "t_gate"
+)
+
+_PARAM_EXPORT = _registry_qasm_names("rx", "ry", "rz", "u2")
+
+_DOUBLE_EXPORT = _registry_qasm_names(
+    "cx", "cy", "cz", "swap", "crx", "cry", "crz", "rzz", "rxx"
+)
+
+_THREE_EXPORT = _registry_qasm_names("toffoli")
+
+_IMPORT_SINGLE = {qasm_name: name for name, qasm_name in _SINGLE_NO_PARAM_EXPORT.items()}
 
 _IMPORT_PARAM = {"rx", "ry", "rz"}
 _IMPORT_DOUBLE = {"cx", "cy", "cz", "swap"}
@@ -170,8 +152,8 @@ def _control_state_wrapper_lines(controls: List[int], control_states: List[int])
 def _qasm3_required_ancilla_count(circuit: Circuit) -> int:
     """计算 QASM 3.0 导出多控 crx/cry/crz 所需的最大辅助比特数。"""
     max_ancillas = 0
-    for gate in circuit.gates:
-        gtype = _normalize_gate_type_for_export(gate["type"])
+    for gate in circuit_gate_dicts(circuit):
+        gtype = canonical_gate_name(_normalize_gate_type_for_export(gate["type"]))
         if gtype not in {"crx", "cry", "crz"}:
             continue
         controls, _ = _normalized_control_data(gate)
@@ -205,8 +187,8 @@ def _append_qasm3_multi_control_rotation(
 
 def circuit_to_qasm(circuit: Circuit, version: str = "2.0") -> str:
     """将 Circuit 导出为 OpenQASM 字符串，支持 2.0 和 3.0。"""
-    if not hasattr(circuit, "n_qubits") or not hasattr(circuit, "gates"):
-        raise TypeError("circuit 需要具备 n_qubits 和 gates 属性")
+    if not hasattr(circuit, "n_qubits") or not has_circuit_instructions(circuit):
+        raise TypeError("circuit 需要具备 n_qubits 和 typed IR operations 或 gates 序列")
 
     version_norm = str(version).strip()
     if version_norm not in {"2.0", "3.0"}:
@@ -223,8 +205,8 @@ def circuit_to_qasm(circuit: Circuit, version: str = "2.0") -> str:
         if ancilla_count > 0:
             lines.append(f"qubit[{ancilla_count}] anc;")
 
-    for gate in circuit.gates:
-        gtype = _normalize_gate_type_for_export(gate["type"])
+    for gate in circuit_gate_dicts(circuit):
+        gtype = canonical_gate_name(_normalize_gate_type_for_export(gate["type"]))
         controls, control_states = _normalized_control_data(gate)
         pre_lines, post_lines = _control_state_wrapper_lines(controls, control_states)
         lines.extend(pre_lines)
