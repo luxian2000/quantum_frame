@@ -46,8 +46,6 @@ from .io.pennylane_io import (
     circuit_to_pennylane,
     from_pennylane,
     to_pennylane,
-)
-from .io.wuyue_io import circuit_from_wuyue, circuit_to_wuyue, from_wuyue, to_wuyue
 
 __all__ = [
     "Circuit",
