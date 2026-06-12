@@ -71,6 +71,8 @@ def _format_amplitude(value: complex, tol: float) -> str:
 
 
 def _infer_n_qubits(dim: int) -> int:
+    if dim <= 0:
+        raise ValueError(f"维数 {dim} 必须为正整数")
     n = dim.bit_length() - 1
     if (1 << n) != dim:
         raise ValueError(f"维数 {dim} 不是 2 的幂")
@@ -126,7 +128,7 @@ class State:
             return
 
         if len(shape) == 1:
-            casted = self._backend.cast(casted).reshape(-1, 1)
+            casted = casted.reshape(-1, 1)
             shape = tuple(int(axis) for axis in casted.shape)
         elif len(shape) == 2 and shape[1] != 1:
             raise ValueError(f"无法识别的数据形状 {shape}（n_qubits={n_qubits}）")
@@ -175,7 +177,7 @@ class State:
 
     @property
     def data(self):
-        """后端原生张量，shape (2^n, 1)。"""
+        """后端原生张量。向量形态 shape (2^n, 1)；密度矩阵形态 shape (2^n, 2^n)。"""
         return self._data
 
     @property
