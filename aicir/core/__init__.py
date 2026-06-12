@@ -40,6 +40,7 @@ from .io.qasm import (
     save_circuit_qasm,
     save_circuit_qasm3,
 )
+from .io.qiskit_io import circuit_from_qiskit, circuit_to_qiskit, from_qiskit, to_qiskit
 
 __all__ = [
     "Circuit",
@@ -84,4 +85,8 @@ __all__ = [
     "save_circuit_qasm",
     "save_circuit_qasm3",
     "load_circuit_qasm",
+    "circuit_to_qiskit",
+    "circuit_from_qiskit",
+    "to_qiskit",
+    "from_qiskit",
 ]
