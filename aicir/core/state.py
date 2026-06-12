@@ -200,40 +200,41 @@ class State:
         """当前状态采用的基态标签端序。"""
         return self._bit_order
 
-    def evolve(self, unitary) -> "State":
-        """
-        将酉矩阵作用于当前态，返回新的 State（不修改原对象）。
+    def _matrix_data(self):
+        """返回密度矩阵形态的后端原生张量（向量形态时计算 |ψ><ψ|）。"""
+        if self._kind == "matrix":
+            return self._data
+        bk = self._backend
+        return bk.matmul(self._data, bk.dagger(self._data))
 
-        参数:
-            unitary: (2^n, 2^n) 酉矩阵（后端原生张量）
-        返回:
-            State — 演化后的新态
-        """
-        new_data = self._backend.apply_unitary(self._data, unitary)
-        return State(new_data, self._n_qubits, self._backend, bit_order=self._bit_order)
+    def evolve(self, unitary) -> "State":
+        """酉演化：向量形态 U|ψ⟩；矩阵形态 UρU†。返回新 State。"""
+        bk = self._backend
+        if self._kind == "vector":
+            new_data = bk.apply_unitary(self._data, unitary)
+        else:
+            new_data = bk.matmul(bk.matmul(unitary, self._data), bk.dagger(unitary))
+        return State(new_data, self._n_qubits, bk, bit_order=self._bit_order)
 
     def probabilities(self):
-        """
-        计算计算基上的测量概率分布。
-
-        返回:
-            shape (2^n,) 实数概率向量（后端原生张量），总和为 1
-        """
-        return self._backend.measure_probs(self._data)
+        """计算基测量概率。向量形态返回后端张量；矩阵形态返回 numpy。"""
+        if self._kind == "vector":
+            return self._backend.measure_probs(self._data)
+        diag = self._backend.to_numpy(self._backend.real(self._data.diagonal()))
+        diag = np.clip(np.asarray(diag), 0, None)
+        total = diag.sum()
+        return diag / total if total > 0 else diag
 
     def measure(self, shots: int = 1024, bit_order: Optional[str] = None) -> Dict[str, int]:
-        """
-        模拟 shots 次投影测量，返回各基态出现次数。
-
-        参数:
-            shots: 测量次数（正整数）
-        返回:
-            {"|00⟩": count, "|11⟩": count, ...} 字典（仅含非零项）
-        """
+        """模拟 shots 次测量，返回各基态计数（仅非零项）。"""
         order = _normalize_bit_order(bit_order, default=self._bit_order)
-        probs = self.probabilities()
-        counts_arr = self._backend.sample(probs, shots)
-        counts_np = self._backend.to_numpy(counts_arr).astype(int).reshape(-1)
+        if self._kind == "vector":
+            counts_arr = self._backend.sample(self.probabilities(), shots)
+            counts_np = self._backend.to_numpy(counts_arr).astype(int).reshape(-1)
+        else:
+            probs = self.probabilities()
+            indices = np.random.choice(len(probs), size=shots, p=probs)
+            counts_np = np.bincount(indices, minlength=len(probs))
         return {
             f"|{_basis_label(idx, self._n_qubits, order)}>": int(c)
             for idx, c in enumerate(counts_np)
@@ -241,15 +242,13 @@ class State:
         }
 
     def expectation(self, operator) -> float:
-        """
-        计算期望值 ⟨ψ|O|ψ⟩，返回实数。
-
-        参数:
-            operator: (2^n, 2^n) Hermitian 算符（后端原生张量）
-        """
-        value = self._backend.expectation_sv(self._data, operator)
+        """期望值：向量形态 ⟨ψ|O|ψ⟩；矩阵形态 Tr(ρO)。"""
+        if self._kind == "vector":
+            value = self._backend.expectation_sv(self._data, operator)
+        else:
+            value = self._backend.expectation_dm(self._data, operator)
         if value is None:
-            raise TypeError("backend.expectation_sv 返回了 None")
+            raise TypeError("backend expectation 返回了 None")
         return float(value)
 
     def inner_product(self, other: "State"):
@@ -320,21 +319,50 @@ class State:
         probs_np = self._backend.to_numpy(self.probabilities()).real
         return float(probs_np.sum()) ** 0.5
 
-    def to_density_matrix(self) -> "DensityMatrix":
-        """
-        将纯态转换为密度矩阵 ρ = |ψ⟩⟨ψ|。
-        """
-        from .density import DensityMatrix
-
+    def partial_trace(self, keep) -> "State":
+        """对子系统求偏迹，返回 matrix 形态 State（形状 2^k×2^k，k=len(keep)）。"""
         bk = self._backend
-        rho = bk.matmul(self._data, bk.dagger(self._data))
-        return DensityMatrix(rho, self._n_qubits, bk)
+        rho_red = bk.partial_trace(self._matrix_data(), keep, self._n_qubits)
+        return State(rho_red, len(keep), bk)
+
+    def purity(self) -> float:
+        """纯度 Tr(ρ²)。向量形态恒为 1.0。"""
+        if self._kind == "vector":
+            return 1.0
+        bk = self._backend
+        val = bk.trace(bk.matmul(self._data, self._data))
+        return float(np.real(bk.to_numpy(val)))
+
+    def eigenvalues(self) -> np.ndarray:
+        """密度矩阵特征值（升序），numpy array。"""
+        return np.linalg.eigvalsh(self._backend.to_numpy(self._matrix_data()))
+
+    def von_neumann_entropy(self) -> float:
+        """冯·诺依曼熵 S(ρ) = -Tr(ρ ln ρ)。"""
+        eigs = self.eigenvalues()
+        eigs = eigs[eigs > 1e-15]
+        return float(-np.sum(eigs * np.log(eigs)))
+
+    def is_pure(self, tol: float = 1e-5) -> bool:
+        """是否纯态（purity ≈ 1）。"""
+        return abs(self.purity() - 1.0) < tol
+
+    @classmethod
+    def maximally_mixed(cls, n_qubits: int, backend: "Backend" = None) -> "State":
+        """最大混合态 ρ = I / 2^n（matrix 形态）。"""
+        backend = backend if backend is not None else _default_backend()
+        dim = 1 << n_qubits
+        rho_np = np.eye(dim, dtype=np.complex64) / dim
+        return cls(backend.cast(rho_np), n_qubits, backend)
+
+    def to_density_matrix(self) -> "State":
+        """转为密度矩阵形态 State：ρ = |ψ⟩⟨ψ|（向量形态）或原样（矩阵形态）。"""
+        return State(self._matrix_data(), self._n_qubits, self._backend)
 
     def to_numpy(self) -> np.ndarray:
-        """
-        导出为 numpy 一维复数数组，shape (2^n,)。
-        """
-        return self._backend.to_numpy(self._data).reshape(-1)
+        """向量形态导出 (2^n,)；矩阵形态导出 (2^n, 2^n)。"""
+        arr = self._backend.to_numpy(self._data)
+        return arr.reshape(-1) if self._kind == "vector" else arr
 
     def __len__(self) -> int:
         return self.dim
