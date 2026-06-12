@@ -208,6 +208,17 @@ def test_plot_fits_gate_text_to_box_size(plt):
         assert extent.height <= abs(top - bottom) + 1.0
 
 
+def test_plot_marks_gate_box_labels_with_three_quarter_height_limit(plt):
+    circuit = Circuit(hadamard(0), rz(np.pi / 2, 1), n_qubits=2)
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    label_texts = [text for text in ax.texts if text.get_text() in {"H", "Rz"}]
+    assert {text.get_text() for text in label_texts} == {"H", "Rz"}
+    for text in label_texts:
+        assert text._aicir_max_height_data == pytest.approx(0.62 * 0.75)
+
+
 def test_plot_rzz_gate_label_is_rzz(plt):
     circuit = Circuit(rzz(np.pi / 2, 0, 1), n_qubits=2)
 
