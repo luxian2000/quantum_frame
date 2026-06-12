@@ -268,7 +268,7 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 
 - **构造期校验**：量子比特下标、控制位/控制态长度，以及按 GateSpec 注册表检查目标比特数、参数个数与控制位要求（见 3.6 节），错误在调用处立即报出。
 - **旧字典只读兼容**：`gate["type"]`、`.get("parameter")`、`in`、`dict(gate)`、迭代等读取照常可用，且与旧门字典可直接 `==` 比较；写入（`gate[...] = ...`）会抛 `TypeError`（对象不可变）。
-- **`Circuit` 内部存储不变**：仍是与旧版完全一致的门字典列表（`circuit.gates`），下游代码无需改动。
+- **`Circuit` 内部存储不变**：仍是门字典列表（`circuit.gates`），下游代码无需改动。
 
 ### 3.2 构建电路
 
@@ -536,7 +536,7 @@ aicir 提供两种量子测量机制，可按需选用。
 
 ### 4.1 机制一：线路末端测量
 
-`measure.run(cir, shots=1, measure_qubits=None)` —— `shots` 默认 `1`，`measure_qubits` 默认 `None`（读取全部比特）。
+`result = measurement.run(cir, shots=1, measure_qubits=None, snap=None)` —— `shots` 默认 `1`，`measure_qubits` 默认 `None`（读取全部比特），`snap` 默认 `None`（不记录中间态）。
 
 `result.state` 始终返回**测量前**的完整末态（酉演化结果，不受采样影响）；`result.final_state` 返回**测量后**的量子态，随 `shots` 变化：
 
@@ -549,34 +549,41 @@ aicir 提供两种量子测量机制，可按需选用。
 
 `shots=1` 时 `output` 统一为被测比特上 $Z{\otimes}\dots{\otimes}Z$ 的本征值（测得 `1` 的个数为偶数时 `+1`，奇数时 `-1`）；坍缩到的具体基态可由 `counts`（单条记录）或 `final_state` 读出。
 
+`snap=[a, b, ..., c]` 表示记录门序列中第 `a, b, ..., c` 个门作用于初始态后的完整量子态。门序号与 `cir.gates` 一致，从 `0` 开始；`result.snap(a)` 返回第 `a` 个门结束后量子线路的完整态，未记录的门序号返回 `None`。
+
 > **物理说明（shots=1 + 子集）**：实现上对 `[a..c]` 各比特分别做 Z 基投影测量（这些算符两两对易），`output` 取各结果的乘积——其 ±1 分布与联合 $Z{\otimes}\dots{\otimes}Z$（宇称）测量完全一致。区别在于：真正的联合宇称测量只投影到 ±1 本征子空间，被测比特之间可保留纠缠，此时其余比特一般处于混合态；而逐比特测量完全坍缩，使其余比特处于良定义的纯态，与 `final_state` 返回纯态的约定自洽。
 
 ```python
 from aicir import Circuit, Measure, NumpyBackend, hadamard, cnot
 
-measure = Measure(NumpyBackend())
+measurement = Measure(NumpyBackend())
 cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)   # Bell 态
 
 # 默认 shots=1：对全部比特做单次投影测量
-result = measure.run(cir)
+result = measurement.run(cir)
 print(result.state)          # 测量前末态 (|00> + |11>)/√2，未坍缩
 print(result.output)         # +1（Bell 态只会测得 00 或 11，Z⊗Z 恒为 +1）
 print(result.counts)         # {'|00>': 1} 或 {'|11>': 1}
 print(result.final_state)    # 坍缩后的基态，与 counts 一致
 
 # shots=None / 0：不进行任何测量
-result = measure.run(cir, shots=None)
+result = measurement.run(cir, shots=None)
 print(result.counts)         # None
 # 此时 result.final_state 与 result.state 相同
 
+# snap：记录第 0、1 个门作用后的完整态；默认 snap=None 不记录
+result = measurement.run(cir, shots=None, snap=[0, 1])
+print(result.snap(0))        # hadamard(0) 后的完整态
+print(result.snap(1))        # cnot(1, [0]) 后的完整 Bell 态
+
 # shots=1 + 子集：Z0 关联投影测量
-result = measure.run(cir, shots=1, measure_qubits=[0])
+result = measurement.run(cir, shots=1, measure_qubits=[0])
 print(result.output)         # +1 或 -1（Z0 本征值）
 print(result.final_state)    # qubit1 的坍缩纯态（与测得结果关联）
 print(result.metadata["final_state_qubits"])   # [1]
 
 # shots>1：统计采样；final_state 为偏迹后的约化密度矩阵
-result = measure.run(cir, shots=1024, measure_qubits=[0])
+result = measurement.run(cir, shots=1024, measure_qubits=[0])
 print(result.counts)                           # 1 比特计数，如 {'|0>': 512, '|1>': 512}
 print(result.probabilities)                    # 完整 2 比特概率分布
 print(result.final_state)                      # qubit1 的 2×2 密度矩阵 ≈ I/2
@@ -584,7 +591,7 @@ print(result.metadata["final_state_kind"])     # 'density_matrix'
 print(result.metadata["measured_qubits"])      # [0]
 
 # 读取全部比特且 shots>1 时没有剩余比特，final_state 为 None
-result = measure.run(cir, shots=1024)
+result = measurement.run(cir, shots=1024)
 print(result.counts)            # {'|00>': 512, '|11>': 512}
 print(result.most_probable())   # ('|00>', 0.5)
 print(result.final_state)       # None（result.state 仍是完整末态）
@@ -677,10 +684,11 @@ print(counts)   # {'|00>': 512}
 | `state`                 | `np.ndarray` or `None` | 测量前完整末态（SV 路径为向量；DM 路径为 flatten 后密度矩阵）                                                                                                      |
 | `final_state`           | `np.ndarray` or `None` | 测量后的态，随 shots 变化（见 §4.1）：`None`/`0` 与 `state` 相同；`1` 为坍缩态；`>1` 为约化密度矩阵（SV 路径为 `(2^m, 2^m)` 二维；DM 路径为 flatten） |
 | `output`                | `int` or `None`        | 单次（shots=1）测量结果：被测比特上 Z⊗…⊗Z 的本征值 ±1（具体基态见 `counts`）                                                                                 |
+| `snap(index)`           | `np.ndarray` or `None` | 返回 §4.1 `snap` 记录的第 `index` 个门后的完整态；未记录时返回 `None`                                                                                         |
 | `most_probable()`       | `(str, float)`           | 最高概率基态及其概率                                                                                                                                               |
 | `summary()`             | `str`                    | 单行摘要字符串                                                                                                                                                     |
 
-`result.metadata` 中与读出相关的键：`measured_qubits`（被读出的比特下标列表；机制一默认全读时为 `None`）、`final_state_kind`（`'state_vector'` / `'density_matrix'` / `None`）、`final_state_qubits`（`final_state` 所描述的比特下标列表）。
+`result.metadata` 中与读出相关的键：`measured_qubits`（被读出的比特下标列表；机制一默认全读时为 `None`）、`final_state_kind`（`'state_vector'` / `'density_matrix'` / `None`）、`final_state_qubits`（`final_state` 所描述的比特下标列表）、`snap_indices`（已记录中间态的门序号列表）。
 
 ### 4.7 Sampler / Estimator primitives（统一执行入口）
 

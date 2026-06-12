@@ -120,6 +120,16 @@ def test_return_state_false_drops_states_but_keeps_output(m):
     assert result.output is not None
 
 
+def test_snap_records_requested_intermediate_full_states(m):
+    result = m.run(bell_circuit(), shots=None, snap=[0, 1])
+
+    after_h = np.array([1.0, 0.0, 1.0, 0.0], dtype=np.complex128) / np.sqrt(2.0)
+    np.testing.assert_allclose(result.snap(0).reshape(-1), after_h, atol=1e-6)
+    np.testing.assert_allclose(result.snap(1).reshape(-1), BELL, atol=1e-6)
+    assert result.snap(2) is None
+    assert result.metadata["snap_indices"] == [0, 1]
+
+
 def test_density_matrix_path_mirrors_semantics(m):
     # shots=None：不测量，final_state 即完整末态（flatten 密度矩阵）
     result = m.run_density_matrix(bell_circuit(), shots=None)

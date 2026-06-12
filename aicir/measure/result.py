@@ -25,6 +25,7 @@ class Result:
       shots>1 时为对被测比特求偏迹后的约化密度矩阵（无剩余比特则为 None）；
     - ``output``：单次（shots=1）测量结果——被测比特上 Z⊗...⊗Z 关联测量
       的本征值（+1 或 -1）；坍缩到的具体基态见 ``counts`` / ``final_state``。
+    - ``snapshot_states``：按门序号记录的中间完整态；通过 ``snap(index)`` 读取。
     """
 
     n_qubits: int
@@ -38,6 +39,7 @@ class Result:
     metadata: Dict[str, object] = field(default_factory=dict)
     state: Optional[np.ndarray] = None
     output: Optional[object] = None
+    snapshot_states: Dict[int, np.ndarray] = field(default_factory=dict)
 
     def most_probable(self):
         idx = int(np.argmax(self.probabilities))
@@ -54,6 +56,13 @@ class Result:
         if var is None:
             return None
         return float(np.sqrt(max(var, 0.0)))
+
+    def snap(self, gate_index: int) -> Optional[np.ndarray]:
+        """Return the full state recorded after ``gate_index`` finishes, if any."""
+        state = self.snapshot_states.get(int(gate_index))
+        if state is None:
+            return None
+        return np.array(state, copy=True)
 
     def summary(self) -> str:
         peak_state, peak_prob = self.most_probable()
