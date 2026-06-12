@@ -21,14 +21,14 @@
 
 所有常用类与函数均可从顶层 `aicir` 包一次性导入。
 
-状态类 `StateVector`、`DensityMatrix` 的规范模块路径为 `aicir.core`，同时也可从顶层 `aicir` 导入。
+统一状态类 `State` 的规范模块路径为 `aicir.core`，同时也可从顶层 `aicir` 导入。它同时表示纯态（振幅向量形态）与混合态/密度矩阵（矩阵形态），取代了旧的 `StateVector` / `DensityMatrix`。
 
 ```python
 # 后端
 from aicir import GPUBackend, NumpyBackend, NPUBackend
 
-# 量子态（规范路径）
-from aicir.core import StateVector, DensityMatrix
+# 量子态（规范路径）：统一的 State 类
+from aicir.core import State
 
 # 量子门（构造函数；签名与参数顺序不变，返回类型化 Operation，
 # 支持旧门字典的只读访问与 == 比较，见 3.1 节说明）
@@ -94,111 +94,97 @@ from aicir.primitives import ShotSampler, StatevectorEstimator, ShotEstimator
 
 ## 2. 构建量子态
 
-`aicir` 用 `StateVector` 表示纯态，用 `DensityMatrix` 表示密度矩阵。两者都需要显式传入后端，数值数据会保存在对应后端的张量对象中。
+`aicir` 用统一的 `State` 类表示量子态：纯态以**振幅向量形态**存储，密度矩阵以**矩阵形态**存储，`state.is_density` 区分两者。`backend` 参数可选，省略时默认使用 `NumpyBackend`；数值数据保存在对应后端的张量对象中。
 
 ### 2.1 构建零态
 
 最常用的初态是全零计算基态：
 
 ```python
-from aicir import NumpyBackend
-from aicir.core import StateVector, DensityMatrix
+from aicir.core import State
 
-backend = NumpyBackend()
+psi = State.zero_state(n_qubits=2)                  # 向量形态 |00>
+rho = State.zero_state(n_qubits=2).to_density_matrix()  # 矩阵形态 |00><00|
 
-psi = StateVector.zero_state(n_qubits=2, backend=backend)
-rho = DensityMatrix.zero_state(n_qubits=2, backend=backend)
-
-print(psi.to_numpy())       # [1.+0.j 0.+0.j 0.+0.j 0.+0.j]
+print(psi.array)            # [1.+0.j 0.+0.j 0.+0.j 0.+0.j]
 print(rho.probabilities())  # [1. 0. 0. 0.]
+print(rho.is_density)       # True
 ```
 
 ### 2.2 从数组构建纯态
 
-`StateVector.from_array(...)` 接收长度为 `2**n_qubits` 的数组，并会自动归一化。基态顺序采用大端序：二比特时下标依次对应 `|00>`、`|01>`、`|10>`、`|11>`。
+`State.from_array(...)` 接收长度为 `2**n_qubits` 的数组，并会自动归一化。`n_qubits` 可省略（按数组长度推断），`backend` 也可省略。基态顺序采用大端序：二比特时下标依次对应 `|00>`、`|01>`、`|10>`、`|11>`。
+
+```python
+from aicir.core import State
+
+psi = State.from_array([1, 0, 0, 1])   # n_qubits 自动推断为 2，backend 默认 NumpyBackend
+
+print(psi.ket)  # 1/\sqrt{2}|00>+1/\sqrt{2}|11>
+```
+
+如果直接调用 `State(data, n_qubits, backend)`，构造器只检查形状，不会自动归一化；因此面向用户代码时优先使用 `from_array(...)`。
+
+### 2.3 三种表示与打印
+
+`State` 提供三个可直接打印的表示属性：
+
+- `.array` —— 振幅向量（numpy `(2^n,)`）；**混合态返回 `None`**。
+- `.matrix` —— 密度矩阵（numpy `(2^n, 2^n)`）；纯态会即时计算 `|ψ><ψ|`。
+- `.ket` —— Dirac 记号字符串：纯态为 `Σaᵢ|i>` 叠加，混合态为 `Σρ_ij|i><j|` 算符展开。
+
+`print(state)` 默认输出 `.ket`；需要控制端序或过滤极小振幅时调用 `state.format(...)`。
+
+```python
+from aicir.core import State
+
+psi = State.from_array([1, 0, 0, 1])
+
+print(psi)                  # 1/\sqrt{2}|00>+1/\sqrt{2}|11>
+print(psi.ket)              # 1/\sqrt{2}|00>+1/\sqrt{2}|11>
+print(psi.array)            # 态向量的一维复数数组
+print(psi.matrix)           # 2^n x 2^n 密度矩阵
+print(psi.probabilities())  # [0.5 0.  0.  0.5]
+```
+
+矩阵形态（混合态）下，`.array` 为 `None`，`.ket` 给出算符展开：
 
 ```python
 import numpy as np
-from aicir import NumpyBackend
-from aicir.core import StateVector
+from aicir.core import State
 
-backend = NumpyBackend()
+rho = State.from_matrix(np.diag([0.5, 0.5, 0.0, 0.0]).astype(np.complex64))
 
-psi = StateVector.from_array(
-    np.array([1, 0, 0, 1], dtype=np.complex64),
-    n_qubits=2,
-    backend=backend,
-)
-
-print(psi.format())  # 1/\sqrt{2}|00>+1/\sqrt{2}|11>
-```
-
-如果直接调用 `StateVector(data, n_qubits, backend)`，构造器只检查形状，不会自动归一化；因此面向用户代码时优先使用 `from_array(...)`。
-
-### 2.3 打印量子态
-
-纯态可以直接 `print(psi)`，默认输出 ket 叠加形式；如果需要明确控制端序或过滤很小的振幅，可调用 `psi.format(...)`。需要数值数组时使用 `psi.to_numpy()`；需要测量概率时使用 `psi.probabilities()`。
-
-```python
-import numpy as np
-from aicir import NumpyBackend
-from aicir.core import StateVector
-
-backend = NumpyBackend()
-
-psi = StateVector.from_array(
-    np.array([1, 0, 0, 1], dtype=np.complex64),
-    n_qubits=2,
-    backend=backend,
-)
-
-print(psi)                 # 1/\sqrt{2}|00>+1/\sqrt{2}|11>
-print(psi.format())        # 1/\sqrt{2}|00>+1/\sqrt{2}|11>
-print(psi.to_numpy())      # 态向量的一维复数数组
-print(psi.probabilities()) # [0.5 0.  0.  0.5]
-```
-
-密度矩阵直接 `print(rho)` 会输出对象摘要；如果要查看完整矩阵、对角概率或纯度，分别使用 `rho.to_numpy()`、`rho.probabilities()`、`rho.purity()`。
-
-```python
-rho = psi.to_density_matrix()
-
-print(rho)                 # DensityMatrix(n_qubits=2, backend=NumpyBackend(dtype=complex64))
-print(rho.to_numpy())      # 2^n x 2^n 复数矩阵
-print(rho.probabilities()) # [0.5 0.  0.  0.5]
-print(rho.purity())        # 纯态密度矩阵约为 1.0
+print(rho.array)            # None（混合态无单一振幅向量）
+print(rho.ket)              # 0.5|00><00|+0.5|01><01|
+print(rho.matrix)           # 2^n x 2^n 复数矩阵
+print(rho.probabilities())  # [0.5 0.5 0.  0. ]
+print(rho.purity())         # 0.5（混合态）
 ```
 
 ### 2.4 从纯态构建密度矩阵
 
-纯态可以直接转换为密度矩阵：
+纯态可以直接转换为矩阵形态 `State`：
 
 ```python
-from aicir import NumpyBackend
-from aicir.core import StateVector, DensityMatrix
+from aicir.core import State
 
-backend = NumpyBackend()
-psi = StateVector.from_array([1, 0, 0, 1], n_qubits=2, backend=backend)
+psi = State.from_array([1, 0, 0, 1])
 
 rho = psi.to_density_matrix()
-rho2 = DensityMatrix.from_state_vector(psi)
 
-print(rho.purity())   # 纯态密度矩阵的 purity 约为 1.0
+print(rho.is_density)  # True
+print(rho.purity())    # 纯态密度矩阵的 purity 约为 1.0
 ```
 
-也可以直接从矩阵或列表构建密度矩阵：
+也可以直接从矩阵或列表构建密度矩阵（`n_qubits` 由形状推断）：
 
 ```python
 import numpy as np
-from aicir import NumpyBackend
-from aicir.core import DensityMatrix
+from aicir.core import State
 
-backend = NumpyBackend()
-
-rho = DensityMatrix.from_array(
+rho = State.from_matrix(
     np.diag([0.5, 0.5, 0.0, 0.0]).astype(np.complex64),
-    n_qubits=2,
-    backend=backend,
 )
 ```
 
@@ -209,7 +195,7 @@ rho = DensityMatrix.from_array(
 ```python
 import numpy as np
 from aicir import Circuit, Measure, NumpyBackend, hadamard, cnot
-from aicir.core import StateVector
+from aicir.core import State
 
 backend = NumpyBackend()
 
@@ -219,7 +205,7 @@ cir = Circuit(
     n_qubits=2,
 )
 
-psi0 = StateVector.from_array(
+psi0 = State.from_array(
     np.array([0, 1, 0, 0], dtype=np.complex64),  # |01>
     n_qubits=2,
     backend=backend,
@@ -232,13 +218,13 @@ result = Measure(backend).run(
     return_state=True,
 )
 
-# result.final_state 是 numpy 态向量；重新封装为 StateVector 后可按 ket 形式打印。
-final_psi = StateVector.from_array(
+# result.final_state 是 numpy 态向量；重新封装为 State 后可按 ket 形式打印。
+final_psi = State.from_array(
     result.final_state,
     n_qubits=result.n_qubits,
     backend=backend,
 )
-print(final_psi.format())  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
+print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 ```
 
 密度矩阵路径可使用 `Measure.run_density_matrix(..., initial_density_matrix=...)`，适合噪声模型或混合态演化。
@@ -575,15 +561,15 @@ print(result.expectation_values)   # {'Z0': ~0.0}
 print(result.expectation_variances)
 ```
 
-### 4.5 从 StateVector 直接测量
+### 4.5 从 State 直接测量
 
 ```python
-from aicir.core import StateVector
+from aicir.core import State
 from aicir import GPUBackend
 import numpy as np
 
 backend = GPUBackend()
-sv = StateVector.zero_state(2, backend)
+sv = State.zero_state(2, backend)
 
 # 直接获取概率分布
 probs = sv.probabilities()
@@ -720,9 +706,9 @@ H_default = Hamiltonian(n_qubits=4, terms=[
 H_mat = H.to_matrix(backend)
 print(H_mat.shape)   # torch.Size([4, 4])
 
-# 计算期望值（通过 StateVector）
-from aicir.core import StateVector
-sv = StateVector.zero_state(2, backend)
+# 计算期望值（通过 State）
+from aicir.core import State
+sv = State.zero_state(2, backend)
 print(H.expectation(sv, backend))   # 实数期望值
 
 # 通过 Measure.run() 传入 observables 参数
@@ -743,7 +729,7 @@ from aicir import (
     AmplitudeDampingChannel,
     GPUBackend,
 )
-from aicir.core import DensityMatrix
+from aicir.core import State
 
 backend = GPUBackend()
 model = (NoiseModel()
@@ -752,7 +738,7 @@ model = (NoiseModel()
          .add_channel(PhaseFlipChannel(target_qubit=0, p=0.005)))
 
 # 手动应用到密度矩阵
-rho = DensityMatrix.zero_state(2, backend)
+rho = State.zero_state(2, backend).to_density_matrix()
 rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 ```
 
@@ -760,7 +746,7 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 
 ## 6. 计算后端的选择与使用
 
-aicir 提供三种计算后端，都实现统一的 `Backend` 接口，可与 `Circuit` / `Measure` / `StateVector` / `Hamiltonian` 无缝配合。它们的区别只在底层张量库与运行设备，业务代码无需改动即可切换：
+aicir 提供三种计算后端，都实现统一的 `Backend` 接口，可与 `Circuit` / `Measure` / `State` / `Hamiltonian` 无缝配合。它们的区别只在底层张量库与运行设备，业务代码无需改动即可切换：
 
 | 后端                                    | 底层库                 | 运行设备                 | 自动微分 | 典型用途                                      |
 | --------------------------------------- | ---------------------- | ------------------------ | -------- | --------------------------------------------- |
