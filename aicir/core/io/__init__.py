@@ -8,6 +8,12 @@ from .qasm import (
     save_circuit_qasm3,
 )
 from .qiskit_io import circuit_from_qiskit, circuit_to_qiskit, from_qiskit, to_qiskit
+from .pennylane_io import (
+    circuit_from_pennylane,
+    circuit_to_pennylane,
+    from_pennylane,
+    to_pennylane,
+)
 
 __all__ = [
     "circuit_to_json",
@@ -24,4 +30,8 @@ __all__ = [
     "circuit_from_qiskit",
     "to_qiskit",
     "from_qiskit",
+    "circuit_to_pennylane",
+    "circuit_from_pennylane",
+    "to_pennylane",
+    "from_pennylane",
 ]
