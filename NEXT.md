@@ -233,11 +233,12 @@ GateSpec(
 
 - `to_qiskit()` / `from_qiskit()`
 - `to_pennylane()` / `from_pennylane()`
+- `to_wuyue()` / `from_wuyue()`
 - `to_qasm3()` / `from_qasm3()`
 
-目的不是依赖外部框架，而是让用户可以把 `aicir` 的轻量研究线路带入 Qiskit 硬件生态，或把 PennyLane/Qiskit 的线路导入 `aicir` 做本地模拟、QAS 和自定义指标评估。
+目的不是依赖外部框架，而是让用户可以把 `aicir` 的轻量研究线路带入 Qiskit/WuYue 硬件生态，或把 PennyLane/Qiskit/WuYue 的线路导入 `aicir` 做本地模拟、QAS 和自定义指标评估。
 
-当前状态：Qiskit 与 PennyLane 第一片已落地。Qiskit 路径位于 `aicir.core.io.qiskit_io`，提供 `circuit_to_qiskit`/`circuit_from_qiskit` 和短别名 `to_qiskit`/`from_qiskit`；PennyLane 路径位于 `aicir.core.io.pennylane_io`，提供 `circuit_to_pennylane`/`circuit_from_pennylane` 和短别名 `to_pennylane`/`from_pennylane`。两者都从 `aicir.core.io`、`aicir.core`、顶层 `aicir` 导出，并保持对应框架为可选依赖，仅在调用互操作函数时导入。当前支持基础门、参数旋转、受控门、`swap`、`rzz/rxx`、`u2/u3`、`ccx` 等基础幺正门；Qiskit 路径额外支持线路内 `measure` 标记，PennyLane 路径暂不转换 aicir 线路内 `measure`。更完整的 QASM3 互转仍未开始。
+当前状态：Qiskit、PennyLane 与 WuYue 第一片已落地。Qiskit 路径位于 `aicir.core.io.qiskit_io`，提供 `circuit_to_qiskit`/`circuit_from_qiskit` 和短别名 `to_qiskit`/`from_qiskit`；PennyLane 路径位于 `aicir.core.io.pennylane_io`，提供 `circuit_to_pennylane`/`circuit_from_pennylane` 和短别名 `to_pennylane`/`from_pennylane`；WuYue 路径位于 `aicir.core.io.wuyue_io`，提供 `circuit_to_wuyue`/`circuit_from_wuyue` 和短别名 `to_wuyue`/`from_wuyue`。三者都从 `aicir.core.io`、`aicir.core`、顶层 `aicir` 导出，并保持对应框架为可选依赖，仅在调用互操作函数时导入。当前支持基础门、参数旋转、受控门、`swap`、`rzz/rxx`、`u2/u3`、`ccx` 等基础幺正门；Qiskit 路径额外支持线路内 `measure` 标记，PennyLane 路径暂不转换 aicir 线路内 `measure`，WuYue 路径按当前 SDK 原生门集支持 `cx/cz`、`rzz`、`swap`、`u2/u3`、`ccx`、`identity` 和线路内 `measure`，暂不转换 `cy`、`crx/cry/crz` 与 `rxx`。更完整的 QASM3 互转仍未开始。
 
 ### 9. 统一结果对象和 metadata
 

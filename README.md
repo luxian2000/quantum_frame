@@ -73,6 +73,8 @@ from aicir import (
     to_qiskit, from_qiskit,
     circuit_to_pennylane, circuit_from_pennylane,
     to_pennylane, from_pennylane,
+    circuit_to_wuyue, circuit_from_wuyue,
+    to_wuyue, from_wuyue,
 )
 
 # QML 梯度工具
@@ -1193,6 +1195,47 @@ cir2 = from_pennylane(script)
 ```
 
 当前 PennyLane 互操作支持基础单比特门、参数旋转门、`u2`/`u3`、`cx/cy/cz`、`crx/cry/crz`、`swap`、`rzz/rxx`（对应 PennyLane 的 `IsingZZ`/`IsingXX`）、`ccx` 和 `identity`。暂不支持 PennyLane 自定义门、未绑定符号参数和 aicir 线路内 `measure` 标记。
+
+### 7.8 与 WuYue 互转
+
+`wuyue` 是可选依赖：导入 `aicir` 不要求安装 WuYue SDK，只有调用互转函数时才会检查。
+
+```python
+import math
+from wuyue.circuit.circuit import QuantumCircuit
+from wuyue.element.gate import CX, H
+from wuyue.register.classicalregister import ClassicalRegister
+from wuyue.register.quantumregister import QuantumRegister
+from aicir import Circuit, cnot, hadamard, rz, circuit_from_wuyue, circuit_to_wuyue
+
+cir = Circuit(
+    hadamard(0),
+    cnot(1, [0]),
+    rz(math.pi / 4, 1),
+    n_qubits=2,
+)
+
+wc = circuit_to_wuyue(cir)      # aicir Circuit -> WuYue QuantumCircuit
+cir2 = circuit_from_wuyue(wc)   # WuYue QuantumCircuit -> aicir Circuit
+
+qreg = QuantumRegister(2)
+creg = ClassicalRegister(1)
+wc2 = QuantumCircuit(qreg, creg)
+wc2.add(H, qreg[0])
+wc2.add(CX, qreg[1], control=qreg[0])
+cir3 = circuit_from_wuyue(wc2)
+```
+
+也可以使用 `NEXT.md` 第 8 节中的短别名：
+
+```python
+from aicir import to_wuyue, from_wuyue
+
+wc = to_wuyue(cir)
+cir2 = from_wuyue(wc)
+```
+
+当前 WuYue 互操作支持基础单比特门、参数旋转门、`u2`/`u3`、`cx/cz`、`swap`、`rzz`（对应 WuYue `IsingZZ`）、`ccx`、`identity` 和线路内 `measure` 标记。受 WuYue 当前原生门集限制，暂不转换 `cy`、`crx/cry/crz`、`rxx`、自定义门和未绑定符号参数。
 
 ---
 
