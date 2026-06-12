@@ -70,6 +70,18 @@ def _format_amplitude(value: complex, tol: float) -> str:
     return f"({real:.6g}{sign}{abs(imag):.6g}j)"
 
 
+def _infer_n_qubits(dim: int) -> int:
+    n = dim.bit_length() - 1
+    if (1 << n) != dim:
+        raise ValueError(f"维数 {dim} 不是 2 的幂")
+    return n
+
+
+def _default_backend():
+    from ..channel.backends import NumpyBackend
+    return NumpyBackend()
+
+
 class State:
     """
     纯量子态 |ψ⟩ 的面向对象封装。
@@ -89,71 +101,77 @@ class State:
         print(sv2.measure(shots=1024))
     """
 
-    def __init__(self, data, n_qubits: int, backend: "Backend", bit_order: str = "msb"):
+    def __init__(self, data, n_qubits: int, backend: "Backend" = None, bit_order: str = "msb"):
         """
         参数:
-            data:     后端张量，shape (2^n, 1) 或 (2^n,)
+            data:     后端张量。1D/(2^n,1) 视为纯态向量；(2^n,2^n) 视为密度矩阵
             n_qubits: 量子比特数
-            backend:  计算后端实例
+            backend:  计算后端实例；None 时使用默认 NumpyBackend
         """
-        self._backend = backend
+        self._backend = backend if backend is not None else _default_backend()
         self._n_qubits = n_qubits
         self._bit_order = _normalize_bit_order(bit_order)
+        self._array_cache = None
+        self._matrix_cache = None
 
-        if hasattr(data, "ndim") and data.ndim == 1:
-            data = data.reshape(-1, 1)
-
-        casted = backend.cast(data)
+        casted = self._backend.cast(data)
         if casted is None:
             raise TypeError("backend.cast 返回了 None，无法构造 State")
-        if len(casted.shape) == 1:
-            casted = casted.reshape(-1, 1)
+        shape = tuple(int(axis) for axis in casted.shape)
+        dim = 1 << n_qubits
+
+        if len(shape) == 2 and shape[0] == dim and shape[1] == dim and dim > 1:
+            self._kind = "matrix"
+            self._data = casted
+            return
+
+        if len(shape) == 1:
+            casted = self._backend.cast(casted).reshape(-1, 1)
+            shape = tuple(int(axis) for axis in casted.shape)
+        elif len(shape) == 2 and shape[1] != 1:
+            raise ValueError(f"无法识别的数据形状 {shape}（n_qubits={n_qubits}）")
+        self._kind = "vector"
+        if shape[0] != dim:
+            raise ValueError(
+                f"数据长度 {shape[0]} 与 n_qubits={n_qubits} 不符（期望 {dim}）"
+            )
         self._data = casted
 
-        expected = 1 << n_qubits
-        if self._data.shape[0] != expected:
-            raise ValueError(
-                f"数据长度 {self._data.shape[0]} 与 n_qubits={n_qubits} 不符（期望 {expected}）"
-            )
-
     @classmethod
-    def zero_state(
-        cls,
-        n_qubits: int,
-        backend: "Backend",
-        bit_order: str = "msb",
-    ) -> "State":
-        """创建 |0⊗n⟩ 计算基基态。"""
+    def zero_state(cls, n_qubits: int, backend: "Backend" = None, bit_order: str = "msb") -> "State":
+        """创建 |0⊗n⟩ 计算基基态（向量形态）。"""
+        backend = backend if backend is not None else _default_backend()
         data = backend.zeros_state(n_qubits)
         return cls(data, n_qubits, backend, bit_order=bit_order)
 
     @classmethod
-    def from_array(
-        cls,
-        array,
-        n_qubits: int,
-        backend: "Backend",
-        bit_order: str = "msb",
-    ) -> "State":
-        """
-        从 numpy array / list 构造态向量（自动归一化）。
-
-        参数:
-            array:    长度为 2^n 的一维或 (2^n,1) 的复数序列（无需预先归一化）
-            n_qubits: 量子比特数
-            backend:  计算后端
-            bit_order: 基态标签端序
-        """
-        np_array = np.asarray(array, dtype=np.complex64)
-        
-        # 计算范数并进行自动归一化
+    def from_array(cls, array, n_qubits: int = None, backend: "Backend" = None, bit_order: str = "msb") -> "State":
+        """从 numpy array / list 构造态向量（自动归一化）。n_qubits 省略时由长度推断。"""
+        backend = backend if backend is not None else _default_backend()
+        np_array = np.asarray(array, dtype=np.complex64).reshape(-1)
+        if n_qubits is None:
+            n_qubits = _infer_n_qubits(np_array.shape[0])
         norm = float(np.linalg.norm(np_array))
         if norm <= 0:
             raise ValueError("输入数组范数必须大于 0")
-        normalized = np_array / norm
-        
-        data = backend.cast(normalized)
+        data = backend.cast(np_array / norm)
         return cls(data, n_qubits, backend, bit_order=bit_order)
+
+    @classmethod
+    def from_matrix(cls, matrix, n_qubits: int = None, backend: "Backend" = None) -> "State":
+        """从密度矩阵 (2^n,2^n) 构造混合/纯态（matrix 形态）。n_qubits 省略时由形状推断。"""
+        backend = backend if backend is not None else _default_backend()
+        np_m = np.asarray(matrix, dtype=np.complex64)
+        if np_m.ndim != 2 or np_m.shape[0] != np_m.shape[1]:
+            raise ValueError("from_matrix 需要方阵 (2^n, 2^n)")
+        if n_qubits is None:
+            n_qubits = _infer_n_qubits(np_m.shape[0])
+        return cls(backend.cast(np_m), n_qubits, backend)
+
+    @property
+    def is_density(self) -> bool:
+        """当前是否以密度矩阵形态存储。"""
+        return self._kind == "matrix"
 
     @property
     def data(self):
