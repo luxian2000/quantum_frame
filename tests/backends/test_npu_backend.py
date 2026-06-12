@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch.utils._python_dispatch import TorchDispatchMode
 
-from aicir import NPUBackend, StateVector, npu_runtime_context_from_env
+from aicir import NPUBackend, State, npu_runtime_context_from_env
 from aicir.channel.backends.npu_backend import is_npu_available
 
 
@@ -81,7 +81,7 @@ class TestNPUBackend(unittest.TestCase):
 
     def test_statevector_pipeline(self):
         backend = NPUBackend(fallback_to_cpu=True)
-        sv = StateVector.zero_state(2, backend)
+        sv = State.zero_state(2, backend)
 
         probs = backend.to_numpy(sv.probabilities())
         self.assertAlmostEqual(float(probs[0]), 1.0, places=6)
