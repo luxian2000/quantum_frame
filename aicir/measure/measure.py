@@ -262,6 +262,10 @@ class Measure:
             return State.zero_state(n_qubits, backend)
 
         if isinstance(initial_state, State):
+            if initial_state.is_density:
+                raise TypeError(
+                    "initial_state 为密度矩阵形态 State；态矢演化需要向量形态"
+                )
             if initial_state.n_qubits != n_qubits:
                 raise ValueError("initial_state.n_qubits 与电路 n_qubits 不一致")
             return initial_state
@@ -280,7 +284,11 @@ class Measure:
             rho[0, 0] = 1.0 + 0j
             return State.from_matrix(rho, n_qubits, backend)
 
-        if isinstance(initial_density_matrix, State) and initial_density_matrix.is_density:
+        if isinstance(initial_density_matrix, State):
+            if not initial_density_matrix.is_density:
+                raise TypeError(
+                    "initial_density_matrix 为向量形态 State；请先调用 .to_density_matrix()"
+                )
             if initial_density_matrix.n_qubits != n_qubits:
                 raise ValueError("initial_density_matrix.n_qubits 与电路 n_qubits 不一致")
             return initial_density_matrix
