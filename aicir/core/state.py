@@ -1,12 +1,13 @@
 """
 aicir/core/state.py
 
-纯量子态 |ψ⟩ 的面向对象封装。
+量子态的统一面向对象封装：纯态（向量形态 (2^n,1)）与混合态（密度矩阵形态 (2^n,2^n)）。
 
 设计原则：
-- 内部数据始终保持列向量形式，shape (2^n, 1)
+- 向量形态内部数据 shape (2^n, 1)，密度矩阵形态 shape (2^n, 2^n)，均为复数类型
 - 所有数值运算委托给注入的 Backend 实例
 - 返回新对象而非原地修改（不可变风格），便于函数式组合
+- `.array` / `.matrix` / `.ket` 提供统一的用户访问接口
 """
 
 from __future__ import annotations
@@ -70,6 +71,64 @@ def _format_amplitude(value: complex, tol: float) -> str:
     return f"({real:.6g}{sign}{abs(imag):.6g}j)"
 
 
+def _format_ket(amplitudes, n_qubits: int, bit_order: str, atol: float = 1e-6) -> str:
+    """Σ aᵢ|i> 形式。"""
+    terms = []
+    for idx, amplitude in enumerate(amplitudes):
+        if abs(amplitude) < atol:
+            continue
+        coeff = _format_amplitude(amplitude, atol)
+        label = _basis_label(idx, n_qubits, bit_order)
+        terms.append(f"{coeff}|{label}>")
+    if not terms:
+        return "0"
+    expr = terms[0]
+    for term in terms[1:]:
+        expr += term if term.startswith("-") else f"+{term}"
+    return expr
+
+
+def _format_density_amplitude(value: complex, tol: float) -> str:
+    """密度矩阵元素的格式化：实数用十进制，不使用 sqrt 启发式。"""
+    real = float(np.real(value))
+    imag = float(np.imag(value))
+    if abs(imag) < tol:
+        if abs(real - 1.0) < tol:
+            return "1"
+        if abs(real + 1.0) < tol:
+            return "-1"
+        return f"{real:.6g}"
+    if abs(real) < tol:
+        if abs(imag - 1.0) < tol:
+            return "1j"
+        if abs(imag + 1.0) < tol:
+            return "-1j"
+        return f"{imag:.6g}j"
+    sign = "+" if imag >= 0 else "-"
+    return f"({real:.6g}{sign}{abs(imag):.6g}j)"
+
+
+def _format_density_ket(matrix, n_qubits: int, bit_order: str, atol: float = 1e-6) -> str:
+    """Σ ρ_ij|i><j| 形式（遍历所有非零矩阵元）。"""
+    terms = []
+    dim = matrix.shape[0]
+    for i in range(dim):
+        for j in range(dim):
+            val = matrix[i, j]
+            if abs(val) < atol:
+                continue
+            coeff = _format_density_amplitude(val, atol)
+            li = _basis_label(i, n_qubits, bit_order)
+            lj = _basis_label(j, n_qubits, bit_order)
+            terms.append(f"{coeff}|{li}><{lj}|")
+    if not terms:
+        return "0"
+    expr = terms[0]
+    for term in terms[1:]:
+        expr += term if term.startswith("-") else f"+{term}"
+    return expr
+
+
 def _infer_n_qubits(dim: int) -> int:
     if dim <= 0:
         raise ValueError(f"维数 {dim} 必须为正整数")
@@ -86,9 +145,13 @@ def _default_backend():
 
 class State:
     """
-    纯量子态 |ψ⟩ 的面向对象封装。
+    量子态的面向对象封装，同时支持纯态（向量形态）与混合态（密度矩阵形态）。
 
-    形状约定：内部数据 shape (2^n, 1)，复数类型。
+    形状约定：
+    - 向量形态：内部数据 shape (2^n, 1)，复数类型
+    - 密度矩阵形态：内部数据 shape (2^n, 2^n)，复数类型
+
+    用户接口属性：`.array`（纯态振幅向量）、`.matrix`（密度矩阵）、`.ket`（Dirac 记号字符串）。
 
     示例::
 
@@ -96,9 +159,10 @@ class State:
         from aicir.core import State
 
         bk = GPUBackend()
-        sv = State.zero_state(2, bk)                # |00⟩
+        sv = State.zero_state(2, bk)                # |00⟩（向量形态）
         U  = ...                                    # 某个 4×4 酉矩阵
         sv2 = sv.evolve(U)                          # |ψ'⟩ = U|ψ⟩
+        print(sv2.ket)                              # Dirac 记号
         print(sv2.probabilities())
         print(sv2.measure(shots=1024))
     """
@@ -179,6 +243,37 @@ class State:
     def data(self):
         """后端原生张量。向量形态 shape (2^n, 1)；密度矩阵形态 shape (2^n, 2^n)。"""
         return self._data
+
+    @property
+    def array(self):
+        """纯态返回 numpy (2^n,) 振幅向量；混合态返回 None。"""
+        if self._array_cache is not None:
+            return self._array_cache
+        if self._kind == "vector":
+            self._array_cache = self._backend.to_numpy(self._data).reshape(-1)
+            return self._array_cache
+        rho = self.matrix
+        if not self.is_pure():
+            return None
+        evals, evecs = np.linalg.eigh(rho)
+        idx = int(np.argmax(evals.real))
+        vec = evecs[:, idx]
+        nz = int(np.argmax(np.abs(vec) > 1e-9))
+        phase = np.exp(-1j * np.angle(vec[nz])) if abs(vec[nz]) > 0 else 1.0
+        self._array_cache = (vec * phase).astype(np.complex64)
+        return self._array_cache
+
+    @property
+    def matrix(self) -> np.ndarray:
+        """恒返回 numpy (2^n, 2^n) 密度矩阵。"""
+        if self._matrix_cache is None:
+            self._matrix_cache = self._backend.to_numpy(self._matrix_data())
+        return self._matrix_cache
+
+    @property
+    def ket(self) -> str:
+        """可打印 Dirac 记号：纯态 Σaᵢ|i>；混合态 Σρ_ij|i><j|。"""
+        return self.format()
 
     @property
     def n_qubits(self) -> int:
@@ -263,31 +358,20 @@ class State:
         return self._backend.inner_product(self._data, other._data)
 
     def format(self, bit_order: Optional[str] = None, atol: float = 1e-6) -> str:
-        """
-        以 ket 叠加形式格式化量子态，例如：1/\\sqrt{2}|00>+1/\\sqrt{2}|11>。
-        """
+        """格式化为 Dirac 记号。纯态用 ket 叠加；混合态用 ρ_ij|i><j| 展开。"""
         order = _normalize_bit_order(bit_order, default=self._bit_order)
-        amplitudes = self.to_numpy()
-        terms = []
-        for idx, amplitude in enumerate(amplitudes):
-            if abs(amplitude) < atol:
-                continue
-            coeff = _format_amplitude(amplitude, atol)
-            label = _basis_label(idx, self._n_qubits, order)
-            terms.append(f"{coeff}|{label}>")
-
-        if not terms:
-            return "0"
-
-        expression = terms[0]
-        for term in terms[1:]:
-            expression += term if term.startswith("-") else f"+{term}"
-        return expression
+        arr = self.array
+        if arr is None:
+            return _format_density_ket(self.matrix, self._n_qubits, order, atol)
+        return _format_ket(arr, self._n_qubits, order, atol)
 
     def reorder_endianness(self, bit_order: str) -> "State":
         """
         在 LSB / MSB 约定之间转换底层基态顺序，并返回新状态。
+        仅向量形态支持；矩阵形态会抛出 TypeError。
         """
+        if self._kind == "matrix":
+            raise TypeError("矩阵形态 State 不支持端序重排；请先取纯态向量")
         target_order = _normalize_bit_order(bit_order)
         if target_order == self._bit_order or self._n_qubits <= 1:
             return State(self._data, self._n_qubits, self._backend, bit_order=target_order)
