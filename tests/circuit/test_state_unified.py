@@ -52,3 +52,42 @@ def test_to_density_matrix_returns_matrix_form_state():
     rho = s.to_density_matrix()
     assert isinstance(rho, State)
     assert rho.is_density is True
+
+
+def test_pure_state_three_representations():
+    s = State.from_array([1, 0, 0, 1], n_qubits=2)
+    np.testing.assert_allclose(
+        s.array, np.array([1, 0, 0, 1]) / np.sqrt(2), atol=1e-6
+    )
+    assert s.matrix.shape == (4, 4)
+    assert s.ket == "1/\\sqrt{2}|00>+1/\\sqrt{2}|11>"
+
+
+def test_mixed_state_array_is_none_and_ket_is_operator_form():
+    rho = np.array([[0.5, 0], [0, 0.5]], dtype=np.complex64)
+    s = State.from_matrix(rho)
+    assert s.array is None
+    assert s.matrix.shape == (2, 2)
+    assert s.ket == "0.5|0><0|+0.5|1><1|"
+
+
+def test_matrix_form_pure_state_array_extracted_via_eigenvector():
+    s = State.from_array([0, 1], n_qubits=1).to_density_matrix()  # |1><1|
+    assert s.is_density is True
+    np.testing.assert_allclose(np.abs(s.array), [0, 1], atol=1e-6)
+    assert s.ket == "1|1>"
+
+
+def test_representations_are_printable():
+    s = State.from_array([1, 0], n_qubits=1)
+    assert isinstance(str(s.ket), str)
+    assert "1" in np.array2string(s.array)
+    assert s.matrix.shape == (2, 2)
+
+
+def test_matrix_form_state_is_printable_via_str():
+    # 回归：matrix 形态 State 直接 print 不应崩溃
+    rho = np.array([[0.5, 0], [0, 0.5]], dtype=np.complex64)
+    s = State.from_matrix(rho)
+    text = str(s)  # 不应抛异常
+    assert "><" in text
