@@ -121,21 +121,24 @@ class Measure:
     # ---------- 主入口 ----------
     def run(self, circuit, shots=1, measure_qubits=None, snap=None,
             tm=True, sm="avg", seed=None, *,
-            initial_state=None, observables=None, return_state=True) -> Result:
+            initial_state=None, initial_density_matrix=None,
+            observables=None, return_state=True) -> Result:
         """统一测量入口。
 
         参数:
-            circuit:        待测电路（需具备 n_qubits 属性）
-            shots:          采样次数；None 或 0 表示 exact 模式（单条精确轨迹，
-                            覆盖 tm、不做末端测量）；≥1 表示 M 条轨迹按 sm 聚合
-            measure_qubits: 显式末端读出比特（保留顺序）。与 tm=False、exact 模式互斥
-            snap:           需记录完整态快照的操作下标集合
-            tm:             是否在电路执行完后进行末端测量（exact 模式下被覆盖）
-            sm:             多轨迹聚合模式，目前仅支持 'avg'（'shot'/'cond' 暂未实现）
-            seed:           随机种子（用于复现）
-            initial_state:  初始态（None 表示 |0...0>）
-            observables:    可观测量字典 {name: operator_matrix}
-            return_state:   是否在结果中附带 state / final_state
+            circuit:                 待测电路（需具备 n_qubits 属性）
+            shots:                   采样次数；None 或 0 表示 exact 模式（单条精确轨迹，
+                                     覆盖 tm、不做末端测量）；≥1 表示 M 条轨迹按 sm 聚合
+            measure_qubits:          显式末端读出比特（保留顺序）。与 tm=False、exact 模式互斥
+            snap:                    需记录完整态快照的操作下标集合
+            tm:                      是否在电路执行完后进行末端测量（exact 模式下被覆盖）
+            sm:                      多轨迹聚合模式，目前仅支持 'avg'（'shot'/'cond' 暂未实现）
+            seed:                    随机种子（用于复现）
+            initial_state:           初始态（None 表示 |0...0>）
+            initial_density_matrix:  初始密度矩阵（提供时以密度矩阵模式初始化量子态；
+                                     与 initial_state 互斥）
+            observables:             可观测量字典 {name: operator_matrix}
+            return_state:            是否在结果中附带 state / final_state
         """
         if not hasattr(circuit, "n_qubits"):
             raise TypeError("circuit 需要具备 n_qubits 属性")
@@ -170,10 +173,16 @@ class Measure:
         do_terminal = tm and not exact and not (mq_explicit and len(norm_mq) == 0)
         terminal_qubits = (norm_mq if (mq_explicit and len(norm_mq) > 0) else list(range(n))) if do_terminal else None
 
+        if initial_state is not None and initial_density_matrix is not None:
+            raise ValueError("initial_state 与 initial_density_matrix 互斥，只能提供其一")
+
         noise_model = getattr(circuit, "noise_model", None)
         seed_seq = np.random.SeedSequence(seed) if seed is not None else np.random.SeedSequence()
 
         def fresh_state() -> State:
+            if initial_density_matrix is not None:
+                dm = np.asarray(initial_density_matrix)
+                return State(backend.cast(dm), n, backend)
             if initial_state is None:
                 return State.zero_state(n, backend)
             if isinstance(initial_state, State):
@@ -204,11 +213,14 @@ class Measure:
                                                terminal=terminal, snaps=base.snaps))
 
         result = self._build_result(trajectories, n, backend, norm_shots, exact, specs,
-                                     terminal_qubits, do_terminal, observables, return_state)
+                                     terminal_qubits, do_terminal, observables, return_state,
+                                     noise_model=noise_model,
+                                     initial_density_matrix=initial_density_matrix)
         return result
 
     def _build_result(self, trajectories, n, backend, norm_shots, exact, specs,
-                      terminal_qubits, do_terminal, observables, return_state) -> Result:
+                      terminal_qubits, do_terminal, observables, return_state,
+                      *, noise_model=None, initial_density_matrix=None) -> Result:
         """把轨迹集合按 shots 语义折叠成 Result。"""
         if exact or norm_shots == 1:
             tr = trajectories[0]
@@ -250,6 +262,15 @@ class Measure:
                 else:
                     exp_vals[name] = float(np.real((vec.conj().T @ op @ vec)[0, 0]))
 
+        # 判断末态是否为密度矩阵（噪声路径 / 初始密度矩阵输入）
+        is_dm = (return_state and np.asarray(final).ndim == 2 and
+                 final.shape[0] == final.shape[1]) if return_state else False
+        state_mode = "density_matrix" if (noise_model is not None or initial_density_matrix is not None or is_dm) else "state_vector"
+
+        meta: Dict[str, object] = {"state_mode": state_mode}
+        if noise_model is not None:
+            meta["noise_model"] = type(noise_model).__name__
+
         return Result(
             n_qubits=n, backend_name=type(backend).__name__,
             probabilities=probabilities, shots=norm_shots,
@@ -258,7 +279,8 @@ class Measure:
             terminal_counts=terminal_counts, terminal_qubits=terminal_qubits,
             state=(state if return_state else None),
             final_state=(final if return_state else None),
-            final_state_kind=("density_matrix" if np.asarray(final).ndim == 2 and final.shape[0] == final.shape[1] else "state_vector") if return_state else None,
+            final_state_kind=("density_matrix" if is_dm else "state_vector") if return_state else None,
             expectation_values=exp_vals, expectation_variances=exp_vars,
             snapshot_states=snap_states,
+            metadata=meta,
         )
