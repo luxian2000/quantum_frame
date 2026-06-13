@@ -158,3 +158,82 @@ def measure_joint_pauli(state: State, qubits: Sequence[int], basis: str, rng) ->
     projected = _project_parity_rotated(rotated, qubits, lam)
     restored = pauli_basis_change(projected, qubits, basis, inverse=True)
     return restored, lam
+
+
+def _replace_bit(index: int, n: int, q: int, bit: int) -> int:
+    """将 flat index 在第 q 个量子比特（msb 约定）上的比特置为 bit，返回新 index。"""
+    mask = 1 << (n - 1 - q)
+    return (index | mask) if bit else (index & ~mask)
+
+
+def _reset_dm(rho: np.ndarray, n: int, q: int) -> np.ndarray:
+    """对密度矩阵施加重置信道 R_q(ρ)=K0 ρ K0† + K1 ρ K1†（K0=|0><0|, K1=|0><1|）。
+
+    结果中目标比特恒处 |0>：仅在目标比特行/列均为 0 的子块上累加
+    out[r,c] = rho[r,c] + rho[r1,c1]（r1/c1 为把 r/c 的目标比特置 1 后的 index）。
+    """
+    dim = 1 << n
+    out = np.zeros_like(rho)
+    mask = 1 << (n - 1 - q)
+    rows = [r for r in range(dim) if not (r & mask)]
+    for r in rows:
+        r1 = _replace_bit(r, n, q, 1)
+        for c in rows:
+            c1 = _replace_bit(c, n, q, 1)
+            out[r, c] = rho[r, c] + rho[r1, c1]
+    return out
+
+
+def _reset_one(state: State, q: int) -> State:
+    """对单个量子比特施加重置信道：
+
+    - 密度矩阵输入：直接对 ρ 施加信道；
+    - 纯态且目标比特与其余比特可分离（product）：结果仍为纯态 |0>_q ⊗ (rest)；
+    - 纯态且目标比特纠缠：结果为混合态，升级为密度矩阵。
+    """
+    backend = state.backend
+    n = state.n_qubits
+    if state.is_density:
+        rho = backend.to_numpy(state.data).reshape(1 << n, 1 << n).astype(np.complex128)
+        return State(backend.cast(_reset_dm(rho, n, int(q))), n, backend)
+
+    psi = backend.to_numpy(state.data).reshape([2] * n).astype(np.complex128)
+    sl0 = [slice(None)] * n; sl0[q] = 0
+    sl1 = [slice(None)] * n; sl1[q] = 1
+    a = psi[tuple(sl0)].reshape(-1)
+    b = psi[tuple(sl1)].reshape(-1)
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+
+    # 判断目标比特是否与其余比特可分离：q=0 切片 a 与 q=1 切片 b 是否平行
+    parallel = False
+    if na < 1e-12 or nb < 1e-12:
+        parallel = True
+    else:
+        # 相对阈值：残差是 b 相对 a 的正交分量，可分离时仅为后端精度噪声
+        # （complex64 约 1e-7·‖b‖），纠缠时为 O(‖b‖)，故按 ‖b‖ 归一化判定
+        c = np.vdot(a, b) / (na * na)
+        parallel = np.linalg.norm(b - c * a) < 1e-6 * nb
+
+    if parallel:
+        # 可分离：其余比特的纯态即非零切片归一化，目标比特重置为 |0>
+        v = a if na >= nb else b
+        v = v / np.linalg.norm(v)
+        out = np.zeros([2] * n, dtype=np.complex128)
+        out[tuple(sl0)] = v.reshape(out[tuple(sl0)].shape)
+        return State(backend.cast(out.reshape(-1, 1)), n, backend, bit_order=state.bit_order)
+
+    # 纠缠：构造 ρ=|ψ><ψ| 后施加信道，升级为密度矩阵
+    flat = psi.reshape(-1, 1)
+    rho = (flat @ flat.conj().T)
+    rho = _reset_dm(rho, n, int(q))
+    return State(backend.cast(rho), n, backend)
+
+
+def reset_channel(state: State, qubits: Sequence[int]) -> State:
+    """对一组量子比特依次施加重置信道 R_S(ρ)=|0><0|_S ⊗ Tr_S(ρ)。
+
+    无需事先测量；逐比特处理，纠缠目标会把纯态升级为密度矩阵。
+    """
+    for q in qubits:
+        state = _reset_one(state, int(q))
+    return state

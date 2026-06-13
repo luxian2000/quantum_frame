@@ -66,3 +66,48 @@ def test_joint_probs_match_born():
     p_plus, p_minus = projector.joint_parity_probs(psi, [0, 1], "Z")
     assert np.isclose(p_plus, 1.0, atol=1e-6)
     assert np.isclose(p_minus, 0.0, atol=1e-6)
+
+
+def test_reset_product_qubit_stays_pure():
+    b = NumpyBackend()
+    v = np.kron([0, 1], np.array([1, 1]) / np.sqrt(2)).astype(complex)
+    psi = State(b.cast(v.reshape(-1, 1)), 2, b)
+    out = projector.reset_channel(psi, [0])
+    assert not out.is_density
+    expect = np.kron([1, 0], np.array([1, 1]) / np.sqrt(2))
+    assert np.allclose(out.to_numpy().reshape(-1), expect, atol=1e-6)
+
+
+def test_reset_entangled_qubit_promotes_to_density_matrix():
+    b = NumpyBackend()
+    v = np.array([1, 0, 0, 1], dtype=complex) / np.sqrt(2)
+    psi = State(b.cast(v.reshape(-1, 1)), 2, b)
+    out = projector.reset_channel(psi, [0])
+    assert out.is_density
+    rho = out.to_numpy().reshape(4, 4)
+    expect = np.zeros((4, 4), dtype=complex)
+    expect[0, 0] = 0.5
+    expect[1, 1] = 0.5
+    assert np.allclose(rho, expect, atol=1e-6)
+
+
+def test_reset_on_density_matrix_input():
+    b = NumpyBackend()
+    rho = np.zeros((2, 2), dtype=complex)
+    rho[1, 1] = 1.0
+    st = State.from_matrix(rho, 1, b)
+    out = projector.reset_channel(st, [0])
+    assert np.allclose(out.to_numpy().reshape(2, 2), np.array([[1, 0], [0, 0]]), atol=1e-6)
+
+
+def test_reset_phased_product_qubit_stays_pure():
+    # 带相对相位的乘积态：(|0> + i|1>)/√2 ⊗ |+>，reset(0) 后仍应是纯态 |0> ⊗ |+>
+    b = NumpyBackend()
+    qubit = np.array([1, 1j], dtype=complex) / np.sqrt(2)
+    rest = np.array([1, 1], dtype=complex) / np.sqrt(2)
+    psi = np.kron(qubit, rest)
+    st = State(b.cast(psi.reshape(-1, 1)), 2, b)
+    out = projector.reset_channel(st, [0])
+    assert not out.is_density  # 可分离目标必须保持纯态向量
+    expect = np.kron([1, 0], rest)
+    assert np.allclose(out.to_numpy().reshape(-1), expect, atol=1e-6)
