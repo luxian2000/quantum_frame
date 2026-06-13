@@ -237,3 +237,60 @@ def reset_channel(state: State, qubits: Sequence[int]) -> State:
     for q in qubits:
         state = _reset_one(state, int(q))
     return state
+
+
+def _born_sample_index(state: State, rng) -> int:
+    """按 Born 规则从计算基分布中采样一个 flat index。"""
+    backend = state.backend
+    n = state.n_qubits
+    if state.is_density:
+        rho = backend.to_numpy(state.data).reshape(1 << n, 1 << n)
+        probs = np.real(np.diag(rho))
+    else:
+        psi = backend.to_numpy(state.data).reshape(-1)
+        probs = np.abs(psi) ** 2
+    probs = np.clip(probs, 0.0, None)
+    total = probs.sum()
+    probs = probs / total if total > 0 else np.full_like(probs, 1.0 / probs.size)
+    return int(rng.choice(probs.size, p=probs))
+
+
+def _project_subset_outcome(state: State, qubits: Sequence[int], bits: Sequence[int]) -> State:
+    """把指定比特投影到给定 0/1 取值（其余比特保留），归一化。"""
+    backend = state.backend
+    n = state.n_qubits
+    keep = np.ones(1 << n, dtype=bool)
+    idx = np.arange(1 << n, dtype=np.int64)
+    for q, bit in zip(qubits, bits):
+        qmask = 1 << (n - 1 - int(q))
+        bitvals = (idx & qmask) >> (n - 1 - int(q))
+        keep &= (bitvals == int(bit))
+    if state.is_density:
+        rho = backend.to_numpy(state.data).reshape(1 << n, 1 << n).copy()
+        mask2d = np.outer(keep, keep)
+        rho = np.where(mask2d, rho, 0.0)
+        tr = np.real(np.trace(rho))
+        if tr > 0:
+            rho = rho / tr
+        return State(backend.cast(rho), n, backend)
+    psi = backend.to_numpy(state.data).reshape(-1, 1).copy()
+    psi[~keep, 0] = 0.0
+    norm = np.linalg.norm(psi)
+    if norm > 0:
+        psi = psi / norm
+    return State(backend.cast(psi), n, backend, bit_order=state.bit_order)
+
+
+def terminal_z_measure(state: State, measure_qubits: Sequence[int], rng) -> Tuple[State, List[int]]:
+    """对 measure_qubits 逐比特 Z 基测量（输入顺序保留）。
+
+    返回 (坍缩后完整态, 本征值列表[按 measure_qubits 顺序, 取值 ±1])。
+    实现：按 Born 规则采样全寄存器计算基 index，读取各被测比特的 0/1 值，
+    对该子集比特模式做投影并归一化。本征值约定：比特 0 → +1，比特 1 → -1。
+    """
+    n = state.n_qubits
+    x = _born_sample_index(state, rng)
+    bits = [(x >> (n - 1 - int(q))) & 1 for q in measure_qubits]
+    collapsed = _project_subset_outcome(state, measure_qubits, bits)
+    eig = [1 if bit == 0 else -1 for bit in bits]
+    return collapsed, eig
