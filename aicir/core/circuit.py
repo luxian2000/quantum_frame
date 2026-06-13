@@ -691,30 +691,17 @@ def u2(phi, lam, target_qubit=0):
     return Operation("u2", qubits=(target_qubit,), params=(phi, lam))
 
 
-def measure(*qubits):
-    """In-circuit measurement marker (the second measurement mechanism).
+def measure(*qubits, basis="Z", id=None):
+    """线路内联合 Pauli 投影测量标记（非破坏性，保留比特）。
 
-    Unlike the standalone :class:`~aicir.measure.measure.Measure` runner, which
-    reads out every qubit at the end of a unitary-only circuit, a measure gate
-    records *which* qubits are read out as part of the circuit definition. The
-    circuit can then be measured without telling :meth:`Measure.run` which
-    qubits to sample::
+    measure(0)                 # 单比特 Z 测量
+    measure(0, 1, basis="X")   # 联合 X⊗X 投影测量
+    measure([0, 1], id="m0")   # 可迭代形式 + 结果标识符
+    measure()                  # 空 = 运行时读取全部比特
 
-        cir = Circuit(hadamard(0), cnot(1, [0]), measure(0, 1))
-        result = Measure(backend).run(cir, shots=1024)  # counts over q0, q1
-
-    Accepted forms::
-
-        measure(0)            # read out qubit 0
-        measure(1, 2, 3)      # read out qubits 1, 2 and 3
-        measure([0, 1])       # iterable form
-        measure()             # read out all qubits (resolved at run time)
-
-    The marker is inert during unitary evolution: the simulator evolves the
-    circuit normally and reads out the marked qubits at the end. It does not
-    collapse the state mid-circuit.
+    basis 默认 "Z"（X/Y/Z）；id 可选、用于 result.output("m0")。
     """
-    return Measurement(_flat_marker_qubits(qubits))
+    return Measurement(_flat_marker_qubits(qubits), basis=basis, id=id)
 
 
 def _flat_marker_qubits(qubits):
@@ -728,12 +715,10 @@ def _flat_marker_qubits(qubits):
 
 
 def reset(*qubits):
-    """In-circuit reset marker.
+    """线路内重置信道标记：把指定比特重置为 |0>。
 
-    Accepted argument forms match :func:`measure`: ``reset(0)``,
-    ``reset(0, 1)``, ``reset([0, 1])`` and ``reset()``. During execution, each
-    reset target must have a preceding ``measure`` marker on the same qubit, and
-    no quantum gate may touch that qubit between the matching measure and reset.
+    参数形式与 measure 相同：reset(0)、reset(0, 1)、reset([0, 1])、reset()。
+    无前置条件——可出现在线路任意位置（见统一测量模型设计文档）。
     """
     return Measurement(_flat_marker_qubits(qubits), measurement_type="reset")
 
