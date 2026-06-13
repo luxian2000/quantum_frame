@@ -500,7 +500,17 @@ class Circuit:
             return self
         return Circuit(*gates, n_qubits=self.n_qubits, backend=self._backend)
 
-    def unitary(self, backend=None):
+    def unitary(self, backend=None, ignore_nonunitary=False):
+        """计算线路的酉矩阵。
+
+        Parameters
+        ----------
+        backend:
+            后端实例，默认使用线路绑定的后端或 NumPy。
+        ignore_nonunitary : bool, optional
+            若为 True，则跳过 measure/reset 等非酉操作；
+            若为 False（默认），遇到非酉操作时抛出 ``ValueError``。
+        """
         parameters = self.parameters
         if parameters:
             names = ", ".join(parameter.name for parameter in parameters)
@@ -517,10 +527,14 @@ class Circuit:
 
         circuit_matrix = identity(self.n_qubits) if backend is None else backend.eye(1 << self.n_qubits)
         for gate in self.gates:
-            if _is_measure_gate(gate):
-                continue
-            if _is_reset_gate(gate):
-                raise ValueError("reset 是非酉操作，不能用于 Circuit.unitary()/matrix()")
+            if _is_measure_gate(gate) or _is_reset_gate(gate):
+                if ignore_nonunitary:
+                    continue
+                kind = "measure" if _is_measure_gate(gate) else "reset"
+                raise ValueError(
+                    f"{kind} 是非酉操作，不能用于 Circuit.unitary()/matrix()；"
+                    f"如需仅取酉部分请传 ignore_nonunitary=True"
+                )
             gm = gate_to_matrix(gate, self.n_qubits, backend=backend)
             if backend is None:
                 circuit_matrix = np.matmul(gm, circuit_matrix)
@@ -528,8 +542,9 @@ class Circuit:
                 circuit_matrix = backend.matmul(gm, circuit_matrix)
         return circuit_matrix
 
-    def matrix(self, backend=None):
-        return self.unitary(backend=backend)
+    def matrix(self, backend=None, ignore_nonunitary=False):
+        """``unitary()`` 的别名，参数语义相同。"""
+        return self.unitary(backend=backend, ignore_nonunitary=ignore_nonunitary)
 
     def show(self, file=None):
         """在终端打印量子线路 ASCII 图，并返回该字符串。"""
