@@ -67,37 +67,25 @@ def run_single_circuit(measure: Measure, backend: NPUBackend, shots: int) -> Non
 	print_rank("single circuit result", rank)
 	print_rank(f"  backend_name: {result.backend_name}", rank)
 	print_rank(f"  probabilities: {format_probabilities(result.probabilities, result.n_qubits)}", rank)
-	print_rank(f"  counts({shots}): {result.counts}", rank)
+	# counts 为方法：-1 表示末端测量统计
+	print_rank(f"  counts({shots}): {result.counts(-1)}", rank)
 	print_rank(f"  metadata: {result.metadata}", rank)
 
 
 def run_batch_circuits(measure: Measure, backend: NPUBackend, shots: int, batch_size: int) -> None:
+	# run_batch 已从统一测量模型中移除；逐路用 run() 代替
 	rank = backend.distributed_rank
 	params = np.linspace(0.0, np.pi, batch_size)
 	circuits = [build_scan_circuit(float(theta), backend=backend) for theta in params]
-	options = [
-		{
-			"label": f"theta_{i}",
-			"return_state": False,
-		}
-		for i in range(batch_size)
-	]
-
-	results = measure.run_batch(
-		circuits,
-		shots=shots,
-		mode="state_vector",
-		per_circuit_options=options,
-	)
 
 	print_rank("batch results gathered in input order", rank)
-	for result in results:
-		idx = int(result.metadata["batch_index"])
-		owner = idx % max(1, backend.distributed_world_size)
+	for idx, circuit in enumerate(circuits):
+		result = measure.run(circuit, shots=shots, return_state=False)
 		peak_state, peak_prob = result.most_probable()
+		# counts(-1) 为末端测量统计（方法调用，-1 = terminal）
 		print_rank(
-			f"  idx={idx} owner_rank={owner} label={result.metadata.get('label')} "
-			f"peak={peak_state} prob={peak_prob:.6f} counts={result.counts}",
+			f"  idx={idx} label=theta_{idx} "
+			f"peak={peak_state} prob={peak_prob:.6f} counts={result.counts(-1)}",
 			rank,
 		)
 

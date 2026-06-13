@@ -31,5 +31,6 @@ cir.plot()
 # Counts come back over qubits 1 and 3 only (2-bit strings).
 result = Measure(NumpyBackend()).run(cir, shots=1024)
 print(result.summary())
-print("measured qubits:", result.metadata["measured_qubits"])
-print("counts:", result.counts)
+# 新测量 API：counts / output 均为方法，需传入目标参数
+# -1 表示末端测量（terminal measurement）
+print("counts:", result.counts(-1))

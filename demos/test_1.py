@@ -26,10 +26,13 @@ cir.plot()
 
 result = measurement.run(cir)
 
-print(result.output)
+# 新测量 API：output / counts 均为方法，需传入目标参数
+# -1 = 末端测量（terminal measurement）
+# 线路内嵌 measure(0) 的 op_index 为 7（第 8 个门）
+print(result.output(-1))   # 末端测量输出（shots=1 返回 shape (1, n) 数组）
 
 print(result.state)
 
-print(result.counts)
+print(result.counts(-1))   # 末端统计（shots=1 返回单条统计字典）
 
 print(result.final_state)
