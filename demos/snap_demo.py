@@ -29,7 +29,8 @@ def main() -> None:
     result = measurement.run(circuit, shots=None, snap=[0, 1, 2])
 
     print("Circuit snapshots recorded by snap=[0, 1, 2]")
-    print("snap indices:", result.metadata["snap_indices"])
+    # snap 操作下标集合已内嵌于 snapshot_states，metadata 不再重复存储
+    print("snap op indices:", sorted(result.snapshot_states.keys()))
     print()
 
     describe_state("After gate 0: hadamard(0)", result.snap(0), backend)
