@@ -111,3 +111,34 @@ def test_reset_phased_product_qubit_stays_pure():
     assert not out.is_density  # 可分离目标必须保持纯态向量
     expect = np.kron([1, 0], rest)
     assert np.allclose(out.to_numpy().reshape(-1), expect, atol=1e-6)
+
+
+def test_terminal_z_full_register_collapses_to_basis():
+    psi = _bell()
+    rng = np.random.default_rng(3)
+    out, eig = projector.terminal_z_measure(psi, [0, 1], rng)
+    v = out.to_numpy().reshape(-1)
+    nz = np.flatnonzero(np.abs(v) > 1e-9)
+    assert len(nz) == 1
+    assert eig in ([1, 1], [-1, -1])
+
+
+def test_terminal_z_subset_keeps_other_qubit():
+    b = NumpyBackend()
+    v = np.kron([1, 0], np.array([1, 1]) / np.sqrt(2)).astype(complex)
+    psi = State(b.cast(v.reshape(-1, 1)), 2, b)
+    rng = np.random.default_rng(4)
+    out, eig = projector.terminal_z_measure(psi, [0], rng)
+    assert eig == [1]
+    red = out.partial_trace([1]).to_numpy().reshape(2, 2)
+    plus = np.array([1, 1]) / np.sqrt(2)
+    assert np.allclose(red, np.outer(plus, plus.conj()), atol=1e-6)
+
+
+def test_terminal_order_preserved():
+    b = NumpyBackend()
+    v = np.kron([1, 0], [0, 1]).astype(complex)  # |0>_0 ⊗ |1>_1
+    psi = State(b.cast(v.reshape(-1, 1)), 2, b)
+    rng = np.random.default_rng(5)
+    _, eig = projector.terminal_z_measure(psi, [1, 0], rng)
+    assert eig == [-1, 1]
