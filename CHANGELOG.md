@@ -2,6 +2,23 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-14
+
+### Changed（破坏性变更）
+
+- **统一测量模型**：删除"机制一/机制二互斥"框架；线路内嵌 `measure`/`reset` 与末端读出（`tm`/`measure_qubits`）现可共存，两者是同一模型的两个正交部分。
+- **线路内 `measure(basis, id)` 改为投影测量**：由非坍缩边缘采样标记改为真正的两结果联合 Pauli 投影（`basis∈{Z,X,Y}`，同子空间保留相干）；新增 `id` 参数使 `result.output("id")` 可用；`basis`/`id` 字段在 IR 中作为一等字段序列化（JSON 往返保真）。
+- **`reset` 改为无前置条件的信道**：删除"必须先有同一比特 `measure`"的限制；`reset` 可出现在任意位置；对纠缠目标施加 reset 使该轨迹升级为密度矩阵。
+- **新增 `run()` 参数 `tm`/`sm`/`seed`**：`tm=True`（默认）控制末端测量；`sm="avg"` 为多轨迹聚合模式（`"shot"/"cond"` 待实现，传入报 `NotImplementedError`）；`seed` 单一 RNG 种子贯穿全部随机操作。
+- **`output`/`counts`/`prob` 改为方法**：`result.output(i)`/`result.counts(i)`/`result.prob(i)` 按操作下标（或字符串 `id`）索引；末端结果用 `output(-1)`/`counts(-1)`。原字段访问方式（`result.output`/`result.counts`）已移除。
+- **`state`/`final_state` 语义更新**：`state` = 末端测量前完整态（`ρ_pre`）；`final_state` = 末端测量后的态（`ρ_post`）；`shots>1` 时两者均为平均密度矩阵 `(2^n,2^n)`。
+- **`shots=0` ≡ `None`（exact 模式）且覆盖 `tm`**：exact 模式下不执行末端测量（`final_state==state`，`output(-1)` 报错）；线路内 `measure()` 仍走一条随机轨迹并坍缩。这是对上传规则 23（`shots=0` 非法）与规则 36（`shots=None` 仍取末端结果）的显式偏差。
+- **`Circuit.unitary()` 遇 measure/reset 改为报错**：默认对 `measure`/`reset` 一律 `raise`（原行为：`measure` 静默跳过）；新增 `ignore_nonunitary=True` 选项以丢弃非酉操作并返回酉部分。
+- **QASM 导出限制**：联合（多比特）/ 非 Z 基 / 带 `id` 的 `measure` 导出时报 `NotImplementedError`；普通单比特 Z `measure` 仍按标准 QASM 2.0/3.0 导出。
+- **末端输出顺序保留输入顺序**：`measure_qubits` 原始输入顺序保留到 `output(-1)` 列顺序，不做内部排序。
+- **已移除**：`run_density_matrix`、`run_batch`、`scan_parameters` 旧入口；噪声通过 `circuit.noise_model` / `initial_density_matrix` 传入新 `run()`。
+- **`sm="shot"/"cond"` 待实现**：传入时报 `NotImplementedError`，后续版本实现。
+
 ## 2026-06-12
 
 ### Added
