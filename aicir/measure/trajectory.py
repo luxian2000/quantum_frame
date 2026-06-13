@@ -111,13 +111,18 @@ def run_trajectory(
             qubits = _marker_qubits(gate, n)
             state = projector.reset_channel(state, qubits)
         else:
-            # 酉门演化
-            new_data = apply_gate_to_state(gate, state.data, n, backend)
-            if new_data is None:
+            # 酉门演化：密度矩阵形态直接走 gate_to_matrix + evolve（UρU†），
+            # 纯态形态先尝试快速路径，回退到 evolve。
+            if state.is_density:
                 gm = gate_to_matrix(gate, cir_qubits=n, backend=backend)
                 state = state.evolve(gm)
             else:
-                state = State(new_data, n, backend, bit_order=state.bit_order)
+                new_data = apply_gate_to_state(gate, state.data, n, backend)
+                if new_data is None:
+                    gm = gate_to_matrix(gate, cir_qubits=n, backend=backend)
+                    state = state.evolve(gm)
+                else:
+                    state = State(new_data, n, backend, bit_order=state.bit_order)
             # 可选噪声（密度矩阵路径）
             if noise_model is not None:
                 rho_data = (
