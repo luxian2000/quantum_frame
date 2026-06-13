@@ -626,7 +626,8 @@ r = Measure(NumpyBackend()).run(cir, shots=None, snap=[2])
 
 snap_after_reset = r.snap(2)
 print(snap_after_reset.shape)   # (4, 4)  — 升级为密度矩阵
-# 对角元约为 [0.5, 0, 0, 0.5]，表示 |00> 和 |11> 各占 0.5
+# 对角元约为 [0.5, 0.5, 0, 0]，表示 |00> 和 |01> 各占 0.5
+# （reset(0) 把 Bell 态的 q0 重置为 |0>，q1 仍是最大混合 I/2）
 print(np.real(np.diag(snap_after_reset)))
 ```
 

@@ -155,7 +155,7 @@ class Measure:
 
         if sm not in ("avg", "shot", "cond"):
             raise ValueError(f"sm 必须是 avg/shot/cond，收到 {sm!r}")
-        if sm in ("shot", "cond") and snap_ops:
+        if sm in ("shot", "cond"):
             raise NotImplementedError(f"sm={sm!r} 暂未实现（仅支持 avg）")
 
         # 末端测量解析（exact 模式覆盖 tm；与显式 measure_qubits 冲突报错）

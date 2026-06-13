@@ -62,7 +62,10 @@ def case_parametric_gate(measure: Measure, backend: NPUBackend, shots: int) -> N
 
 def case_density_matrix(measure: Measure, backend: NPUBackend, shots: int) -> None:
     cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2, backend=backend)
-    res = measure.run_density_matrix(cir, shots=shots)
+    # 统一测量模型：用 initial_density_matrix 走密度矩阵路径（替代已移除的 run_density_matrix）
+    dm0 = np.zeros((4, 4), dtype=np.complex64)
+    dm0[0, 0] = 1.0
+    res = measure.run(cir, shots=shots, initial_density_matrix=dm0)
     _assert_probs_normalized(res.probabilities)
     if not (np.isclose(res.probabilities[0], 0.5, atol=2e-2) and np.isclose(res.probabilities[3], 0.5, atol=2e-2)):
         raise AssertionError(f"density-matrix check failed, probs={res.probabilities}")
