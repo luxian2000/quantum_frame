@@ -706,36 +706,40 @@ def u2(phi, lam, target_qubit=0):
     return Operation("u2", qubits=(target_qubit,), params=(phi, lam))
 
 
-def measure(*qubits, basis="Z", id=None):
+def measure(qubits=None, *, basis="Z", id=None):
     """线路内联合 Pauli 投影测量标记（非破坏性，保留比特）。
 
-    measure(0)                 # 单比特 Z 测量
-    measure(0, 1, basis="X")   # 联合 X⊗X 投影测量
-    measure([0, 1], id="m0")   # 可迭代形式 + 结果标识符
-    measure()                  # 空 = 运行时读取全部比特
+    measure(0)                  # 单比特 Z 测量
+    measure(0, basis="X")       # 单比特 X 测量
+    measure([0, 1], basis="X")  # 联合 X⊗X 投影测量
+    measure([0, 1, 2], id="m0") # 联合测量 + 结果标识符
+    measure()                   # 空 = 运行时读取全部比特
 
+    qubits 为单个 int 或比特下标列表；多个比特须用列表（measure(0, 1) 不再支持）。
     basis 默认 "Z"（X/Y/Z）；id 可选、用于 result.output("m0")。
     """
-    return Measurement(_flat_marker_qubits(qubits), basis=basis, id=id)
+    return Measurement(_normalize_marker_qubits(qubits), basis=basis, id=id)
 
 
-def _flat_marker_qubits(qubits):
-    flat = []
-    for qubit in qubits:
-        if isinstance(qubit, (list, tuple, set, range)):
-            flat.extend(int(value) for value in qubit)
-        else:
-            flat.append(int(qubit))
-    return tuple(flat)
+def _normalize_marker_qubits(qubits):
+    """把 measure/reset 的 qubits 入参归一化为下标元组。
+
+    None → ()（空 = 全部比特）；单个 int → (int,)；list/tuple/set/range → 展平为元组。
+    """
+    if qubits is None:
+        return ()
+    if isinstance(qubits, (list, tuple, set, range)):
+        return tuple(int(q) for q in qubits)
+    return (int(qubits),)
 
 
-def reset(*qubits):
+def reset(qubits=None):
     """线路内重置信道标记：把指定比特重置为 |0>。
 
-    参数形式与 measure 相同：reset(0)、reset(0, 1)、reset([0, 1])、reset()。
+    参数形式与 measure 相同：reset(0)、reset([0, 1])、reset()。多个比特须用列表。
     无前置条件——可出现在线路任意位置（见统一测量模型设计文档）。
     """
-    return Measurement(_flat_marker_qubits(qubits), measurement_type="reset")
+    return Measurement(_normalize_marker_qubits(qubits), measurement_type="reset")
 
 
 __all__ = [

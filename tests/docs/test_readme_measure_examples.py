@@ -22,7 +22,7 @@ def run(cir, **kw):
 def test_bell_zz_incircuit_deterministic_plus1_shots_none():
     """Bell 态 ZZ 联合投影：shots=None 时 output 为标量 +1（确定性），
     态矢仍是 Bell 态（未坍缩到计算基）。"""
-    cir = Circuit(hadamard(0), cnot(1, [0]), measure(0, 1, id="zz"), n_qubits=2)
+    cir = Circuit(hadamard(0), cnot(1, [0]), measure([0, 1], id="zz"), n_qubits=2)
     r = run(cir, shots=None, tm=False)
 
     # output("zz") 和 output(2) 均应给出标量 +1
@@ -37,7 +37,7 @@ def test_bell_zz_incircuit_deterministic_plus1_shots_none():
 
 def test_bell_zz_incircuit_shots_m_output_shape_and_values():
     """Bell ZZ，shots=8：output(2) 形状 (8,1)，全为 +1；counts(2) 仅含 {1}。"""
-    cir = Circuit(hadamard(0), cnot(1, [0]), measure(0, 1), n_qubits=2)
+    cir = Circuit(hadamard(0), cnot(1, [0]), measure([0, 1]), n_qubits=2)
     r = run(cir, shots=8, tm=False)
 
     out = r.output(2)

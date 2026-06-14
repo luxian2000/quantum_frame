@@ -6,6 +6,7 @@
 
 ### Changed（破坏性变更）
 
+- **`measure`/`reset` 量子比特参数改为「单个 int 或列表」**：`measure([0,1], ...)` / `reset([0,1])`；不再支持 `measure(0, 1)` 多位置形式（请改用列表）。
 - **统一测量模型**：删除"机制一/机制二互斥"框架；线路内嵌 `measure`/`reset` 与末端读出（`tm`/`measure_qubits`）现可共存，两者是同一模型的两个正交部分。
 - **线路内 `measure(basis, id)` 改为投影测量**：由非坍缩边缘采样标记改为真正的两结果联合 Pauli 投影（`basis∈{Z,X,Y}`，同子空间保留相干）；新增 `id` 参数使 `result.output("id")` 可用；`basis`/`id` 字段在 IR 中作为一等字段序列化（JSON 往返保真）。
 - **`reset` 改为无前置条件的信道**：删除"必须先有同一比特 `measure`"的限制；`reset` 可出现在任意位置；对纠缠目标施加 reset 使该轨迹升级为密度矩阵。

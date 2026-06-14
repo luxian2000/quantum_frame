@@ -11,7 +11,7 @@ def _init(n):
 
 
 def test_trajectory_records_incircuit_outcome_and_terminal():
-    cir = Circuit(hadamard(0), cnot(1, [0]), measure(0, 1), n_qubits=2)  # ops: 0,1,2
+    cir = Circuit(hadamard(0), cnot(1, [0]), measure([0, 1]), n_qubits=2)  # ops: 0,1,2
     st, b = _init(2)
     rng = np.random.default_rng(0)
     tr = run_trajectory(cir, st, b, tm=True, measure_qubits=[0, 1],
