@@ -22,7 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 from aicir.qas import build_common_architectures, evaluate_architectures
 from aicir.qas.multi_objective_reward import RewardWeights
 from aicir.qas import ArchitectureScore
-from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.backends.numpy_backend import NumpyBackend
 
 
 RESULT_PATH = Path(__file__).with_name("architecture_scoring_results.txt")

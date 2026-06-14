@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple
 
 import numpy as np
 
-from ..channel.backends.base import Backend
+from ..backends.base import Backend
 from ..core.circuit import Circuit
 from ..ir import (
     circuit_instruction_count,
@@ -39,7 +39,7 @@ class RankedScore(Protocol):
 
 
 def get_default_backend() -> Backend:
-    from ..channel.backends.numpy_backend import NumpyBackend
+    from ..backends.numpy_backend import NumpyBackend
 
     return NumpyBackend()
 

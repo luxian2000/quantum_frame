@@ -13,8 +13,8 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ..channel.backends.numpy_backend import NumpyBackend
-from ..channel.operators import Hamiltonian
+from ..backends.numpy_backend import NumpyBackend
+from ..operators import Hamiltonian
 from ..core.circuit import Circuit
 from ..ir import circuit_gate_dicts
 from ..measure import Measure

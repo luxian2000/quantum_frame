@@ -30,14 +30,14 @@ from ..metrics.noisy_expressibility import (
     comparative_expressibility,
     expressibility_score,
 )
-from ..channel.noise import (
+from ..noise import (
     IonTrapNoiseConfig,
     NoiseSensitivityResult,
     load_default_ion_trap_noise_config,
     load_ion_trap_noise_config,
     noise_sensitivity,
 )
-from ..channel.noise.metrics import ion_trap_error_budget_proxy
+from ..noise.metrics import ion_trap_error_budget_proxy
 
 _OPTIONAL_RL_EXPORTS: list[str] = []
 try:

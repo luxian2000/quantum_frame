@@ -6,7 +6,7 @@ import torch
 from torch.utils._python_dispatch import TorchDispatchMode
 
 from aicir import NPUBackend, State, npu_runtime_context_from_env
-from aicir.channel.backends.npu_backend import is_npu_available
+from aicir.backends.npu_backend import is_npu_available
 
 
 class _BanComplexAddMul(TorchDispatchMode):
@@ -172,7 +172,7 @@ class TestNPUBackend(unittest.TestCase):
         self.assertTrue(torch.allclose(result, expected, atol=1e-5))
 
     def test_measure_probs_workaround_matches_parent(self):
-        from aicir.channel.backends.gpu_backend import TorchBackend
+        from aicir.backends.gpu_backend import TorchBackend
 
         ref_backend = TorchBackend()
         state = ref_backend.zeros_state(2)
@@ -284,7 +284,7 @@ class TestNPUBackend(unittest.TestCase):
         self.assertTrue(torch.allclose(result.unsqueeze(0), expected.unsqueeze(0), atol=1e-5))
 
     def test_partial_trace_workaround_matches_parent(self):
-        from aicir.channel.backends.gpu_backend import TorchBackend
+        from aicir.backends.gpu_backend import TorchBackend
         ref = TorchBackend()
         # 2-qubit density matrix for |00><00|
         rho = ref.zeros_state(2)
@@ -299,7 +299,7 @@ class TestNPUBackend(unittest.TestCase):
         self.assertTrue(np.allclose(result, expected, atol=1e-5))
 
     def test_expectation_sv_workaround_matches_parent(self):
-        from aicir.channel.backends.gpu_backend import TorchBackend
+        from aicir.backends.gpu_backend import TorchBackend
         ref = TorchBackend()
         state = ref.zeros_state(1)
         # Z operator: [[1,0],[0,-1]]
@@ -316,7 +316,7 @@ class TestNPUBackend(unittest.TestCase):
         self.assertAlmostEqual(result, expected, places=5)
 
     def test_expectation_dm_workaround_matches_parent(self):
-        from aicir.channel.backends.gpu_backend import TorchBackend
+        from aicir.backends.gpu_backend import TorchBackend
         ref = TorchBackend()
         state = ref.zeros_state(1)
         rho = torch.matmul(state, ref.dagger(state))
@@ -335,7 +335,7 @@ class TestNPUBackend(unittest.TestCase):
     # ──────── autograd-safe NPU Functions (value + gradient) ────────
 
     def test_npu_complex_matmul_function_matches_native_gradient(self):
-        from aicir.channel.backends.npu_backend import _NpuMatmulFn
+        from aicir.backends.npu_backend import _NpuMatmulFn
 
         torch.manual_seed(0)
         a = torch.randn(4, 4, dtype=torch.complex64, requires_grad=True)
@@ -354,7 +354,7 @@ class TestNPUBackend(unittest.TestCase):
         self.assertTrue(torch.allclose(gb, b2.grad, atol=1e-4))
 
     def test_npu_real_complex_matmul_function_gradient(self):
-        from aicir.channel.backends.npu_backend import _NpuMatmulFn
+        from aicir.backends.npu_backend import _NpuMatmulFn
 
         torch.manual_seed(1)
         real_gate = torch.randn(4, 4)  # constant real gate
@@ -369,8 +369,8 @@ class TestNPUBackend(unittest.TestCase):
         self.assertTrue(torch.allclose(gv, v2.grad, atol=1e-4))
 
     def test_npu_expectation_function_matches_native_gradient(self):
-        from aicir.channel.backends.npu_backend import _NpuExpectationFn
-        from aicir.channel.backends.gpu_backend import GPUBackend
+        from aicir.backends.npu_backend import _NpuExpectationFn
+        from aicir.backends.gpu_backend import GPUBackend
 
         torch.manual_seed(2)
         m = torch.randn(8, 8, dtype=torch.complex64)
@@ -390,8 +390,8 @@ class TestNPUBackend(unittest.TestCase):
         # End-to-end: a parameterised circuit's energy gradient via the forced
         # NPU complex path must match native GPUBackend autograd.
         import types
-        from aicir.channel.backends.npu_backend import NPUBackend, _NpuMatmulFn
-        from aicir.channel.backends.gpu_backend import GPUBackend
+        from aicir.backends.npu_backend import NPUBackend, _NpuMatmulFn
+        from aicir.backends.gpu_backend import GPUBackend
         from aicir.core.gates import apply_gate_to_state
         from aicir.core.circuit import rx, ry, rz, rzz, cx, hadamard
 
@@ -442,7 +442,7 @@ class TestNPUBackend(unittest.TestCase):
             _rxx_backend,
             _single_qubit_base_for_gate_backend,
         )
-        from aicir.channel.backends.gpu_backend import GPUBackend
+        from aicir.backends.gpu_backend import GPUBackend
 
         backend = GPUBackend(device="cpu")
 
@@ -479,8 +479,8 @@ class TestNPUBackend(unittest.TestCase):
         # expectation Functions + parameterised gate construction) must not use
         # any complex add/mul, i.e. it would run on a real Ascend NPU.
         import types
-        from aicir.channel.backends.npu_backend import _NpuMatmulFn, _NpuExpectationFn
-        from aicir.channel.backends.gpu_backend import GPUBackend
+        from aicir.backends.npu_backend import _NpuMatmulFn, _NpuExpectationFn
+        from aicir.backends.gpu_backend import GPUBackend
         from aicir.core.gates import apply_gate_to_state
         from aicir.core.circuit import rx, ry, rz, rzz, cx, hadamard
 

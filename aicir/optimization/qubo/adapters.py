@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from ...channel.operators import Hamiltonian
+from ...operators import Hamiltonian
 from .modeling.backends import IsingModel, QAOATerm
 
 
@@ -25,7 +25,7 @@ def qaoa_terms_to_hamiltonian(
     offset: float = 0.0,
     include_offset: bool = True,
 ) -> Hamiltonian:
-    """Convert QAOA Z terms into an ``aicir.channel.operators.Hamiltonian``.
+    """Convert QAOA Z terms into an ``aicir.operators.Hamiltonian``.
 
     The QUBO modeling layer emits terms such as ``Z_i`` and ``Z_i Z_j``. The
     aicir Hamiltonian accepts local Pauli strings with explicit qubit indices,

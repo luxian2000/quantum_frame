@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import List, Optional, Sequence
 
-from ..channel.backends.base import Backend
-from ..channel.noise.model import NoiseModel
+from ..backends.base import Backend
+from ..noise.model import NoiseModel
 from ._types import ArchitectureSpec, SearchConfig, SearchResult
 from .candidates import build_common_architectures
 from .evaluator import ArchitectureEvaluator

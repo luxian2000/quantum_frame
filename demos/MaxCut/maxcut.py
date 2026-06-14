@@ -38,8 +38,8 @@ import numpy as np
 import networkx as nx
 
 from aicir import Circuit
-from aicir.channel.backends.numpy_backend import NumpyBackend
-from aicir.channel.operators import Hamiltonian
+from aicir.backends.numpy_backend import NumpyBackend
+from aicir.operators import Hamiltonian
 from aicir.core.gates import apply_gate_to_state, gate_to_matrix
 from aicir.core.io.json_io import circuit_from_json, circuit_to_json
 from aicir.core.state import State
@@ -280,7 +280,7 @@ def render_hamiltonian_module(
 from __future__ import annotations
 
 from aicir import Circuit
-from aicir.channel.operators import Hamiltonian
+from aicir.operators import Hamiltonian
 from aicir.core.io.json_io import circuit_from_json
 
 # ── 随机图 ────────────────────────────────────────────────────────────────

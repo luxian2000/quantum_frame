@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 from torch.distributions import Categorical
 
-from ..channel.backends.numpy_backend import NumpyBackend
+from ..backends.numpy_backend import NumpyBackend
 from ..core.circuit import Circuit
 from ..core.gates import gate_to_matrix
 from ..core.state import State

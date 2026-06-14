@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..channel.backends import NumpyBackend
+from ..backends import NumpyBackend
 from ..measure import Measure
 from ..measure.estimator import PauliEstimator
 from .base import BaseEstimator, normalize_run_inputs, pair_observables
@@ -14,7 +14,7 @@ from .results import EstimateResult
 class StatevectorEstimator(BaseEstimator):
     """精确期望：演化态向量后计算 ``<psi|H|psi>``，无采样噪声。
 
-    可观测量接受 :class:`~aicir.channel.operators.Hamiltonian`（经
+    可观测量接受 :class:`~aicir.operators.Hamiltonian`（经
     ``to_matrix``）或现成的稠密矩阵。
     """
 

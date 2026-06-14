@@ -6,10 +6,10 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
-from ..channel.backends.base import Backend
-from ..channel.noise.analysis import noise_sensitivity
-from ..channel.noise.metrics import ion_trap_error_budget_proxy
-from ..channel.noise.model import NoiseModel
+from ..backends.base import Backend
+from ..noise.analysis import noise_sensitivity
+from ..noise.metrics import ion_trap_error_budget_proxy
+from ..noise.model import NoiseModel
 from ._types import ArchitectureScore, ArchitectureSpec, MetricDefinition, MetricGroupScore
 from ._utils import assign_ranks, clipped_score, ensure_backend
 from ..metrics.expressibility import KL_Haar_divergence, MMD_relative

@@ -256,7 +256,7 @@ $$
 ```python
 from aicir.qml import auto
 from aicir import Circuit, State, ry
-from aicir.channel.backends.gpu_backend import GPUBackend
+from aicir.backends.gpu_backend import GPUBackend
 import numpy as np
 
 bk = GPUBackend(device="cpu")
@@ -485,7 +485,7 @@ $$
 ```python
 from aicir.qml import ad
 from aicir import Circuit, NumpyBackend, ry, cx
-from aicir.channel.operators import Hamiltonian
+from aicir.operators import Hamiltonian
 import numpy as np
 
 bk = NumpyBackend()

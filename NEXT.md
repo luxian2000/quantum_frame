@@ -22,7 +22,7 @@
 `aicir` 已经具备较完整的研究型量子算法框架雏形：
 
 - `aicir.core` 提供 `Circuit`、门构造器、参数绑定和 QASM/JSON 互转。
-- `aicir.channel` 提供 NumPy、GPU、NPU 后端和噪声模型。
+- `aicir.backends` 提供 NumPy、GPU、NPU 后端；`aicir.noise` 提供噪声模型；`aicir.operators` 提供 Pauli/Hamiltonian 算符（均已从旧 `aicir.channel` 上移到顶层）。
 - `aicir.measure` 提供测量、采样和 Pauli 项能量估计。
 - `aicir.optimizer` 提供线路结构优化和经典参数优化器。
 - `aicir.qml` 提供参数移位、有限差分、自动微分、伴随微分、量子自然梯度等方法。
@@ -44,9 +44,9 @@ aicir/
 |-- transpile/         # 新增：Pass、PassManager、线路编译与优化
 |   `-- passes/        # 新增：验证、规范化、消去、合并、分解、布局、路由等 pass
 |-- devices/           # 新增：Target、设备能力、连接拓扑、硬件约束
-|-- backends/          # 长期建议从 channel/backends 拆出
-|-- noise/             # 长期建议从 channel/noise 拆出
-|-- observables/       # 长期建议从 channel/operators 拆出
+|-- backends/          # 已落地：从 channel/backends 上移到顶层
+|-- noise/             # 已落地：从 channel/noise 上移到顶层
+|-- operators.py       # 已落地：从 channel/operators 上移到顶层（PauliOp/PauliString/Hamiltonian）
 |-- primitives/        # 新增：Sampler、Estimator、统一执行结果
 |-- qnode/             # 新增：QNode、expval、probs、sample
 |-- qml/               # 保留：梯度方法；新增 diff method 注册表
