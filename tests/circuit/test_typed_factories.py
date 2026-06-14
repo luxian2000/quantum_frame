@@ -16,6 +16,7 @@ from aicir.core.circuit import (
     hadamard,
     measure,
     pauli_x,
+    reset,
     rx,
     rz,
     rxx,
@@ -66,7 +67,7 @@ def test_cnot_alias_still_builds_cx_operation():
 
 
 def test_measure_factory_returns_measurement():
-    marker = measure(1, 3)
+    marker = measure([1, 3])
     assert isinstance(marker, Measurement)
     assert marker.qubits == (1, 3)
 
@@ -76,6 +77,22 @@ def test_measure_factory_returns_measurement():
 
     empty = measure()
     assert isinstance(empty, Measurement)
+    assert empty.qubits == ()
+
+
+def test_reset_factory_returns_measurement_marker():
+    marker = reset([1, 3])
+    assert isinstance(marker, Measurement)
+    assert marker.measurement_type == "reset"
+    assert marker.qubits == (1, 3)
+
+    iterable_form = reset([0, 1])
+    assert isinstance(iterable_form, Measurement)
+    assert iterable_form.qubits == (0, 1)
+
+    empty = reset()
+    assert isinstance(empty, Measurement)
+    assert empty.measurement_type == "reset"
     assert empty.qubits == ()
 
 
@@ -137,12 +154,21 @@ def test_operation_supports_mapping_protocol_helpers():
 
 
 def test_measurement_supports_legacy_dict_reads():
-    marker = measure(1, 3)
+    marker = measure([1, 3])
     assert marker["type"] == "measure"
     assert marker["qubits"] == [1, 3]
     assert marker.get("qubits") == [1, 3]
     assert "type" in marker
     assert dict(marker) == {"type": "measure", "qubits": [1, 3]}
+
+
+def test_reset_supports_legacy_dict_reads():
+    marker = reset([1, 3])
+    assert marker["type"] == "reset"
+    assert marker["qubits"] == [1, 3]
+    assert marker.get("qubits") == [1, 3]
+    assert "type" in marker
+    assert dict(marker) == {"type": "reset", "qubits": [1, 3]}
 
 
 def test_operation_compares_equal_to_legacy_dict_form():
@@ -156,10 +182,17 @@ def test_operation_compares_equal_to_legacy_dict_form():
 
 
 def test_measurement_compares_equal_to_legacy_dict_form():
-    assert measure(1, 3) == {"type": "measure", "qubits": [1, 3]}
-    assert {"type": "measure", "qubits": [1, 3]} == measure(1, 3)
-    assert measure(1, 3) == measure(1, 3)
-    assert measure(1, 3) != measure(1, 2)
+    assert measure([1, 3]) == {"type": "measure", "qubits": [1, 3]}
+    assert {"type": "measure", "qubits": [1, 3]} == measure([1, 3])
+    assert measure([1, 3]) == measure([1, 3])
+    assert measure([1, 3]) != measure([1, 2])
+
+
+def test_reset_compares_equal_to_legacy_dict_form():
+    assert reset([1, 3]) == {"type": "reset", "qubits": [1, 3]}
+    assert {"type": "reset", "qubits": [1, 3]} == reset([1, 3])
+    assert reset([1, 3]) == reset([1, 3])
+    assert reset([1, 3]) != reset([1, 2])
 
 
 def test_operation_is_immutable_via_item_assignment():
@@ -182,7 +215,8 @@ def test_circuit_stores_same_dicts_as_before():
         s_gate(2),
         rx(0.1, 2),
         cz(2, [3]),
-        measure(1, 3),
+        measure([1, 3]),
+        reset([1, 3]),
         n_qubits=4,
     )
     assert cir.gates == [
@@ -194,5 +228,6 @@ def test_circuit_stores_same_dicts_as_before():
         {"type": "rx", "target_qubit": 2, "parameter": 0.1},
         {"type": "cz", "target_qubit": 2, "control_qubits": [3], "control_states": [1]},
         {"type": "measure", "qubits": [1, 3]},
+        {"type": "reset", "qubits": [1, 3]},
     ]
     assert all(type(gate) is dict for gate in cir.gates)

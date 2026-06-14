@@ -95,13 +95,14 @@ _STANDARD_GATES = (
     GateSpec("cry", 1, 1, controlled=True, qasm_name="cry", symbol="Ry"),
     GateSpec("crz", 1, 1, controlled=True, qasm_name="crz", symbol="Rz"),
     GateSpec("toffoli", 1, 0, aliases=("ccnot",), controlled=True, qasm_name="ccx", symbol="X"),
-    # swap/rzz/rxx/measure 在绘图中特殊绘制，不携带 symbol。
+    # 这些门在绘图中使用专门形状，不携带通用 symbol。
     GateSpec("swap", 2, 0, qasm_name="swap"),
     GateSpec("rzz", 2, 1, qasm_name="rzz"),
     GateSpec("rxx", 2, 1, qasm_name="rxx"),
     # unitary 的矩阵经 "parameter" 携带，但绘图占位场景允许缺省，故参数个数可变。
     GateSpec("unitary", None, None, symbol="U"),
     GateSpec("measure", None, 0, aliases=("measurement",)),
+    GateSpec("reset", None, 0, symbol="|0>"),
 )
 
 for _spec in _STANDARD_GATES:

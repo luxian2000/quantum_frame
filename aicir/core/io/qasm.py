@@ -185,6 +185,14 @@ def _append_qasm3_multi_control_rotation(
     lines.append(f"ccx q[{controls[0]}],q[{controls[1]}],anc[0];")
 
 
+def _is_plain_z_measure(gate: Dict[str, object]) -> bool:
+    """判断 gate 是否为可导出为标准 QASM 的单比特 Z 测量（无 id）。"""
+    qubits = gate.get("qubits") or []
+    basis = str(gate.get("basis", "Z")).upper()
+    measure_id = gate.get("id")
+    return len(qubits) == 1 and basis == "Z" and measure_id is None
+
+
 def circuit_to_qasm(circuit: Circuit, version: str = "2.0") -> str:
     """将 Circuit 导出为 OpenQASM 字符串，支持 2.0 和 3.0。"""
     if not hasattr(circuit, "n_qubits") or not has_circuit_instructions(circuit):
@@ -194,22 +202,57 @@ def circuit_to_qasm(circuit: Circuit, version: str = "2.0") -> str:
     if version_norm not in {"2.0", "3.0"}:
         raise ValueError("version 仅支持 '2.0' 或 '3.0'")
 
+    # 预扫描：统计可导出的单比特 Z 测量数量，用于声明经典比特寄存器
+    all_gate_dicts = circuit_gate_dicts(circuit)
+    plain_measure_count = sum(
+        1
+        for g in all_gate_dicts
+        if canonical_gate_name(_normalize_gate_type_for_export(str(g.get("type", "")))) == "measure"
+        and _is_plain_z_measure(g)
+    )
+
     lines: List[str] = []
     if version_norm == "2.0":
         lines.append(_QASM2_HEADER.rstrip("\n"))
         lines.append(f"qreg q[{int(circuit.n_qubits)}];")
+        if plain_measure_count > 0:
+            lines.append(f"creg c[{plain_measure_count}];")
     else:
         lines.append(_QASM3_HEADER.rstrip("\n"))
         lines.append(f"qubit[{int(circuit.n_qubits)}] q;")
         ancilla_count = _qasm3_required_ancilla_count(circuit)
         if ancilla_count > 0:
             lines.append(f"qubit[{ancilla_count}] anc;")
+        if plain_measure_count > 0:
+            lines.append(f"bit[{plain_measure_count}] c;")
 
-    for gate in circuit_gate_dicts(circuit):
+    # 用于给 measure 分配经典比特索引
+    measure_cbit_idx = 0
+
+    for gate in all_gate_dicts:
         gtype = canonical_gate_name(_normalize_gate_type_for_export(gate["type"]))
         controls, control_states = _normalized_control_data(gate)
         pre_lines, post_lines = _control_state_wrapper_lines(controls, control_states)
         lines.extend(pre_lines)
+
+        if gtype == "measure":
+            # 联合多比特 / 非 Z 基 / 带 id 的 measure 无法用标准 QASM 表达
+            qubits = gate.get("qubits") or []
+            basis = str(gate.get("basis", "Z")).upper()
+            measure_id = gate.get("id")
+            if len(qubits) != 1 or basis != "Z" or measure_id is not None:
+                raise NotImplementedError(
+                    "联合/非Z基/带id 的 measure 无法导出为标准 QASM；请使用 JSON 格式"
+                )
+            q = int(qubits[0])
+            c = measure_cbit_idx
+            measure_cbit_idx += 1
+            if version_norm == "2.0":
+                lines.append(f"measure q[{q}] -> c[{c}];")
+            else:
+                lines.append(f"c[{c}] = measure q[{q}];")
+            lines.extend(post_lines)
+            continue
 
         if gtype in _SINGLE_NO_PARAM_EXPORT:
             qasm_gate = _SINGLE_NO_PARAM_EXPORT[gtype]

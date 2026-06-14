@@ -410,23 +410,24 @@ class PauliEstimator:
                 raise ValueError("non-identity Pauli groups require positive shots")
 
             measured_circuit = measurement_circuit(circuit, group.basis, backend=backend)
-            if density_mode or active_noise is not None:
-                result = measure.run_density_matrix(
-                    measured_circuit,
-                    shots=group_shots,
-                    initial_density_matrix=initial_density_matrix,
-                    noise_model=active_noise,
-                    return_state=False,
-                )
-            else:
-                result = measure.run(
-                    measured_circuit,
-                    shots=group_shots,
-                    initial_state=initial_state,
-                    return_state=False,
-                )
+            # 统一走 run()：run_density_matrix 已移除。
+            # 若有噪声模型，动态附加到临时电路（Measure.run 通过 getattr 读取）。
+            if active_noise is not None:
+                measured_circuit.noise_model = active_noise
 
-            counts = dict(result.counts or {})
+            # 初始态：density_mode 下使用 initial_density_matrix，否则 initial_state
+            init = initial_density_matrix if (density_mode and initial_density_matrix is not None) else initial_state
+            result = measure.run(
+                measured_circuit,
+                shots=group_shots,
+                initial_state=init,
+                return_state=False,
+            )
+
+            # counts(-1) 返回裸比特串（如 "00"），包装为 |..> 格式供测试断言及
+            # pauli_expectation_from_counts（_bits_from_count_key 两者均接受）
+            raw_counts = result.counts(-1)
+            counts = {f"|{k}>": v for k, v in raw_counts.items()}
             term_estimates = []
             for term in group.terms:
                 expectation, variance = pauli_expectation_from_counts(term.pauli, counts, n_qubits=n_qubits)

@@ -21,7 +21,7 @@ def as_instruction(value: CircuitInstruction | Mapping[str, Any]) -> CircuitInst
     if isinstance(value, (Operation, Measurement)):
         return value
     if isinstance(value, Mapping):
-        if str(value.get("type", "")).lower() in {"measure", "measurement"}:
+        if str(value.get("type", "")).lower() in {"measure", "measurement", "reset"}:
             return Measurement.from_dict(value)
         return Operation.from_dict(value)
     raise TypeError("instruction must be Operation, Measurement, or a gate mapping")

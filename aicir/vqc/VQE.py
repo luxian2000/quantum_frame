@@ -317,12 +317,14 @@ class BasicVQE:
         observables = {self.observable_name: observable}
 
         if self.noise_model is not None or self.use_density_matrix:
-            measurement = measure.run_density_matrix(
+            # 噪声路径：将 noise_model 附加到线路，由 run() 内部读取
+            if self.noise_model is not None:
+                circuit.noise_model = self.noise_model
+            measurement = measure.run(
                 circuit,
                 shots=self.shots,
                 initial_density_matrix=self.initial_density_matrix,
                 observables=observables,
-                noise_model=self.noise_model,
                 return_state=return_state,
             )
         else:

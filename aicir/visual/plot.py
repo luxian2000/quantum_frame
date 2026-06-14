@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import inspect
 import linecache
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -34,44 +35,43 @@ from .utils import require_matplotlib
 
 # --- Style ----------------------------------------------------------------
 
-# Per gate-family fill / edge colours, loosely matching the look of the popular
-# graphical composers: blue Hadamards, amber Paulis / controls, red phase
-# gates, green rotations and pink measurements.
+# Gate-family fill / edge colours. Non-Clifford gates share the Hadamard palette;
+# Clifford gates use green; parameterized variants use a
+# lighter version of their base palette. Measurements keep their own colour.
 _PALETTE: dict[str, tuple[str, str]] = {
     "hadamard": ("#CBDDF0", "#3B6FB5"),
-    "pauli": ("#F7D9A8", "#E1922B"),
-    "phase": ("#F6C2BE", "#D9534F"),
-    "rotation": ("#CBE8C6", "#4C9A4A"),
-    "unitary": ("#D8CCEC", "#7E57C2"),
+    "clifford": ("#B8DEB2", "#3F8B3D"),
+    "t_gate": ("#F6C2BE", "#D9534F"),
     "measure": ("#F3C6DC", "#C2549B"),
     "default": ("#E2E2E2", "#888888"),
 }
 
-# 键为 GateSpec 规范名；别名（X/cnot/ccnot 等）在查询时经 canonical_gate_name 归一。
-_FAMILY: dict[str, str] = {
-    "hadamard": "hadamard",
-    "pauli_x": "pauli",
-    "pauli_y": "pauli",
-    "pauli_z": "pauli",
-    "cx": "pauli",
-    "cy": "pauli",
-    "cz": "pauli",
-    "toffoli": "pauli",
-    "s_gate": "phase",
-    "t_gate": "phase",
-    "rx": "rotation",
-    "ry": "rotation",
-    "rz": "rotation",
-    "crx": "rotation",
-    "cry": "rotation",
-    "crz": "rotation",
-    "rzz": "rotation",
-    "rxx": "rotation",
-    "u2": "unitary",
-    "u3": "unitary",
-    "unitary": "unitary",
-    "measure": "measure",
+_CLIFFORD_GATES = {
+    "hadamard",
+    "pauli_x",
+    "pauli_y",
+    "pauli_z",
+    "s_gate",
+    "cx",
+    "cy",
+    "cz",
+    "swap",
 }
+_PARAMETERIZED_CLIFFORD_GATES: set[str] = set()
+_PARAMETERIZED_NONCLIFFORD_GATES = {
+    "rx",
+    "ry",
+    "rz",
+    "crx",
+    "cry",
+    "crz",
+    "rzz",
+    "rxx",
+    "u2",
+    "u3",
+    "unitary",
+}
+_NONCLIFFORD_GATES = {"t_gate", "toffoli", *_PARAMETERIZED_NONCLIFFORD_GATES}
 
 # Geometry, in data units (the axes use an equal aspect ratio).
 _BOX = 0.62          # gate-box side length
@@ -135,8 +135,30 @@ def _fit_marked_texts(ax, *, min_fontsize: float = 1.0) -> None:
             return
 
 
+def _lighten(hex_color: str, amount: float = 0.30) -> str:
+    text = hex_color.lstrip("#")
+    r, g, b = (int(text[i:i + 2], 16) for i in (0, 2, 4))
+    values = [round(channel + (255 - channel) * amount) for channel in (r, g, b)]
+    return "#" + "".join(f"{value:02X}" for value in values)
+
+
+def _light_style(style: tuple[str, str], amount: float = 0.30) -> tuple[str, str]:
+    return (_lighten(style[0], amount), _lighten(style[1], amount))
+
+
 def _style_for(gate_type: str) -> tuple[str, str]:
-    return _PALETTE[_FAMILY.get(canonical_gate_name(gate_type), "default")]
+    name = canonical_gate_name(gate_type)
+    if name in {"measure", "measurement", "reset"}:
+        return _PALETTE["measure"]
+    if name in _PARAMETERIZED_CLIFFORD_GATES:
+        return _light_style(_PALETTE["clifford"])
+    if name in _CLIFFORD_GATES:
+        return _PALETTE["clifford"]
+    if name in _PARAMETERIZED_NONCLIFFORD_GATES:
+        return _light_style(_PALETTE["hadamard"], amount=0.20)
+    if name in _NONCLIFFORD_GATES:
+        return _PALETTE["hadamard"]
+    return _PALETTE["default"]
 
 
 def _measure_targets(gate: dict) -> list[int]:
@@ -145,6 +167,11 @@ def _measure_targets(gate: dict) -> list[int]:
     if not qubits and "target_qubit" in gate:
         qubits = [gate["target_qubit"]]
     return [int(q) for q in (qubits or [])]
+
+
+def _reset_targets(gate: dict, n_qubits: int) -> list[int]:
+    """Qubits a reset gate targets; empty reset() means every qubit."""
+    return _measure_targets(gate) or list(range(n_qubits))
 
 
 def _pretty_angle(value: Any) -> str:
@@ -190,8 +217,8 @@ def _gate_qubits(gate: dict, n_qubits: int) -> list[int]:
         return [int(gate["qubit_1"]), int(gate["qubit_2"])]
     if gate_type in {"identity", "I", "unitary"}:
         return list(range(n_qubits))
-    if gate_type in {"measure", "measurement"}:
-        return _measure_targets(gate) or [0]
+    if gate_type in {"measure", "measurement", "reset"}:
+        return list(range(n_qubits))
     qubits: list[int] = []
     controls = gate.get("control_qubits")
     if controls:
@@ -214,6 +241,93 @@ def _pack_layers(circuit: Any) -> list[int]:
             next_available[q] = col + 1
         columns.append(col)
     return columns
+
+
+def _gate_draws_box_on_qubit(gate: dict, qubit: int, n_qubits: int) -> bool:
+    """Whether rendering covers ``qubit`` with a box-shaped gate body."""
+    gate_type = canonical_gate_name(gate["type"])
+    if gate_type in {"identity", "I"}:
+        return True
+    if gate_type == "unitary":
+        return qubit < int(gate.get("n_qubits", n_qubits))
+    if gate_type in {"rzz", "rxx"}:
+        return qubit in {int(gate["qubit_1"]), int(gate["qubit_2"])}
+    if gate_type == "swap":
+        return False
+
+    target = gate.get("target_qubit")
+    if target is None:
+        return False
+    target = int(target)
+    controls = [int(q) for q in gate.get("control_qubits", [])]
+    if controls:
+        return qubit == target and gate_type not in {"cx", "toffoli"}
+    return qubit == target
+
+
+def _next_quantum_gate_column(
+    gates: list[dict],
+    columns: list[int],
+    start: int,
+    qubit: int,
+    n_qubits: int,
+) -> float | None:
+    """Return where a reset dash should stop before the next quantum gate."""
+    for gate, col in zip(gates[start:], columns[start:]):
+        gate_type = canonical_gate_name(gate["type"])
+        if gate_type in {"measure", "measurement", "reset"}:
+            continue
+        if qubit in _gate_qubits(gate, n_qubits):
+            if _gate_draws_box_on_qubit(gate, qubit, n_qubits):
+                return float(col)
+            return float(col) - _BOX / 2
+    return None
+
+
+def _reset_link_targets(
+    gates: list[dict],
+    columns: list[int],
+    n_qubits: int,
+    default_end: float,
+) -> dict[int, dict[int, tuple[float, float]]]:
+    """Map reset gate index/target to the measure->reset dashed span."""
+    measured_col: dict[int, float] = {}
+    links: dict[int, dict[int, tuple[float, float]]] = {}
+    for index, (gate, col) in enumerate(zip(gates, columns)):
+        gate_type = canonical_gate_name(gate["type"])
+        if gate_type in {"measure", "measurement"}:
+            for q in (_measure_targets(gate) or list(range(n_qubits))):
+                measured_col[int(q)] = float(col)
+            continue
+        if gate_type == "reset":
+            for q in _reset_targets(gate, n_qubits):
+                start_col = measured_col.pop(q, None)
+                end_col = (
+                    _next_quantum_gate_column(gates, columns, index + 1, q, n_qubits)
+                    or default_end
+                )
+                if start_col is not None:
+                    links.setdefault(index, {})[q] = (start_col, end_col)
+            continue
+        for q in _gate_qubits(gate, n_qubits):
+            measured_col.pop(q, None)
+    return links
+
+
+def _wire_segments(x_left: float, x_right: float, blocked: list[tuple[float, float]]):
+    """Yield solid wire segments, excluding reset dashed spans."""
+    intervals = sorted(
+        (max(x_left, min(a, b)), min(x_right, max(a, b)))
+        for a, b in blocked
+        if max(x_left, min(a, b)) < min(x_right, max(a, b))
+    )
+    cursor = x_left
+    for start, end in intervals:
+        if start > cursor:
+            yield cursor, start
+        cursor = max(cursor, end)
+    if cursor < x_right:
+        yield cursor, x_right
 
 
 # --- Primitive shapes -----------------------------------------------------
@@ -307,7 +421,7 @@ def _draw_swap_mark(ax, x, y, color, fontsize=_DEFAULT_FONTSIZE):
 
 
 def _draw_measure(ax, x, y, facecolor, edgecolor):
-    from matplotlib.patches import Arc, FancyBboxPatch
+    from matplotlib.patches import Arc
 
     _draw_box(ax, x, y, "", facecolor, edgecolor, fontsize=1)
     ax.add_patch(Arc((x, y - 0.08), _BOX * 0.62, _BOX * 0.62, theta1=0, theta2=180,
@@ -316,21 +430,67 @@ def _draw_measure(ax, x, y, facecolor, edgecolor):
             linewidth=1.6, zorder=4)
 
 
+def _draw_reset(ax, x, y, facecolor, edgecolor):
+    from matplotlib.patches import Arc
+
+    _draw_box(ax, x, y, "", facecolor, edgecolor, fontsize=1)
+    radius = _BOX * 0.23
+    left_angle = 210.0
+    right_angle = 30.0
+    gap_angle = 16.0
+    ax.add_patch(Arc((x, y), radius * 2, radius * 2,
+                     theta1=right_angle + gap_angle, theta2=left_angle,
+                     edgecolor=edgecolor, linewidth=1.6, zorder=4))
+    ax.add_patch(Arc((x, y), radius * 2, radius * 2,
+                     theta1=left_angle + gap_angle, theta2=360.0 + right_angle,
+                     edgecolor=edgecolor, linewidth=1.6, zorder=4))
+    head = _BOX * 0.08
+    left_x = x + radius * math.cos(math.radians(left_angle))
+    left_y = y + radius * math.sin(math.radians(left_angle))
+    right_x = x + radius * math.cos(math.radians(right_angle))
+    right_y = y + radius * math.sin(math.radians(right_angle))
+    ax.plot([left_x, left_x - head],
+            [left_y, left_y + head * 0.15],
+            color=edgecolor, linewidth=1.6, zorder=5)
+    ax.plot([left_x, left_x + head * 0.15],
+            [left_y, left_y + head],
+            color=edgecolor, linewidth=1.6, zorder=5)
+    ax.plot([right_x, right_x + head],
+            [right_y, right_y - head * 0.15],
+            color=edgecolor, linewidth=1.6, zorder=5)
+    ax.plot([right_x, right_x - head * 0.15],
+            [right_y, right_y - head],
+            color=edgecolor, linewidth=1.6, zorder=5)
+
+
 def _draw_connector(ax, x, q_lo, q_hi, n_qubits, color):
     ax.plot([x, x], [_yy(q_hi, n_qubits), _yy(q_lo, n_qubits)], color=color,
             linewidth=1.8, zorder=2)
 
 
+def _draw_reset_link(ax, x_start, x_end, y, color):
+    ax.plot([x_start, x_end], [y, y], color=color, linewidth=1.4, zorder=1)
+
+
 # --- Per-gate dispatch ----------------------------------------------------
 
 
-def _render_gate(ax, gate, x, n_qubits, fontsize):
+def _render_gate(ax, gate, x, n_qubits, fontsize, reset_link_targets=None):
     gate_type = canonical_gate_name(gate["type"])
-    facecolor, edgecolor = _style_for(gate_type)
+    facecolor, edgecolor = _style_for("measure" if gate_type == "reset" else gate_type)
+    reset_link_targets = reset_link_targets or set()
 
     if gate_type in {"measure", "measurement"}:
-        for target in (_measure_targets(gate) or [0]):
+        targets = _measure_targets(gate) or [0]
+        if len(targets) > 1:
+            _draw_connector(ax, x, min(targets), max(targets), n_qubits, edgecolor)
+        for target in targets:
             _draw_measure(ax, x, _yy(target, n_qubits), facecolor, edgecolor)
+        return
+
+    if gate_type == "reset":
+        for target in _reset_targets(gate, n_qubits):
+            _draw_reset(ax, x, _yy(target, n_qubits), facecolor, edgecolor)
         return
 
     if gate_type in {"identity", "I"}:
@@ -424,26 +584,52 @@ def _render_figure(
         fig = ax.figure
 
     x_left, x_right = -0.85, n_cols - 1 + 0.85
+    reset_links = _reset_link_targets(gates, columns, n_qubits, x_right) if gates else {}
 
-    # Find the leftmost measurement column for each qubit (wire ends there).
+    # Find terminal measurement columns for each qubit. A reset consumes the
+    # preceding measurement marker and lets the wire continue.
     measure_col: dict[int, float] = {}
     for gate, col in zip(gates, columns):
-        if gate["type"] in {"measure", "measurement"}:
-            for q in _measure_targets(gate):
-                if q not in measure_col or col < measure_col[q]:
-                    measure_col[q] = float(col)
+        gate_type = canonical_gate_name(gate["type"])
+        if gate_type in {"measure", "measurement"}:
+            for q in (_measure_targets(gate) or list(range(n_qubits))):
+                measure_col.setdefault(q, float(col))
+        elif gate_type == "reset":
+            for q in _reset_targets(gate, n_qubits):
+                measure_col.pop(q, None)
+        else:
+            for q in _gate_qubits(gate, n_qubits):
+                measure_col.pop(q, None)
 
     for q in range(n_qubits):
         y = _yy(q, n_qubits)
         wire_end = measure_col[q] if q in measure_col else x_right
-        ax.plot([x_left, wire_end], [y, y], color=wire_color, linewidth=1.4,
-                zorder=1)
+        blocked = [
+            span
+            for targets in reset_links.values()
+            for target, span in targets.items()
+            if target == q
+        ]
+        for seg_start, seg_end in _wire_segments(x_left, wire_end, blocked):
+            ax.plot([seg_start, seg_end], [y, y], color=wire_color, linewidth=1.4,
+                    zorder=1)
         label = qubit_labels[q] if qubit_labels else f"q{q}"
         ax.text(x_left - 0.15, y, label, ha="right", va="center",
                 fontsize=fontsize * 0.8, color="#444444")
 
-    for gate, col in zip(gates, columns):
-        _render_gate(ax, gate, float(col), n_qubits, fontsize)
+    for targets in reset_links.values():
+        for target, (x_start, x_end) in targets.items():
+            _draw_reset_link(ax, x_start, x_end, _yy(target, n_qubits), wire_color)
+
+    for index, (gate, col) in enumerate(zip(gates, columns)):
+        _render_gate(
+            ax,
+            gate,
+            float(col),
+            n_qubits,
+            fontsize,
+            reset_link_targets=set(reset_links.get(index, {})),
+        )
 
     ax.set_xlim(x_left - 0.9, x_right + 0.3)
     ax.set_ylim(-0.9, n_qubits - 1 + 0.9)

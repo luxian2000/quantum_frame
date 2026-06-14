@@ -114,7 +114,7 @@ solver = BasicVQE(
     noise_model=noise,
 )
 energy = solver.energy(np.array([0.1]))
-counts = solver._last_measurement.counts
+counts = solver._last_measurement.counts(-1)   # counts 现为方法，-1 取末端测量计数
 ```
 
 ### 示例：PauliEstimator 有限 shots 能量

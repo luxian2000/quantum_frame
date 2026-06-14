@@ -12,7 +12,7 @@ def _circuit(*gates, n_qubits):
 
 
 def test_valid_circuit_passes_and_is_equivalent():
-    cir = _circuit(hadamard(0), rz(0.5, 1), cx(1, [0]), measure(0, 1), n_qubits=2)
+    cir = _circuit(hadamard(0), rz(0.5, 1), cx(1, [0]), measure([0, 1]), n_qubits=2)
     out = ValidatePass().run(cir)
     assert out.n_qubits == cir.n_qubits
     assert out.gates == cir.gates
@@ -31,7 +31,7 @@ def test_control_qubit_out_of_range_raises():
 
 
 def test_measure_qubit_out_of_range_raises():
-    cir = _circuit(hadamard(0), measure(0, 4), n_qubits=2)
+    cir = _circuit(hadamard(0), measure([0, 4]), n_qubits=2)
     with pytest.raises(ValueError):
         ValidatePass().run(cir)
 

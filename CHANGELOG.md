@@ -2,6 +2,24 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-14
+
+### Changed（破坏性变更）
+
+- **`measure`/`reset` 量子比特参数改为「单个 int 或列表」**：`measure([0,1], ...)` / `reset([0,1])`；不再支持 `measure(0, 1)` 多位置形式（请改用列表）。
+- **统一测量模型**：删除"机制一/机制二互斥"框架；线路内嵌 `measure`/`reset` 与末端读出（`tm`/`measure_qubits`）现可共存，两者是同一模型的两个正交部分。
+- **线路内 `measure(basis, id)` 改为投影测量**：由非坍缩边缘采样标记改为真正的两结果联合 Pauli 投影（`basis∈{Z,X,Y}`，同子空间保留相干）；新增 `id` 参数使 `result.output("id")` 可用；`basis`/`id` 字段在 IR 中作为一等字段序列化（JSON 往返保真）。
+- **`reset` 改为无前置条件的信道**：删除"必须先有同一比特 `measure`"的限制；`reset` 可出现在任意位置；对纠缠目标施加 reset 使该轨迹升级为密度矩阵。
+- **新增 `run()` 参数 `tm`/`sm`/`seed`**：`tm=True`（默认）控制末端测量；`sm="avg"` 为多轨迹聚合模式（`"shot"/"cond"` 待实现，传入报 `NotImplementedError`）；`seed` 单一 RNG 种子贯穿全部随机操作。
+- **`output`/`counts`/`prob` 改为方法**：`result.output(i)`/`result.counts(i)`/`result.prob(i)` 按操作下标（或字符串 `id`）索引；末端结果用 `output(-1)`/`counts(-1)`。原字段访问方式（`result.output`/`result.counts`）已移除。
+- **`state`/`final_state` 语义更新**：`state` = 末端测量前完整态（`ρ_pre`）；`final_state` = 末端测量后的态（`ρ_post`）；`shots>1` 时两者均为平均密度矩阵 `(2^n,2^n)`。
+- **`shots=0` ≡ `None`（exact 模式）且覆盖 `tm`**：exact 模式下不执行末端测量（`final_state==state`，`output(-1)` 报错）；线路内 `measure()` 仍走一条随机轨迹并坍缩。这是对上传规则 23（`shots=0` 非法）与规则 36（`shots=None` 仍取末端结果）的显式偏差。
+- **`Circuit.unitary()` 遇 measure/reset 改为报错**：默认对 `measure`/`reset` 一律 `raise`（原行为：`measure` 静默跳过）；新增 `ignore_nonunitary=True` 选项以丢弃非酉操作并返回酉部分。
+- **QASM 导出限制**：联合（多比特）/ 非 Z 基 / 带 `id` 的 `measure` 导出时报 `NotImplementedError`；普通单比特 Z `measure` 仍按标准 QASM 2.0/3.0 导出。
+- **末端输出顺序保留输入顺序**：`measure_qubits` 原始输入顺序保留到 `output(-1)` 列顺序，不做内部排序。
+- **已移除**：`run_density_matrix`、`run_batch`、`scan_parameters` 旧入口；噪声通过 `circuit.noise_model` / `initial_density_matrix` 传入新 `run()`。
+- **`sm="shot"/"cond"` 待实现**：传入时报 `NotImplementedError`，后续版本实现。
+
 ## 2026-06-12
 
 ### Added
@@ -12,6 +30,8 @@
 - `Result` 新增 `state` 字段：始终返回测量前的完整末态（SV 路径为态向量，DM 路径为 flatten 密度矩阵），不受采样影响。
 - `Result` 新增 `output` 字段：`shots=1` 单次测量结果——被测比特上 Z⊗…⊗Z 关联投影测量的本征值（±1，实现为对各被测比特分别做 Z 基投影后取乘积，与联合宇称测量的 ±1 分布一致且保证其余比特为纯态）；坍缩到的具体基态见 `counts` / `final_state`。
 - `result.metadata` 新增 `final_state_kind`（`'state_vector'`/`'density_matrix'`/`None`）与 `final_state_qubits`（`final_state` 所描述的比特下标）。
+- 新增线路内 `reset(*qubits)` 标记，与 `measure(*qubits)` 参数格式一致；每个 reset 目标必须先有同一比特的 `measure`，且二者之间不能有任何量子门作用于该比特。`Measure.run()`/`run_density_matrix()` 支持 reset 执行语义；matplotlib 线路图以与 `measure` 同色、标注 `Reset` 的虚线表示 reset，`Reset` 字号与 `Rz` 门主标签一致且虚线 dash 间距更大；虚线区间不叠加普通实线，没有后续量子门时延伸到线路末端；遇到 CNOT/SWAP 等无完整方框的后续门时，虚线停在虚拟方框左边界，虚拟方框内部恢复普通实线。
+- 新增 `demos.reset_demo`，通过 `H(0) -> cnot(1,0) -> cnot(2,1) -> measure(1) -> reset(1) -> cnot(1,2)` 三比特线路的 `result.snap(...)` 记录 reset 前后中间态，验证 `reset(1)` 将已测量比特从 `|1>` 重置为 `|0>`，且后续门从重置后的态继续演化。
 
 ### Changed
 
