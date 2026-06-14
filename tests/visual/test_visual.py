@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from aicir import Circuit, cnot, crz, cz, hadamard, measure, reset, rxx, rzz, rx, rz, s_gate, swap, toffoli, u2, u3
+from aicir import Circuit, cnot, crz, cz, hadamard, measure, reset, rxx, rzz, rx, rz, s_gate, swap, t_gate, toffoli, u2, u3
 from aicir.visual import (
     circuit_to_text,
     draw_circuit,
@@ -124,6 +124,56 @@ def test_plot_returns_fig_and_draws_patches(plt, tmp_path):
     assert ax.get_title() == "circuit"
     assert len(ax.patches) > 0
     assert (tmp_path / "bell.png").exists()
+
+
+def test_plot_colors_clifford_and_nonclifford_gate_families():
+    from matplotlib.colors import to_rgb
+
+    style_for = sys.modules["aicir.visual.plot"]._style_for
+    clifford_style = style_for("hadamard")
+    nonclifford_style = style_for("t_gate")
+    previous_clifford_style = ("#CBE8C6", "#4C9A4A")
+
+    assert clifford_style != ("#CBDDF0", "#3B6FB5")
+    assert sum(to_rgb(clifford_style[0])) < sum(to_rgb(previous_clifford_style[0]))
+    assert sum(to_rgb(clifford_style[1])) < sum(to_rgb(previous_clifford_style[1]))
+    assert style_for("pauli_x") == clifford_style
+    assert style_for("cx") == clifford_style
+    assert style_for("cz") == clifford_style
+    assert style_for("swap") == clifford_style
+    assert style_for("t_gate") == ("#CBDDF0", "#3B6FB5")
+    assert style_for("t_gate") == nonclifford_style
+    assert style_for("toffoli") == nonclifford_style
+
+    assert style_for("rx") != nonclifford_style
+    assert style_for("rx") == style_for("u3")
+    assert style_for("rx") == style_for("rzz")
+
+
+def test_plot_parameterized_gate_colors_are_lighter_than_base_family(plt):
+    from matplotlib.colors import to_rgb
+
+    circuit = Circuit(t_gate(0), rx(0.1, 1), n_qubits=2)
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    box_patches = [patch for patch in ax.patches if hasattr(patch, "get_y")]
+    t_patch, rx_patch = box_patches
+
+    assert fig is ax.figure
+    assert sum(to_rgb(rx_patch.get_facecolor())) > sum(to_rgb(t_patch.get_facecolor()))
+    assert sum(to_rgb(rx_patch.get_edgecolor())) > sum(to_rgb(t_patch.get_edgecolor()))
+
+
+def test_plot_parameterized_nonclifford_light_color_is_only_slightly_lighter():
+    plot_module = sys.modules["aicir.visual.plot"]
+    nonclifford_style = plot_module._PALETTE["hadamard"]
+    light_nonclifford = plot_module._light_style(nonclifford_style, amount=0.20)
+    old_light_nonclifford = plot_module._light_style(nonclifford_style, amount=0.30)
+
+    assert light_nonclifford != old_light_nonclifford
+    assert light_nonclifford[0] < old_light_nonclifford[0]
+    assert light_nonclifford[1] < old_light_nonclifford[1]
 
 
 def test_plot_layered_packs_columns(plt):
@@ -254,6 +304,80 @@ def test_plot_rxx_gate_label_is_rxx(plt):
 
     value_ys = [text.get_position()[1] for text in ax.texts if text.get_text() == "π/2"]
     assert value_ys == pytest.approx([-(0.62 / 2 + 0.04)])
+
+
+def test_plot_joint_measure_draws_boxes_connected_by_solid_line(plt):
+    circuit = Circuit(measure(0, 2), n_qubits=3)
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    vertical_solid = [
+        line for line in ax.lines
+        if line.get_linestyle() in {"-", "solid"}
+        and np.allclose(line.get_xdata(), [0.0, 0.0], atol=1e-6)
+        and np.allclose(line.get_ydata(), [0.0, 2.0], atol=1e-6)
+    ]
+    box_patches = [patch for patch in ax.patches if hasattr(patch, "get_y")]
+
+    assert fig is ax.figure
+    assert len(box_patches) == 2
+    assert vertical_solid
+
+
+def test_plot_measure_with_following_gate_does_not_draw_separator(plt):
+    circuit = Circuit(hadamard(0), measure(0, 2), rz(0.2, 1), n_qubits=3)
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    box = sys.modules["aicir.visual.plot"]._BOX
+    measure_edge = sys.modules["aicir.visual.plot"]._style_for("measure")[1]
+    separators = [
+        line for line in ax.lines
+        if line.get_linestyle() == "--"
+        and line.get_color() == measure_edge
+        and np.allclose(line.get_ydata(), [0.0, 2.0], atol=1e-6)
+    ]
+
+    box_patches = [patch for patch in ax.patches if hasattr(patch, "get_y")]
+    h_patch = next(p for p in box_patches if p.get_y() + p.get_height() / 2 == pytest.approx(2.0))
+    rz_patch = next(p for p in box_patches if p.get_y() + p.get_height() / 2 == pytest.approx(1.0))
+
+    assert fig is ax.figure
+    assert separators == []
+    assert h_patch.get_x() + h_patch.get_width() < 1.0 - box / 2
+    assert rz_patch.get_x() > 1.0 + box / 2
+
+
+def test_plot_measured_qubit_wire_continues_when_later_gate_uses_it(plt):
+    circuit = Circuit(hadamard(0), measure(0), rz(0.2, 0), n_qubits=1)
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    solid_spans = []
+    for line in ax.lines:
+        if line.get_linestyle() not in {"-", "solid"}:
+            continue
+        xdata = np.asarray(line.get_xdata(), dtype=float)
+        ydata = np.asarray(line.get_ydata(), dtype=float)
+        if xdata.shape != (2,) or ydata.shape != (2,):
+            continue
+        if np.allclose(ydata, [0.0, 0.0], atol=1e-6):
+            solid_spans.append((min(xdata), max(xdata)))
+
+    assert fig is ax.figure
+    assert any(start <= 1.0 and end >= 2.0 for start, end in solid_spans)
+
+
+def test_plot_measure_reset_are_global_layer_barriers(plt):
+    circuit = Circuit(hadamard(0), measure(1), rx(0.2, 0), reset(1), rz(0.3, 0), n_qubits=2)
+
+    fig, ax = plot(circuit, layered=True, save=False)
+
+    box_patches = [patch for patch in ax.patches if hasattr(patch, "get_y")]
+    centers = [round(patch.get_x() + patch.get_width() / 2, 6) for patch in box_patches]
+
+    assert fig is ax.figure
+    assert centers == [0.0, 1.0, 2.0, 3.0, 4.0]
 
 
 def test_plot_rejects_invalid_input(plt):
@@ -391,37 +515,97 @@ def test_plot_handles_reset_marker(plt):
     fig, ax = plot(circuit, save=False)
 
     labels = [text.get_text() for text in ax.texts]
-    dashed = [line for line in ax.lines if line.get_linestyle() == "--"]
+    box_patches = [patch for patch in ax.patches if hasattr(patch, "get_y")]
+    from matplotlib.colors import to_rgba
     measure_edge = sys.modules["aicir.visual.plot"]._style_for("measure")[1]
+    reset_arcs = [
+        patch for patch in ax.patches
+        if patch.__class__.__name__ == "Arc"
+        and patch.center[0] == pytest.approx(1.0)
+    ]
+    dashed = [
+        line for line in ax.lines
+        if line.get_linestyle() == "--"
+        and not np.allclose(line.get_xdata(), [line.get_xdata()[0], line.get_xdata()[0]], atol=1e-6)
+    ]
 
     assert fig is ax.figure
-    assert "Reset" in labels
+    assert "Reset" not in labels
     assert "|0>" not in labels
-    assert len(dashed) == 1
-    assert dashed[0].get_color() == measure_edge
+    assert len(box_patches) == 2
+    assert len(reset_arcs) == 2
+    assert box_patches[-1].get_edgecolor() == pytest.approx(to_rgba(measure_edge))
+    for arc in reset_arcs:
+        assert arc.get_edgecolor() == pytest.approx(to_rgba(measure_edge))
+    assert dashed == []
 
 
-def test_plot_draws_reset_as_dashed_link_before_next_gate(plt):
+def test_plot_reset_arcs_are_split_before_arrowheads(plt):
+    circuit = Circuit(reset(0), n_qubits=1)
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    box = sys.modules["aicir.visual.plot"]._BOX
+    radius = box * 0.23
+    min_gap_degrees = 16.0
+    measure_edge = sys.modules["aicir.visual.plot"]._style_for("measure")[1]
+    arrow_lines = [
+        line for line in ax.lines
+        if line.get_zorder() == 5
+        and line.get_color() == measure_edge
+        and np.mean(np.asarray(line.get_xdata(), dtype=float)) == pytest.approx(0.0, abs=0.25)
+    ]
+
+    assert fig is ax.figure
+    assert len(arrow_lines) == 4
+    for line in arrow_lines:
+        x0 = float(line.get_xdata()[0])
+        y0 = float(line.get_ydata()[0])
+        distance = np.hypot(x0, y0)
+        assert distance == pytest.approx(radius)
+
+    reset_arcs = [
+        patch for patch in ax.patches
+        if patch.__class__.__name__ == "Arc"
+        and patch.center[0] == pytest.approx(0.0)
+    ]
+    assert len(reset_arcs) == 2
+    arc_ends = sorted(round(arc.theta2, 6) for arc in reset_arcs)
+    assert arc_ends == [210.0, 390.0]
+    for arc in reset_arcs:
+        assert (arc.theta2 - arc.theta1) == pytest.approx(180.0 - min_gap_degrees)
+
+
+def test_plot_draws_reset_link_as_plain_solid_wire_before_next_gate(plt):
     circuit = Circuit(measure(0), reset(0), rz(0.2, 0), n_qubits=1)
 
     fig, ax = plot(circuit, layered=False, save=False)
 
     labels = [text.get_text() for text in ax.texts]
-    dashed = [line for line in ax.lines if line.get_linestyle() == "--"]
+    box_patches = [patch for patch in ax.patches if hasattr(patch, "get_y")]
+    from matplotlib.colors import to_rgba
     measure_edge = sys.modules["aicir.visual.plot"]._style_for("measure")[1]
+    reset_arcs = [
+        patch for patch in ax.patches
+        if patch.__class__.__name__ == "Arc"
+        and patch.center[0] == pytest.approx(1.0)
+    ]
+    dashed = [
+        line for line in ax.lines
+        if line.get_linestyle() == "--"
+        and not np.allclose(line.get_xdata(), [line.get_xdata()[0], line.get_xdata()[0]], atol=1e-6)
+    ]
 
     assert fig is ax.figure
-    assert "Reset" in labels
+    assert "Reset" not in labels
     assert "|0>" not in labels
-    assert len(dashed) == 1
-    assert dashed[0].get_color() == measure_edge
-    assert dashed[0]._unscaled_dash_pattern == (0, (5, 5))
-    np.testing.assert_allclose(dashed[0].get_xdata(), [0.0, 2.0], atol=1e-6)
-    np.testing.assert_allclose(dashed[0].get_ydata(), [0.0, 0.0], atol=1e-6)
-    text_by_label = {text.get_text(): text for text in ax.texts}
-    assert text_by_label["Reset"].get_fontsize() == pytest.approx(text_by_label["Rz"].get_fontsize())
+    assert len(reset_arcs) == 2
+    assert box_patches[1].get_edgecolor() == pytest.approx(to_rgba(measure_edge))
+    for arc in reset_arcs:
+        assert arc.get_edgecolor() == pytest.approx(to_rgba(measure_edge))
+    assert dashed == []
 
-    solid_wire_overlaps = []
+    solid_wire_spans = []
     for line in ax.lines:
         if line.get_linestyle() not in {"-", "solid"}:
             continue
@@ -431,9 +615,8 @@ def test_plot_draws_reset_as_dashed_link_before_next_gate(plt):
             continue
         if not np.allclose(ydata, [0.0, 0.0], atol=1e-6):
             continue
-        if min(xdata) <= 0.0 and max(xdata) >= 2.0:
-            solid_wire_overlaps.append(line)
-    assert solid_wire_overlaps == []
+        solid_wire_spans.append((min(xdata), max(xdata)))
+    assert any(np.isclose(start, 0.0) and np.isclose(end, 2.0) for start, end in solid_wire_spans)
 
 
 @pytest.mark.parametrize("next_gate", [cnot(1, [0]), swap(0, 1)])
@@ -443,7 +626,6 @@ def test_plot_reset_dash_stops_at_virtual_box_for_boxless_next_gate(plt, next_ga
     fig, ax = plot(circuit, layered=False, save=False)
 
     box = sys.modules["aicir.visual.plot"]._BOX
-    dashed = [line for line in ax.lines if line.get_linestyle() == "--"]
     solid_segments = []
     for line in ax.lines:
         if line.get_linestyle() not in {"-", "solid"}:
@@ -457,7 +639,5 @@ def test_plot_reset_dash_stops_at_virtual_box_for_boxless_next_gate(plt, next_ga
 
     expected_stop = 2.0 - box / 2
     assert fig is ax.figure
-    assert len(dashed) == 1
-    np.testing.assert_allclose(dashed[0].get_xdata(), [0.0, expected_stop], atol=1e-6)
-    np.testing.assert_allclose(dashed[0].get_ydata(), [1.0, 1.0], atol=1e-6)
+    assert any(np.isclose(start, 0.0) and np.isclose(end, expected_stop) for start, end in solid_segments)
     assert any(np.isclose(start, expected_stop) and end > 2.0 for start, end in solid_segments)
