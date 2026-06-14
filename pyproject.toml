@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aicir"
+description = "从零实现的量子线路模拟器与量子算法框架（态矢量 / 密度矩阵 / 噪声 / VQE·QAOA·VQD·SSVQE / 量子架构搜索 / QML 梯度 / OpenQASM I/O）"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "luxian", email = "xlu8838@gmail.com" }]
+keywords = ["quantum", "quantum-computing", "simulator", "vqe", "qaoa", "qml"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dynamic = ["version"]
+dependencies = [
+    "numpy",
+]
+
+[project.optional-dependencies]
+# Torch 后端：GPU/NPU/自动微分、以及依赖 torch 的量子架构搜索（QAS）
+torch = ["torch"]
+# 绘图（Circuit.plot / visual 子系统）
+viz = ["matplotlib"]
+# 科学计算（部分优化器 / 经典优化层）
+sci = ["scipy"]
+# 全部可选运行时依赖
+all = ["torch", "matplotlib", "scipy"]
+# 开发与测试
+dev = ["pytest", "torch", "matplotlib", "scipy"]
+
+[tool.setuptools.dynamic]
+version = { attr = "aicir.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["aicir*"]
+exclude = ["demos*", "tests*", "docs*", "node_modules*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.md", "*.qasm", "*.txt"]
+"aicir.qas" = ["demos/*.qasm", "demos/*.txt", "*.md"]
+"aicir.encoder" = ["demos/*.qasm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1235,6 +1235,38 @@ runtime_context: NPURuntimeContext(world_size=1, rank=0, local_rank=0, distribut
 Summary: PASS
 ```
 
+### 6.13 BatchSV（批量态矢量路径，NPU 安全且可微）
+
+`aicir` 主路径（`State` / `apply_gate_to_state`）一次只演化单个 `(2^n, 1)` 态矢量，且门参数为标量。深度学习场景（例如把变分量子线路当作神经网络的一层）需要：一次模拟一批态矢量；旋转门角度可逐样本（per-sample）不同（如数据编码角度依赖输入）；端到端可微（autograd）；以及 **Ascend NPU 安全**——NPU 缺少 `complex64` 的 `aclnnAdd` / `aclnnMul` 内核，因此 `BatchSV` 全程以实部/虚部两个实张量表示，只用实数乘加，反向传播不会触发复数累加。
+
+`BatchSV`（规范路径 `aicir.core`，也可从顶层 `aicir` 导入）即为该批量路径。门矩阵与单态路径采用同一套定义（复用 `_single_qubit_base_for_gate`），保持单一事实来源；量子比特端序也与主路径一致（**qubit 0 为最高位**）。需要 `torch`。
+
+```python
+import torch
+from aicir import BatchSV, GPUBackend, hadamard, ry, crz
+
+backend = GPUBackend()                      # 或 NPUBackend；用于获取目标 device / dtype
+bsv = BatchSV(n_qubits=3, batch_size=8, backend=backend)
+
+# 逐样本数据编码角度：ry 的参数可以是 (batch,) 张量，逐样本不同。
+enc = torch.randn(8, 3, requires_grad=True)
+theta = torch.zeros(3, requires_grad=True)  # 0 维/标量参数按 batch 广播
+
+for q in range(3):
+    bsv.apply_gate(hadamard(q))
+    bsv.apply_gate(ry(enc[:, q], q))        # 逐样本角度
+bsv.apply_gate(crz(theta[0], 1, [0]))       # 受控旋转门同样支持
+bsv.apply_gate(ry(theta[1], 2))
+
+z = bsv.z_expectations()                     # (batch, n_qubits) 逐比特 <Z_q>
+probs = bsv.probabilities()                  # (batch, 2^n) 基测量概率
+
+loss = z.sum()
+loss.backward()                              # 端到端可微，全程实张量
+```
+
+逐样本张量角度目前支持 `rx` / `ry` / `rz` 及其受控形式 `crx` / `cry` / `crz`；常量门与标量参数门复用单态路径定义，覆盖范围与之一致。`apply_gate` 返回自身以便链式调用。
+
 ---
 
 ## 7. 与 OpenQASM 2.0 / 3.0 互转
