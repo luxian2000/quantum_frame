@@ -576,6 +576,32 @@ def test_plot_reset_arcs_are_split_before_arrowheads(plt):
         assert (arc.theta2 - arc.theta1) == pytest.approx(180.0 - min_gap_degrees)
 
 
+def test_plot_reset_arrowheads_are_slightly_larger(plt):
+    circuit = Circuit(reset(0), n_qubits=1)
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    box = sys.modules["aicir.visual.plot"]._BOX
+    measure_edge = sys.modules["aicir.visual.plot"]._style_for("measure")[1]
+    arrow_lines = [
+        line for line in ax.lines
+        if line.get_zorder() == 5
+        and line.get_color() == measure_edge
+        and np.mean(np.asarray(line.get_xdata(), dtype=float)) == pytest.approx(0.0, abs=0.25)
+    ]
+    lengths = [
+        np.hypot(
+            float(line.get_xdata()[1]) - float(line.get_xdata()[0]),
+            float(line.get_ydata()[1]) - float(line.get_ydata()[0]),
+        )
+        for line in arrow_lines
+    ]
+
+    assert fig is ax.figure
+    assert len(lengths) == 4
+    assert min(lengths) > box * 0.075
+
+
 def test_plot_draws_reset_link_as_plain_solid_wire_before_next_gate(plt):
     circuit = Circuit(measure(0), reset(0), rz(0.2, 0), n_qubits=1)
 

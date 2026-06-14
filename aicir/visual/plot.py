@@ -444,7 +444,7 @@ def _draw_reset(ax, x, y, facecolor, edgecolor):
     ax.add_patch(Arc((x, y), radius * 2, radius * 2,
                      theta1=left_angle + gap_angle, theta2=360.0 + right_angle,
                      edgecolor=edgecolor, linewidth=1.6, zorder=4))
-    head = _BOX * 0.065
+    head = _BOX * 0.08
     left_x = x + radius * math.cos(math.radians(left_angle))
     left_y = y + radius * math.sin(math.radians(left_angle))
     right_x = x + radius * math.cos(math.radians(right_angle))
