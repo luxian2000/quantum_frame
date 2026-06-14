@@ -18,9 +18,9 @@ cir = Circuit(
     rxx(np.pi / 4, 2, 3),
     u3(0.1, 0.2, 0.3, 2),
     cnot(1, [0, 3]),
-    measure(0, 1, basis="Z", id="m0"),
+    measure(0, 1, 3, id="m0"),
     measure(2, basis="X", id="m1"),
-    reset(2),
+    reset(1, 2),
     pauli_x(1),
     t_gate(0),
     swap(0, 3),
@@ -44,7 +44,7 @@ print("in-circuit output by id:", result.output("m0"))
 print("in-circuit counts by id:", result.counts("m0"))
 print("in-circuit probabilities by id:", result.prob("m0"))
 
-# reset(0) is operation index 9. It is a channel in the circuit; there is no
+# reset(1, 2) is operation index 10. It is a channel in the circuit; there is no
 # separate Result output for reset itself. The terminal measurement below is
 # performed after reset and all following gates. -1 means terminal measurement.
 print("terminal measured qubits:", result.terminal_qubits)
