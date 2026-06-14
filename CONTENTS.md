@@ -5,10 +5,10 @@
 ~~~text
 quantum_frame/
 |-- aicir/
+|   |-- backends/
 |   |-- channel/
 |   |   |-- backends/
-|   |   |-- noise/
-|   |   `-- states/
+|   |   `-- noise/
 |   |-- chemistry/
 |   |-- core/
 |   |   `-- io/
@@ -19,6 +19,7 @@ quantum_frame/
 |   |-- ir/
 |   |-- measure/
 |   |-- metrics/
+|   |-- noise/
 |   |-- optimization/
 |   |   |-- qubo/
 |   |   `-- sb/
@@ -43,8 +44,10 @@ quantum_frame/
 |   |   `-- result_npu_3/
 |   |-- LiH/
 |   |-- MaxCut/
+|   |-- mnist/
 |   `-- visual_outputs/
 |-- docs/
+|   `-- superpowers/
 `-- tests/
     |-- algorithms/
     |-- backends/
@@ -57,6 +60,7 @@ quantum_frame/
     |-- noise/
     |-- optimizer/
     |-- qml/
+    |-- transpile/
     |-- universal/
     |-- visual/
     `-- vqc/
