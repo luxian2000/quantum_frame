@@ -4,6 +4,15 @@
 
 ## 2026-06-14
 
+### Added
+
+- **批量态矢量路径 `BatchSV`**（`aicir.core.batch`，已在 `aicir` / `aicir.core` 顶层导出）：一次演化一批态矢量，供把变分线路当作神经网络一层的场景使用。特性：
+  - 旋转门角度可逐样本（per-sample）不同（如数据编码角度依赖输入），亦兼容 0 维标量张量参数（保留 autograd 梯度）；
+  - 全程以实部/虚部两个实张量表示，只用实数乘加，**NPU 安全**（规避 Ascend 缺失的 complex64 `aclnnAdd`/`aclnnMul`），反向不触发复数累加；
+  - 端到端可微；门矩阵复用单态路径 `_single_qubit_base_for_gate` 的定义（常量门/标量旋转门），逐样本张量角度按相同公式构造批量基矩阵；
+  - 端序与单态路径一致（qubit 0 为最高位）；提供 `apply_gate`、`probabilities`、`z_expectations`（逐比特 `<Z_q>`）。
+  - 受控单比特门（`crx/cry/crz` 等）通过控制比特掩码通用实现。
+
 ### Changed（破坏性变更）
 
 - **`measure`/`reset` 量子比特参数改为「单个 int 或列表」**：`measure([0,1], ...)` / `reset([0,1])`；不再支持 `measure(0, 1)` 多位置形式（请改用列表）。
@@ -111,7 +120,6 @@
 - 两种测量机制互斥：当电路已内嵌 `measure()` 门（机制二）时再传入 `measure_qubits`（机制一）会抛出 `ValueError`，避免两种读出方式相互冲突。
 - `measure` 函数从 `aicir` 顶层导出，支持 `from aicir import measure`；`aicir.measure` 子包仍可通过 `from aicir.measure.measure import Measure` 访问。
 - 线路图支持 `measure(q1, q2, ...)` 多比特测量门绘制：每个被测比特线上绘制独立测量框，测量框右侧不再延伸导线（符合量子线路惯例）。
-
 - 新增 `Circuit.plot(...)` 语法，用于直接从电路对象输出线路图；默认文件位置为调用该方法的 `.py` 文件所在目录。
 - 新增 `rxx(θ, q1, q2)` 双比特 XX 旋转门，并提供 `ms_gate` / `molmer_sorensen` 作为 Mølmer-Sørensen gate 别名。
 - `rxx` 支持矩阵构造、逐门态演化、Torch autograd、QASM 导入导出、QML adjoint gradient、HEA entangler、metrics/QAS/noise 统计路径。
