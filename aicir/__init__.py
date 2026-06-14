@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from importlib import import_module
 
-__all__: list[str] = []
+__version__ = "0.1.0"
+
+__all__: list[str] = ["__version__"]
 
 
 def _export(names: list[str]) -> None:
