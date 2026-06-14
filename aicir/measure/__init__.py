@@ -14,12 +14,13 @@ from .estimator import (
     pauli_eigenvalue_from_bits,
     pauli_expectation_from_counts,
 )
-from .result import Result
+from .result import MeasureSpec, Result
 from .sampler import Sampler
 
 __all__ = [
     "Measure",
     "Result",
+    "MeasureSpec",
     "Sampler",
     "PauliTerm",
     "PauliGroup",

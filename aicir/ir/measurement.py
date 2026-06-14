@@ -1,4 +1,4 @@
-"""Typed measurement IR with compatibility helpers for measure gates."""
+"""Typed measurement/reset IR with compatibility helpers for circuit markers."""
 
 from __future__ import annotations
 
@@ -17,17 +17,23 @@ _KNOWN_MEASUREMENT_KEYS = {
     "classical_bit",
     "classical_bits",
     "clbits",
+    "basis",
+    "id",
 }
+
+_VALID_BASES = {"X", "Y", "Z"}
 
 
 @dataclass(frozen=True)
 class Measurement(LegacyGateView):
-    """Typed representation of an in-circuit measurement declaration."""
+    """Typed representation of an in-circuit measurement-like declaration."""
 
     qubits: tuple[int, ...] = ()
     measurement_type: str = "measure"
     return_type: str = "counts"
     classical_bits: tuple[int, ...] = ()
+    basis: str = "Z"
+    id: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -43,10 +49,17 @@ class Measurement(LegacyGateView):
         if classical_bits and qubits and len(classical_bits) != len(qubits):
             raise ValueError("classical_bits length must match qubits length")
 
+        basis = str(self.basis).strip().upper()
+        if basis not in _VALID_BASES:
+            raise ValueError(f"measure basis 必须是 X/Y/Z 之一，收到 {self.basis!r}")
+        measure_id = None if self.id is None else str(self.id)
+
         object.__setattr__(self, "measurement_type", measurement_type)
         object.__setattr__(self, "return_type", return_type)
         object.__setattr__(self, "qubits", qubits)
         object.__setattr__(self, "classical_bits", classical_bits)
+        object.__setattr__(self, "basis", basis)
+        object.__setattr__(self, "id", measure_id)
         object.__setattr__(self, "metadata", dict(self.metadata))
 
     @classmethod
@@ -56,8 +69,8 @@ class Measurement(LegacyGateView):
         if not isinstance(gate, Mapping):
             raise TypeError("Measurement.from_dict expects a mapping")
         measurement_type = str(gate.get("type", "measure"))
-        if measurement_type.lower() not in {"measure", "measurement"}:
-            raise ValueError("measurement gate type must be 'measure' or 'measurement'")
+        if measurement_type.lower() not in {"measure", "measurement", "reset"}:
+            raise ValueError("measurement gate type must be 'measure', 'measurement', or 'reset'")
 
         if "qubits" in gate:
             qubits = _as_int_tuple(gate["qubits"], label="qubits")
@@ -75,6 +88,9 @@ class Measurement(LegacyGateView):
         else:
             classical_bits = ()
 
+        basis = str(gate.get("basis", "Z"))
+        measure_id = gate.get("id", None)
+
         metadata = {
             key: value
             for key, value in gate.items()
@@ -85,6 +101,8 @@ class Measurement(LegacyGateView):
             measurement_type=measurement_type,
             return_type=str(gate.get("return_type", "counts")),
             classical_bits=classical_bits,
+            basis=basis,
+            id=measure_id,
             metadata=metadata,
         )
 
@@ -96,12 +114,16 @@ class Measurement(LegacyGateView):
                 self.measurement_type,
                 self.return_type,
                 self.classical_bits,
+                self.basis,
+                self.id,
                 self.metadata,
             ) == (
                 other.qubits,
                 other.measurement_type,
                 other.return_type,
                 other.classical_bits,
+                other.basis,
+                other.id,
                 other.metadata,
             )
         if isinstance(other, Mapping):
@@ -119,6 +141,11 @@ class Measurement(LegacyGateView):
             gate["return_type"] = self.return_type
         if self.classical_bits:
             gate["classical_bits"] = list(self.classical_bits)
+        if self.measurement_type != "reset":
+            if self.basis != "Z":
+                gate["basis"] = self.basis
+            if self.id is not None:
+                gate["id"] = self.id
         for key, value in self.metadata.items():
             gate[key] = value
         return gate

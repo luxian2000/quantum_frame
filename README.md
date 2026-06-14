@@ -42,7 +42,7 @@ from aicir import (
     swap, rzz, rxx, ms_gate,
     toffoli, ccnot,
     u2, u3,
-    measure,     # 线路内测量标记（测量机制二），返回 Measurement
+    measure,     # 线路内联合 Pauli 投影测量标记，返回 Measurement
 )
 
 # 电路、 typed IR 与参数占位符
@@ -261,14 +261,16 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 | `ms_gate(θ, q1, q2)`     | 角度, qubit_1, qubit_2           | `rxx` 的别名  |
 | `toffoli(t, [c0,c1,...])` | target, control_list             | 多控制 X 门     |
 | `ccnot(t, [c0,c1,...])`   | target, control_list             | 同 toffoli      |
+| `measure(q...)`           | qubit list                       | 线路内测量标记  |
+| `reset(q...)`             | qubit list                       | 测量后重置为零态 |
 
 `toffoli` / `ccnot` 的矩阵构造与逐门执行路径支持任意数量控制位，也支持门字典中的 `control_states`；导出为 OpenQASM `ccx` 时仍只适用于两个控制位。
 
-门构造函数的**签名与参数顺序与旧版完全一致**，但返回值已由裸门字典升级为类型化 `Operation`（`measure(...)` 返回 `Measurement`）：
+门构造函数的**签名与参数顺序与旧版完全一致**，但返回值已由裸门字典升级为类型化 `Operation`（`measure(...)` / `reset(...)` 返回 `Measurement`）：
 
 - **构造期校验**：量子比特下标、控制位/控制态长度，以及按 GateSpec 注册表检查目标比特数、参数个数与控制位要求（见 3.6 节），错误在调用处立即报出。
 - **旧字典只读兼容**：`gate["type"]`、`.get("parameter")`、`in`、`dict(gate)`、迭代等读取照常可用，且与旧门字典可直接 `==` 比较；写入（`gate[...] = ...`）会抛 `TypeError`（对象不可变）。
-- **`Circuit` 内部存储不变**：仍是与旧版完全一致的门字典列表（`circuit.gates`），下游代码无需改动。
+- **`Circuit` 内部存储不变**：仍是门字典列表（`circuit.gates`），下游代码无需改动。
 
 ### 3.2 构建电路
 
@@ -524,165 +526,250 @@ register_gate(GateSpec(name="my_iswap", num_qubits=2, num_params=0, symbol="iS")
 
 ## 4. 量子测量
 
-aicir 提供两种量子测量机制，可按需选用。
-
-**机制一**：电路中不含任何测量门，由外部 `Measure.run()` 决定读取哪些比特——默认读取全部，也可通过 `measure_qubits=[...]` 显式指定。
-
-**机制二**：在构建电路时用 `measure(*qubits)` 将测量目标嵌入电路，`Measure.run()` 自动识别并对这些比特做边缘分布采样，无需额外参数。
-
-> **两种机制互斥**：一旦电路通过机制二嵌入了 `measure()` 门，就不能再对该电路使用机制一——此时向 `run()` 传入 `measure_qubits` 会抛出 `ValueError`。请二选一：要么移除电路中的 `measure()` 门，要么不要传 `measure_qubits`。
+aicir 采用**统一测量模型**：线路内的 `measure`/`reset` 是操作序列中的正式操作，末端读出由 `tm`/`measure_qubits` 控制，二者可共存而非互斥。
 
 `Measure` 对象绑定一个后端，`run()` 返回统一的 `Result` 对象。
 
-### 4.1 机制一：独立测量（shots 语义）
+### 4.1 运行接口与参数
 
-`measure.run(cir, shots=1, measure_qubits=None)` —— `shots` 默认 `1`，`measure_qubits` 默认 `None`（读取全部比特）。
+```python
+result = Measure(backend).run(
+    circuit,
+    shots=1,             # 采样次数；None/0 = exact 模式（覆盖 tm，不做末端测量）
+    measure_qubits=None, # 显式末端读出比特，保留输入顺序；None = 全部比特
+    snap=None,           # 记录完整态快照的操作下标列表
+    tm=True,             # 是否在线路全部操作后执行末端测量
+    sm="avg",            # 多轨迹聚合模式；当前仅支持 "avg"
+    seed=None,           # 随机种子（用于复现）
+    *,
+    initial_state=None,          # 初始态（None = |0…0>）
+    initial_density_matrix=None, # 初始密度矩阵（与 initial_state 互斥）
+    observables=None,            # 可观测量字典 {name: matrix}
+    return_state=True,           # 是否在结果中附带 state / final_state
+)
+```
 
-`result.state` 始终返回**测量前**的完整末态（酉演化结果，不受采样影响）；`result.final_state` 返回**测量后**的量子态，随 `shots` 变化：
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `shots` | `1` | 正整数/`0`/`None`；`0` 与 `None` 同义（exact 模式）；负数/非整数报 `ValueError` |
+| `measure_qubits` | `None` | `None` = 全部比特 `[0..n−1]`；`[]` = 不做末端测量，等价 `tm=False` |
+| `snap` | `None` | 操作下标集合（0 起，`<` 操作总数 L），记录该操作完成后的完整态 |
+| `tm` | `True` | `False` 时不执行末端测量（`final_state == state`）；exact 模式下被静默覆盖 |
+| `sm` | `"avg"` | `"avg"`：多轨迹平均；`"shot"`/`"cond"` 待实现（传入报 `NotImplementedError`） |
+| `seed` | `None` | 单个 `numpy.random` 种子，贯穿线路内 measure/reset/末端测量，相同参数可复现 |
 
-| `shots`         | `measure_qubits` | 行为                                                                   | `result.final_state`                                      | `result.output`       |
-| ----------------- | ------------------ | ---------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------- |
-| `None` 或 `0` | （任意）           | 不测量，仅计算概率                                                     | 与 `result.state` 相同                                    | `None`                |
-| `1`             | `None`（全部）   | 对全部比特做单次投影测量                                               | 坍缩后的基态                                                | 本征值 `+1` / `-1`  |
-| `1`             | `[a, b, …, c]`  | 对这些比特做$Z_a{\otimes}Z_b{\otimes}\dots{\otimes}Z_c$ 关联投影测量 | 其余比特的坍缩纯态                                          | 本征值 `+1` / `-1`  |
-| `>1`            | （任意）           | 采样统计                                                               | 对被测比特求偏迹后的约化密度矩阵（无剩余比特时为 `None`） | `None`                |
+### 4.2 线路与操作序列约定
 
-`shots=1` 时 `output` 统一为被测比特上 $Z{\otimes}\dots{\otimes}Z$ 的本征值（测得 `1` 的个数为偶数时 `+1`，奇数时 `-1`）；坍缩到的具体基态可由 `counts`（单条记录）或 `final_state` 读出。
+线路 `cir` 包含操作序列 `[O₀, O₁, …, O_{L−1}]`，每个操作分配一个**操作下标**（0 起）：
 
-> **物理说明（shots=1 + 子集）**：实现上对 `[a..c]` 各比特分别做 Z 基投影测量（这些算符两两对易），`output` 取各结果的乘积——其 ±1 分布与联合 $Z{\otimes}\dots{\otimes}Z$（宇称）测量完全一致。区别在于：真正的联合宇称测量只投影到 ±1 本征子空间，被测比特之间可保留纠缠，此时其余比特一般处于混合态；而逐比特测量完全坍缩，使其余比特处于良定义的纯态，与 `final_state` 返回纯态的约定自洽。
+- 普通量子门（`hadamard`、`cnot`、`rx`、…）按顺序执行酉演化。
+- `measure(*qubits, basis="Z", id=None)`：线路内联合 Pauli 投影测量，占用一个操作下标。
+- `reset(*qubits)`：重置信道，占用一个操作下标。
+- 默认初态为 `|0…0>` 纯态；可通过 `initial_state` 或 `initial_density_matrix` 指定。
+
+```python
+from aicir import Circuit, hadamard, cnot, measure, reset
+
+cir = Circuit(
+    hadamard(0),   # op 0
+    cnot(1, [0]), # op 1
+    measure([0, 1]), # op 2 — 线路内联合 ZZ 投影测量
+    reset(0),      # op 3 — 重置信道
+    n_qubits=2,
+)
+```
+
+### 4.3 线路内 measure：联合 Pauli 投影测量
+
+`measure(qubits=None, *, basis="Z", id=None)` 对所列比特执行**两结果联合 Pauli 投影测量**：
+
+- **投影**到 `λ=±1` 联合本征子空间，结果为 `λ∈{+1,−1}`。
+- **非破坏性保留**：被测比特仍留在电路中，后续门可作用其上；子空间内相干被保留（不是逐比特坍缩）。
+- `basis`：`"Z"`（默认）/ `"X"` / `"Y"`，同一 basis 作用于所列全部比特。
+- `id`：可选字符串，在整条电路中唯一，使 `result.output("id")` 可用。
+
+`result.output(i)` 按操作下标 `i` 或字符串 `id` 取该次测量结果；`result.counts(i)` / `result.prob(i)` 仅在 `shots≥1` 时可用。
+
+```python
+from aicir import Circuit, Measure, NumpyBackend, hadamard, cnot, measure
+
+# Bell 态用 ZZ 联合投影测量：Bell 态是 Z⊗Z 的 +1 本征态，恒返回 +1
+cir = Circuit(hadamard(0), cnot(1, [0]), measure([0, 1], id="zz"), n_qubits=2)
+m = Measure(NumpyBackend())
+
+# shots=None：单条精确轨迹，output 为标量
+r = m.run(cir, shots=None, tm=False)
+print(r.output("zz"))      # 1（+1，必然）
+print(r.state.reshape(-1)) # [0.707+0j, 0, 0, 0.707+0j]（Bell 态，仍相干）
+
+# shots=8：多轨迹，output(2) 形状 (8, 1)，全为 +1
+r8 = m.run(cir, shots=8, tm=False)
+print(r8.output(2))        # [[1],[1],[1],[1],[1],[1],[1],[1]]
+print(r8.counts(2))        # {1: 8, -1: 0} 或 {1: 8}
+```
+
+### 4.4 reset：重置信道
+
+`reset(*qubits)` 实施 `R_S(ρ) = |0⟩⟨0|_S ⊗ Tr_S(ρ)`，**无需事先 measure**，可出现在任意位置：
+
+- 被重置比特回到 `|0⟩`，与其他比特的关联被清除。
+- 对**纠缠**目标比特施加 reset：该轨迹升级为密度矩阵（混合态），其他比特约化态不变。
+- 对**可分**目标施加 reset：仍保持纯态。
+
+```python
+from aicir import Circuit, Measure, NumpyBackend, hadamard, cnot, reset
+import numpy as np
+
+# Bell 态的 qubit 0 施加 reset → 混合态（密度矩阵）
+cir = Circuit(hadamard(0), cnot(1, [0]), reset(0), n_qubits=2)
+r = Measure(NumpyBackend()).run(cir, shots=None, snap=[2])
+
+snap_after_reset = r.snap(2)
+print(snap_after_reset.shape)   # (4, 4)  — 升级为密度矩阵
+# 对角元约为 [0.5, 0.5, 0, 0]，表示 |00> 和 |01> 各占 0.5
+# （reset(0) 把 Bell 态的 q0 重置为 |0>，q1 仍是最大混合 I/2）
+print(np.real(np.diag(snap_after_reset)))
+```
+
+### 4.5 末端测量
+
+电路全部显式操作执行完后，`tm=True`（默认）时对 `measure_qubits` 所列比特执行**逐比特 Z 基**投影测量：
+
+- **输入顺序保留**：`measure_qubits=[1, 0]` 时 `output(-1)` 列顺序为 `[qubit1, qubit0]`，不做内部排序。
+- `output(-1)` 形状：`shots=1` 时 `(1, k)`，`shots=M` 时 `(M, k)`（`k=len(measure_qubits)`）。
+- `measure_qubits=None`（默认）：读出全部 `n` 个比特。
+- `measure_qubits=[]`：不做末端测量（等价 `tm=False`）。
+
+```python
+from aicir import Circuit, Measure, NumpyBackend, pauli_x
+import numpy as np
+
+# qubit1=|1>，qubit0=|0>；末端按 [1, 0] 顺序读出
+cir = Circuit(pauli_x(1), n_qubits=2)
+r = Measure(NumpyBackend()).run(cir, shots=1, measure_qubits=[1, 0])
+print(r.output(-1))   # [[-1, 1]]  — qubit1=-1(|1>), qubit0=+1(|0>)
+```
+
+### 4.6 shots 语义
+
+| `shots` | 模式 | 说明 |
+|---|---|---|
+| `None` 或 `0` | exact 模式 | 单条精确轨迹；覆盖 `tm`，不执行末端测量；`output(-1)` / `counts(i)` / `prob(i)` 报错 |
+| `M ≥ 1` | 采样模式 | M 条独立轨迹（线路内含 measure 时重跑完整电路，否则仅对末端重采样）；`output(i)` 形状 `(M,1)` / `output(-1)` 形状 `(M,k)` |
 
 ```python
 from aicir import Circuit, Measure, NumpyBackend, hadamard, cnot
+import numpy as np
 
-measure = Measure(NumpyBackend())
-cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)   # Bell 态
+cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
+m = Measure(NumpyBackend())
 
-# 默认 shots=1：对全部比特做单次投影测量
-result = measure.run(cir)
-print(result.state)          # 测量前末态 (|00> + |11>)/√2，未坍缩
-print(result.output)         # +1（Bell 态只会测得 00 或 11，Z⊗Z 恒为 +1）
-print(result.counts)         # {'|00>': 1} 或 {'|11>': 1}
-print(result.final_state)    # 坍缩后的基态，与 counts 一致
+# exact 模式：不做末端测量
+r = m.run(cir, shots=None)
+assert np.allclose(r.final_state, r.state)
+try:
+    r.output(-1)
+except ValueError:
+    print("shots=None 时 output(-1) 报 ValueError")  # 预期输出
 
-# shots=None / 0：不进行任何测量
-result = measure.run(cir, shots=None)
-print(result.counts)         # None
-# 此时 result.final_state 与 result.state 相同
-
-# shots=1 + 子集：Z0 关联投影测量
-result = measure.run(cir, shots=1, measure_qubits=[0])
-print(result.output)         # +1 或 -1（Z0 本征值）
-print(result.final_state)    # qubit1 的坍缩纯态（与测得结果关联）
-print(result.metadata["final_state_qubits"])   # [1]
-
-# shots>1：统计采样；final_state 为偏迹后的约化密度矩阵
-result = measure.run(cir, shots=1024, measure_qubits=[0])
-print(result.counts)                           # 1 比特计数，如 {'|0>': 512, '|1>': 512}
-print(result.probabilities)                    # 完整 2 比特概率分布
-print(result.final_state)                      # qubit1 的 2×2 密度矩阵 ≈ I/2
-print(result.metadata["final_state_kind"])     # 'density_matrix'
-print(result.metadata["measured_qubits"])      # [0]
-
-# 读取全部比特且 shots>1 时没有剩余比特，final_state 为 None
-result = measure.run(cir, shots=1024)
-print(result.counts)            # {'|00>': 512, '|11>': 512}
-print(result.most_probable())   # ('|00>', 0.5)
-print(result.final_state)       # None（result.state 仍是完整末态）
+# shots=16：末端读出
+r16 = m.run(cir, shots=16)
+print(r16.output(-1).shape)  # (16, 2)
+print(r16.counts(-1))        # {'00': N1, '11': N2}，N1+N2=16
 ```
 
-### 4.2 机制二：线路内嵌测量门
+### 4.7 末态与约化：state / final_state / snap / reduce
 
-`measure(*qubits)` 是一个门构造器，将测量目标嵌入电路定义。`Measure.run()` 会跳过这些标记门做酉演化，然后对指定比特输出边缘分布（marginal）计数。
+| 字段/方法 | `shots=None/0` | `shots=1` | `shots=M>1` |
+|---|---|---|---|
+| `result.state` | 本轨迹条件态（纯/DM） | 单 shot 条件态 | 平均 DM `(2^n,2^n)` |
+| `result.final_state` | 等于 `state`（无末端测量） | 末端投影后的条件态 | 末端后平均 DM |
+| `result.snap(t)` | 第 `t` 个操作后条件态 | 同左 | 第 `t` 个操作后平均 DM |
+| `result.reduce(R, pos)` | 对 `state`/`final_state` 做偏迹，保留比特集 `R` | 同左 | 同左 |
+
+- `shots>1` 时 `state` / `final_state` 一律为密度矩阵（`shape=(2^n, 2^n)`）。
+- `sm="avg"` 时 `snap(t)` 为各轨迹第 `t` 步的平均 DM；`sm="shot"/"cond"` 待实现。
+- `pos` 参数：`"final"`（默认，约化 `final_state`）/ `"state"`（约化 `state`）。
 
 ```python
-from aicir import Circuit, Measure, NumpyBackend, hadamard, cnot, rz, measure
+from aicir import Circuit, Measure, NumpyBackend, hadamard, cnot
+import numpy as np
 
-cir = Circuit(
-    hadamard(0),
-    cnot(1, [0]),
-    rz(0.5, 1),
-    measure(0, 1),      # 仅读取 qubit 0 和 qubit 1
-)
+cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
+m = Measure(NumpyBackend())
 
-result = Measure(NumpyBackend()).run(cir, shots=1024)
-print(result.counts)                          # 2 比特字符串，如 {'|00>': 503, '|11>': 521}
-print(result.metadata["measured_qubits"])     # [0, 1]
+# snap 记录 Bell 态建立过程
+r = m.run(cir, shots=None, snap=[0, 1])
+print(r.snap(0).reshape(-1))  # [0.707+0j, 0, 0.707+0j, 0] — H(0) 后
+print(r.snap(1).reshape(-1))  # [0.707+0j, 0, 0, 0.707+0j] — Bell 态
+
+# shots>1 时 state 为密度矩阵；偏迹得单比特约化 DM
+r16 = m.run(cir, shots=16)
+print(np.asarray(r16.state).shape)  # (4, 4)
+red = r16.reduce([0], pos="state")
+print(red)   # [[0.5+0j, 0], [0, 0.5+0j]] — 约化为 I/2
 ```
 
-`measure()` 的接受形式：
-
-```python
-measure(0)            # 读取 qubit 0，输出 1 比特计数
-measure(1, 2, 3)      # 读取 qubit 1、2、3，输出 3 比特计数
-measure([0, 1])       # 可迭代形式，与 measure(0, 1) 等价
-measure()             # 空参数 = 读取全部比特（与机制一行为一致）
-```
-
-当电路中含多个 `measure` 门时，以**最早出现**的为准（后续同比特的 `measure` 不影响结果）。`measure` 是纯粹的读出标记，不会在电路中途对态向量做投影坍缩——演化始终是全局酉的；末端读出仍遵循 §4.1 的 shots 语义（例如 `shots=1` 时 `result.final_state` 给出按读出结果坍缩后的态，`result.state` 始终是演化末态）。
-
-### 4.3 仅获取概率（不测量）
-
-```python
-result = measure.run(cir, shots=None)   # shots=0 等价
-print(result.probabilities)     # 仅概率，counts 为 None
-print(result.final_state)       # 不测量，与 result.state 相同
-```
-
-### 4.4 期望值测量
+### 4.8 期望值与 observables
 
 ```python
 import numpy as np
-from aicir import Circuit, Measure, GPUBackend, hadamard
+from aicir import Circuit, Measure, NumpyBackend, pauli_x
 
-backend = GPUBackend()
-# Z 算符矩阵
-Z = np.array([[1, 0], [0, -1]], dtype=np.complex64)
+Z = np.array([[1, 0], [0, -1]], dtype=complex)
+cir = Circuit(pauli_x(0), n_qubits=1)   # |1> 态
 
-result = measure.run(
-    Circuit(hadamard(0), n_qubits=1),
-    shots=1024,
-    observables={"Z0": Z},
-)
-print(result.expectation_values)   # {'Z0': ~0.0}
-print(result.expectation_variances)
+result = Measure(NumpyBackend()).run(cir, shots=None, observables={"Z0": Z})
+print(result.expectation_values)   # {'Z0': -1.0}
 ```
 
-### 4.5 从 State 直接测量
+### 4.9 从 State 直接测量
 
 ```python
 from aicir.core import State
-from aicir import GPUBackend
-import numpy as np
+from aicir import NumpyBackend
 
-backend = GPUBackend()
+backend = NumpyBackend()
 sv = State.zero_state(2, backend)
 
 # 直接获取概率分布
-probs = sv.probabilities()
+probs = sv.probabilities()   # [1., 0., 0., 0.]
 
-# 模拟 512 次测量，返回 {bitstring: count}
-counts = sv.measure(shots=512)
-print(counts)   # {'|00>': 512}
+# 模拟 4 次测量，返回 {bitstring: count}
+counts = sv.measure(shots=4)
+print(counts)   # {'|00>': 4}
 ```
 
-### 4.6 Result 对象字段速查
+### 4.10 Result 字段/方法速查
 
-| 字段                      | 类型                         | 说明                                                                                                                                                               |
-| ------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `probabilities`         | `np.ndarray`               | 各基态概率，shape `(2^n,)`                                                                                                                                       |
-| `counts`                | `dict` or `None`         | `{'\|00>': N, ...}` 采样计数                                                                                                                                      |
-| `shots`                 | `int` or `None`          | 采样次数                                                                                                                                                           |
-| `expectation_values`    | `dict`                     | `{name: float}` 期望值                                                                                                                                           |
-| `expectation_variances` | `dict`                     | `{name: float}` 方差                                                                                                                                             |
-| `state`                 | `np.ndarray` or `None`   | 测量前完整末态（SV 路径为向量；DM 路径为 flatten 后密度矩阵）                                                                                                      |
-| `final_state`           | `np.ndarray` or `None`   | 测量后的态，随 shots 变化（见 §4.1）：`None`/`0` 与 `state` 相同；`1` 为坍缩态；`>1` 为约化密度矩阵（SV 路径为 `(2^m, 2^m)` 二维；DM 路径为 flatten） |
-| `output`                | `int` or `None`          | 单次（shots=1）测量结果：被测比特上 Z⊗…⊗Z 的本征值 ±1（具体基态见 `counts`）                                                                                       |
-| `most_probable()`       | `(str, float)`             | 最高概率基态及其概率                                                                                                                                               |
-| `summary()`             | `str`                      | 单行摘要字符串                                                                                                                                                     |
+**方法**（按需调用，带参数）：
 
-`result.metadata` 中与读出相关的键：`measured_qubits`（被读出的比特下标列表；机制一默认全读时为 `None`）、`final_state_kind`（`'state_vector'` / `'density_matrix'` / `None`）、`final_state_qubits`（`final_state` 所描述的比特下标列表）。
+| 方法 | 说明 |
+|---|---|
+| `output(i)` | 按操作下标 `i`（或字符串 `id`）取线路内 measure 结果；`output(-1)` 取末端结果 |
+| `counts(i)` | 该 measure 的计数字典；仅 `shots≥1` 可用 |
+| `prob(i)` | 该 measure 的相对频率；仅 `shots≥1` 可用 |
+| `snap(t)` | 第 `t` 个操作完成后的完整态（需 `snap=[...,t,...]` 预注册） |
+| `reduce(R, pos)` | 对 `pos` 态（`"final"`/`"state"`）保留比特集 `R` 求偏迹 |
+| `most_probable()` | 返回 `(bitstring, prob)` 最高概率基态 |
+| `summary()` | 单行摘要字符串 |
 
-### 4.7 Sampler / Estimator primitives（统一执行入口）
+**字段**（直接访问）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `probabilities` | `np.ndarray` | `ρ_pre` 计算基对角元，shape `(2^n,)` |
+| `state` | `np.ndarray` | 末端测量前完整态（SV 或 DM） |
+| `final_state` | `np.ndarray` | 末端测量后的态；`tm=False`/exact 时与 `state` 相同 |
+| `terminal_qubits` | `list[int]` | 末端测量比特列表（按输入顺序） |
+| `measurement_specs` | `list[MeasureSpec]` | 线路内 measure 操作登记（`op_index`/`id`/`qubits`/`basis`） |
+| `expectation_values` | `dict` | `{name: float}` 期望值 |
+| `expectation_variances` | `dict` | `{name: float}` 方差 |
+| `shots` | `int or None` | 实际采样次数（None = exact 模式） |
+| `n_qubits` | `int` | 电路比特数 |
+| `metadata` | `dict` | `state_mode` 等辅助信息 |
+
+### 4.11 Sampler / Estimator primitives（统一执行入口）
 
 `aicir.primitives` 把采样与期望值估计统一为 primitives，算法层无需各自处理测量、Hamiltonian 和 counts：
 
@@ -704,6 +791,20 @@ noisy = ShotEstimator(shots=4096).run(Circuit(pauli_x(0), n_qubits=1), ham)
 ```
 
 约定：接收**已绑定参数**的电路；单个电路入参返回单个结果，序列入参返回结果列表；Estimator 支持单个可观测量广播到多个电路。`ShotEstimator` 包装 `PauliEstimator`（qubit-wise commuting 分组、基变换测量、shot 分配），并暴露 `estimate(circuit, hamiltonian)` 直通方法，可直接作为 `BasicVQE(energy_estimator=...)` 注入。详见 [`aicir/primitives/README.md`](aicir/primitives/README.md)。
+
+### 4.12 输入检查与报错
+
+| 条件 | 抛出 |
+|---|---|
+| `shots < 0` 或非整数（含 `bool`） | `ValueError` |
+| `measure_qubits` / `measure(...)` / `reset(...)` 含越界比特 | `ValueError` |
+| 单个列表内有重复比特 | `ValueError` |
+| 跨 measure 操作的 `id` 重复 | `ValueError` |
+| `snap` 含越界操作下标 | `ValueError` |
+| `tm=False` 且 `measure_qubits` 非空 | `ValueError` |
+| `shots∈{None,0}` 且显式 `measure_qubits` 非空 | `ValueError` |
+| `sm="shot"` 或 `"cond"` | `NotImplementedError`（待实现） |
+| 产生混合态但后端不支持密度矩阵 | `ValueError` |
 
 ---
 
@@ -1469,7 +1570,7 @@ mixed = multipsr(objective_2d, params, parameter_indices=[(0, 0), (1, 0)])
 
 ## 9. 可视化模块
 
-`aicir.visual` 提供第一阶段的轻量可视化工具，用于查看量子线路、量子态概率/振幅和密度矩阵。文本线路图与门统计不依赖额外图形库；绘图函数会在调用时按需导入 `matplotlib`。
+`aicir.visual` 提供第一阶段的轻量可视化工具，用于查看量子线路、量子态概率/振幅和密度矩阵。文本线路图与门统计不依赖额外图形库；绘图函数会在调用时按需导入 `matplotlib`。matplotlib 图中的 `reset` 会以与 `measure` 同色、标注 `Reset` 的虚线显示；`Reset` 字号与 `Rz` 门主标签一致，虚线 dash 间距更大。虚线连接 `measure(q)` 与后续同一比特量子门，没有后续量子门时延伸到线路末端，且不再叠加普通实线。若后续门没有完整方框，reset 虚线按虚拟方框左边界停止，虚拟方框内用普通实线。
 
 ```python
 import numpy as np

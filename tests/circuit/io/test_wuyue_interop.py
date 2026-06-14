@@ -35,7 +35,7 @@ def test_circuit_to_wuyue_preserves_supported_gate_order_and_qubits():
         swap(0, 1),
         u3(math.pi / 7, math.pi / 8, math.pi / 9, 2),
         toffoli(2, [0, 1]),
-        measure(0, 2),
+        measure([0, 2]),
         n_qubits=3,
     )
 

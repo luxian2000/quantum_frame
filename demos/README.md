@@ -16,6 +16,7 @@ python -m demos.visual_circuit_demo
 python -m demos.visual_state_demo
 python -m demos.visual_density_demo
 python -m demos.visual_qas_demo
+python -m demos.reset_demo
 python demos/qubo_qaoa_demo.py
 ```
 
@@ -59,6 +60,12 @@ most likely QUBO assignment:
 
 ```bash
 python demos/qubo_qaoa_demo.py
+```
+
+Verify in-circuit `reset` execution with `result.snap(...)` snapshots:
+
+```bash
+python -m demos.reset_demo
 ```
 
 By default, figures are saved to:
