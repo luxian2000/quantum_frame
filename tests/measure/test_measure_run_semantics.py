@@ -28,7 +28,7 @@ import numpy as np
 import pytest
 
 from aicir import Circuit, Measure, cnot, hadamard, pauli_x
-from aicir.channel.backends import NumpyBackend
+from aicir.backends import NumpyBackend
 
 BELL = np.array([1.0, 0.0, 0.0, 1.0], dtype=np.complex128) / np.sqrt(2.0)
 

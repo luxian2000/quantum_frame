@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from aicir import Circuit, Measure, cnot, hadamard, ry, measure
-from aicir.channel.backends import NumpyBackend
+from aicir.backends import NumpyBackend
 from aicir.core.circuit import hadamard, ry, cnot, crx, rxx, swap, toffoli, measure
 from aicir.core.gates import apply_gate_to_state, gate_to_matrix
 from aicir.measure.result import Result

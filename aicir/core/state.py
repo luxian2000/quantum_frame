@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Dict, Optional
 import numpy as np
 
 if TYPE_CHECKING:
-    from ..channel.backends.base import Backend
+    from ..backends.base import Backend
 
 
 _MIXED_SENTINEL = object()
@@ -141,7 +141,7 @@ def _infer_n_qubits(dim: int) -> int:
 
 
 def _default_backend():
-    from ..channel.backends import NumpyBackend
+    from ..backends import NumpyBackend
     return NumpyBackend()
 
 
@@ -157,7 +157,7 @@ class State:
 
     示例::
 
-        from aicir.channel.backends import GPUBackend
+        from aicir.backends import GPUBackend
         from aicir.core import State
 
         bk = GPUBackend()

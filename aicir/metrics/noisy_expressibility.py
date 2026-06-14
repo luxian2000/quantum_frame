@@ -6,9 +6,9 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from ..channel.backends.base import Backend
-from ..channel.noise.analysis import default_plus_state, estimate_noise_strength, evolve_density_gatewise
-from ..channel.noise.model import NoiseModel
+from ..backends.base import Backend
+from ..noise.analysis import default_plus_state, estimate_noise_strength, evolve_density_gatewise
+from ..noise.model import NoiseModel
 from ..core.circuit import Circuit
 from ..core.state import State
 from .expressibility import (
@@ -65,7 +65,7 @@ def KL_Haar_noisy(
 ) -> float:
     """Compute KL divergence between noisy PQC output distribution and Haar distribution."""
     if backend is None:
-        from ..channel.backends.numpy_backend import NumpyBackend
+        from ..backends.numpy_backend import NumpyBackend
 
         backend = NumpyBackend()
 
@@ -109,7 +109,7 @@ def MMD_noisy(
 ) -> float:
     """Compute MMD between noisy PQC probability vectors and Haar-like samples."""
     if backend is None:
-        from ..channel.backends.numpy_backend import NumpyBackend
+        from ..backends.numpy_backend import NumpyBackend
 
         backend = NumpyBackend()
 
@@ -139,7 +139,7 @@ def comparative_expressibility(
 ) -> Dict[str, float]:
     """Compute ideal and noisy expressibility metrics for comparison."""
     if backend is None:
-        from ..channel.backends.numpy_backend import NumpyBackend
+        from ..backends.numpy_backend import NumpyBackend
 
         backend = NumpyBackend()
 
@@ -166,7 +166,7 @@ def expressibility_score(
 ) -> float:
     """Unified ideal/noisy expressibility distance interface."""
     if backend is None:
-        from ..channel.backends.numpy_backend import NumpyBackend
+        from ..backends.numpy_backend import NumpyBackend
 
         backend = NumpyBackend()
 

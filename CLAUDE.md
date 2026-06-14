@@ -36,7 +36,7 @@ torchrun --nproc_per_node=2 demos/demo_npu.py     # task-parallel (NOT state sha
 
 Everything is built on a backend abstraction so upper layers (`StateVector`, `Circuit`, `Measure`, VQE, QAS…) never touch the underlying numeric framework.
 
-- **Backends** (`aicir/channel/backends/`): all implement the abstract `Backend` (`base.py`). `NumpyBackend` (default, CPU), `GPUBackend` (Torch, autograd-capable; `TorchBackend` is a deprecated alias), `NPUBackend` (Ascend). Conventions: state vector shape `(2^n, 1)`, density matrix `(2^n, 2^n)`, complex dtype; methods return native tensors, `to_numpy()` is the single conversion exit. To add a backend, subclass `Backend` and implement all abstract methods — nothing else should need changing.
+- **Backends** (`aicir/backends/`): all implement the abstract `Backend` (`base.py`). `NumpyBackend` (default, CPU), `GPUBackend` (Torch, autograd-capable; `TorchBackend` is a deprecated alias), `NPUBackend` (Ascend). Conventions: state vector shape `(2^n, 1)`, density matrix `(2^n, 2^n)`, complex dtype; methods return native tensors, `to_numpy()` is the single conversion exit. To add a backend, subclass `Backend` and implement all abstract methods — nothing else should need changing.
 
 - **Gates are plain dicts**, not objects. Gate factories (`pauli_x`, `cnot`, `rx`, `rzz`, `rxx`/`ms_gate`, `toffoli`, `u3`, …) return dicts consumed by `gate_to_matrix` (`aicir/core/gates.py`). Controlled gates take `(target, control_qubits_list)`; dicts may carry `control_states` (0/1) and `control_qubits`. A typed `Operation` IR (`aicir/ir/`) is being layered on top: `Circuit.__init__`/`append`/`extend` now route every gate through `normalize_gate`, so they accept `Operation` *or* dict, but the circuit still **stores dicts internally** (`Operation.to_dict()`). Don't assume `circuit.gates` holds `Operation`s.
 
@@ -53,7 +53,7 @@ Everything is built on a backend abstraction so upper layers (`StateVector`, `Ci
 - `aicir/qml/deriv.py` — gradient/preconditioning methods (`psr`, `spsr`, `multipsr`/`mpsr`, `fd`, `auto`, `ad`, `spsa`, `qng`, …). All backend-agnostic; return values may be raw backend tensors. VQE/SSVQE/VQD/VQA-QAS all funnel parameter-shift through `qml.deriv.psr` — keep that single source of truth.
 - `aicir/chemistry/` — fixed preset qubit Hamiltonians only (`h2`, `h2_jw`, `h2_tapered`); NOT an electronic-structure pipeline. Only presets with confirmed coefficients are registered.
 - `aicir/core/io/` — OpenQASM 2.0/3.0 + JSON round-trip. Multi-control `crx/cry/crz` auto-decompose (ancilla + `ccx` chains) **only under QASM 3.0**; `control_states=0` inserts surrounding `x` gates. Bind all symbolic params before QASM export.
-- `aicir/channel/noise/` — `NoiseModel`/`NoiseChannel` (depolarizing, bit/phase flip, amplitude damping), ion-trap noise, metrics. Noise paths run through density-matrix simulation.
+- `aicir/noise/` — `NoiseModel`/`NoiseChannel` (depolarizing, bit/phase flip, amplitude damping), ion-trap noise, metrics. Noise paths run through density-matrix simulation.
 - `aicir/metrics/` — circuit expressibility, trainability, hardware metrics (incl. noisy variants).
 - `aicir/visual/` — plotting (`Circuit.plot(...)`/`Circuit.show()`); needs `matplotlib`.
 - `aicir/optimizer/` — two distinct concerns: `circuit.py` rewrites circuits (`optimize_circuit`/`optimize_basic`: rotation-gate merging, safe bounded reordering); `params.py` is the classical optimizer layer (`minimize`, `Adam`, `GD`, `SPSA`, `COBYLA`, `LBFGSB`, `ScipyMinimize`, `OptimizationResult`) that VQA loops drive.

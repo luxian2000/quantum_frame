@@ -16,13 +16,13 @@ def _is_missing_torch(exc: ModuleNotFoundError) -> bool:
     return exc.name == "torch"
 
 
-from .channel.backends.numpy_backend import NumpyBackend
+from .backends.numpy_backend import NumpyBackend
 
 _export(["NumpyBackend"])
 
 try:
-    from .channel.backends.gpu_backend import GPUBackend, TorchBackend
-    from .channel.backends.npu_backend import NPUBackend, NPURuntimeContext, npu_runtime_context_from_env
+    from .backends.gpu_backend import GPUBackend, TorchBackend
+    from .backends.npu_backend import NPUBackend, NPURuntimeContext, npu_runtime_context_from_env
 except ModuleNotFoundError as exc:
     if not _is_missing_torch(exc):
         raise
@@ -37,7 +37,7 @@ else:
         ]
     )
 
-from .channel.operators import Hamiltonian, PauliOp, PauliString
+from .operators import Hamiltonian, PauliOp, PauliString
 
 _export(
     [
@@ -52,7 +52,7 @@ from .ir import CircuitIR, Measurement, Observable, Operation
 _export(["CircuitIR", "Measurement", "Observable", "Operation"])
 
 try:
-    from .channel.noise import (
+    from .noise import (
         AmplitudeDampingChannel,
         BitFlipChannel,
         DepolarizingChannel,
@@ -204,6 +204,11 @@ except ModuleNotFoundError as exc:
         raise
 else:
     _export(["Measure", "PauliEstimator", "PauliEstimateResult", "Result"])
+
+# 导入 ``aicir.measure`` 子包会把 ``aicir.measure`` 属性重新绑定为该子模块，
+# 覆盖上面从 ``.core`` 导入的同名门构造器 ``measure``。这里显式恢复门构造器，
+# 使 ``from aicir import measure`` 始终拿到门构造函数而非子包。
+from .core import measure  # noqa: E402  恢复门构造器绑定
 
 for _module_name in [
     "chemistry",

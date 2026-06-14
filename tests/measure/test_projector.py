@@ -1,6 +1,6 @@
 import numpy as np
 from aicir.core.state import State
-from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.backends.numpy_backend import NumpyBackend
 from aicir.measure import projector
 
 

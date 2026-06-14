@@ -115,7 +115,7 @@ def auto(
         ) from exc
 
     if backend is None:
-        from aicir.channel.backends.gpu_backend import GPUBackend
+        from aicir.backends.gpu_backend import GPUBackend
 
         backend = GPUBackend(device="cpu")
 
@@ -612,7 +612,7 @@ def ad(circuit, observable, *, backend=None, return_value: bool = False):
         ``np.ndarray`` of gradients (one per differentiable gate). If
         ``return_value`` is ``True``, returns ``(grad, expectation)``.
     """
-    from aicir.channel.backends.numpy_backend import NumpyBackend
+    from aicir.backends.numpy_backend import NumpyBackend
 
     bk = backend if backend is not None else NumpyBackend()
 
@@ -1212,7 +1212,7 @@ def _auto_torch_device(
             "auto (automatic differentiation) requires PyTorch; install torch or use psr/fd/spsa."
         )
     if backend is None:
-        from aicir.channel.backends.gpu_backend import GPUBackend
+        from aicir.backends.gpu_backend import GPUBackend
 
         backend = GPUBackend(device="cpu")
 

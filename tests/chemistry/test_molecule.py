@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from aicir.channel.operators import Hamiltonian
+from aicir.operators import Hamiltonian
 from aicir.chemistry import (
     MOLECULES,
     available_molecules,

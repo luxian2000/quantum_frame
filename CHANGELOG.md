@@ -15,6 +15,8 @@
 
 ### Changed（破坏性变更）
 
+- **后端、噪声、算符上移到顶层（`aicir.channel` 包移除）**：`aicir.channel.backends` → `aicir.backends`、`aicir.channel.noise` → `aicir.noise`、`aicir.channel.operators` → `aicir.operators`。旧 `aicir.channel` 包及其 `__init__` 已删除，不保留兼容垫片。顶层再导出（`Backend`/`NumpyBackend`/`GPUBackend`/`NPUBackend`、`NoiseModel`/`NoiseChannel`/各噪声信道、`PauliOp`/`PauliString`/`Hamiltonian`）不变，`from aicir import ...` 无需改动；仅子模块路径导入（如 `from aicir.channel.backends.numpy_backend import NumpyBackend`）需改为新路径。
+  - 顺带修复 `aicir/__init__.py` 中 `measure` 门构造器被 `aicir.measure` 子包属性覆盖的隐患（旧 `channel/__init__` 早期导入 `aicir.measure` 恰好掩盖了该问题）：现在导入 measure 子包后显式恢复门构造器绑定。
 - **`measure`/`reset` 量子比特参数改为「单个 int 或列表」**：`measure([0,1], ...)` / `reset([0,1])`；不再支持 `measure(0, 1)` 多位置形式（请改用列表）。
 - **统一测量模型**：删除"机制一/机制二互斥"框架；线路内嵌 `measure`/`reset` 与末端读出（`tm`/`measure_qubits`）现可共存，两者是同一模型的两个正交部分。
 - **线路内 `measure(basis, id)` 改为投影测量**：由非坍缩边缘采样标记改为真正的两结果联合 Pauli 投影（`basis∈{Z,X,Y}`，同子空间保留相干）；新增 `id` 参数使 `result.output("id")` 可用；`basis`/`id` 字段在 IR 中作为一等字段序列化（JSON 往返保真）。

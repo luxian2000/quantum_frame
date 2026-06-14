@@ -5,7 +5,7 @@ This module turns the Hamiltonian-cycle / Hamiltonian-path formulations from
     Andrew Lucas, "Ising formulations of many NP problems",
     Frontiers in Physics 2 (2014), Section 7.1, Eq. (56).
 
-into an aicir :class:`~aicir.channel.operators.Hamiltonian` whose ground state
+into an aicir :class:`~aicir.operators.Hamiltonian` whose ground state
 encodes the solution, so that :mod:`aicir.qas.supernet` can search a circuit that
 prepares it.
 
@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from itertools import product
 from typing import Dict, Iterable, List, Sequence, Tuple
 
-from ...channel.operators import Hamiltonian
+from ...operators import Hamiltonian
 
 # A binary variable is identified by (vertex, position).
 Var = Tuple[int, int]

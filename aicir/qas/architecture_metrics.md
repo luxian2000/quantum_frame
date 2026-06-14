@@ -9,7 +9,7 @@ metrics/expressibility.py        无噪表达能力
 metrics/noisy_expressibility.py  含噪表达能力
 metrics/trainability.py          可训练性
 metrics/hardware.py              硬件效率
-channel/noise/                              噪声模型、噪声配置、噪声分析、噪声指标
+noise/                              噪声模型、噪声配置、噪声分析、噪声指标
 qas/evaluator.py                 QAS 指标编排和加权评分
 ```
 
@@ -43,7 +43,7 @@ weighted_score =
 |---|---|---|---|
 | 表达能力 | `kl_haar` | `metrics/expressibility.py::KL_Haar_divergence`, `evaluator.py::ArchitectureEvaluator` | 衡量参数化线路诱导态分布与 Haar 随机态分布的距离 |
 | 可训练性 | `structure_proxy` | `metrics/trainability.py::structure_proxy` | 使用深度、双比特门比例、参数密度的低成本代理 |
-| 噪声鲁棒性 | `ion_trap_error_budget_proxy` | `channel/noise/metrics.py::ion_trap_error_budget_proxy`, `channel/noise/ion_trap.py` | 使用默认离子阱噪声配置估计线路 error budget |
+| 噪声鲁棒性 | `ion_trap_error_budget_proxy` | `noise/metrics.py::ion_trap_error_budget_proxy`, `noise/ion_trap.py` | 使用默认离子阱噪声配置估计线路 error budget |
 | 硬件效率 | `native_depth_twoq_efficiency` | `metrics/hardware.py::native_depth_twoq_efficiency` | 使用 native gate 比例、深度、双比特门密度评估硬件友好度 |
 
 `structure_proxy` 和 `native_depth_twoq_efficiency` 是 `evaluator.py` 中登记的 active 指标名，真实计算分别在 `metrics/trainability.py` 和 `metrics/hardware.py` 中。`multi_objective_reward.py` 保留 legacy RL reward wrapper；新主线不再从 reward 层直接 import 具体指标函数。
@@ -277,7 +277,7 @@ O(G)
 
 ## 5. 噪声鲁棒性组
 
-噪声鲁棒性组衡量候选架构在默认离子阱噪声模型下预计有多稳健。当前 active 使用 `channel/noise/ion_trap.py`：
+噪声鲁棒性组衡量候选架构在默认离子阱噪声模型下预计有多稳健。当前 active 使用 `noise/ion_trap.py`：
 
 ```python
 config = load_default_ion_trap_noise_config()

@@ -1,6 +1,6 @@
 import pytest
 
-from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.backends.numpy_backend import NumpyBackend
 from aicir.qas import ArchitectureSearch, SearchConfig, build_common_architectures, evaluate_architectures
 from aicir.visual import (
     compare_architectures,

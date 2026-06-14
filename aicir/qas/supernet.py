@@ -27,9 +27,9 @@ from typing import Any, Callable, Mapping, Sequence
 import numpy as np
 import torch
 
-from ..channel.backends.gpu_backend import GPUBackend
-from ..channel.backends.npu_backend import NPUBackend
-from ..channel.operators import Hamiltonian
+from ..backends.gpu_backend import GPUBackend
+from ..backends.npu_backend import NPUBackend
+from ..operators import Hamiltonian
 from ..core.circuit import Circuit, cx, hadamard, rx, ry, rz, rzz
 from ..core.gates import apply_gate_to_state, gate_to_matrix
 from ..ir import circuit_instructions
