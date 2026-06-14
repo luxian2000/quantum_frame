@@ -11,7 +11,7 @@
 | `MoleculeHamiltonian` | dataclass | 记录固定分子 Hamiltonian 的元数据和 Pauli 项 |
 | `available_molecules()` | `tuple[str, ...]` | 返回可用 canonical preset 名称 |
 | `get_molecule(name)` | `MoleculeHamiltonian` | 按 canonical 名称读取 preset |
-| `molecule_hamiltonian(name)` | `Hamiltonian` | 构造新的 `aicir.channel.operators.Hamiltonian` |
+| `molecule_hamiltonian(name)` | `Hamiltonian` | 构造新的 `aicir.operators.Hamiltonian` |
 | `molecule_matrix(name, backend=None)` | `np.ndarray` | 返回 dense_matrix 哈密顿量 |
 | `iter_molecules(names=None)` | `tuple[MoleculeHamiltonian, ...]` | 批量读取 preset |
 

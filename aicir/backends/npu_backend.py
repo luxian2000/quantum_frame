@@ -1,5 +1,5 @@
 """
-aicir/channel/backends/npu_backend.py
+aicir/backends/npu_backend.py
 
 Ascend NPU backend built on top of PyTorch + torch_npu.
 

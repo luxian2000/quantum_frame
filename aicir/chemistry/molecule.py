@@ -12,8 +12,8 @@ from typing import Iterable
 
 import numpy as np
 
-from ..channel.backends.numpy_backend import NumpyBackend
-from ..channel.operators import Hamiltonian
+from ..backends.numpy_backend import NumpyBackend
+from ..operators import Hamiltonian
 
 
 PauliTerm = tuple[complex, str]

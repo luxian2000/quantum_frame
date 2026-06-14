@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from .abstract import BaseEncoder
-from ..channel.backends.numpy_backend import NumpyBackend
+from ..backends.numpy_backend import NumpyBackend
 from ..core.circuit import Circuit
 from ..core.io.dag import circuit_to_dag
 from ..core.io.qasm import circuit_to_qasm

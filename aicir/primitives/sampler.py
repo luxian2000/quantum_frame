@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from ..channel.backends import NumpyBackend
+from ..backends import NumpyBackend
 from ..measure import Measure
 from .base import BaseSampler, normalize_run_inputs
 from .results import SampleResult

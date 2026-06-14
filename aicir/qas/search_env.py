@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from ..channel.backends.base import Backend
-from ..channel.noise.model import NoiseModel
+from ..backends.base import Backend
+from ..noise.model import NoiseModel
 from ..core.circuit import Circuit
 from ..core.gates import gate_to_matrix
 from ..core.state import State

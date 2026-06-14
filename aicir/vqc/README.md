@@ -55,7 +55,7 @@
 
 | 参数 | 说明 |
 | --- | --- |
-| `hamiltonian` | dense_matrix 或 `aicir.channel.operators.Hamiltonian` |
+| `hamiltonian` | dense_matrix 或 `aicir.operators.Hamiltonian` |
 | `ansatz` | 可选 `Circuit` 模板或 callable builder |
 | `backend` | `NumpyBackend` / `GPUBackend` / `NPUBackend` 等 |
 | `optimizer` | 可选 `GD`、`Adam`、`SPSA`、`COBYLA`、`LBFGSB`、`ScipyMinimize` 等 |

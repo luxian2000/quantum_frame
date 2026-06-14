@@ -1,7 +1,7 @@
 import unittest
 
 from aicir.qas import ArchitectureSpec, evaluate_architectures
-from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.backends.numpy_backend import NumpyBackend
 
 
 class TestArchitectureEvaluation(unittest.TestCase):

@@ -25,7 +25,7 @@ def test_h2o_recorded_supernet_circuit_approximates_ground_energy():
     # verify the recorded circuit (demos/H2O/H2O_cir.py, produced by the
     # supernet method) reproduces an energy close to exact.
     from demos.H2O.result_cpu.H2O_cir import build_h2o_qas_circuit
-    from aicir.channel.backends.gpu_backend import TorchBackend
+    from aicir.backends.gpu_backend import TorchBackend
 
     hamiltonian = build_h2o_hamiltonian()
     exact = exact_ground_energy(hamiltonian)

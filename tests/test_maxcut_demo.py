@@ -5,7 +5,7 @@ import networkx as nx
 import pytest
 
 from aicir import Circuit
-from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.backends.numpy_backend import NumpyBackend
 from aicir.core.circuit import hadamard
 from demos.MaxCut import maxcut
 from demos.MaxCut import maxcut_hamiltonian

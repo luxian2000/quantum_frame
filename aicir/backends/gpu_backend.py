@@ -1,5 +1,5 @@
 """
-aicir/channel/backends/gpu_backend.py
+aicir/backends/gpu_backend.py
 
 基于 PyTorch 的 CPU/GPU 计算后端。
 

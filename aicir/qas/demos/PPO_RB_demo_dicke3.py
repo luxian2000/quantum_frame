@@ -24,7 +24,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from aicir.qas.PPO_RB import PPORollbackConfig, ppo_rb_qas
-from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.backends.numpy_backend import NumpyBackend
 from aicir.core.circuit import Circuit
 from aicir.core.gates import gate_to_matrix
 from aicir.core.io.qasm import circuit_to_qasm

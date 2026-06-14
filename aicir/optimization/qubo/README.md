@@ -32,7 +32,7 @@ hamiltonian = model_to_hamiltonian(model)
 ```
 
 The adapter converts one- and two-qubit Z terms into
-`aicir.channel.operators.Hamiltonian`. By default it keeps the global Ising
+`aicir.operators.Hamiltonian`. By default it keeps the global Ising
 offset as an identity term, which preserves exact energies. Pass
 `include_offset=False` when the offset should be omitted, for example when only
 the QAOA phase operator up to a global phase is needed.
@@ -69,7 +69,7 @@ Included in this first integration pass:
 - low-level `QuboBuilder`
 - TSP, graph coloring, and knapsack builders
 - QUBO, Ising, sparse matrix, and QAOA term exports
-- conversion to `aicir.channel.operators.Hamiltonian`
+- conversion to `aicir.operators.Hamiltonian`
 - dense-matrix helper for `aicir.vqc.BasicQAOA`
 - solution decoding and small-model brute-force analysis
 

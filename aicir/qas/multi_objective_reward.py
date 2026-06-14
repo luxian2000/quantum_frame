@@ -23,8 +23,8 @@ from typing import Optional, Dict, List
 import numpy as np
 
 from ..core.circuit import Circuit
-from ..channel.backends.base import Backend
-from ..channel.noise.model import NoiseModel
+from ..backends.base import Backend
+from ..noise.model import NoiseModel
 from ..ir import (
     circuit_instruction_count,
     circuit_instructions,
@@ -40,7 +40,7 @@ from ..metrics.noisy_expressibility import (
     KL_Haar_noisy,
     MMD_noisy,
 )
-from ..channel.noise.analysis import NoiseSensitivityResult, noise_sensitivity
+from ..noise.analysis import NoiseSensitivityResult, noise_sensitivity
 
 
 # =============================================================================

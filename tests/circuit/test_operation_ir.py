@@ -6,8 +6,8 @@ from aicir import (
     Observable,
     Operation as TopLevelOperation,
 )
-from aicir.channel.backends import NumpyBackend
-from aicir.channel.operators import Hamiltonian
+from aicir.backends import NumpyBackend
+from aicir.operators import Hamiltonian
 from aicir.core.circuit import Circuit, Parameter
 from aicir.ir import Operation, normalize_gate
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
-from ..channel.backends.base import Backend
+from ..backends.base import Backend
 from ..core.circuit import Circuit
 from ..ir import circuit_instruction_count
 from ._utils import count_parameters, count_two_qubit_gates

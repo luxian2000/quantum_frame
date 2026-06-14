@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
-from ..channel.backends.numpy_backend import NumpyBackend
+from ..backends.numpy_backend import NumpyBackend
 from ..core.circuit import Circuit
 from ..core.gates import apply_gate_to_state
 from ..ir import circuit_gate_dicts, circuit_instruction_count, circuit_instructions, instruction_parameter

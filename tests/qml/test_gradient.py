@@ -265,7 +265,7 @@ def test_gradients_accept_backend_native_tensor_objective():
     """Objectives returning raw backend tensors (e.g. NPU/Torch expectation_sv,
     autograd-tracked or complex) must work across every gradient rule."""
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.gpu_backend import TorchBackend
+    from aicir.backends.gpu_backend import TorchBackend
 
     theta = Parameter("theta")
     template = Circuit(ry(theta, 0), n_qubits=1)
@@ -349,7 +349,7 @@ def test_ad_returns_expectation_value_when_requested():
 
 
 def test_ad_accepts_hamiltonian_observable():
-    from aicir.channel.operators import Hamiltonian
+    from aicir.operators import Hamiltonian
 
     backend = NumpyBackend()
     circuit = Circuit(ry(0.5, 0), n_qubits=1)
@@ -360,7 +360,7 @@ def test_ad_accepts_hamiltonian_observable():
 
 def test_ad_matches_psr_on_torch_backend():
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.gpu_backend import TorchBackend
+    from aicir.backends.gpu_backend import TorchBackend
     from aicir.core.circuit import rz
 
     backend = TorchBackend(device="cpu")
@@ -386,7 +386,7 @@ def test_ad_rejects_unbound_parameters():
 
 def test_auto_matches_psr_on_mixed_ansatz():
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.gpu_backend import TorchBackend
+    from aicir.backends.gpu_backend import TorchBackend
     from aicir.core.circuit import crx, rx, rz, rzz, hadamard
 
     backend = TorchBackend(device="cpu")
@@ -417,7 +417,7 @@ def test_auto_matches_psr_on_mixed_ansatz():
 
 def test_auto_supports_scalar_param():
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.gpu_backend import TorchBackend
+    from aicir.backends.gpu_backend import TorchBackend
 
     backend = TorchBackend(device="cpu")
     z = np.diag([1.0, -1.0]).astype(np.complex64)
@@ -434,7 +434,7 @@ def test_auto_supports_scalar_param():
 
 def test_auto_honors_backend_dtype_and_device():
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.gpu_backend import TorchBackend
+    from aicir.backends.gpu_backend import TorchBackend
 
     backend = TorchBackend(dtype=torch.complex128, device="cpu")
     z = np.diag([1.0, -1.0]).astype(np.complex128)
@@ -458,7 +458,7 @@ def test_auto_honors_backend_dtype_and_device():
 
 def test_auto_rejects_non_differentiable_objective():
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.gpu_backend import TorchBackend
+    from aicir.backends.gpu_backend import TorchBackend
 
     backend = TorchBackend(device="cpu")
 
@@ -538,7 +538,7 @@ def test_qng_accepts_spsa_gradient_method():
 
 def test_qng_accepts_npu_backend_state_tensor():
     pytest.importorskip("torch")
-    from aicir.channel.backends.npu_backend import NPUBackend
+    from aicir.backends.npu_backend import NPUBackend
 
     backend = NPUBackend(device="cpu")
     z = backend.cast(np.diag([1.0, -1.0]).astype(np.complex64))
@@ -601,7 +601,7 @@ def test_bdqng_single_block_matches_full_qng():
 
 def test_bdqng_accepts_npu_backend_state_tensor():
     pytest.importorskip("torch")
-    from aicir.channel.backends.npu_backend import NPUBackend
+    from aicir.backends.npu_backend import NPUBackend
 
     backend = NPUBackend(device="cpu")
     z = backend.cast(np.diag([1.0, -1.0]).astype(np.complex64))
@@ -682,7 +682,7 @@ def test_kqng_single_column_factorization_matches_full_qng():
 
 def test_kqng_npu_backend_path_does_not_move_tensors_to_cpu(monkeypatch):
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.npu_backend import NPUBackend
+    from aicir.backends.npu_backend import NPUBackend
 
     backend = NPUBackend(device="cpu")
     z = backend.cast(np.diag([1.0, -1.0]).astype(np.complex64))
@@ -751,7 +751,7 @@ def test_dqng_matches_bdqng_with_singleton_blocks():
 
 def test_dqng_npu_backend_path_does_not_move_tensors_to_cpu(monkeypatch):
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.npu_backend import NPUBackend
+    from aicir.backends.npu_backend import NPUBackend
 
     backend = NPUBackend(device="cpu")
     z = backend.cast(np.diag([1.0, -1.0]).astype(np.complex64))
@@ -786,7 +786,7 @@ def test_dqng_npu_backend_path_does_not_move_tensors_to_cpu(monkeypatch):
 
 def test_dqng_npu_backend_spsa_path_does_not_move_tensors_to_cpu(monkeypatch):
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.npu_backend import NPUBackend
+    from aicir.backends.npu_backend import NPUBackend
 
     backend = NPUBackend(device="cpu")
     z = backend.cast(np.diag([1.0, -1.0]).astype(np.complex64))

@@ -1,5 +1,5 @@
 """
-aicir/channel/backends/base.py
+aicir/backends/base.py
 
 量子模拟器后端抽象基类。
 

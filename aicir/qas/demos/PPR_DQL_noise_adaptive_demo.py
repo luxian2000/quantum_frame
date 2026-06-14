@@ -26,7 +26,7 @@ from aicir.qas.multi_objective_reward import (
     RewardWeights,
     TrainabilityScore,
 )
-from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.backends.numpy_backend import NumpyBackend
 from aicir.core.circuit import Circuit
 from aicir.core.state import State
 

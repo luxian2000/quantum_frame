@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Sequence, Set
 
-from ...ir import instruction_controls, instruction_name, instruction_qubits
+from ..ir import instruction_controls, instruction_name, instruction_qubits
 
 
 @dataclass
