@@ -31,7 +31,7 @@ def test_shots_m_terminal_shapes_and_density_state():
 
 
 def test_incircuit_measure_collapses_and_output_indexed():
-    cir = Circuit(hadamard(0), cnot(1, [0]), measure(0, 1), n_qubits=2)  # op2 = measure
+    cir = Circuit(hadamard(0), cnot(1, [0]), measure([0, 1]), n_qubits=2)  # op2 = measure
     r = run(cir, shots=16, tm=False)
     assert r.output(2).shape == (16, 1)
     assert set(np.unique(r.output(2))) <= {1}

@@ -307,7 +307,7 @@ def test_plot_rxx_gate_label_is_rxx(plt):
 
 
 def test_plot_joint_measure_draws_boxes_connected_by_solid_line(plt):
-    circuit = Circuit(measure(0, 2), n_qubits=3)
+    circuit = Circuit(measure([0, 2]), n_qubits=3)
 
     fig, ax = plot(circuit, layered=False, save=False)
 
@@ -325,7 +325,7 @@ def test_plot_joint_measure_draws_boxes_connected_by_solid_line(plt):
 
 
 def test_plot_measure_with_following_gate_does_not_draw_separator(plt):
-    circuit = Circuit(hadamard(0), measure(0, 2), rz(0.2, 1), n_qubits=3)
+    circuit = Circuit(hadamard(0), measure([0, 2]), rz(0.2, 1), n_qubits=3)
 
     fig, ax = plot(circuit, layered=False, save=False)
 

@@ -573,7 +573,7 @@ from aicir import Circuit, hadamard, cnot, measure, reset
 cir = Circuit(
     hadamard(0),   # op 0
     cnot(1, [0]), # op 1
-    measure(0, 1), # op 2 — 线路内联合 ZZ 投影测量
+    measure([0, 1]), # op 2 — 线路内联合 ZZ 投影测量
     reset(0),      # op 3 — 重置信道
     n_qubits=2,
 )
@@ -581,7 +581,7 @@ cir = Circuit(
 
 ### 4.3 线路内 measure：联合 Pauli 投影测量
 
-`measure(*qubits, basis="Z", id=None)` 对所列比特执行**两结果联合 Pauli 投影测量**：
+`measure(qubits=None, *, basis="Z", id=None)` 对所列比特执行**两结果联合 Pauli 投影测量**：
 
 - **投影**到 `λ=±1` 联合本征子空间，结果为 `λ∈{+1,−1}`。
 - **非破坏性保留**：被测比特仍留在电路中，后续门可作用其上；子空间内相干被保留（不是逐比特坍缩）。
@@ -594,7 +594,7 @@ cir = Circuit(
 from aicir import Circuit, Measure, NumpyBackend, hadamard, cnot, measure
 
 # Bell 态用 ZZ 联合投影测量：Bell 态是 Z⊗Z 的 +1 本征态，恒返回 +1
-cir = Circuit(hadamard(0), cnot(1, [0]), measure(0, 1, id="zz"), n_qubits=2)
+cir = Circuit(hadamard(0), cnot(1, [0]), measure([0, 1], id="zz"), n_qubits=2)
 m = Measure(NumpyBackend())
 
 # shots=None：单条精确轨迹，output 为标量

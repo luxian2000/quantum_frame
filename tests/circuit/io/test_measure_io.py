@@ -22,7 +22,7 @@ from aicir.core.io.qasm import circuit_to_qasm
 
 def test_json_round_trip_preserves_basis_and_id():
     """JSON 序列化/反序列化后 basis 与 id 字段保持不变。"""
-    cir = Circuit(hadamard(0), measure(0, 1, basis="X", id="m0"), n_qubits=2)
+    cir = Circuit(hadamard(0), measure([0, 1], basis="X", id="m0"), n_qubits=2)
     back = circuit_from_json(circuit_to_json(cir))
     g = back.gates[-1]
     assert g["basis"] == "X"
@@ -41,7 +41,7 @@ def test_json_round_trip_preserves_default_z_basis():
 
 def test_json_round_trip_multi_qubit_basis_y():
     """多比特 Y 基测量的 qubits/basis/id 在 JSON 往返中完整保留。"""
-    cir = Circuit(measure(0, 1, 2, basis="Y", id="joint_y"), n_qubits=3)
+    cir = Circuit(measure([0, 1, 2], basis="Y", id="joint_y"), n_qubits=3)
     back = circuit_from_json(circuit_to_json(cir))
     g = back.gates[-1]
     assert g["type"] == "measure"
@@ -57,7 +57,7 @@ def test_json_round_trip_multi_qubit_basis_y():
 
 def test_qasm_raises_on_joint_measure():
     """联合多比特 measure 无法导出为标准 QASM，应抛出 NotImplementedError。"""
-    cir = Circuit(hadamard(0), measure(0, 1), n_qubits=2)
+    cir = Circuit(hadamard(0), measure([0, 1]), n_qubits=2)
     with pytest.raises(NotImplementedError):
         circuit_to_qasm(cir)
 
@@ -78,7 +78,7 @@ def test_qasm_raises_on_measure_with_id():
 
 def test_qasm_raises_on_joint_non_z_with_id():
     """联合 + 非Z基 + id 的组合也应抛出 NotImplementedError。"""
-    cir = Circuit(measure(0, 1, basis="X", id="m0"), n_qubits=2)
+    cir = Circuit(measure([0, 1], basis="X", id="m0"), n_qubits=2)
     with pytest.raises(NotImplementedError):
         circuit_to_qasm(cir)
 

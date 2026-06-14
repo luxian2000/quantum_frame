@@ -67,7 +67,7 @@ def test_cnot_alias_still_builds_cx_operation():
 
 
 def test_measure_factory_returns_measurement():
-    marker = measure(1, 3)
+    marker = measure([1, 3])
     assert isinstance(marker, Measurement)
     assert marker.qubits == (1, 3)
 
@@ -81,7 +81,7 @@ def test_measure_factory_returns_measurement():
 
 
 def test_reset_factory_returns_measurement_marker():
-    marker = reset(1, 3)
+    marker = reset([1, 3])
     assert isinstance(marker, Measurement)
     assert marker.measurement_type == "reset"
     assert marker.qubits == (1, 3)
@@ -154,7 +154,7 @@ def test_operation_supports_mapping_protocol_helpers():
 
 
 def test_measurement_supports_legacy_dict_reads():
-    marker = measure(1, 3)
+    marker = measure([1, 3])
     assert marker["type"] == "measure"
     assert marker["qubits"] == [1, 3]
     assert marker.get("qubits") == [1, 3]
@@ -163,7 +163,7 @@ def test_measurement_supports_legacy_dict_reads():
 
 
 def test_reset_supports_legacy_dict_reads():
-    marker = reset(1, 3)
+    marker = reset([1, 3])
     assert marker["type"] == "reset"
     assert marker["qubits"] == [1, 3]
     assert marker.get("qubits") == [1, 3]
@@ -182,17 +182,17 @@ def test_operation_compares_equal_to_legacy_dict_form():
 
 
 def test_measurement_compares_equal_to_legacy_dict_form():
-    assert measure(1, 3) == {"type": "measure", "qubits": [1, 3]}
-    assert {"type": "measure", "qubits": [1, 3]} == measure(1, 3)
-    assert measure(1, 3) == measure(1, 3)
-    assert measure(1, 3) != measure(1, 2)
+    assert measure([1, 3]) == {"type": "measure", "qubits": [1, 3]}
+    assert {"type": "measure", "qubits": [1, 3]} == measure([1, 3])
+    assert measure([1, 3]) == measure([1, 3])
+    assert measure([1, 3]) != measure([1, 2])
 
 
 def test_reset_compares_equal_to_legacy_dict_form():
-    assert reset(1, 3) == {"type": "reset", "qubits": [1, 3]}
-    assert {"type": "reset", "qubits": [1, 3]} == reset(1, 3)
-    assert reset(1, 3) == reset(1, 3)
-    assert reset(1, 3) != reset(1, 2)
+    assert reset([1, 3]) == {"type": "reset", "qubits": [1, 3]}
+    assert {"type": "reset", "qubits": [1, 3]} == reset([1, 3])
+    assert reset([1, 3]) == reset([1, 3])
+    assert reset([1, 3]) != reset([1, 2])
 
 
 def test_operation_is_immutable_via_item_assignment():
@@ -215,8 +215,8 @@ def test_circuit_stores_same_dicts_as_before():
         s_gate(2),
         rx(0.1, 2),
         cz(2, [3]),
-        measure(1, 3),
-        reset(1, 3),
+        measure([1, 3]),
+        reset([1, 3]),
         n_qubits=4,
     )
     assert cir.gates == [
