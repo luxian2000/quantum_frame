@@ -7,7 +7,7 @@ from typing import Callable
 
 import numpy as np
 
-from ...channel.backends.numpy_backend import NumpyBackend
+from ...backends.numpy_backend import NumpyBackend
 from ...vqc.QAOA import BasicQAOA, QAOAResult
 from .adapters import builder_to_hamiltonian, model_to_hamiltonian
 

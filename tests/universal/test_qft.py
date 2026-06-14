@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.backends.numpy_backend import NumpyBackend
 from aicir.core.circuit import Circuit
 from aicir.universal import qft, qft_circuit
 

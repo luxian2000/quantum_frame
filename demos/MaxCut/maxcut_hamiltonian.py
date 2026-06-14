@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from aicir import Circuit
-from aicir.channel.operators import Hamiltonian
+from aicir.operators import Hamiltonian
 from aicir.core.io.json_io import circuit_from_json
 
 # ── 随机图 ────────────────────────────────────────────────────────────────

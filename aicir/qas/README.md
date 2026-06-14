@@ -253,7 +253,7 @@ result = supernet_qas(
 示例（自定义哈密顿量，CPU）：
 
 ```python
-from aicir.channel.operators import Hamiltonian
+from aicir.operators import Hamiltonian
 from aicir.qas import supernet_qas
 
 ham = Hamiltonian(n_qubits=6, terms=[("IIIIII", -4.524), ("IIIIIZ", 0.515), ...])
@@ -446,7 +446,7 @@ circuit = result.circuit
 ```python
 import numpy as np
 
-from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.backends.numpy_backend import NumpyBackend
 from aicir.core.state import State
 from aicir.qas import config, run
 
@@ -493,7 +493,7 @@ print(circuit.show())
 
 | 参数            | 类型                         | 必填 | 说明                                                                              |
 | --------------- | ---------------------------- | ---- | --------------------------------------------------------------------------------- |
-| `hamiltonian` | `np.ndarray \| Hamiltonian` | 是   | 目标哈密顿量，支持直接传矩阵，或传 `aicir.channel.operators.Hamiltonian` 对象。 |
+| `hamiltonian` | `np.ndarray \| Hamiltonian` | 是   | 目标哈密顿量，支持直接传矩阵，或传 `aicir.operators.Hamiltonian` 对象。 |
 | `config`      | `CRLQASConfig \| None`      | 否   | 训练超参数；传 `None` 使用默认值。                                              |
 
 返回值：
@@ -557,7 +557,7 @@ print(circuit.show())
 ### 6.3 最小示例（H2）
 
 ```python
-from aicir.channel.operators import Hamiltonian
+from aicir.operators import Hamiltonian
 from aicir.qas import config, run
 
 h2 = Hamiltonian([

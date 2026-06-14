@@ -115,7 +115,7 @@ def test_array_none_is_memoized_for_mixed_state():
 
 
 def test_default_numpy_backend_used_when_omitted():
-    from aicir.channel.backends import NumpyBackend
+    from aicir.backends import NumpyBackend
 
     s = State.zero_state(1)
     assert isinstance(s.backend, NumpyBackend)

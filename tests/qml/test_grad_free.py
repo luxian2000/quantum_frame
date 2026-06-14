@@ -82,7 +82,7 @@ def test_rotosolve_with_parameterized_circuit_template():
 
 def test_rotosolve_npu_backend_path_does_not_move_tensors_to_cpu(monkeypatch):
     torch = pytest.importorskip("torch")
-    from aicir.channel.backends.npu_backend import NPUBackend
+    from aicir.backends.npu_backend import NPUBackend
 
     backend = NPUBackend(device="cpu")
     z = backend.cast(np.diag([1.0, -1.0]).astype(np.complex64))

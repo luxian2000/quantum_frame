@@ -1,5 +1,5 @@
 """
-aicir/channel/backends/numpy_backend.py
+aicir/backends/numpy_backend.py
 
 基于 NumPy 的 CPU 计算后端（参考实现）。
 

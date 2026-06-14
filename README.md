@@ -1670,7 +1670,7 @@ fig, ax = plot_density_matrix(rho, part="abs")
 `aicir.visual` 也可以直接消费 `aicir.qas` 的 `SearchResult`、`ArchitectureScore`、`ArchitectureSpec`，用于对比架构搜索候选、查看四类 objective group 分数，以及把线路图和指标放在一个 summary 图中。
 
 ```python
-from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.backends.numpy_backend import NumpyBackend
 from aicir.qas import ArchitectureSearch, SearchConfig
 from aicir.visual import (
     qas_scores_to_rows,

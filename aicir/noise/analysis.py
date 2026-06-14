@@ -9,10 +9,10 @@ import numpy as np
 
 from ..backends.base import Backend
 from .model import NoiseModel
-from ...core.circuit import Circuit
-from ...core.gates import gate_to_matrix
-from ...core.state import State
-from ...ir import circuit_instruction_count, circuit_instructions, instruction_name
+from ..core.circuit import Circuit
+from ..core.gates import gate_to_matrix
+from ..core.state import State
+from ..ir import circuit_instruction_count, circuit_instructions, instruction_name
 
 
 @dataclass

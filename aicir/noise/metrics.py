@@ -6,8 +6,8 @@ from typing import Any, Dict, Tuple
 
 import numpy as np
 
-from ...core.circuit import Circuit
-from ...ir import circuit_instructions, instruction_controls, instruction_name, instruction_qubits
+from ..core.circuit import Circuit
+from ..ir import circuit_instructions, instruction_controls, instruction_name, instruction_qubits
 from .ion_trap import ONEQ_GATE_TYPES, TWOQ_GATE_TYPES, load_default_ion_trap_noise_config
 
 

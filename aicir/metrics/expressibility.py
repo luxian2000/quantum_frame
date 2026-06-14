@@ -13,7 +13,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from ..channel.backends.base import Backend
+from ..backends.base import Backend
 from ..core.circuit import Circuit
 from ..core.state import State
 from ..ir import circuit_gate_dicts, circuit_instructions, instruction_name, instruction_parameter
@@ -143,7 +143,7 @@ def KL_Haar_relative(
     """
     # 使用默认后端
     if backend is None:
-        from ..channel.backends.numpy_backend import NumpyBackend
+        from ..backends.numpy_backend import NumpyBackend
         backend = NumpyBackend()
 
     n_qubits = cir.n_qubits
@@ -265,7 +265,7 @@ def MMD_relative(
         raise ValueError("sigma 必须为正数")
 
     if backend is None:
-        from ..channel.backends.numpy_backend import NumpyBackend
+        from ..backends.numpy_backend import NumpyBackend
 
         backend = NumpyBackend()
 

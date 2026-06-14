@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 import torch
 
-from aicir.channel.operators import Hamiltonian
-from aicir.channel.backends.gpu_backend import TorchBackend
+from aicir.operators import Hamiltonian
+from aicir.backends.gpu_backend import TorchBackend
 from aicir.qas.supernet import h2_hamiltonian, prepare_classification_dataset
 from aicir.qas import (
     Architecture,

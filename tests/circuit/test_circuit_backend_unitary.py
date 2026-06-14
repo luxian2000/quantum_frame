@@ -5,7 +5,7 @@ import torch
 
 from aicir import Circuit, TorchBackend, cnot, crz, hadamard, ms_gate, rx, rxx, rzz
 from aicir.core.gates import apply_gate_to_state, gate_to_matrix
-from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir.backends.numpy_backend import NumpyBackend
 
 
 class TestCircuitBackendUnitary(unittest.TestCase):
