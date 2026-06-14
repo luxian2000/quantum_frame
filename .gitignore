@@ -1,2 +1,17 @@
 __pycache__/
 *.pyc
+
+# 操作系统 / 编辑器
+.DS_Store
+
+# 工具缓存
+.mypy_cache/
+.pytest_cache/
+
+# Python 打包产物
+build/
+dist/
+*.egg-info/
+
+# 误入的 JS 残留
+node_modules/

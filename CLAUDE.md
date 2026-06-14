@@ -4,13 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`aicir` is a from-scratch quantum circuit simulator and quantum-algorithm framework (state vectors, density matrices, noise, VQE/QAOA/VQD/SSVQE, quantum architecture search, QML gradients, OpenQASM I/O). It has **no `setup.py`/`pyproject.toml`** — it runs directly from the source tree via `PYTHONPATH`. Most docs and code comments are in Chinese; match that when editing comments/docstrings.
+`aicir` is a from-scratch quantum circuit simulator and quantum-algorithm framework (state vectors, density matrices, noise, VQE/QAOA/VQD/SSVQE, quantum architecture search, QML gradients, OpenQASM I/O). It ships a standard `pyproject.toml` (setuptools, flat layout, package `aicir`); install editable with `pip install -e ".[all]"`, or just run from the source tree via `PYTHONPATH=.` — both work. Most docs and code comments are in Chinese; match that when editing comments/docstrings.
 
 ## Commands
 
 ```bash
+# Install editable (optional; tests/demos also work via PYTHONPATH=.)
+pip install -e ".[all]"        # extras: torch / viz / sci / all / dev
+
 # Run the full test suite (run from repo root)
-PYTHONPATH=. pytest            # or: python -m pytest -q
+PYTHONPATH=. pytest            # or: python -m pytest -q (no PYTHONPATH needed if installed)
 
 # Run a single test file / test
 PYTHONPATH=. pytest tests/vqc/test_vqe_orchestration.py
