@@ -19,7 +19,6 @@ cir = Circuit(
     u3(0.1, 0.2, 0.3, 2),
     cnot(1, [0, 3]),
     measure([0, 1, 3], id="m0"),
-    measure(2, basis="X", id="m1"),
     reset([1, 2]),
     pauli_x(1),
     t_gate(0),

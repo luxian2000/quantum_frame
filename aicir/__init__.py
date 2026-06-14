@@ -75,6 +75,7 @@ else:
 
 try:
     from .core.state import State
+    from .core.batch import BatchSV
     from .core import (
         Circuit,
         Parameter,
@@ -136,6 +137,7 @@ else:
     _export(
         [
             "State",
+            "BatchSV",
             "Circuit",
             "Parameter",
             "circuit",
