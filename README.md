@@ -600,7 +600,7 @@ m = Measure(NumpyBackend())
 # shots=None：单条精确轨迹，output 为标量
 r = m.run(cir, shots=None, tm=False)
 print(r.output("zz"))      # 1（+1，必然）
-print(r.state.reshape(-1)) # [0.707+0j, 0, 0, 0.707+0j]（Bell 态，仍相干）
+print(r.state.array)       # [0.707+0j, 0, 0, 0.707+0j]（Bell 态，仍相干）
 
 # shots=8：多轨迹，output(2) 形状 (8, 1)，全为 +1
 r8 = m.run(cir, shots=8, tm=False)
@@ -700,8 +700,8 @@ m = Measure(NumpyBackend())
 
 # snap 记录 Bell 态建立过程
 r = m.run(cir, shots=None, snap=[0, 1])
-print(r.snap(0).reshape(-1))  # [0.707+0j, 0, 0.707+0j, 0] — H(0) 后
-print(r.snap(1).reshape(-1))  # [0.707+0j, 0, 0, 0.707+0j] — Bell 态
+print(r.snap(0).array)  # [0.707+0j, 0, 0.707+0j, 0] — H(0) 后
+print(r.snap(1).array)  # [0.707+0j, 0, 0, 0.707+0j] — Bell 态
 
 # shots>1 时 state 为密度矩阵；偏迹得单比特约化 DM
 r16 = m.run(cir, shots=16)
