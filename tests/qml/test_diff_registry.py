@@ -29,68 +29,68 @@ def test_diff_method_is_frozen():
 
 from aicir.qml import deriv
 from aicir.qml.diff import (
-    canonical_diff_name,
-    get_diff_method,
-    register_diff_method,
-    registered_diff_methods,
-    resolve_diff_method,
-    unregister_diff_method,
+    canonical_diff,
+    get_diff,
+    register_diff,
+    registered_diffs,
+    resolve_diff,
+    unregister_diff,
 )
 
 
 def test_builtin_methods_registered():
-    assert set(registered_diff_methods()) == {"psr", "fd", "auto", "spsa", "spsr"}
+    assert set(registered_diffs()) == {"psr", "fd", "auto", "spsa", "spsr"}
 
 
 def test_resolve_returns_bound_function():
-    assert resolve_diff_method("psr") is deriv.psr
-    assert resolve_diff_method("auto") is deriv.auto
+    assert resolve_diff("psr") is deriv.psr
+    assert resolve_diff("auto") is deriv.auto
 
 
 def test_resolve_unknown_raises_with_listing():
     with pytest.raises(ValueError) as exc:
-        resolve_diff_method("nope")
+        resolve_diff("nope")
     assert "psr" in str(exc.value)
 
 
 def test_mpsr_not_registered():
-    assert "mpsr" not in registered_diff_methods()
-    assert get_diff_method("mpsr") is None
+    assert "mpsr" not in registered_diffs()
+    assert get_diff("mpsr") is None
     with pytest.raises(ValueError):
-        resolve_diff_method("mpsr")
+        resolve_diff("mpsr")
 
 
 def test_register_and_unregister_roundtrip():
     spec = DiffMethod("dummy", lambda fn, p: p)
-    register_diff_method(spec)
+    register_diff(spec)
     try:
-        assert "dummy" in registered_diff_methods()
-        assert resolve_diff_method("dummy") is spec.fn
+        assert "dummy" in registered_diffs()
+        assert resolve_diff("dummy") is spec.fn
     finally:
-        unregister_diff_method("dummy")
-    assert "dummy" not in registered_diff_methods()
+        unregister_diff("dummy")
+    assert "dummy" not in registered_diffs()
 
 
 def test_duplicate_register_raises():
     with pytest.raises(ValueError):
-        register_diff_method(DiffMethod("psr", lambda fn, p: p))
+        register_diff(DiffMethod("psr", lambda fn, p: p))
 
 
 def test_alias_resolution():
     spec = DiffMethod("dummy2", lambda fn, p: p, aliases=("dummy_alias",))
-    register_diff_method(spec)
+    register_diff(spec)
     try:
-        assert canonical_diff_name("dummy_alias") == "dummy2"
-        assert get_diff_method("dummy_alias") is spec
+        assert canonical_diff("dummy_alias") == "dummy2"
+        assert get_diff("dummy_alias") is spec
     finally:
-        unregister_diff_method("dummy2")
+        unregister_diff("dummy2")
 
 
 def test_canonical_unknown_passthrough():
-    assert canonical_diff_name("unknown_xyz") == "unknown_xyz"
+    assert canonical_diff("unknown_xyz") == "unknown_xyz"
 
 
-from aicir.qml.diff import select_diff_method
+from aicir.qml.diff import select_diff
 
 
 class GPUBackend:  # noqa: N801 - 模拟 Torch 系后端类名
@@ -98,30 +98,30 @@ class GPUBackend:  # noqa: N801 - 模拟 Torch 系后端类名
 
 
 def test_select_prefers_auto_on_torch_noiseless_no_shots():
-    assert select_diff_method(backend=GPUBackend()) == "auto"
+    assert select_diff(backend=GPUBackend()) == "auto"
 
 
 def test_select_falls_back_to_psr_with_shots():
-    assert select_diff_method(backend=GPUBackend(), shots=1024) == "psr"
+    assert select_diff(backend=GPUBackend(), shots=1024) == "psr"
 
 
 def test_select_falls_back_to_psr_when_noisy():
-    assert select_diff_method(backend=GPUBackend(), noisy=True) == "psr"
+    assert select_diff(backend=GPUBackend(), noisy=True) == "psr"
 
 
 def test_select_psr_on_non_torch_backend():
-    assert select_diff_method(backend=None) == "psr"
+    assert select_diff(backend=None) == "psr"
 
 
 def test_select_never_returns_stochastic():
     for kwargs in ({}, {"shots": 1000}, {"noisy": True}, {"backend": GPUBackend()}):
-        assert select_diff_method(**kwargs) not in {"spsa", "spsr"}
+        assert select_diff(**kwargs) not in {"spsa", "spsr"}
 
 
 def test_diff_api_reexported_from_qml():
     import aicir.qml as qml
 
     assert hasattr(qml, "DiffMethod")
-    assert hasattr(qml, "resolve_diff_method")
-    assert hasattr(qml, "select_diff_method")
-    assert qml.resolve_diff_method("psr") is qml.psr
+    assert hasattr(qml, "resolve_diff")
+    assert hasattr(qml, "select_diff")
+    assert qml.resolve_diff("psr") is qml.psr

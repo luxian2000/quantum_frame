@@ -4,7 +4,7 @@
 
 **Goal:** 把 fn-based 梯度方法收敛为 `aicir.qml.diff` 策略注册表（查表 + 选择器），并接入 `optimizer/params.py`，使其能触达全部内置梯度方法。
 
-**Architecture:** 新增子包 `aicir/qml/diff/`，镜像 `aicir/gates/` 的 frozen dataclass（`DiffMethod`）+ 模块级注册表习惯。注册表只引用 `deriv.py` 中已有函数（`deriv.py` 不改），保持 `psr` 单点出处。`select_diff_method` 把 NEXT.md §6 偏好表实现为纯函数并单测，本片不接入调用方（留给后续 QNode）。`params.py` 的 `_gradient_from_method` 改为通过 `resolve_diff_method` 分发。
+**Architecture:** 新增子包 `aicir/qml/diff/`，镜像 `aicir/gates/` 的 frozen dataclass（`DiffMethod`）+ 模块级注册表习惯。注册表只引用 `deriv.py` 中已有函数（`deriv.py` 不改），保持 `psr` 单点出处。`select_diff` 把 NEXT.md §6 偏好表实现为纯函数并单测，本片不接入调用方（留给后续 QNode）。`params.py` 的 `_gradient_from_method` 改为通过 `resolve_diff` 分发。
 
 **Tech Stack:** Python，`dataclasses`，pytest，numpy。`torch` 为可选依赖（select 仅按后端类名判定，不导入 torch）。
 
@@ -18,7 +18,7 @@
 - 新建 `aicir/qml/diff/spec.py` —— `DiffMethod` frozen dataclass。
 - 新建 `aicir/qml/diff/registry.py` —— 注册表 dict + register/unregister/get/list/canonical/resolve/select + 内置注册。
 - 修改 `aicir/qml/__init__.py` —— 重导出 diff API。
-- 修改 `aicir/optimizer/params.py` —— `_gradient_from_method` 改用 `resolve_diff_method`；调整 import。
+- 修改 `aicir/optimizer/params.py` —— `_gradient_from_method` 改用 `resolve_diff`；调整 import。
 - 新建 `tests/qml/test_diff_registry.py` —— spec/注册表/resolve/select 测试。
 - 修改/新建 `tests/optimizer/`（或并入既有测试）—— params.py 集成测试。
 
@@ -161,71 +161,71 @@ git commit -m "feat(qml): add DiffMethod spec (NEXT.md §6 slice 1)"
 ```python
 from aicir.qml import deriv
 from aicir.qml.diff import (
-    canonical_diff_name,
-    get_diff_method,
-    register_diff_method,
-    registered_diff_methods,
-    resolve_diff_method,
-    unregister_diff_method,
+    canonical_diff,
+    get_diff,
+    register_diff,
+    registered_diffs,
+    resolve_diff,
+    unregister_diff,
 )
 
 
 def test_builtin_methods_registered():
-    assert set(registered_diff_methods()) == {"psr", "fd", "auto", "spsa", "spsr"}
+    assert set(registered_diffs()) == {"psr", "fd", "auto", "spsa", "spsr"}
 
 
 def test_resolve_returns_bound_function():
-    assert resolve_diff_method("psr") is deriv.psr
-    assert resolve_diff_method("auto") is deriv.auto
+    assert resolve_diff("psr") is deriv.psr
+    assert resolve_diff("auto") is deriv.auto
 
 
 def test_resolve_unknown_raises_with_listing():
     with pytest.raises(ValueError) as exc:
-        resolve_diff_method("nope")
+        resolve_diff("nope")
     assert "psr" in str(exc.value)
 
 
 def test_mpsr_not_registered():
-    assert "mpsr" not in registered_diff_methods()
-    assert get_diff_method("mpsr") is None
+    assert "mpsr" not in registered_diffs()
+    assert get_diff("mpsr") is None
     with pytest.raises(ValueError):
-        resolve_diff_method("mpsr")
+        resolve_diff("mpsr")
 
 
 def test_register_and_unregister_roundtrip():
     spec = DiffMethod("dummy", lambda fn, p: p)
-    register_diff_method(spec)
+    register_diff(spec)
     try:
-        assert "dummy" in registered_diff_methods()
-        assert resolve_diff_method("dummy") is spec.fn
+        assert "dummy" in registered_diffs()
+        assert resolve_diff("dummy") is spec.fn
     finally:
-        unregister_diff_method("dummy")
-    assert "dummy" not in registered_diff_methods()
+        unregister_diff("dummy")
+    assert "dummy" not in registered_diffs()
 
 
 def test_duplicate_register_raises():
     with pytest.raises(ValueError):
-        register_diff_method(DiffMethod("psr", lambda fn, p: p))
+        register_diff(DiffMethod("psr", lambda fn, p: p))
 
 
 def test_alias_resolution():
     spec = DiffMethod("dummy2", lambda fn, p: p, aliases=("dummy_alias",))
-    register_diff_method(spec)
+    register_diff(spec)
     try:
-        assert canonical_diff_name("dummy_alias") == "dummy2"
-        assert get_diff_method("dummy_alias") is spec
+        assert canonical_diff("dummy_alias") == "dummy2"
+        assert get_diff("dummy_alias") is spec
     finally:
-        unregister_diff_method("dummy2")
+        unregister_diff("dummy2")
 
 
 def test_canonical_unknown_passthrough():
-    assert canonical_diff_name("unknown_xyz") == "unknown_xyz"
+    assert canonical_diff("unknown_xyz") == "unknown_xyz"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `PYTHONPATH=. pytest tests/qml/test_diff_registry.py -q`
-Expected: FAIL（`ImportError: cannot import name 'register_diff_method' from 'aicir.qml.diff'`）
+Expected: FAIL（`ImportError: cannot import name 'register_diff' from 'aicir.qml.diff'`）
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -250,11 +250,11 @@ _REGISTRY: dict[str, DiffMethod] = {}
 _LOOKUP: dict[str, DiffMethod] = {}
 
 
-def register_diff_method(spec: DiffMethod, *, overwrite: bool = False) -> DiffMethod:
+def register_diff(spec: DiffMethod, *, overwrite: bool = False) -> DiffMethod:
     """注册一个梯度方法；``overwrite=False`` 时名称/别名冲突会报错。"""
 
     if not isinstance(spec, DiffMethod):
-        raise TypeError("register_diff_method expects a DiffMethod")
+        raise TypeError("register_diff expects a DiffMethod")
 
     names = (spec.name, *spec.aliases)
     if not overwrite:
@@ -265,7 +265,7 @@ def register_diff_method(spec: DiffMethod, *, overwrite: bool = False) -> DiffMe
         if spec.name in _REGISTRY:
             raise ValueError(f"diff method already registered: {spec.name!r}")
     else:
-        unregister_diff_method(spec.name)
+        unregister_diff(spec.name)
 
     _REGISTRY[spec.name] = spec
     for name in names:
@@ -273,7 +273,7 @@ def register_diff_method(spec: DiffMethod, *, overwrite: bool = False) -> DiffMe
     return spec
 
 
-def unregister_diff_method(name: str) -> None:
+def unregister_diff(name: str) -> None:
     """移除一个已注册方法（含其全部别名）；未注册时静默返回。"""
 
     spec = _REGISTRY.pop(str(name), None)
@@ -284,31 +284,31 @@ def unregister_diff_method(name: str) -> None:
             del _LOOKUP[key]
 
 
-def get_diff_method(name: str) -> DiffMethod | None:
+def get_diff(name: str) -> DiffMethod | None:
     """按规范名或别名查询；未注册返回 ``None``。"""
 
     return _LOOKUP.get(str(name))
 
 
-def registered_diff_methods() -> tuple[str, ...]:
+def registered_diffs() -> tuple[str, ...]:
     """返回全部已注册方法的规范名。"""
 
     return tuple(_REGISTRY)
 
 
-def canonical_diff_name(name: str) -> str:
+def canonical_diff(name: str) -> str:
     """把方法名（含别名）解析为规范名；未注册的名称原样返回。"""
 
     spec = _LOOKUP.get(str(name))
     return spec.name if spec is not None else str(name)
 
 
-def resolve_diff_method(name: str) -> Callable[..., Any]:
+def resolve_diff(name: str) -> Callable[..., Any]:
     """返回方法对应的可调用 ``fn``；未注册名抛 ``ValueError`` 并列出已注册方法。"""
 
     spec = _LOOKUP.get(str(name))
     if spec is None:
-        available = ", ".join(sorted(registered_diff_methods()))
+        available = ", ".join(sorted(registered_diffs()))
         raise ValueError(f"unknown diff method {name!r}; registered methods: {available}")
     return spec.fn
 
@@ -329,7 +329,7 @@ _STANDARD_METHODS = (
 )
 
 for _spec in _STANDARD_METHODS:
-    register_diff_method(_spec)
+    register_diff(_spec)
 del _spec
 ```
 
@@ -339,23 +339,23 @@ del _spec
 """DiffMethod 策略注册表（NEXT.md §6 第一片）。"""
 
 from .registry import (
-    canonical_diff_name,
-    get_diff_method,
-    register_diff_method,
-    registered_diff_methods,
-    resolve_diff_method,
-    unregister_diff_method,
+    canonical_diff,
+    get_diff,
+    register_diff,
+    registered_diffs,
+    resolve_diff,
+    unregister_diff,
 )
 from .spec import DiffMethod
 
 __all__ = [
     "DiffMethod",
-    "canonical_diff_name",
-    "get_diff_method",
-    "register_diff_method",
-    "registered_diff_methods",
-    "resolve_diff_method",
-    "unregister_diff_method",
+    "canonical_diff",
+    "get_diff",
+    "register_diff",
+    "registered_diffs",
+    "resolve_diff",
+    "unregister_diff",
 ]
 ```
 
@@ -373,7 +373,7 @@ git commit -m "feat(qml): add DiffMethod registry + resolve (NEXT.md §6 slice 1
 
 ---
 
-## Task 3: `select_diff_method` 选择策略
+## Task 3: `select_diff` 选择策略
 
 **Files:**
 - Modify: `aicir/qml/diff/registry.py`
@@ -385,7 +385,7 @@ git commit -m "feat(qml): add DiffMethod registry + resolve (NEXT.md §6 slice 1
 在 `tests/qml/test_diff_registry.py` 末尾追加：
 
 ```python
-from aicir.qml.diff import select_diff_method
+from aicir.qml.diff import select_diff
 
 
 class GPUBackend:  # noqa: N801 - 模拟 Torch 系后端类名
@@ -393,34 +393,34 @@ class GPUBackend:  # noqa: N801 - 模拟 Torch 系后端类名
 
 
 def test_select_prefers_auto_on_torch_noiseless_no_shots():
-    assert select_diff_method(backend=GPUBackend()) == "auto"
+    assert select_diff(backend=GPUBackend()) == "auto"
 
 
 def test_select_falls_back_to_psr_with_shots():
-    assert select_diff_method(backend=GPUBackend(), shots=1024) == "psr"
+    assert select_diff(backend=GPUBackend(), shots=1024) == "psr"
 
 
 def test_select_falls_back_to_psr_when_noisy():
-    assert select_diff_method(backend=GPUBackend(), noisy=True) == "psr"
+    assert select_diff(backend=GPUBackend(), noisy=True) == "psr"
 
 
 def test_select_psr_on_non_torch_backend():
-    assert select_diff_method(backend=None) == "psr"
+    assert select_diff(backend=None) == "psr"
 
 
 def test_select_never_returns_stochastic():
     for kwargs in ({}, {"shots": 1000}, {"noisy": True}, {"backend": GPUBackend()}):
-        assert select_diff_method(**kwargs) not in {"spsa", "spsr"}
+        assert select_diff(**kwargs) not in {"spsa", "spsr"}
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `PYTHONPATH=. pytest tests/qml/test_diff_registry.py -q`
-Expected: FAIL（`ImportError: cannot import name 'select_diff_method'`）
+Expected: FAIL（`ImportError: cannot import name 'select_diff'`）
 
 - [ ] **Step 3: Write minimal implementation**
 
-在 `aicir/qml/diff/registry.py` 的 `resolve_diff_method` 之后、`_STANDARD_METHODS` 之前插入：
+在 `aicir/qml/diff/registry.py` 的 `resolve_diff` 之后、`_STANDARD_METHODS` 之前插入：
 
 ```python
 def _is_torch_family_backend(backend: Any) -> bool:
@@ -437,7 +437,7 @@ def _is_torch_family_backend(backend: Any) -> bool:
 _SELECT_PREFERENCE = ("auto", "psr", "fd")
 
 
-def select_diff_method(*, backend: Any = None, shots: Any = None, noisy: bool = False) -> str:
+def select_diff(*, backend: Any = None, shots: Any = None, noisy: bool = False) -> str:
     """按 NEXT.md §6 策略选择梯度方法名（纯函数）。
 
     过滤：``requires_torch`` 仅在 Torch 系后端保留；有 shots 丢弃
@@ -464,31 +464,31 @@ def select_diff_method(*, backend: Any = None, shots: Any = None, noisy: bool = 
     return "fd"
 ```
 
-在 `aicir/qml/diff/__init__.py` 的 registry import 列表中加入 `select_diff_method`，并加入 `__all__`。即把该文件改为：
+在 `aicir/qml/diff/__init__.py` 的 registry import 列表中加入 `select_diff`，并加入 `__all__`。即把该文件改为：
 
 ```python
 """DiffMethod 策略注册表（NEXT.md §6 第一片）。"""
 
 from .registry import (
-    canonical_diff_name,
-    get_diff_method,
-    register_diff_method,
-    registered_diff_methods,
-    resolve_diff_method,
-    select_diff_method,
-    unregister_diff_method,
+    canonical_diff,
+    get_diff,
+    register_diff,
+    registered_diffs,
+    resolve_diff,
+    select_diff,
+    unregister_diff,
 )
 from .spec import DiffMethod
 
 __all__ = [
     "DiffMethod",
-    "canonical_diff_name",
-    "get_diff_method",
-    "register_diff_method",
-    "registered_diff_methods",
-    "resolve_diff_method",
-    "select_diff_method",
-    "unregister_diff_method",
+    "canonical_diff",
+    "get_diff",
+    "register_diff",
+    "registered_diffs",
+    "resolve_diff",
+    "select_diff",
+    "unregister_diff",
 ]
 ```
 
@@ -501,7 +501,7 @@ Expected: PASS（全部通过）
 
 ```bash
 git add aicir/qml/diff/registry.py aicir/qml/diff/__init__.py tests/qml/test_diff_registry.py
-git commit -m "feat(qml): add select_diff_method policy (NEXT.md §6 slice 1)"
+git commit -m "feat(qml): add select_diff policy (NEXT.md §6 slice 1)"
 ```
 
 ---
@@ -521,9 +521,9 @@ def test_diff_api_reexported_from_qml():
     import aicir.qml as qml
 
     assert hasattr(qml, "DiffMethod")
-    assert hasattr(qml, "resolve_diff_method")
-    assert hasattr(qml, "select_diff_method")
-    assert qml.resolve_diff_method("psr") is qml.psr
+    assert hasattr(qml, "resolve_diff")
+    assert hasattr(qml, "select_diff")
+    assert qml.resolve_diff("psr") is qml.psr
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -541,13 +541,13 @@ Expected: FAIL（`AttributeError: module 'aicir.qml' has no attribute 'DiffMetho
 from .deriv import auto, psr, spsr, spsa, mpsr, fd, ad, qng, bdqng, kqng, dqng, rotosolve
 from .diff import (
     DiffMethod,
-    canonical_diff_name,
-    get_diff_method,
-    register_diff_method,
-    registered_diff_methods,
-    resolve_diff_method,
-    select_diff_method,
-    unregister_diff_method,
+    canonical_diff,
+    get_diff,
+    register_diff,
+    registered_diffs,
+    resolve_diff,
+    select_diff,
+    unregister_diff,
 )
 
 __all__ = [
@@ -564,13 +564,13 @@ __all__ = [
     "dqng",
     "rotosolve",
     "DiffMethod",
-    "canonical_diff_name",
-    "get_diff_method",
-    "register_diff_method",
-    "registered_diff_methods",
-    "resolve_diff_method",
-    "select_diff_method",
-    "unregister_diff_method",
+    "canonical_diff",
+    "get_diff",
+    "register_diff",
+    "registered_diffs",
+    "resolve_diff",
+    "select_diff",
+    "unregister_diff",
 ]
 ```
 
@@ -653,7 +653,7 @@ from ..qml.deriv import fd, psr, spsa
 改为
 ```python
 from ..qml.deriv import spsa
-from ..qml.diff import resolve_diff_method
+from ..qml.diff import resolve_diff
 ```
 
 把 `_gradient_from_method` 中的 if/elif（约 112-120 行）：
@@ -672,7 +672,7 @@ from ..qml.diff import resolve_diff_method
 ```python
     kwargs = dict(gradient_kwargs or {})
     method = str(gradient_method).strip().lower()
-    grad_fn = resolve_diff_method(method)  # 未知名抛 ValueError（信息含已注册方法名）
+    grad_fn = resolve_diff(method)  # 未知名抛 ValueError（信息含已注册方法名）
     grad = grad_fn(fn, params, **kwargs)   # fn 为目标闭包，与 deriv.psr 签名一致
     return np.asarray(grad, dtype=float).reshape(params.shape)
 ```
@@ -705,7 +705,7 @@ git commit -m "feat(optimizer): dispatch gradients via DiffMethod registry (NEXT
 
 - [ ] **Step 1: 给 NEXT.md §6 追加当前状态**
 
-在 `NEXT.md` 第 6 节（`### 6. 把梯度方法做成策略注册表`）正文末尾追加一段中文「当前状态」，说明：`aicir.qml.diff` 已落地 `DiffMethod` 富 spec、注册表 API（`register_diff_method`/`unregister_diff_method`/`get_diff_method`/`registered_diff_methods`/`canonical_diff_name`/`resolve_diff_method`）与纯函数选择器 `select_diff_method`（偏好 `auto -> psr -> fd`）；内置 5 个 fn-based 全梯度方法 `psr/fd/auto/spsa/spsr`，`mpsr` 因契约不符刻意排除；`optimizer/params.py` 已改为经 `resolve_diff_method` 分发；`select_diff_method` 已实现并单测，尚未接入调用方（留待 §5 QNode）；`ad`/`qng` 等非 fn-based 方法未纳入。
+在 `NEXT.md` 第 6 节（`### 6. 把梯度方法做成策略注册表`）正文末尾追加一段中文「当前状态」，说明：`aicir.qml.diff` 已落地 `DiffMethod` 富 spec、注册表 API（`register_diff`/`unregister_diff`/`get_diff`/`registered_diffs`/`canonical_diff`/`resolve_diff`）与纯函数选择器 `select_diff`（偏好 `auto -> psr -> fd`）；内置 5 个 fn-based 全梯度方法 `psr/fd/auto/spsa/spsr`，`mpsr` 因契约不符刻意排除；`optimizer/params.py` 已改为经 `resolve_diff` 分发；`select_diff` 已实现并单测，尚未接入调用方（留待 §5 QNode）；`ad`/`qng` 等非 fn-based 方法未纳入。
 
 - [ ] **Step 2: 给 CHANGELOG.md 加条目**
 
@@ -723,7 +723,7 @@ git commit -m "docs: record DiffMethod registry (NEXT.md §6 slice 1)"
 ## 完成校验
 
 - [ ] `PYTHONPATH=. pytest -q` 全绿。
-- [ ] `from aicir.qml import DiffMethod, resolve_diff_method, select_diff_method, registered_diff_methods` 可用。
-- [ ] `registered_diff_methods()` 返回 `{psr, fd, auto, spsa, spsr}`，不含 `mpsr`。
+- [ ] `from aicir.qml import DiffMethod, resolve_diff, select_diff, registered_diffs` 可用。
+- [ ] `registered_diffs()` 返回 `{psr, fd, auto, spsa, spsr}`，不含 `mpsr`。
 - [ ] `Adam(gradient_method="spsr")` 可运行；未知方法报错且信息含已注册方法名。
 - [ ] `aicir/qml/deriv.py` 未改动；`vqc`/`qas` 的 `psr` 导入路径不变。

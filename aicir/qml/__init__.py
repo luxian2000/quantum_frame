@@ -3,13 +3,13 @@
 from .deriv import auto, psr, spsr, spsa, mpsr, fd, ad, qng, bdqng, kqng, dqng, rotosolve
 from .diff import (
     DiffMethod,
-    canonical_diff_name,
-    get_diff_method,
-    register_diff_method,
-    registered_diff_methods,
-    resolve_diff_method,
-    select_diff_method,
-    unregister_diff_method,
+    canonical_diff,
+    get_diff,
+    register_diff,
+    registered_diffs,
+    resolve_diff,
+    select_diff,
+    unregister_diff,
 )
 
 __all__ = [
@@ -26,11 +26,11 @@ __all__ = [
     "dqng",
     "rotosolve",
     "DiffMethod",
-    "canonical_diff_name",
-    "get_diff_method",
-    "register_diff_method",
-    "registered_diff_methods",
-    "resolve_diff_method",
-    "select_diff_method",
-    "unregister_diff_method",
+    "canonical_diff",
+    "get_diff",
+    "register_diff",
+    "registered_diffs",
+    "resolve_diff",
+    "select_diff",
+    "unregister_diff",
 ]
