@@ -88,3 +88,31 @@ def test_alias_resolution():
 
 def test_canonical_unknown_passthrough():
     assert canonical_diff_name("unknown_xyz") == "unknown_xyz"
+
+
+from aicir.qml.diff import select_diff_method
+
+
+class GPUBackend:  # noqa: N801 - 模拟 Torch 系后端类名
+    pass
+
+
+def test_select_prefers_auto_on_torch_noiseless_no_shots():
+    assert select_diff_method(backend=GPUBackend()) == "auto"
+
+
+def test_select_falls_back_to_psr_with_shots():
+    assert select_diff_method(backend=GPUBackend(), shots=1024) == "psr"
+
+
+def test_select_falls_back_to_psr_when_noisy():
+    assert select_diff_method(backend=GPUBackend(), noisy=True) == "psr"
+
+
+def test_select_psr_on_non_torch_backend():
+    assert select_diff_method(backend=None) == "psr"
+
+
+def test_select_never_returns_stochastic():
+    for kwargs in ({}, {"shots": 1000}, {"noisy": True}, {"backend": GPUBackend()}):
+        assert select_diff_method(**kwargs) not in {"spsa", "spsr"}

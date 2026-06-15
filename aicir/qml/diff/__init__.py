@@ -6,6 +6,7 @@ from .registry import (
     register_diff_method,
     registered_diff_methods,
     resolve_diff_method,
+    select_diff_method,
     unregister_diff_method,
 )
 from .spec import DiffMethod
@@ -17,5 +18,6 @@ __all__ = [
     "register_diff_method",
     "registered_diff_methods",
     "resolve_diff_method",
+    "select_diff_method",
     "unregister_diff_method",
 ]

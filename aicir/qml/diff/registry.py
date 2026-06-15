@@ -79,6 +79,47 @@ def resolve_diff_method(name: str) -> Callable[..., Any]:
     return spec.fn
 
 
+def _is_torch_family_backend(backend: Any) -> bool:
+    """是否为支持自动微分的 Torch 系后端（GPU/NPU）。仅按类名/设备判定，不导入 torch。"""
+
+    if backend is None:
+        return False
+    if type(backend).__name__ in {"GPUBackend", "TorchBackend", "NPUBackend"}:
+        return True
+    device = getattr(backend, "_device", None)
+    return getattr(device, "type", None) in {"cuda", "npu"}
+
+
+_SELECT_PREFERENCE = ("auto", "psr", "fd")
+
+
+def select_diff_method(*, backend: Any = None, shots: Any = None, noisy: bool = False) -> str:
+    """按 NEXT.md §6 策略选择梯度方法名（纯函数）。
+
+    过滤：``requires_torch`` 仅在 Torch 系后端保留；有 shots 丢弃
+    ``supports_shots=False``；``noisy`` 丢弃 ``supports_noise=False``。
+    偏好顺序：``auto -> psr -> fd``（``spsa``/``spsr`` 不参与自动优选）。
+    """
+
+    has_shots = shots is not None and int(shots) > 0
+    torch_family = _is_torch_family_backend(backend)
+
+    def compatible(spec: DiffMethod) -> bool:
+        if spec.requires_torch and not torch_family:
+            return False
+        if has_shots and not spec.supports_shots:
+            return False
+        if noisy and not spec.supports_noise:
+            return False
+        return True
+
+    for name in _SELECT_PREFERENCE:
+        spec = _REGISTRY.get(name)
+        if spec is not None and compatible(spec):
+            return name
+    return "fd"
+
+
 # ---------------------------------------------------------------------------
 # 内置 fn-based 全梯度方法（与 deriv.py 中函数一一对应）
 # ---------------------------------------------------------------------------
