@@ -8,7 +8,8 @@ from typing import Any
 
 import numpy as np
 
-from ..qml.deriv import fd, psr, spsa
+from ..qml.deriv import spsa
+from ..qml.diff import resolve_diff_method
 
 
 ScalarFn = Callable[[np.ndarray], Any]
@@ -111,13 +112,9 @@ def _gradient_from_method(
 
     kwargs = dict(gradient_kwargs or {})
     method = str(gradient_method).strip().lower()
-    if method == "psr":
-        return psr(fn, params, **kwargs)
-    if method == "fd":
-        return fd(fn, params, **kwargs)
-    if method == "spsa":
-        return spsa(fn, params, **kwargs)
-    raise ValueError("gradient_method must be 'psr', 'fd', 'spsa', or a callable")
+    grad_fn = resolve_diff_method(method)  # 未知名抛 ValueError（信息含已注册方法名）
+    grad = grad_fn(fn, params, **kwargs)   # fn 为目标闭包，与 deriv.psr 签名一致
+    return np.asarray(grad, dtype=float).reshape(params.shape)
 
 
 class GD:
