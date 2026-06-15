@@ -463,6 +463,15 @@ class State:
         arr = self._backend.to_numpy(self._data)
         return arr.reshape(-1) if self._kind == "vector" else arr
 
+    def __array__(self, dtype=None):
+        """numpy 数组协议：向量态导出 (2^n,)，密度态导出 (2^n, 2^n)。
+
+        使 ``np.asarray(state)`` / ``np.allclose(a, state)`` / ``backend.cast(state)``
+        等隐式转换继续以与旧版裸数组一致的形态工作。
+        """
+        arr = self.to_numpy()
+        return arr.astype(dtype) if dtype is not None else arr
+
     def __len__(self) -> int:
         return self.dim
 
