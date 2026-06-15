@@ -224,8 +224,8 @@ class Measure:
         """把轨迹集合按 shots 语义折叠成 Result。"""
         if exact or norm_shots == 1:
             tr = trajectories[0]
-            state = np.asarray(tr.pre.to_numpy())
-            final = np.asarray(tr.post.to_numpy())
+            state = tr.pre
+            final = tr.post
             incircuit_outputs = ({op: tr.incircuit[op] for op in (s.op_index for s in specs)}
                                  if exact else
                                  {op: np.array([[tr.incircuit[op]]]) for op in (s.op_index for s in specs)})
@@ -233,9 +233,9 @@ class Measure:
             if do_terminal and tr.terminal is not None:
                 terminal_output = (np.array(tr.terminal) if exact
                                    else np.array(tr.terminal).reshape(1, -1))
-            snap_states = {t: np.asarray(s.to_numpy()) for t, s in tr.snaps.items()}
+            snap_states = dict(tr.snaps)
             probabilities = np.asarray(tr.pre.probabilities()).reshape(-1).astype(np.float64) \
-                if hasattr(tr.pre, "probabilities") else np.abs(state.reshape(-1)) ** 2
+                if hasattr(tr.pre, "probabilities") else np.abs(np.asarray(state).reshape(-1)) ** 2
             incircuit_counts = {}
             terminal_counts = None
             if not exact:  # shots=1 仍可统计
@@ -245,16 +245,19 @@ class Measure:
                     terminal_counts = {key: 1}
         else:
             agg = aggregate_avg(trajectories, n, specs, terminal_qubits if do_terminal else None)
-            state = agg["state"]; final = agg["final_state"]
+            state = State.from_matrix(np.asarray(agg["state"]), n)
+            final = State.from_matrix(np.asarray(agg["final_state"]), n)
             incircuit_outputs = agg["incircuit_outputs"]; incircuit_counts = agg["incircuit_counts"]
             terminal_output = agg["terminal_output"]; terminal_counts = agg["terminal_counts"]
-            snap_states = agg["snapshot_states"]; probabilities = agg["probabilities"]
+            snap_states = {t: State.from_matrix(np.asarray(s), n) for t, s in agg["snapshot_states"].items()}
+            probabilities = agg["probabilities"]
 
         exp_vals: Dict[str, float] = {}
         exp_vars: Dict[str, float] = {}
         if observables:
-            rho = state if (np.asarray(state).ndim == 2 and state.shape[0] == state.shape[1]) else None
-            vec = None if rho is not None else np.asarray(state).reshape(-1, 1)
+            state_arr = np.asarray(state)
+            rho = state_arr if (state_arr.ndim == 2 and state_arr.shape[0] == state_arr.shape[1]) else None
+            vec = None if rho is not None else state_arr.reshape(-1, 1)
             for name, op in observables.items():
                 op = np.asarray(op)
                 if rho is not None:
@@ -263,8 +266,7 @@ class Measure:
                     exp_vals[name] = float(np.real((vec.conj().T @ op @ vec)[0, 0]))
 
         # 判断末态是否为密度矩阵（噪声路径 / 初始密度矩阵输入）
-        is_dm = (return_state and np.asarray(final).ndim == 2 and
-                 final.shape[0] == final.shape[1]) if return_state else False
+        is_dm = bool(return_state and final.is_density) if return_state else False
         state_mode = "density_matrix" if (noise_model is not None or initial_density_matrix is not None or is_dm) else "state_vector"
 
         meta: Dict[str, object] = {"state_mode": state_mode}

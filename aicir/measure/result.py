@@ -7,6 +7,8 @@ from typing import Dict, List, Optional, Sequence, Union
 
 import numpy as np
 
+from ..core.state import State
+
 
 @dataclass
 class MeasureSpec:
@@ -39,12 +41,12 @@ class Result:
     terminal_output: Optional[np.ndarray] = None
     terminal_counts: Optional[Dict[str, int]] = None
     terminal_qubits: Optional[List[int]] = None
-    state: Optional[np.ndarray] = None
-    final_state: Optional[np.ndarray] = None
+    state: Optional[State] = None
+    final_state: Optional[State] = None
     final_state_kind: Optional[str] = None
     expectation_values: Dict[str, float] = field(default_factory=dict)
     expectation_variances: Dict[str, float] = field(default_factory=dict)
-    snapshot_states: Dict[int, np.ndarray] = field(default_factory=dict)
+    snapshot_states: Dict[int, State] = field(default_factory=dict)
     metadata: Dict[str, object] = field(default_factory=dict)
 
     def _resolve(self, target: Union[int, str]) -> int:
@@ -82,9 +84,13 @@ class Result:
         total = sum(counts.values()) or 1
         return {k: v / total for k, v in counts.items()}
 
-    def snap(self, op_index: int) -> Optional[np.ndarray]:
-        s = self.snapshot_states.get(int(op_index))
-        return None if s is None else np.array(s, copy=True)
+    def snap(self, op_index: int) -> Optional[State]:
+        """返回该 op 下标记录的快照 State；未记录返回 None。
+
+        返回的是内部存储的 State 本身（不可变风格，只读消费）；
+        需要裸数组时用 ``.array``/``.matrix`` 或 ``np.asarray`` (会复制)。
+        """
+        return self.snapshot_states.get(int(op_index))
 
     def reduce(self, R: Sequence[int], pos: str = "final") -> np.ndarray:
         src = self.final_state if pos == "final" else self.state
