@@ -46,9 +46,9 @@ def test_exact_mode_state_equals_final_state(m):
     # shots=None/0：exact 模式，state 与 final_state 均为演化后态矢且相等
     for shots in (None, 0):
         result = m.run(bell_circuit(), shots=shots)
-        np.testing.assert_allclose(result.state.reshape(-1), BELL, atol=1e-6)
+        np.testing.assert_allclose(result.state.array, BELL, atol=1e-6)
         np.testing.assert_allclose(
-            result.final_state.reshape(-1), result.state.reshape(-1), atol=1e-6
+            result.final_state.array, result.state.array, atol=1e-6
         )
 
 
@@ -77,7 +77,7 @@ def test_exact_mode_rejects_explicit_measure_qubits(m):
 def test_single_shot_state_is_pre_measurement_state_vector(m):
     # shots=1：state 为测量前纯态（态矢，1D 或 2D 列向量）
     result = m.run(bell_circuit(), shots=1)
-    np.testing.assert_allclose(result.state.reshape(-1), BELL, atol=1e-6)
+    np.testing.assert_allclose(result.state.array, BELL, atol=1e-6)
 
 
 def test_single_shot_full_readout_collapses_to_basis_state(m):
@@ -95,7 +95,7 @@ def test_single_shot_full_readout_collapses_to_basis_state(m):
     assert int(out[0, 0]) * int(out[0, 1]) == 1
 
     # state 不坍缩
-    np.testing.assert_allclose(result.state.reshape(-1), BELL, atol=1e-6)
+    np.testing.assert_allclose(result.state.array, BELL, atol=1e-6)
 
 
 def test_single_shot_full_readout_odd_parity(m):
@@ -173,8 +173,8 @@ def test_snap_records_intermediate_full_states(m):
     result = m.run(bell_circuit(), shots=None, snap=[0, 1])
 
     after_h = np.array([1.0, 0.0, 1.0, 0.0], dtype=np.complex128) / np.sqrt(2.0)
-    np.testing.assert_allclose(result.snap(0).reshape(-1), after_h, atol=1e-6)
-    np.testing.assert_allclose(result.snap(1).reshape(-1), BELL, atol=1e-6)
+    np.testing.assert_allclose(result.snap(0).array, after_h, atol=1e-6)
+    np.testing.assert_allclose(result.snap(1).array, BELL, atol=1e-6)
     # 未记录下标返回 None
     assert result.snap(2) is None
     # snapshot_states 中有且只有 0 和 1 两个快照

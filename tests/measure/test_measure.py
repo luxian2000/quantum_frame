@@ -162,7 +162,7 @@ class TestMeasure(unittest.TestCase):
 
         result = self.measure.run(circ, shots=None)
 
-        np.testing.assert_allclose(result.state.reshape(-1), [1.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(result.state.array, [1.0, 0.0], atol=1e-6)
         np.testing.assert_allclose(result.probabilities, [1.0, 0.0], atol=1e-6)
 
     def test_reset_with_density_matrix_initial_state(self):

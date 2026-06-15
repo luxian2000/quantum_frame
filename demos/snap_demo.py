@@ -45,7 +45,7 @@ def main() -> None:
     print("Unrecorded gate snapshot:", result.snap(2))
     print(
         "snap(2) equals final_state:",
-        np.allclose(result.snap(2).reshape(-1), result.final_state.reshape(-1)),
+        np.allclose(result.snap(2).array, result.final_state.array),
     )
 
 
