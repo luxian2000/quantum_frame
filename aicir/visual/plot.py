@@ -33,6 +33,16 @@ from ..ir import Measurement, Operation, circuit_gate_dicts, has_circuit_instruc
 from .utils import require_matplotlib
 
 
+def _controlled_targets(gate: dict) -> list[int]:
+    """受控门的目标位列表：多目标 cx 携带 ``qubits``，单目标用 ``target_qubit``。"""
+    qubits = gate.get("qubits")
+    if qubits:
+        return [int(q) for q in qubits]
+    if "target_qubit" in gate:
+        return [int(gate["target_qubit"])]
+    return []
+
+
 # --- Style ----------------------------------------------------------------
 
 # Gate-family fill / edge colours. Non-Clifford gates share the Hadamard palette;
@@ -223,8 +233,7 @@ def _gate_qubits(gate: dict, n_qubits: int) -> list[int]:
     controls = gate.get("control_qubits")
     if controls:
         qubits.extend(int(q) for q in controls)
-    if "target_qubit" in gate:
-        qubits.append(int(gate["target_qubit"]))
+    qubits.extend(_controlled_targets(gate))
     return qubits or [0]
 
 
@@ -255,14 +264,13 @@ def _gate_draws_box_on_qubit(gate: dict, qubit: int, n_qubits: int) -> bool:
     if gate_type == "swap":
         return False
 
-    target = gate.get("target_qubit")
-    if target is None:
+    targets = _controlled_targets(gate)
+    if not targets:
         return False
-    target = int(target)
     controls = [int(q) for q in gate.get("control_qubits", [])]
     if controls:
-        return qubit == target and gate_type not in {"cx", "toffoli"}
-    return qubit == target
+        return qubit in targets and gate_type not in {"cx", "toffoli"}
+    return qubit in targets
 
 
 def _next_quantum_gate_column(
@@ -529,27 +537,31 @@ def _render_gate(ax, gate, x, n_qubits, fontsize, reset_link_targets=None):
         return
 
     controls = [int(q) for q in gate.get("control_qubits", [])]
-    target = int(gate["target_qubit"])
+    targets = _controlled_targets(gate)
 
     if controls:
-        involved = controls + [target]
+        # 多目标受控门画作单个门：一条贯穿连线，每个控制位一个实心点，
+        # 每个目标位一个标记（cx/toffoli 为 ⊕，受控旋转为方框）。
+        involved = controls + targets
         _draw_connector(ax, x, min(involved), max(involved), n_qubits, edgecolor)
         for c in controls:
             _draw_control(ax, x, _yy(c, n_qubits), edgecolor, fontsize=fontsize)
-        if gate_type in {"cx", "toffoli"}:
-            _draw_oplus(ax, x, _yy(target, n_qubits), edgecolor, fontsize=fontsize)
-        else:
-            _draw_box(ax, x, _yy(target, n_qubits), _gate_label(gate),
-                      facecolor, edgecolor, fontsize=fontsize,
-                      sublabel=_angle_sublabel(gate),
-                      sublabel_inside=False,
-                      sublabel_scale=_sublabel_scale(gate))
+        for target in targets:
+            if gate_type in {"cx", "toffoli"}:
+                _draw_oplus(ax, x, _yy(target, n_qubits), edgecolor, fontsize=fontsize)
+            else:
+                _draw_box(ax, x, _yy(target, n_qubits), _gate_label(gate),
+                          facecolor, edgecolor, fontsize=fontsize,
+                          sublabel=_angle_sublabel(gate),
+                          sublabel_inside=False,
+                          sublabel_scale=_sublabel_scale(gate))
         return
 
-    _draw_box(ax, x, _yy(target, n_qubits), _gate_label(gate), facecolor,
-              edgecolor, fontsize=fontsize, sublabel=_angle_sublabel(gate),
-              sublabel_inside=False,
-              sublabel_scale=_sublabel_scale(gate))
+    for target in targets:
+        _draw_box(ax, x, _yy(target, n_qubits), _gate_label(gate), facecolor,
+                  edgecolor, fontsize=fontsize, sublabel=_angle_sublabel(gate),
+                  sublabel_inside=False,
+                  sublabel_scale=_sublabel_scale(gate))
 
 
 # --- Public API -----------------------------------------------------------

@@ -248,8 +248,8 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 | `rz(θ, q)`               | 角度, target_qubit               | Rz 旋转门       |
 | `u2(φ, λ, q)`           | phi, lambda, target_qubit        | U2 门           |
 | `u3(θ, φ, λ, q)`       | theta, phi, lambda, target_qubit | U3 通用单比特门 |
-| `cx(t, [c])`              | target, control_list             | CNOT（控制-X）  |
-| `cnot(t, [c])`            | target, control_list             | 同 cx           |
+| `cx(t, [c])`              | target, control_list             | CNOT（控制-X）；`t` 也可为目标列表 `[t1, t2, ...]`，详见下方说明 |
+| `cnot(t, [c])`            | target, control_list             | 同 cx；`t` 同样支持目标列表 `[t1, t2, ...]` |
 | `cy(t, [c])`              | target, control_list             | 控制-Y          |
 | `cz(t, [c])`              | target, control_list             | 控制-Z          |
 | `crx(θ, t, [c])`         | 角度, target, control_list       | 受控 Rx         |
@@ -265,6 +265,19 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 | `reset(q...)`             | qubit list                       | 测量后重置为零态 |
 
 `toffoli` / `ccnot` 的矩阵构造与逐门执行路径支持任意数量控制位，也支持门字典中的 `control_states`；导出为 OpenQASM `ccx` 时仍只适用于两个控制位。
+
+**`cx` / `cnot` 多目标模式**：`cx`/`cnot` 的第一个参数除单个整数外，还可传入目标位列表 `cx([t1, t2, ...], [controls])`，对每个目标施加同一组控制位——在语义上等价于多个共享控制位的单目标 CX（它们彼此对易）。多目标与单目标模式完全兼容：
+
+```python
+from aicir import Circuit, cnot
+
+# 单目标（行为不变）：control=2 -> target=0
+cnot(0, [2])
+# 多目标：control=2 -> targets=0,1，等价于 cnot(0,[2]) + cnot(1,[2])
+Circuit(cnot([0, 1], [2]), n_qubits=3)
+```
+
+多目标门以**单个** `Operation`（`qubits=(0, 1)`）形式存储于 `circuit.gates`；态向量演化、酉矩阵构造（`Circuit.unitary()`）与 OpenQASM 导出都会在内部按目标自动展开为逐目标的单目标 CX。`control_states` 同样适用：`cnot([0, 2], [3], [0])` 表示当控制位 3 为 0 时翻转目标 0 与 2。
 
 门构造函数的**签名与参数顺序与旧版完全一致**，但返回值已由裸门字典升级为类型化 `Operation`（`measure(...)` / `reset(...)` 返回 `Measurement`）：
 
