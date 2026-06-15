@@ -85,6 +85,11 @@ class Result:
         return {k: v / total for k, v in counts.items()}
 
     def snap(self, op_index: int) -> Optional[State]:
+        """返回该 op 下标记录的快照 State；未记录返回 None。
+
+        返回的是内部存储的 State 本身（不可变风格，只读消费）；
+        需要裸数组时用 ``.array``/``.matrix`` 或 ``np.asarray`` (会复制)。
+        """
         return self.snapshot_states.get(int(op_index))
 
     def reduce(self, R: Sequence[int], pos: str = "final") -> np.ndarray:
