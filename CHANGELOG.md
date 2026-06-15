@@ -2,6 +2,19 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-15
+
+### Added
+
+- 新增 `DiffMethod` 策略注册表（NEXT.md 第 6 节第一片）：子包 `aicir.qml.diff` 提供冻结数据类 `DiffMethod`（字段含 `name`/`fn`/`aliases`/`exact`/`stochastic`/`requires_torch`/`supports_shots`/`supports_noise`）与注册表 API（`register_diff`/`unregister_diff`/`get_diff`/`registered_diffs`/`canonical_diff`/`resolve_diff`），并从 `aicir.qml` 顶层再导出。
+- 新增纯函数选择器 `select_diff(*, backend=None, shots=None, noisy=False)`，按 auto → psr → fd 优先级自动推断梯度方法（`spsa`/`spsr` 不参与自动选择）；已有单元测试覆盖，暂未接入调用方（保留给后续 QNode）。
+- 内置注册 fn-based 全梯度方法：`psr`/`fd`/`auto`/`spsa`/`spsr`；`mpsr`（返回标量混合偏导而非梯度向量）有意排除在注册表之外，仍作为 `qml.mpsr` 直接可用；基于线路的 `ad` 与预条件策略 `qng` 同样不纳入注册表。
+
+### Changed
+
+- `aicir/optimizer/params.py` 的 `_gradient_from_method` 改为经 `resolve_diff` 分发，`GD`/`Adam`/`ScipyMinimize` 现可统一访问所有内置梯度方法；对 `requires_torch=True` 的方法（即 `auto`）在经典黑盒目标路径上新增守卫，传入时抛出明确错误。
+- `aicir/qml/deriv.py` 未改动；`vqc`/`qas` 保持原有 `from ..qml.deriv import psr` 路径，参数移位单一实现不变。
+
 ## 2026-06-14
 
 ### Added
