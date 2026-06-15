@@ -467,10 +467,10 @@ class State:
         """numpy 数组协议：向量态导出 (2^n,)，密度态导出 (2^n, 2^n)。
 
         使 ``np.asarray(state)`` / ``np.allclose(a, state)`` / ``backend.cast(state)``
-        等隐式转换继续以与旧版裸数组一致的形态工作。
+        等隐式转换继续以与旧版裸数组一致的形态工作。返回副本，避免外部修改污染内部态。
         """
         arr = self.to_numpy()
-        return arr.astype(dtype) if dtype is not None else arr
+        return arr.astype(dtype) if dtype is not None else arr.copy()
 
     def __len__(self) -> int:
         return self.dim

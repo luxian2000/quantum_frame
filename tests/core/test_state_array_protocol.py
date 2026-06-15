@@ -30,3 +30,11 @@ def test_asarray_dtype_arg():
     s = State.from_array([1.0, 0.0], backend=NumpyBackend())
     arr = np.asarray(s, dtype=np.complex128)
     assert arr.dtype == np.complex128
+
+
+def test_asarray_returns_copy_not_view():
+    s = State.from_array([1.0, 0.0], backend=NumpyBackend())
+    arr = np.asarray(s)
+    arr[0] = 0.0
+    # 修改返回数组不应污染原 State
+    np.testing.assert_allclose(s.array, [1.0, 0.0], atol=1e-6)
