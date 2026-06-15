@@ -9,11 +9,13 @@
 - 新增 `DiffMethod` 策略注册表（NEXT.md 第 6 节第一片）：子包 `aicir.qml.diff` 提供冻结数据类 `DiffMethod`（字段含 `name`/`fn`/`aliases`/`exact`/`stochastic`/`requires_torch`/`supports_shots`/`supports_noise`）与注册表 API（`register_diff`/`unregister_diff`/`get_diff`/`registered_diffs`/`canonical_diff`/`resolve_diff`），并从 `aicir.qml` 顶层再导出。
 - 新增纯函数选择器 `select_diff(*, backend=None, shots=None, noisy=False)`，按 auto → psr → fd 优先级自动推断梯度方法（`spsa`/`spsr` 不参与自动选择）；已有单元测试覆盖，暂未接入调用方（保留给后续 QNode）。
 - 内置注册 fn-based 全梯度方法：`psr`/`fd`/`auto`/`spsa`/`spsr`；`mpsr`（返回标量混合偏导而非梯度向量）有意排除在注册表之外，仍作为 `qml.mpsr` 直接可用；基于线路的 `ad` 与预条件策略 `qng` 同样不纳入注册表。
+- 新增 `State.__array__` numpy 数组协议：`np.asarray(state)` / `np.allclose(a, state)` / `backend.cast(state)` 等隐式转换可用（向量导出 `(2^n,)`、密度导出 `(2^n, 2^n)`，返回副本以保持不可变风格）。
 
 ### Changed
 
 - `aicir/optimizer/params.py` 的 `_gradient_from_method` 改为经 `resolve_diff` 分发，`GD`/`Adam`/`ScipyMinimize` 现可统一访问所有内置梯度方法；对 `requires_torch=True` 的方法（即 `auto`）在经典黑盒目标路径上新增守卫，传入时抛出明确错误。
 - `aicir/qml/deriv.py` 未改动；`vqc`/`qas` 保持原有 `from ..qml.deriv import psr` 路径，参数移位单一实现不变。
+- **（破坏性）** `aicir.measure.Result` 的 `state`/`final_state`/`snap()`/`snapshot_states` 现返回统一 `State` 对象（而非裸 numpy 数组），与全局 State 迁移一致；`.ket`/`.array`/`.matrix`/`.is_density`/`.probabilities()` 可直接使用。迁移指引：`result.state.reshape(-1)` → `result.state.array`，`result.final_state.reshape(2, 2)` → `result.final_state.matrix`；`np.asarray(result.state)`、`np.allclose(...)`、`backend.cast(...)` 经 `State.__array__` 仍兼容。`reduce()` 仍返回约化密度 numpy 数组，`final_state_kind` 字段保留。
 
 ## 2026-06-14
 
