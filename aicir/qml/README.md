@@ -875,3 +875,71 @@ theta, value = rotosolve(objective, np.array([0.5]), return_value=True)
 ```
 
 ---
+
+## 15. DiffMethod 策略注册表（`aicir.qml.diff`）
+
+上面的 `deriv.py` 把每种梯度方法实现为独立函数；`aicir/qml/diff/` 在其上叠加一层**策略注册表**，把 fn-based 全梯度方法（统一契约 `(fn, params, **kw) -> 梯度向量`）按名字单点登记，便于按字符串解析、按上下文自动选择、以及注册自定义方法。它镜像 `aicir/gates/` 的 `GateSpec` 注册表习惯，全部 API 从 `aicir.qml` 顶层再导出。
+
+内置注册的 5 个方法：`psr` / `fd` / `auto` / `spsa` / `spsr`。`mpsr` 有意**不**纳入注册表（它返回标量混合偏导，不满足全梯度契约），仍可作为 `qml.mpsr` 直接调用；电路型 `ad` 与预条件 `qng/bdqng/kqng/dqng` 也不在注册表内（非 fn-based）。
+
+### API 一览
+
+| 函数 | 说明 |
+| --- | --- |
+| `DiffMethod` | 冻结数据类，描述一个方法：`name`、`fn`、`aliases`、`exact`、`stochastic`、`requires_torch`、`supports_shots`、`supports_noise` |
+| `register_diff(spec, *, overwrite=False)` | 注册一个 `DiffMethod`；名称/别名冲突时报错 |
+| `unregister_diff(name)` | 注销一个方法（含别名），未注册则静默 |
+| `get_diff(name) -> DiffMethod \| None` | 按规范名或别名查 spec，未注册返回 `None` |
+| `registered_diffs() -> tuple[str, ...]` | 返回全部已注册方法的规范名 |
+| `canonical_diff(name) -> str` | 别名 → 规范名；未注册名原样返回 |
+| `resolve_diff(name) -> Callable` | 返回方法对应的可调用 `fn`；未注册名抛 `ValueError`（信息列出已注册方法） |
+| `select_diff(*, backend=None, shots=None, noisy=False) -> str` | 按上下文选择方法名（纯函数） |
+
+### `select_diff` 选择策略
+
+纯函数，不执行梯度，只返回方法名。过滤规则：`requires_torch` 的方法仅在 Torch 系后端保留；有 shots 时丢弃 `supports_shots=False`；`noisy=True` 时丢弃 `supports_noise=False`。偏好顺序为 **`auto` → `psr` → `fd`**（`spsa`/`spsr` 不参与自动优选，仅在调用方显式请求时使用）。例如：Torch 后端 + 无 shots + 无噪声 → `auto`；有 shots 或含噪声 → `psr`；非 Torch 后端 → `psr`。
+
+### 示例：解析与选择
+
+```python
+from aicir.qml import resolve_diff, select_diff, registered_diffs
+
+registered_diffs()                 # ('psr', 'fd', 'auto', 'spsa', 'spsr')
+
+grad_fn = resolve_diff("psr")      # 即 deriv.psr 本身
+# grad = grad_fn(objective, params)
+
+select_diff()                      # 'psr'（无 Torch 后端）
+select_diff(backend=gpu_backend)   # 'auto'（Torch 系后端、无 shots/噪声）
+select_diff(backend=gpu_backend, shots=1024)  # 'psr'（auto 不支持 shots）
+```
+
+### 示例：经优化器按名调用
+
+`aicir.optimizer.params` 的优化器（`GD`/`Adam`/`ScipyMinimize`）通过注册表分发，因此 `gradient_method` 可用任意已注册方法名（此前仅支持 `psr`/`fd`/`spsa`）：
+
+```python
+from aicir.optimizer.params import Adam
+
+opt = Adam(gradient_method="spsr", gradient_kwargs={"rng": 0})
+result = opt.minimize(objective, init_params)
+```
+
+注意：`auto` 需要 Torch 系后端与连接 autograd 图的目标，无法经经典优化器的黑盒数值目标使用；在该路径上请求 `auto` 会被守卫拦截并给出清晰错误，应改用 `psr`/`fd`/`spsa`/`spsr`。
+
+### 示例：注册自定义方法
+
+```python
+from aicir.qml import DiffMethod, register_diff, unregister_diff
+
+def my_grad(fn, params, **kw):
+    ...  # 返回与 params 同形状的梯度向量
+
+register_diff(DiffMethod("mygrad", my_grad, exact=False))
+# 之后 resolve_diff("mygrad") / Adam(gradient_method="mygrad") 均可用
+unregister_diff("mygrad")
+```
+
+> `select_diff` 目前已实现并单测，但尚未接入任何调用方（保留给后续 PennyLane 风格 QNode）。当前自动选择仅在用户显式调用 `select_diff` 时生效。
+
+---
