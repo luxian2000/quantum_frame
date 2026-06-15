@@ -116,3 +116,12 @@ def test_select_psr_on_non_torch_backend():
 def test_select_never_returns_stochastic():
     for kwargs in ({}, {"shots": 1000}, {"noisy": True}, {"backend": GPUBackend()}):
         assert select_diff_method(**kwargs) not in {"spsa", "spsr"}
+
+
+def test_diff_api_reexported_from_qml():
+    import aicir.qml as qml
+
+    assert hasattr(qml, "DiffMethod")
+    assert hasattr(qml, "resolve_diff_method")
+    assert hasattr(qml, "select_diff_method")
+    assert qml.resolve_diff_method("psr") is qml.psr
