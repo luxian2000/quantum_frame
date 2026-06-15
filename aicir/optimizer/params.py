@@ -8,7 +8,8 @@ from typing import Any
 
 import numpy as np
 
-from ..qml.deriv import fd, psr, spsa
+from ..qml.deriv import spsa
+from ..qml.diff import get_diff, resolve_diff
 
 
 ScalarFn = Callable[[np.ndarray], Any]
@@ -111,13 +112,17 @@ def _gradient_from_method(
 
     kwargs = dict(gradient_kwargs or {})
     method = str(gradient_method).strip().lower()
-    if method == "psr":
-        return psr(fn, params, **kwargs)
-    if method == "fd":
-        return fd(fn, params, **kwargs)
-    if method == "spsa":
-        return spsa(fn, params, **kwargs)
-    raise ValueError("gradient_method must be 'psr', 'fd', 'spsa', or a callable")
+    grad_fn = resolve_diff(method)  # 未知名抛 ValueError（信息含已注册方法名）
+    spec = get_diff(method)
+    if spec is not None and spec.requires_torch:
+        # auto（自动微分）需 Torch 系后端与连接 autograd 图的目标，无法经
+        # 经典优化器的黑盒数值目标使用；及早给出清晰错误而非底层 torch 报错。
+        raise ValueError(
+            f"gradient_method {method!r} 需要 Torch 系后端与连接 autograd 图的目标，"
+            f"无法经经典优化器的黑盒目标使用；请改用 'psr'/'fd'/'spsa'/'spsr'。"
+        )
+    grad = grad_fn(fn, params, **kwargs)   # fn 为目标闭包，与 deriv.psr 签名一致
+    return np.asarray(grad, dtype=float).reshape(params.shape)
 
 
 class GD:

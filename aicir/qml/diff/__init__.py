@@ -1,8 +1,6 @@
-"""Quantum machine learning utilities."""
+"""DiffMethod 策略注册表（NEXT.md §6 第一片）。"""
 
-from .deriv import auto, psr, spsr, spsa, mpsr, fd, ad, qng, bdqng, kqng, dqng, rotosolve
-from .diff import (
-    DiffMethod,
+from .registry import (
     canonical_diff,
     get_diff,
     register_diff,
@@ -11,20 +9,9 @@ from .diff import (
     select_diff,
     unregister_diff,
 )
+from .spec import DiffMethod
 
 __all__ = [
-    "auto",
-    "psr",
-    "spsr",
-    "spsa",
-    "mpsr",
-    "fd",
-    "ad",
-    "qng",
-    "bdqng",
-    "kqng",
-    "dqng",
-    "rotosolve",
     "DiffMethod",
     "canonical_diff",
     "get_diff",
