@@ -1,4 +1,4 @@
-﻿# Noise-Adaptive QAS Architecture Metrics
+# Noise-Adaptive QAS Architecture Metrics
 
 本文档定义噪声自适应 QAS 中候选量子架构 / ansatz 的统一评分指标。当前实现遵循一个原则：每个指标组可以列出多种评估函数，但顶层加权时每组只使用一个 active 指标的 `score`，避免同类指标重复加权。
 
@@ -9,7 +9,7 @@ metrics/expressibility.py        无噪表达能力
 metrics/noisy_expressibility.py  含噪表达能力
 metrics/trainability.py          可训练性
 metrics/hardware.py              硬件效率
-noise/                              噪声模型、噪声配置、噪声分析、噪声指标
+noise/                           噪声模型、噪声配置、噪声分析、噪声指标
 qas/evaluator.py                 QAS 指标编排和加权评分
 ```
 
@@ -17,7 +17,7 @@ qas/evaluator.py                 QAS 指标编排和加权评分
 
 ```text
 n = qubit 数
-d = 2^n
+N = 2^n
 G = gate 数
 G1 = 单比特门数
 G2 = 双比特门数
@@ -39,12 +39,12 @@ weighted_score =
 
 ## 2. 当前 Active 指标
 
-| 指标组 | active 指标 | 实现位置 | 说明 |
-|---|---|---|---|
-| 表达能力 | `kl_haar` | `metrics/expressibility.py::KL_Haar_divergence`, `evaluator.py::ArchitectureEvaluator` | 衡量参数化线路诱导态分布与 Haar 随机态分布的距离 |
-| 可训练性 | `structure_proxy` | `metrics/trainability.py::structure_proxy` | 使用深度、双比特门比例、参数密度的低成本代理 |
-| 噪声鲁棒性 | `ion_trap_error_budget_proxy` | `noise/metrics.py::ion_trap_error_budget_proxy`, `noise/ion_trap.py` | 使用默认离子阱噪声配置估计线路 error budget |
-| 硬件效率 | `native_depth_twoq_efficiency` | `metrics/hardware.py::native_depth_twoq_efficiency` | 使用 native gate 比例、深度、双比特门密度评估硬件友好度 |
+| 指标组     | active 指标                      | 实现位置                                                                                   | 说明                                                    |
+| ---------- | -------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| 表达能力   | `kl_haar`                      | `metrics/expressibility.py::KL_Haar_divergence`, `evaluator.py::ArchitectureEvaluator` | 衡量参数化线路诱导态分布与 Haar 随机态分布的距离        |
+| 可训练性   | `structure_proxy`              | `metrics/trainability.py::structure_proxy`                                               | 使用深度、双比特门比例、参数密度的低成本代理            |
+| 噪声鲁棒性 | `ion_trap_error_budget_proxy`  | `noise/metrics.py::ion_trap_error_budget_proxy`, `noise/ion_trap.py`                   | 使用默认离子阱噪声配置估计线路 error budget             |
+| 硬件效率   | `native_depth_twoq_efficiency` | `metrics/hardware.py::native_depth_twoq_efficiency`                                      | 使用 native gate 比例、深度、双比特门密度评估硬件友好度 |
 
 `structure_proxy` 和 `native_depth_twoq_efficiency` 是 `evaluator.py` 中登记的 active 指标名，真实计算分别在 `metrics/trainability.py` 和 `metrics/hardware.py` 中。`multi_objective_reward.py` 保留 legacy RL reward wrapper；新主线不再从 reward 层直接 import 具体指标函数。
 
@@ -60,10 +60,10 @@ weighted_score =
 F = |<psi(theta_i) | psi(theta_j)>|^2
 
 P_PQC(F): 参数化线路采样得到的保真度分布
-P_Haar(F) = (d - 1) * (1 - F)^(d - 2)
+P_Haar(F) = (N - 1) * (1 - F)^(N - 2)
 
 D_KL = sum_i P_PQC(i) * log(P_PQC(i) / P_Haar(i))
-Exp_idle = (d - 1) * log(B)
+Exp_idle = (N - 1) * log(B)
 raw = -log(D_KL / Exp_idle)
 score = clip(raw, 0, 1)
 ```
@@ -78,7 +78,7 @@ score = clip(raw, 0, 1)
 O(M * cost(unitary/evolution) + B)
 ```
 
-在当前 dense simulator 下，线路演化随 `d = 2^n` 指数增长，适合小比特精确评估，大规模搜索需要 surrogate。
+在当前 dense simulator 下，线路演化随 `N = 2^n` 指数增长，适合小比特精确评估，大规模搜索需要 surrogate。
 
 ### 3.2 `mmd_relative`（implemented，可选）
 
@@ -97,7 +97,7 @@ score = 1 - MMD
 复杂度：
 
 ```text
-O(M^2 * d) + M 次线路执行
+O(M^2 * N) + M 次线路执行
 ```
 
 ### 3.3 `frame_potential`（todo）
@@ -106,13 +106,13 @@ O(M^2 * d) + M 次线路执行
 
 ```text
 F_t = (1 / M^2) * sum_ij |<psi_i | psi_j>|^(2t)
-F_t^Haar = 1 / C(d + t - 1, t)
+F_t^Haar = 1 / C(N + t - 1, t)
 ```
 
 常用 `t = 2`：
 
 ```text
-F_2^Haar = 2 / (d * (d + 1))
+F_2^Haar = 2 / (N * (N + 1))
 score = exp(- |F_2 - F_2^Haar| / scale)
 ```
 
@@ -121,7 +121,7 @@ score = exp(- |F_2 - F_2^Haar| / scale)
 复杂度：
 
 ```text
-O(M^2 * d) + M 次线路执行
+O(M^2 * N) + M 次线路执行
 ```
 
 ### 3.4 `entangling_capability`（todo）
@@ -135,12 +135,12 @@ score = E_theta[Q(psi(theta))]
 
 其中 `rho_k` 是第 `k` 个 qubit 的单比特约化密度矩阵。
 
-依据：Sim et al. 同时讨论 expressibility 和 entangling capability。该指标更偏“产生纠缠的能力”。
+依据：Sim et al. 同时讨论 expressibility 和 entangling capability。该指标更偏"产生纠缠的能力"。
 
 复杂度：
 
 ```text
-O(M * n * d)
+O(M * n * N)
 ```
 
 ### 3.5 `transformer_predictor`（todo）
@@ -348,7 +348,7 @@ score = exp(-degradation / scale)
 复杂度，密度矩阵噪声仿真时：
 
 ```text
-O(M * G * K * d^3)
+O(M * G * K * N^3)
 ```
 
 其中 `K` 是 Kraus 数。小比特可用，大比特昂贵。
@@ -498,7 +498,3 @@ score = exp(-T_total / T2)
 串行: O(G)
 简单分层调度: O(G log G) 或 O(G * n)
 ```
-
-
-
-

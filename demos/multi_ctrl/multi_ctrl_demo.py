@@ -3,7 +3,7 @@ from aicir import Circuit, Measure, NumpyBackend, hadamard, cnot
 cir = Circuit(
     hadamard(0),
     hadamard(3),
-    cnot(1, [0, 3], [0, 1])
+    cnot(1, [0, 3])
 )
 
 mm = Measure(NumpyBackend())

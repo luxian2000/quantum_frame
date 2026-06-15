@@ -2,7 +2,7 @@
 
 下面是当前仓库的目录结构（目录级）：
 
-~~~text
+```text
 quantum_frame/
 |-- aicir/
 |   |-- backends/
@@ -22,12 +22,14 @@ quantum_frame/
 |   |-- noise/
 |   |-- optimization/
 |   |   |-- qubo/
+|   |   |   `-- modeling/
 |   |   `-- sb/
 |   |-- optimizer/
 |   |-- primitives/
 |   |-- qas/
 |   |   `-- demos/
 |   |-- qml/
+|   |   `-- diff/
 |   |-- transpile/
 |   |   `-- passes/
 |   |-- universal/
@@ -45,27 +47,32 @@ quantum_frame/
 |   |-- LiH/
 |   |-- MaxCut/
 |   |-- mnist/
+|   |-- multi_ctrl/
 |   `-- visual_outputs/
 |-- docs/
 |   `-- superpowers/
+|       |-- plans/
+|       `-- specs/
 `-- tests/
     |-- algorithms/
     |-- backends/
     |-- chemistry/
     |-- circuit/
     |   `-- io/
+    |-- docs/
     |-- execution/
+    |-- gates/
+    |-- ir/
     |-- measure/
     |-- metrics/
     |-- noise/
+    |-- optimization/
+    |   `-- qubo/
     |-- optimizer/
+    |-- primitives/
     |-- qml/
     |-- transpile/
     |-- universal/
     |-- visual/
     `-- vqc/
-~~~
-
-目录结构图片（横版）：
-
-![contents](contents.png)
+```
