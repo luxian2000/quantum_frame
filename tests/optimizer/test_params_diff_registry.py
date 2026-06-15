@@ -31,3 +31,19 @@ def test_adam_unknown_method_lists_registered():
     with pytest.raises(ValueError) as exc:
         opt.minimize(_cos_sum, np.array([1.0]))
     assert "psr" in str(exc.value)
+    assert "bogus" in str(exc.value)
+
+
+def test_adam_psr_via_registry_descends():
+    init = np.array([1.0, 2.0])
+    opt = Adam(gradient_method="psr", learning_rate=0.2, max_iters=80)
+    result = opt.minimize(_cos_sum, init)
+    assert result.best_fun < _cos_sum(init)
+
+
+def test_adam_rejects_auto_in_classical_path():
+    # auto 需 Torch 后端与 autograd 图，经经典优化器黑盒目标应及早报清晰错误。
+    opt = Adam(gradient_method="auto", max_iters=5)
+    with pytest.raises(ValueError) as exc:
+        opt.minimize(_cos_sum, np.array([1.0]))
+    assert "auto" in str(exc.value)
