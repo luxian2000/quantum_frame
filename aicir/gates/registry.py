@@ -88,7 +88,8 @@ _STANDARD_GATES = (
     GateSpec("rz", 1, 1, qasm_name="rz", symbol="Rz"),
     GateSpec("u2", 1, 2, qasm_name="u2", symbol="U2"),
     GateSpec("u3", 1, 3, qasm_name="u3", symbol="U3"),
-    GateSpec("cx", 1, 0, aliases=("cnot",), controlled=True, qasm_name="cx", symbol="X"),
+    # num_qubits=None：cx/cnot 支持单目标或多目标（多目标等价于多个单目标 CX）。
+    GateSpec("cx", None, 0, aliases=("cnot",), controlled=True, qasm_name="cx", symbol="X"),
     GateSpec("cy", 1, 0, controlled=True, qasm_name="cy", symbol="Y"),
     GateSpec("cz", 1, 0, controlled=True, qasm_name="cz", symbol="Z"),
     GateSpec("crx", 1, 1, controlled=True, qasm_name="crx", symbol="Rx"),
