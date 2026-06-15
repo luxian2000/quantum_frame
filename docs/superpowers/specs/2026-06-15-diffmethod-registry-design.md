@@ -88,20 +88,20 @@ import 时注册 5 个 fn-based 全梯度方法：
 
 模块级 `_REGISTRY: dict[str, DiffMethod] = {}`，别名映射 `_ALIASES: dict[str, str] = {}`。
 
-- `register_diff_method(spec: DiffMethod, *, overwrite: bool = False) -> DiffMethod`
+- `register_diff(spec: DiffMethod, *, overwrite: bool = False) -> DiffMethod`
   ——重复名未 `overwrite` 时报错；同步登记别名。
-- `unregister_diff_method(name: str) -> None`
-- `get_diff_method(name: str) -> DiffMethod | None` ——别名归一后查找。
-- `registered_diff_methods() -> tuple[str, ...]` ——规范名元组。
-- `canonical_diff_name(name: str) -> str` ——别名→规范名（未知名透传，
+- `unregister_diff(name: str) -> None`
+- `get_diff(name: str) -> DiffMethod | None` ——别名归一后查找。
+- `registered_diffs() -> tuple[str, ...]` ——规范名元组。
+- `canonical_diff(name: str) -> str` ——别名→规范名（未知名透传，
   参照 `canonical_gate_name`）。
-- `resolve_diff_method(name: str) -> Callable` ——返回绑定的 `fn`；未知名抛
-  `ValueError`，错误信息列出 `registered_diff_methods()`。
+- `resolve_diff(name: str) -> Callable` ——返回绑定的 `fn`；未知名抛
+  `ValueError`，错误信息列出 `registered_diffs()`。
 
 ## `select()` 选择策略（§6 表格的代码化）
 
 ```python
-def select_diff_method(*, backend=None, shots=None, noisy: bool = False) -> str:
+def select_diff(*, backend=None, shots=None, noisy: bool = False) -> str:
     ...
 ```
 
@@ -126,7 +126,7 @@ Torch 系后端判定复用现有工具（`deriv._is_npu_family_backend` / `_tor
 if/elif 替换为：
 
 ```python
-from ..qml.diff import resolve_diff_method
+from ..qml.diff import resolve_diff
 ...
 if callable(gradient_method):
     grad = gradient_method(params)
@@ -134,7 +134,7 @@ if callable(gradient_method):
 
 kwargs = dict(gradient_kwargs or {})
 method = str(gradient_method).strip().lower()
-grad_fn = resolve_diff_method(method)   # 未知名抛 ValueError（信息含已注册方法名）
+grad_fn = resolve_diff(method)   # 未知名抛 ValueError（信息含已注册方法名）
 grad = grad_fn(fn, params, **kwargs)     # fn 为目标函数闭包，与 deriv.psr 签名一致
 return np.asarray(grad, dtype=float).reshape(params.shape)
 ```
@@ -154,9 +154,9 @@ return np.asarray(grad, dtype=float).reshape(params.shape)
 - spec 校验：空名/非可调用 `fn` 报错；别名规范化。
 - 注册表：内置 5 方法均存在；`register`/`unregister`/`overwrite` 行为；
   重复注册未 `overwrite` 报错。
-- `canonical_diff_name`：别名→规范名；未知名透传。
-- `resolve_diff_method`：已知名返回正确 `fn`；未知名 `ValueError` 且信息列出方法。
-- `select_diff_method` 真值表：
+- `canonical_diff`：别名→规范名；未知名透传。
+- `resolve_diff`：已知名返回正确 `fn`；未知名 `ValueError` 且信息列出方法。
+- `select_diff` 真值表：
   - Torch 后端 + 无 shots + 无噪声 → `auto`；
   - 有 shots → `psr`（`auto` 被过滤）；
   - `noisy=True` → `psr`；
@@ -170,18 +170,18 @@ return np.asarray(grad, dtype=float).reshape(params.shape)
 
 ## 验收标准
 
-- `from aicir.qml.diff import DiffMethod, register_diff_method, get_diff_method,
-  resolve_diff_method, registered_diff_methods, canonical_diff_name,
-  select_diff_method` 全部可用，并经 `aicir.qml` 重导出。
+- `from aicir.qml.diff import DiffMethod, register_diff, get_diff,
+  resolve_diff, registered_diffs, canonical_diff,
+  select_diff` 全部可用，并经 `aicir.qml` 重导出。
 - 内置注册 `{psr, fd, auto, spsa, spsr}`，`mpsr` 不在其中。
-- `params.py` 通过 `resolve_diff_method` 分发，可触达全部 5 个方法。
-- `select_diff_method` 真值表测试通过。
+- `params.py` 通过 `resolve_diff` 分发，可触达全部 5 个方法。
+- `select_diff` 真值表测试通过。
 - `deriv.py` 与 `vqc`/`qas` 的现有 `psr` 导入路径不变，既有测试不回归。
 - 全量 `PYTHONPATH=. pytest` 通过。
 
 ## 后续（不在本片）
 
-- QNode（§5）调用 `select_diff_method` 实现 `diff_method="auto"`。
+- QNode（§5）调用 `select_diff` 实现 `diff_method="auto"`。
 - 向优化器/QNode 透传 backend/shots/noisy 上下文以启用自动优选默认值。
 - 将 `ad`、`qng` 等纳入更广义的微分策略体系（需先解决签名差异）。
 ```

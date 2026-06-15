@@ -16,11 +16,11 @@ _REGISTRY: dict[str, DiffMethod] = {}
 _LOOKUP: dict[str, DiffMethod] = {}
 
 
-def register_diff_method(spec: DiffMethod, *, overwrite: bool = False) -> DiffMethod:
+def register_diff(spec: DiffMethod, *, overwrite: bool = False) -> DiffMethod:
     """注册一个梯度方法；``overwrite=False`` 时名称/别名冲突会报错。"""
 
     if not isinstance(spec, DiffMethod):
-        raise TypeError("register_diff_method expects a DiffMethod")
+        raise TypeError("register_diff expects a DiffMethod")
 
     names = (spec.name, *spec.aliases)
     if not overwrite:
@@ -31,7 +31,7 @@ def register_diff_method(spec: DiffMethod, *, overwrite: bool = False) -> DiffMe
         if spec.name in _REGISTRY:
             raise ValueError(f"diff method already registered: {spec.name!r}")
     else:
-        unregister_diff_method(spec.name)
+        unregister_diff(spec.name)
 
     _REGISTRY[spec.name] = spec
     for name in names:
@@ -39,7 +39,7 @@ def register_diff_method(spec: DiffMethod, *, overwrite: bool = False) -> DiffMe
     return spec
 
 
-def unregister_diff_method(name: str) -> None:
+def unregister_diff(name: str) -> None:
     """移除一个已注册方法（含其全部别名）；未注册时静默返回。"""
 
     spec = _REGISTRY.pop(str(name), None)
@@ -50,31 +50,31 @@ def unregister_diff_method(name: str) -> None:
             del _LOOKUP[key]
 
 
-def get_diff_method(name: str) -> DiffMethod | None:
+def get_diff(name: str) -> DiffMethod | None:
     """按规范名或别名查询；未注册返回 ``None``。"""
 
     return _LOOKUP.get(str(name))
 
 
-def registered_diff_methods() -> tuple[str, ...]:
+def registered_diffs() -> tuple[str, ...]:
     """返回全部已注册方法的规范名。"""
 
     return tuple(_REGISTRY)
 
 
-def canonical_diff_name(name: str) -> str:
+def canonical_diff(name: str) -> str:
     """把方法名（含别名）解析为规范名；未注册的名称原样返回。"""
 
     spec = _LOOKUP.get(str(name))
     return spec.name if spec is not None else str(name)
 
 
-def resolve_diff_method(name: str) -> Callable[..., Any]:
+def resolve_diff(name: str) -> Callable[..., Any]:
     """返回方法对应的可调用 ``fn``；未注册名抛 ``ValueError`` 并列出已注册方法。"""
 
     spec = _LOOKUP.get(str(name))
     if spec is None:
-        available = ", ".join(sorted(registered_diff_methods()))
+        available = ", ".join(sorted(registered_diffs()))
         raise ValueError(f"unknown diff method {name!r}; registered methods: {available}")
     return spec.fn
 
@@ -93,7 +93,7 @@ def _is_torch_family_backend(backend: Any) -> bool:
 _SELECT_PREFERENCE = ("auto", "psr", "fd")
 
 
-def select_diff_method(*, backend: Any = None, shots: Any = None, noisy: bool = False) -> str:
+def select_diff(*, backend: Any = None, shots: Any = None, noisy: bool = False) -> str:
     """按 NEXT.md §6 策略选择梯度方法名（纯函数）。
 
     过滤：``requires_torch`` 仅在 Torch 系后端保留；有 shots 丢弃
@@ -136,5 +136,5 @@ _STANDARD_METHODS = (
 )
 
 for _spec in _STANDARD_METHODS:
-    register_diff_method(_spec)
+    register_diff(_spec)
 del _spec
