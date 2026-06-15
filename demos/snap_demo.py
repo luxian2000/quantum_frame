@@ -8,8 +8,7 @@ from aicir import Circuit, Measure, NumpyBackend, cnot, hadamard, rx, measure
 from aicir.core import State
 
 
-def describe_state(label: str, state_vector, backend: NumpyBackend) -> None:
-    state = State.from_array(state_vector, backend=backend)
+def describe_state(label: str, state: State) -> None:
     print(f"{label}:")
     print("  ket:", state.ket)
     print("  vector:", np.array2string(state.array, precision=3, suppress_small=True))
@@ -33,16 +32,16 @@ def main() -> None:
     print("snap op indices:", sorted(result.snapshot_states.keys()))
     print()
 
-    describe_state("After gate 0: hadamard(0)", result.snap(0), backend)
+    describe_state("After gate 0: hadamard(0)", result.snap(0))
     print()
-    describe_state("After gate 1: rx(0.5, 0)", result.snap(1), backend)
+    describe_state("After gate 1: rx(0.5, 0)", result.snap(1))
     print()
-    describe_state("After gate 2: cnot(1, [0])", result.snap(2), backend)
+    describe_state("After gate 2: cnot(1, [0])", result.snap(2))
     print()
-    describe_state("Final state", result.final_state, backend)
+    describe_state("Final state", result.final_state)
 
     print()
-    print("Unrecorded gate snapshot:", result.snap(2))
+    print("Recorded snapshot snap(2) ket:", result.snap(2).ket)
     print(
         "snap(2) equals final_state:",
         np.allclose(result.snap(2).array, result.final_state.array),
