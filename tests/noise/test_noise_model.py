@@ -57,7 +57,7 @@ class TestNoiseModel(unittest.TestCase):
             shots=None,
             return_state=True,
         )
-        rho = result.final_state.reshape(2, 2)
+        rho = result.final_state.matrix.reshape(2, 2)
         self.assertAlmostEqual(np.real(rho[0, 1]), -0.5, places=6)
         self.assertAlmostEqual(np.real(rho[1, 0]), -0.5, places=6)
 

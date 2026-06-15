@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 from aicir.measure.result import Result, MeasureSpec
+from aicir.core.state import State
 
 
 def _empty_probs(n):
@@ -43,6 +44,6 @@ def test_reduce_partial_trace():
     rho = np.zeros((4, 4), dtype=complex); rho[0, 0] = rho[3, 3] = 0.5
     r = Result(n_qubits=2, backend_name="numpy", probabilities=_empty_probs(2),
                shots=8, measurement_specs=[], incircuit_outputs={}, terminal_output=None,
-               terminal_qubits=None, final_state=rho, final_state_kind="density_matrix")
+               terminal_qubits=None, final_state=State.from_matrix(rho), final_state_kind="density_matrix")
     red = r.reduce([0], pos="final")
     assert np.allclose(red, np.array([[0.5, 0], [0, 0.5]]), atol=1e-6)
