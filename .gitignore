@@ -7,6 +7,7 @@ __pycache__/
 # 工具缓存
 .mypy_cache/
 .pytest_cache/
+.venv/
 
 # Python 打包产物
 build/
