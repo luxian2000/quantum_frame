@@ -12,8 +12,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
-from ..channel.backends.numpy_backend import NumpyBackend
-from ..channel.noise.model import NoiseModel
+from ..backends.numpy_backend import NumpyBackend
+from ..noise.model import NoiseModel
 from ..core.circuit import Circuit
 from ..measure.measure import Measure
 from ._types import ArchitectureSpec

@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
-from ...channel.backends.numpy_backend import NumpyBackend
-from ...channel.noise.model import NoiseModel
+from ...backends.numpy_backend import NumpyBackend
+from ...noise.model import NoiseModel
 from ...metrics.hardware import HardwareProfile
 from .._types import ArchitectureScore, ArchitectureSpec, SearchConfig
 from ..architecture_candidates import build_common_architectures
