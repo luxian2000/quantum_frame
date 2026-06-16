@@ -2,6 +2,13 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-16
+
+### Fixed
+
+- **昇腾 NPU 上 8+ 量子比特态矢量演化崩溃**：`aicir/core/gates.py` 的 `_apply_local_matrix_to_state` 原先将态矢量整形为 `(2,)*n_qubits` 的高阶张量再 `permute`/`contiguous`，秩等于 n。当 n>8 时超出昇腾 ACL 算子最多 8 维的限制，`.contiguous()` 触发 `aclnnInplaceCopy failed ... the self tensor cannot be larger than 8 dimensions`（20 比特线路必现）。现改为把相邻的非目标比特合并成单个「空闲段」维度，工作张量的秩降至至多 `2*len(axes)+1`（单比特门 3 维，Toffoli 也仅 7 维），与量子比特总数无关。改动为后端无关、按位精确等价（`err=0`，144 项门测试全通过），不改变基排序与端序。GPU/CPU 后端原先因 PyTorch 允许至多 64 维而未受影响，本次修改对其结果不变、性能等同或略优（`contiguous` 仍只拷贝 2^n 个元素，但每元素的步幅索引计算维度更少）。
+- **密度矩阵 `partial_trace` 的同类高维崩溃**：`npu_backend.py` 与 `gpu_backend.py` 的 `partial_trace` 原先将密度矩阵一次性整形为 `[2]*n + [2]*n`（秩 2n）再 `permute`/`einsum`，NPU 在 n>4、CUDA 在 n>32 时即超限。现改为逐比特求迹，每步整形为 `(L, 2, R, L, 2, R)` 的秩-6 张量并对该比特的行/列同一指标求和，工作张量的秩恒为 6，与量子比特总数无关。按降序求迹保持保留比特的原有（升序）次序，结果与原实现按位等价（已对 5 比特全部 keep 子集校验 `err<1e-10`，相关测试全通过）。
+
 ## 2026-06-15
 
 ### Added
