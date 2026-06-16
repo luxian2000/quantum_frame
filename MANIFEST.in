@@ -1,0 +1,13 @@
+include README.md CHANGELOG.md CLAUDE.md CONTENTS.md NEXT.md
+
+recursive-include aicir *.md *.qasm *.txt
+
+global-exclude *.pyc
+global-exclude .DS_Store
+prune aicir/**/__pycache__
+prune aicir/**/.pytest_cache
+
+prune demos
+prune tests
+prune docs
+prune node_modules

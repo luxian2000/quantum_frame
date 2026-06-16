@@ -3,4 +3,28 @@
 量子化学工具模块（电子结构、哈密顿映射、分子算符构建）。
 """
 
-__all__ = []
+from .molecule import (
+    H2_STO3G_JW_4Q,
+    H2_STO3G_PARITY_2Q,
+    H2_STO3G_TAPERED_1Q,
+    MOLECULES,
+    MoleculeHamiltonian,
+    available_molecules,
+    get_molecule,
+    iter_molecules,
+    molecule_hamiltonian,
+    molecule_matrix,
+)
+
+__all__ = [
+    "MoleculeHamiltonian",
+    "H2_STO3G_PARITY_2Q",
+    "H2_STO3G_JW_4Q",
+    "H2_STO3G_TAPERED_1Q",
+    "MOLECULES",
+    "available_molecules",
+    "get_molecule",
+    "iter_molecules",
+    "molecule_hamiltonian",
+    "molecule_matrix",
+]

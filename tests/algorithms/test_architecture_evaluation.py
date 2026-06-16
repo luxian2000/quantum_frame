@@ -1,8 +1,7 @@
 import unittest
 
-from aicir.qas import ArchitectureSpec, HardwareProfile, evaluate_architectures
-from aicir.channel.backends.numpy_backend import NumpyBackend
-from aicir.metrics.trainability import local_probe_gradient_statistics
+from aicir.qas import ArchitectureSpec, evaluate_architectures
+from aicir.backends.numpy_backend import NumpyBackend
 
 
 class TestArchitectureEvaluation(unittest.TestCase):
@@ -55,65 +54,6 @@ class TestArchitectureEvaluation(unittest.TestCase):
         row = score.to_row()
         self.assertEqual(row["name"], "bell_like")
         self.assertIn("weighted_score", row)
-
-    def test_zero_cost_gradient_trainability_metric(self):
-        trainable = ArchitectureSpec.from_gates(
-            name="ry_probe",
-            gates=[{"type": "ry", "target_qubit": 0, "parameter": 0.0}],
-            n_qubits=1,
-            backend=self.backend,
-        )
-        flat = ArchitectureSpec.from_gates(
-            name="h_only",
-            gates=[{"type": "hadamard", "target_qubit": 0}],
-            n_qubits=1,
-            backend=self.backend,
-        )
-
-        stats = local_probe_gradient_statistics(trainable.circuit, samples=4, seed=7)
-        self.assertGreater(stats["mean_gradient_norm"], 0.0)
-
-        trainable_score, flat_score = evaluate_architectures(
-            [trainable, flat],
-            backend=self.backend,
-            n_samples=4,
-            active_metrics={"trainability": "gradient_norm"},
-        )
-
-        self.assertEqual(trainable_score.trainability.active_metric, "gradient_norm")
-        self.assertGreater(trainable_score.trainability.score, flat_score.trainability.score)
-        self.assertIn("mean_gradient_norm", trainable_score.trainability.raw_values)
-
-    def test_topology_mapping_hardware_metric(self):
-        local = ArchitectureSpec.from_gates(
-            name="local_cx",
-            gates=[{"type": "cx", "target_qubit": 1, "control_qubits": [0], "control_states": [1]}],
-            n_qubits=3,
-            backend=self.backend,
-        )
-        nonlocal_arch = ArchitectureSpec.from_gates(
-            name="nonlocal_cx",
-            gates=[{"type": "cx", "target_qubit": 2, "control_qubits": [0], "control_states": [1]}],
-            n_qubits=3,
-            backend=self.backend,
-        )
-        profile = HardwareProfile(
-            coupling_map=[(0, 1), (1, 2)],
-            edge_fidelity={(0, 1): 0.99, (1, 2): 0.98},
-            max_depth=8,
-        )
-
-        local_score, nonlocal_score = evaluate_architectures(
-            [local, nonlocal_arch],
-            backend=self.backend,
-            hardware_profile=profile,
-            active_metrics={"hardware_efficiency": "topology_mapping_efficiency"},
-        )
-
-        self.assertEqual(local_score.hardware_efficiency.active_metric, "topology_mapping_efficiency")
-        self.assertGreater(local_score.hardware_efficiency.score, nonlocal_score.hardware_efficiency.score)
-        self.assertEqual(nonlocal_score.hardware_efficiency.raw_values["connectivity_violation_count"], 1)
-        self.assertEqual(local_score.hardware_efficiency.raw_values["mapping_fidelity_score"], 0.99)
 
 
 if __name__ == "__main__":

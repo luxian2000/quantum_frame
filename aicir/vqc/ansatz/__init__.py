@@ -1,6 +1,25 @@
-"""aicir.vqc.ansatz
+"""Parameterized ansatz templates for variational quantum algorithms."""
 
-占位模块：参数化量子电路（ansatz）集合与接口定义，例如硬件高效 ansatz、层次化 ansatz 等。
-"""
+from .hea import Edge, entangling_edges, hea, hea_parameter_count, hardware_efficient_ansatz
+from .hea_ti import (
+    global_evolution_unitary,
+    hea_ti,
+    hea_ti_ansatz,
+    hea_ti_parameter_count,
+    power_law_couplings,
+    trapped_ion_hamiltonian,
+)
 
-__all__ = []
+__all__ = [
+    "Edge",
+    "entangling_edges",
+    "global_evolution_unitary",
+    "hea",
+    "hea_parameter_count",
+    "hea_ti",
+    "hea_ti_ansatz",
+    "hea_ti_parameter_count",
+    "hardware_efficient_ansatz",
+    "power_law_couplings",
+    "trapped_ion_hamiltonian",
+]

@@ -1,6 +1,7 @@
-"""aicir.optimization
+"""Optimization tools.
 
-优化器和参数更新策略的模块。可放置 Adam、SGD 变体、量子特定优化器（SPSA 等）。
+This package currently exposes QUBO modeling utilities and placeholders for
+future sample-based or subspace optimization strategies.
 """
 
 from . import qubo, sb

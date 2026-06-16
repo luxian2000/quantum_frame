@@ -6,8 +6,15 @@ from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple
 
 import numpy as np
 
-from ..channel.backends.base import Backend
+from ..backends.base import Backend
 from ..core.circuit import Circuit
+from ..ir import (
+    circuit_instruction_count,
+    circuit_instructions,
+    instruction_controls,
+    instruction_name,
+    instruction_parameter,
+)
 
 
 TWO_QUBIT_GATE_TYPES = {
@@ -22,6 +29,7 @@ TWO_QUBIT_GATE_TYPES = {
     "toffoli",
     "ccnot",
     "rzz",
+    "rxx",
 }
 
 
@@ -31,7 +39,7 @@ class RankedScore(Protocol):
 
 
 def get_default_backend() -> Backend:
-    from ..channel.backends.numpy_backend import NumpyBackend
+    from ..backends.numpy_backend import NumpyBackend
 
     return NumpyBackend()
 
@@ -41,18 +49,18 @@ def ensure_backend(backend: Optional[Backend]) -> Backend:
 
 
 def gate_type(gate: Dict[str, Any]) -> str:
-    return str(gate.get("type", ""))
+    return instruction_name(gate)
 
 
 def is_two_qubit_gate(gate: Dict[str, Any]) -> bool:
     gate_name = gate_type(gate)
-    return gate_name in TWO_QUBIT_GATE_TYPES or bool(gate.get("control_qubits"))
+    return gate_name in TWO_QUBIT_GATE_TYPES or bool(instruction_controls(gate))
 
 
 def count_gate_families(circuit: Circuit) -> Tuple[int, int]:
     single_qubit = 0
     two_qubit = 0
-    for gate in circuit.gates:
+    for gate in circuit_instructions(circuit):
         if is_two_qubit_gate(gate):
             two_qubit += 1
         else:
@@ -61,15 +69,13 @@ def count_gate_families(circuit: Circuit) -> Tuple[int, int]:
 
 
 def count_two_qubit_gates(circuit: Circuit) -> int:
-    return sum(1 for gate in circuit.gates if is_two_qubit_gate(gate))
+    return sum(1 for gate in circuit_instructions(circuit) if is_two_qubit_gate(gate))
 
 
 def count_parameters(circuit: Circuit) -> int:
     total = 0
-    for gate in circuit.gates:
-        if "parameter" not in gate:
-            continue
-        parameter = gate.get("parameter")
+    for gate in circuit_instructions(circuit):
+        parameter = instruction_parameter(gate)
         if parameter is None:
             continue
         array = np.asarray(parameter)
@@ -78,7 +84,7 @@ def count_parameters(circuit: Circuit) -> int:
 
 
 def depth_proxy(circuit: Circuit) -> float:
-    return len(circuit.gates) / max(1, int(circuit.n_qubits))
+    return circuit_instruction_count(circuit) / max(1, int(circuit.n_qubits))
 
 
 def clipped_score(value: float) -> float:

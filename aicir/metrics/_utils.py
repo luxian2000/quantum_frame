@@ -5,16 +5,23 @@ from __future__ import annotations
 from typing import List, Tuple
 
 from ..core.circuit import Circuit
+from ..ir import (
+    circuit_instruction_count,
+    circuit_instructions,
+    instruction_controls,
+    instruction_name,
+    instruction_qubits,
+)
 
 
-def gate_type(gate: dict) -> str:
-    return str(gate.get("type", "")).lower()
+def gate_type(gate) -> str:
+    return instruction_name(gate).lower()
 
 
-def is_two_qubit_gate(gate: dict) -> bool:
+def is_two_qubit_gate(gate) -> bool:
     gate_name = gate_type(gate)
     return bool(
-        gate.get("control_qubits")
+        instruction_controls(gate)
         or gate_name in {
             "cx",
             "cnot",
@@ -25,6 +32,7 @@ def is_two_qubit_gate(gate: dict) -> bool:
             "crz",
             "swap",
             "rzz",
+            "rxx",
             "zz",
             "toffoli",
             "ccnot",
@@ -35,7 +43,7 @@ def is_two_qubit_gate(gate: dict) -> bool:
 def count_gate_families(circuit: Circuit) -> Tuple[int, int]:
     single_qubit_ops = 0
     two_qubit_ops = 0
-    for gate in circuit.gates:
+    for gate in circuit_instructions(circuit):
         if is_two_qubit_gate(gate):
             two_qubit_ops += 1
         else:
@@ -44,37 +52,12 @@ def count_gate_families(circuit: Circuit) -> Tuple[int, int]:
 
 
 def count_two_qubit_gates(circuit: Circuit) -> int:
-    return sum(1 for gate in circuit.gates if is_two_qubit_gate(gate))
+    return sum(1 for gate in circuit_instructions(circuit) if is_two_qubit_gate(gate))
 
 
-def _extend_qubits(qubits: List[int], values) -> None:
-    if isinstance(values, (list, tuple, set)):
-        qubits.extend(int(qubit) for qubit in values)
-    else:
-        qubits.append(int(values))
-
-
-def gate_qubits(gate: dict, n_qubits: int) -> List[int]:
+def gate_qubits(gate, n_qubits: int) -> List[int]:
     """Return explicit qubits touched by a gate, falling back to all qubits."""
-    qubits = []
-
-    target = gate.get("target_qubit")
-    if target is not None:
-        qubits.append(int(target))
-
-    controls = gate.get("control_qubits")
-    if controls is not None:
-        _extend_qubits(qubits, controls)
-
-    for key in ("qubit_1", "qubit_2"):
-        qubit = gate.get(key)
-        if qubit is not None:
-            qubits.append(int(qubit))
-
-    for key in ("qubits", "targets"):
-        generic_qubits = gate.get(key)
-        if generic_qubits is not None:
-            _extend_qubits(qubits, generic_qubits)
+    qubits = [*instruction_qubits(gate), *instruction_controls(gate)]
 
     if not qubits:
         return list(range(int(n_qubits)))
@@ -84,12 +67,12 @@ def gate_qubits(gate: dict, n_qubits: int) -> List[int]:
 
 def depth_proxy(circuit: Circuit) -> float:
     """Simple layer-like circuit depth proxy without backend scheduling."""
-    if not circuit.gates:
+    if circuit_instruction_count(circuit) == 0:
         return 0.0
 
     qubit_layers = [0] * int(circuit.n_qubits)
     max_layer = 0
-    for gate in circuit.gates:
+    for gate in circuit_instructions(circuit):
         involved_qubits = gate_qubits(gate, int(circuit.n_qubits))
         layer = max((qubit_layers[qubit] for qubit in involved_qubits), default=0) + 1
         for qubit in involved_qubits:

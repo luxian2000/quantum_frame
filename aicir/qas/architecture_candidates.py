@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from ..channel.backends.base import Backend
+from ..backends.base import Backend
 from ._types import ArchitectureSpec
 
 
@@ -68,9 +68,9 @@ def _controlled_gate(gate_type: str, control_qubit: int, target_qubit: int, curs
 
 def _two_qubit_gate(gate_type: str, edge: Edge, cursor: _ParameterCursor) -> Dict[str, Any]:
     control_qubit, target_qubit = edge
-    if gate_type == "rzz":
+    if gate_type in {"rzz", "rxx"}:
         return {
-            "type": "rzz",
+            "type": gate_type,
             "qubit_1": control_qubit,
             "qubit_2": target_qubit,
             "parameter": cursor.next(),

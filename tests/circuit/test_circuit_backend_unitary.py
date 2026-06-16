@@ -6,9 +6,9 @@ try:
 except ModuleNotFoundError as exc:
     raise unittest.SkipTest("TorchBackend unitary tests require torch") from exc
 
-from aicir import Circuit, TorchBackend, cnot, crz, hadamard, rx, rzz
-from aicir.core.gates import apply_gate_to_state
-from aicir.channel.backends.numpy_backend import NumpyBackend
+from aicir import Circuit, TorchBackend, cnot, crz, hadamard, ms_gate, rx, rxx, rzz
+from aicir.core.gates import apply_gate_to_state, gate_to_matrix
+from aicir.backends.numpy_backend import NumpyBackend
 
 
 class TestCircuitBackendUnitary(unittest.TestCase):
@@ -68,6 +68,31 @@ class TestCircuitBackendUnitary(unittest.TestCase):
         self.assertEqual(unitary.shape, (8, 8))
         self.assertTrue(np.allclose(unitary.conj().T @ unitary, np.eye(8), atol=1e-6))
 
+    def test_rxx_matches_standard_xx_rotation_and_ms_alias(self):
+        theta = 0.7
+        cos = np.cos(theta / 2.0)
+        neg_i_sin = -1j * np.sin(theta / 2.0)
+        expected = np.array(
+            [
+                [cos, 0.0, 0.0, neg_i_sin],
+                [0.0, cos, neg_i_sin, 0.0],
+                [0.0, neg_i_sin, cos, 0.0],
+                [neg_i_sin, 0.0, 0.0, cos],
+            ],
+            dtype=np.complex64,
+        )
+
+        self.assertEqual(ms_gate(theta, 0, 1), rxx(theta, 0, 1))
+        np.testing.assert_allclose(gate_to_matrix(rxx(theta, 0, 1), cir_qubits=2), expected, atol=1e-6)
+
+    def test_rxx_full_matrix_embeds_nonleading_qubits(self):
+        circ = Circuit(rxx(0.7, qubit_1=1, qubit_2=2), n_qubits=3)
+
+        unitary = circ.unitary()
+
+        self.assertEqual(unitary.shape, (8, 8))
+        self.assertTrue(np.allclose(unitary.conj().T @ unitary, np.eye(8), atol=1e-6))
+
     def test_identity_gate_expands_to_circuit_width(self):
         circ = Circuit({"type": "identity", "n_qubits": 1}, n_qubits=3)
 
@@ -119,6 +144,19 @@ class TestCircuitBackendUnitary(unittest.TestCase):
         self.assertTrue(unitary.requires_grad)
         self.assertIsNotNone(theta.grad)
         self.assertIsNotNone(phi.grad)
+
+    def test_torch_rxx_parameter_preserves_autograd(self):
+        backend = TorchBackend(device="cpu")
+        theta = torch.tensor(0.5, dtype=torch.float32, requires_grad=True)
+        circ = Circuit(rxx(theta, qubit_1=0, qubit_2=1), n_qubits=2)
+
+        unitary = circ.unitary(backend=backend)
+        loss = torch.real(unitary[0, 0])
+        loss.backward()
+
+        self.assertTrue(unitary.requires_grad)
+        self.assertIsNotNone(theta.grad)
+        self.assertAlmostEqual(float(theta.grad), -0.5 * np.sin(0.25), places=6)
 
     def test_toffoli_full_matrix_supports_control_states_and_more_controls(self):
         backend = NumpyBackend()

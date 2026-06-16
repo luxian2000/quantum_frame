@@ -13,9 +13,10 @@ from typing import List, Optional
 
 import numpy as np
 
-from ..channel.backends.base import Backend
+from ..backends.base import Backend
 from ..core.circuit import Circuit
-from ..core.state import StateVector
+from ..core.state import State
+from ..ir import circuit_gate_dicts, circuit_instructions, instruction_name, instruction_parameter
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -27,8 +28,8 @@ def _get_parametrized_gate_indices(circuit: Circuit) -> List[int]:
     返回电路中所有包含 'parameter' 字段的门的索引。
     """
     indices = []
-    for i, gate in enumerate(circuit.gates):
-        if "parameter" in gate:
+    for i, gate in enumerate(circuit_instructions(circuit)):
+        if instruction_parameter(gate) is not None:
             indices.append(i)
     return indices
 
@@ -45,7 +46,7 @@ def _replace_circuit_parameters(circuit: Circuit, params: np.ndarray) -> Circuit
     返回:
         新的 Circuit 对象，所有参数化门的参数已更新
     """
-    gates_copy = deepcopy(list(circuit.gates))
+    gates_copy = deepcopy(circuit_gate_dicts(circuit))
     param_idx = 0
 
     for i, gate in enumerate(gates_copy):
@@ -55,7 +56,7 @@ def _replace_circuit_parameters(circuit: Circuit, params: np.ndarray) -> Circuit
         gate_type = gate["type"]
 
         # 根据门类型确定参数数量
-        if gate_type in ("rx", "ry", "rz", "crx", "cry", "crz", "rzz"):
+        if gate_type in ("rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"):
             # 单参数门
             gate["parameter"] = float(params[param_idx])
             param_idx += 1
@@ -72,10 +73,10 @@ def _replace_circuit_parameters(circuit: Circuit, params: np.ndarray) -> Circuit
             ]
             param_idx += 3
 
-    return Circuit(*gates_copy, n_qubits=circuit.n_qubits)
+    return Circuit(*gates_copy, n_qubits=circuit.n_qubits, backend=getattr(circuit, "backend", None))
 
 
-def _compute_fidelity(sv1: StateVector, sv2: StateVector, backend: Backend) -> float:
+def _compute_fidelity(sv1: State, sv2: State, backend: Backend) -> float:
     """
     计算两个量子态之间的保真度。
     
@@ -97,10 +98,10 @@ def _compute_fidelity(sv1: StateVector, sv2: StateVector, backend: Backend) -> f
 def _count_total_parameters(circuit: Circuit, param_indices: List[int]) -> int:
     """统计电路中所有参数化门的总参数数量。"""
     total_params = 0
+    gates = tuple(circuit_instructions(circuit))
     for idx in param_indices:
-        gate = circuit.gates[idx]
-        gate_type = gate["type"]
-        if gate_type in ("rx", "ry", "rz", "crx", "cry", "crz", "rzz"):
+        gate_type = instruction_name(gates[idx])
+        if gate_type in ("rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"):
             total_params += 1
         elif gate_type == "u2":
             total_params += 2
@@ -142,7 +143,7 @@ def KL_Haar_relative(
     """
     # 使用默认后端
     if backend is None:
-        from ..channel.backends.numpy_backend import NumpyBackend
+        from ..backends.numpy_backend import NumpyBackend
         backend = NumpyBackend()
 
     n_qubits = cir.n_qubits
@@ -157,7 +158,7 @@ def KL_Haar_relative(
     total_params = _count_total_parameters(cir, param_indices)
 
     # ──────────── 第 2 步：初始态 ────────────────────────────
-    zero_state = StateVector.zero_state(n_qubits, backend)
+    zero_state = State.zero_state(n_qubits, backend)
 
     # ──────────── 第 3 步：采样保真度 ──────────────────────
     fidelity_list = []
@@ -264,7 +265,7 @@ def MMD_relative(
         raise ValueError("sigma 必须为正数")
 
     if backend is None:
-        from ..channel.backends.numpy_backend import NumpyBackend
+        from ..backends.numpy_backend import NumpyBackend
 
         backend = NumpyBackend()
 
@@ -278,7 +279,7 @@ def MMD_relative(
 
     # |+>^N = (1/sqrt(2^N)) * sum_i |i>
     plus_state_data = np.ones(dim, dtype=np.complex64) / np.sqrt(dim)
-    plus_state = StateVector.from_array(plus_state_data, n_qubits=n_qubits, backend=backend)
+    plus_state = State.from_array(plus_state_data, n_qubits=n_qubits, backend=backend)
 
     # X: 从参数化电路诱导分布采样得到的概率向量
     x_samples = np.zeros((samples, dim), dtype=np.float64)
