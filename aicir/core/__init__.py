@@ -11,9 +11,14 @@ from .circuit import (
     cy,
     cz,
     hadamard,
+    measure,
+    molmer_sorensen,
+    ms_gate,
     pauli_x,
     pauli_y,
     pauli_z,
+    reset,
+    rxx,
     rzz,
     rx,
     ry,
@@ -25,8 +30,8 @@ from .circuit import (
     u2,
     u3,
 )
-from .state import State, StateVector
-from .density import DensityMatrix
+from .state import State
+from .batch import BatchSV
 from .io.json_io import circuit_from_json, circuit_to_json, load_circuit_json, save_circuit_json
 from .io.qasm import (
     circuit_from_qasm,
@@ -36,22 +41,33 @@ from .io.qasm import (
     save_circuit_qasm,
     save_circuit_qasm3,
 )
+from .io.qiskit_io import circuit_from_qiskit, circuit_to_qiskit, from_qiskit, to_qiskit
+from .io.pennylane_io import (
+    circuit_from_pennylane,
+    circuit_to_pennylane,
+    from_pennylane,
+    to_pennylane,
+)
 
 __all__ = [
     "Circuit",
     "Parameter",
     "State",
-    "StateVector",
-    "DensityMatrix",
+    "BatchSV",
     "circuit",
     "pauli_x",
     "pauli_y",
     "pauli_z",
     "rzz",
     "hadamard",
+    "measure",
+    "reset",
+    "molmer_sorensen",
+    "ms_gate",
     "rx",
     "ry",
     "rz",
+    "rxx",
     "s_gate",
     "t_gate",
     "cx",
@@ -76,4 +92,16 @@ __all__ = [
     "save_circuit_qasm",
     "save_circuit_qasm3",
     "load_circuit_qasm",
+    "circuit_to_qiskit",
+    "circuit_from_qiskit",
+    "to_qiskit",
+    "from_qiskit",
+    "circuit_to_pennylane",
+    "circuit_from_pennylane",
+    "to_pennylane",
+    "from_pennylane",
+    "circuit_to_wuyue",
+    "circuit_from_wuyue",
+    "to_wuyue",
+    "from_wuyue",
 ]

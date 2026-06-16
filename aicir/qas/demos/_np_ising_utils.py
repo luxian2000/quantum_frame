@@ -1,12 +1,12 @@
-"""Shared helpers: NP-problem QUBO/Ising formulations for VQA_QAS demos.
+"""Shared helpers: NP-problem QUBO/Ising formulations for supernet demos.
 
 This module turns the Hamiltonian-cycle / Hamiltonian-path formulations from
 
     Andrew Lucas, "Ising formulations of many NP problems",
     Frontiers in Physics 2 (2014), Section 7.1, Eq. (56).
 
-into an aicir :class:`~aicir.channel.operators.Hamiltonian` whose ground state
-encodes the solution, so that :mod:`aicir.qas.VQA_QAS` can search a circuit that
+into an aicir :class:`~aicir.operators.Hamiltonian` whose ground state
+encodes the solution, so that :mod:`aicir.qas.supernet` can search a circuit that
 prepares it.
 
 Pipeline
@@ -16,7 +16,7 @@ Pipeline
 2. Map each binary variable to a qubit via ``x = (1 - Z) / 2`` (standard
    QUBO -> Ising substitution; with aicir's ``Z|0> = +|0>``, ``Z|1> = -|1>``
    this means ``x = 1`` corresponds to qubit state ``|1>``).
-3. Minimise ``<psi|H|psi>`` with VQA_QAS (``task="vqe"``); the optimal basis
+3. Minimise ``<psi|H|psi>`` with supernet (``task="vqe"``); the optimal basis
    state is read back and decoded into the vertex ordering.
 
 The formulations here are diagonal (only ``I`` and ``Z`` terms), so the ground
@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from itertools import product
 from typing import Dict, Iterable, List, Sequence, Tuple
 
-from ...channel.operators import Hamiltonian
+from ...operators import Hamiltonian
 
 # A binary variable is identified by (vertex, position).
 Var = Tuple[int, int]
@@ -232,17 +232,16 @@ def qubo_to_hamiltonian(
         z_coef[qj] = z_coef.get(qj, 0.0) - b / 4.0
         zz_coef[frozenset((qi, qj))] = zz_coef.get(frozenset((qi, qj)), 0.0) + b / 4.0
 
-    hamiltonian = Hamiltonian(n_qubits=n_qubits)
-    hamiltonian.term(complex(const), {"I": [0]})
+    terms = [("I", complex(const), [0])]
     for q, c in sorted(z_coef.items()):
         if abs(c) > 1e-12:
-            hamiltonian.term(complex(c), {"Z": [q]})
+            terms.append(("Z", complex(c), [q]))
     for key, c in sorted(zz_coef.items(), key=lambda kv: sorted(kv[0])):
         if abs(c) > 1e-12:
             qi, qj = sorted(key)
-            hamiltonian.term(complex(c), {"Z": [qi, qj]})
+            terms.append(("ZZ", complex(c), [qi, qj]))
 
-    return hamiltonian, var_to_qubit
+    return Hamiltonian(n_qubits=n_qubits, terms=terms), var_to_qubit
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -304,17 +303,17 @@ def format_order(order: Sequence[int | None], *, cyclic: bool) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Ground-state search with VQA_QAS (multi-restart)
+# Ground-state search with supernet (multi-restart)
 # ──────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class QASSolution:
-    """Outcome of a VQA_QAS ground-state search."""
+    """Outcome of a supernet ground-state search."""
 
     energy: float
     probabilities: "object"        # backend probability vector (numpy array)
     best_index: int                # argmax computational-basis index
-    result: "object"               # the winning VQAQASResult
+    result: "object"               # the winning SupernetResult
     seed: int                      # restart seed that won
     attempts: List[Tuple[int, float]]  # (seed, energy) for every restart
 
@@ -334,7 +333,7 @@ def solve_ground_state_qas(
     base_seed: int = 0,
     verbose: bool = True,
 ) -> QASSolution:
-    """Search a circuit whose ground state minimises ``hamiltonian`` via VQA_QAS.
+    """Search a circuit whose ground state minimises ``hamiltonian`` via supernet.
 
     VQE is a heuristic, so combinatorial Ising landscapes have local minima; we
     run several independent restarts (different seeds) and keep the lowest-energy
@@ -343,7 +342,7 @@ def solve_ground_state_qas(
     """
     import numpy as np
 
-    from ..VQA_QAS import VQAQASConfig, train_vqa_qas
+    from ..supernet import SupernetConfig, train_supernet
     from ...measure import Measure
 
     if two_qubit_pairs is None:
@@ -353,7 +352,7 @@ def solve_ground_state_qas(
     attempts: List[Tuple[int, float]] = []
     for offset in range(restarts):
         seed = base_seed + offset
-        config = VQAQASConfig(
+        config = SupernetConfig(
             n_qubits=n_qubits,
             layers=layers,
             single_qubit_gates=("ry",),
@@ -368,7 +367,7 @@ def solve_ground_state_qas(
             seed=seed,
             task="vqe",
         )
-        result = train_vqa_qas(None, config=config, hamiltonian=hamiltonian)
+        result = train_supernet(None, config=config, hamiltonian=hamiltonian)
         energy = float(result.final_metrics["fine_tuned_energy"])
         attempts.append((seed, energy))
         if verbose:
@@ -376,7 +375,13 @@ def solve_ground_state_qas(
 
         if best is None or energy < best.energy:
             backend = result.best_circuit.backend
-            probs = np.asarray(Measure(backend).run(result.best_circuit, shots=0).probabilities)
+            # shots=None 走"仅取概率、不测量"路径（新测量语义，见 README §4.3）；
+            # 这里只需要概率分布，return_state=False 避免无谓地构造 state/final_state。
+            probs = np.asarray(
+                Measure(backend)
+                .run(result.best_circuit, shots=None, return_state=False)
+                .probabilities
+            )
             best = QASSolution(
                 energy=energy,
                 probabilities=probs,

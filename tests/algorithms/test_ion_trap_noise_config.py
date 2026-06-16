@@ -3,8 +3,8 @@ import unittest
 
 import numpy as np
 
-from aicir.channel.backends.numpy_backend import NumpyBackend
-from aicir.channel.noise.model import NoiseModel
+from aicir.backends.numpy_backend import NumpyBackend
+from aicir.noise.model import NoiseModel
 from aicir.qas import load_default_ion_trap_noise_config, load_ion_trap_noise_config
 
 

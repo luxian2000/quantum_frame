@@ -5,7 +5,7 @@ OpenQASM 2.0 / 3.0 导入导出（子集支持）。
 
 支持门：
 - 单比特: x, y, z, h, s, t, rx, ry, rz, p/u1, u2, u3/u
-- 双比特: cx, cy, cz, swap, crx, cry, crz, rzz
+- 双比特: cx, cy, cz, swap, crx, cry, crz, rzz, rxx
 - 三比特: ccx
 
 当前不处理：if、reset、opaque、自定义 gate、cp/cu 家族。
@@ -19,58 +19,41 @@ import re
 from pathlib import Path
 from typing import Dict, List
 
+from ...gates import canonical_gate_name, get_gate_spec
+from ...ir import circuit_gate_dicts, has_circuit_instructions
 from ..circuit import Circuit
 
 _QASM2_HEADER = 'OPENQASM 2.0;\ninclude "qelib1.inc";\n'
 _QASM3_HEADER = 'OPENQASM 3.0;\ninclude "stdgates.inc";\n'
 
-_SINGLE_NO_PARAM_EXPORT = {
-    "pauli_x": "x",
-    "X": "x",
-    "pauli_y": "y",
-    "Y": "y",
-    "pauli_z": "z",
-    "Z": "z",
-    "hadamard": "h",
-    "H": "h",
-    "s_gate": "s",
-    "S": "s",
-    "t_gate": "t",
-    "T": "t",
-}
+# QASM 导出名以 GateSpec 注册表（aicir.gates）为单一来源；本文件只维护
+# “发射形态”分类（单比特无参/带参/双引用/三引用）。门名别名（X/cnot/ccnot
+# 等）在导出时先经 canonical_gate_name 归一，无需在表中重复列出。
 
-_PARAM_EXPORT = {
-    "rx": "rx",
-    "ry": "ry",
-    "rz": "rz",
-    "u2": "u2",
-}
 
-_DOUBLE_EXPORT = {
-    "cnot": "cx",
-    "cx": "cx",
-    "cy": "cy",
-    "cz": "cz",
-    "swap": "swap",
-    "crx": "crx",
-    "cry": "cry",
-    "crz": "crz",
-    "rzz": "rzz",
-}
+def _registry_qasm_names(*names: str) -> Dict[str, str]:
+    table: Dict[str, str] = {}
+    for name in names:
+        spec = get_gate_spec(name)
+        if spec is None or spec.qasm_name is None:
+            raise ValueError(f"门 {name!r} 未在 GateSpec 注册表中提供 QASM 导出名")
+        table[name] = spec.qasm_name
+    return table
 
-_THREE_EXPORT = {
-    "toffoli": "ccx",
-    "ccnot": "ccx",
-}
 
-_IMPORT_SINGLE = {
-    "x": "pauli_x",
-    "y": "pauli_y",
-    "z": "pauli_z",
-    "h": "hadamard",
-    "s": "s_gate",
-    "t": "t_gate",
-}
+_SINGLE_NO_PARAM_EXPORT = _registry_qasm_names(
+    "pauli_x", "pauli_y", "pauli_z", "hadamard", "s_gate", "t_gate"
+)
+
+_PARAM_EXPORT = _registry_qasm_names("rx", "ry", "rz", "u2")
+
+_DOUBLE_EXPORT = _registry_qasm_names(
+    "cx", "cy", "cz", "swap", "crx", "cry", "crz", "rzz", "rxx"
+)
+
+_THREE_EXPORT = _registry_qasm_names("toffoli")
+
+_IMPORT_SINGLE = {qasm_name: name for name, qasm_name in _SINGLE_NO_PARAM_EXPORT.items()}
 
 _IMPORT_PARAM = {"rx", "ry", "rz"}
 _IMPORT_DOUBLE = {"cx", "cy", "cz", "swap"}
@@ -169,8 +152,8 @@ def _control_state_wrapper_lines(controls: List[int], control_states: List[int])
 def _qasm3_required_ancilla_count(circuit: Circuit) -> int:
     """计算 QASM 3.0 导出多控 crx/cry/crz 所需的最大辅助比特数。"""
     max_ancillas = 0
-    for gate in circuit.gates:
-        gtype = _normalize_gate_type_for_export(gate["type"])
+    for gate in circuit_gate_dicts(circuit):
+        gtype = canonical_gate_name(_normalize_gate_type_for_export(gate["type"]))
         if gtype not in {"crx", "cry", "crz"}:
             continue
         controls, _ = _normalized_control_data(gate)
@@ -202,31 +185,74 @@ def _append_qasm3_multi_control_rotation(
     lines.append(f"ccx q[{controls[0]}],q[{controls[1]}],anc[0];")
 
 
+def _is_plain_z_measure(gate: Dict[str, object]) -> bool:
+    """判断 gate 是否为可导出为标准 QASM 的单比特 Z 测量（无 id）。"""
+    qubits = gate.get("qubits") or []
+    basis = str(gate.get("basis", "Z")).upper()
+    measure_id = gate.get("id")
+    return len(qubits) == 1 and basis == "Z" and measure_id is None
+
+
 def circuit_to_qasm(circuit: Circuit, version: str = "2.0") -> str:
     """将 Circuit 导出为 OpenQASM 字符串，支持 2.0 和 3.0。"""
-    if not hasattr(circuit, "n_qubits") or not hasattr(circuit, "gates"):
-        raise TypeError("circuit 需要具备 n_qubits 和 gates 属性")
+    if not hasattr(circuit, "n_qubits") or not has_circuit_instructions(circuit):
+        raise TypeError("circuit 需要具备 n_qubits 和 typed IR operations 或 gates 序列")
 
     version_norm = str(version).strip()
     if version_norm not in {"2.0", "3.0"}:
         raise ValueError("version 仅支持 '2.0' 或 '3.0'")
 
+    # 预扫描：统计可导出的单比特 Z 测量数量，用于声明经典比特寄存器
+    all_gate_dicts = circuit_gate_dicts(circuit)
+    plain_measure_count = sum(
+        1
+        for g in all_gate_dicts
+        if canonical_gate_name(_normalize_gate_type_for_export(str(g.get("type", "")))) == "measure"
+        and _is_plain_z_measure(g)
+    )
+
     lines: List[str] = []
     if version_norm == "2.0":
         lines.append(_QASM2_HEADER.rstrip("\n"))
         lines.append(f"qreg q[{int(circuit.n_qubits)}];")
+        if plain_measure_count > 0:
+            lines.append(f"creg c[{plain_measure_count}];")
     else:
         lines.append(_QASM3_HEADER.rstrip("\n"))
         lines.append(f"qubit[{int(circuit.n_qubits)}] q;")
         ancilla_count = _qasm3_required_ancilla_count(circuit)
         if ancilla_count > 0:
             lines.append(f"qubit[{ancilla_count}] anc;")
+        if plain_measure_count > 0:
+            lines.append(f"bit[{plain_measure_count}] c;")
 
-    for gate in circuit.gates:
-        gtype = _normalize_gate_type_for_export(gate["type"])
+    # 用于给 measure 分配经典比特索引
+    measure_cbit_idx = 0
+
+    for gate in all_gate_dicts:
+        gtype = canonical_gate_name(_normalize_gate_type_for_export(gate["type"]))
         controls, control_states = _normalized_control_data(gate)
         pre_lines, post_lines = _control_state_wrapper_lines(controls, control_states)
         lines.extend(pre_lines)
+
+        if gtype == "measure":
+            # 联合多比特 / 非 Z 基 / 带 id 的 measure 无法用标准 QASM 表达
+            qubits = gate.get("qubits") or []
+            basis = str(gate.get("basis", "Z")).upper()
+            measure_id = gate.get("id")
+            if len(qubits) != 1 or basis != "Z" or measure_id is not None:
+                raise NotImplementedError(
+                    "联合/非Z基/带id 的 measure 无法导出为标准 QASM；请使用 JSON 格式"
+                )
+            q = int(qubits[0])
+            c = measure_cbit_idx
+            measure_cbit_idx += 1
+            if version_norm == "2.0":
+                lines.append(f"measure q[{q}] -> c[{c}];")
+            else:
+                lines.append(f"c[{c}] = measure q[{q}];")
+            lines.extend(post_lines)
+            continue
 
         if gtype in _SINGLE_NO_PARAM_EXPORT:
             qasm_gate = _SINGLE_NO_PARAM_EXPORT[gtype]
@@ -255,11 +281,11 @@ def circuit_to_qasm(circuit: Circuit, version: str = "2.0") -> str:
                 q1 = int(gate["qubit_1"])
                 q2 = int(gate["qubit_2"])
                 lines.append(f"swap q[{q1}],q[{q2}];")
-            elif qasm_gate == "rzz":
+            elif qasm_gate in {"rzz", "rxx"}:
                 q1 = int(gate["qubit_1"])
                 q2 = int(gate["qubit_2"])
                 theta = _format_angle(gate["parameter"])
-                lines.append(f"rzz({theta}) q[{q1}],q[{q2}];")
+                lines.append(f"{qasm_gate}({theta}) q[{q1}],q[{q2}];")
             elif qasm_gate in {"crx", "cry", "crz"}:
                 t = int(gate["target_qubit"])
                 theta = _format_angle(gate["parameter"])
@@ -334,7 +360,7 @@ def circuit_from_qasm(qasm_text: str) -> Circuit:
     qubit_re = re.compile(r"^qubit\[(\d+)\]\s+([A-Za-z_]\w*)\s*;$", re.IGNORECASE)
     qubit_scalar_re = re.compile(r"^qubit\s+([A-Za-z_]\w*)\s*;$", re.IGNORECASE)
     gate3_re = re.compile(r"^(ccx)\s+(.+);$", re.IGNORECASE)
-    gate2_re = re.compile(r"^(cx|cy|cz|swap|crx|cry|crz|rzz)\s+(.+);$", re.IGNORECASE)
+    gate2_re = re.compile(r"^(cx|cy|cz|swap|crx|cry|crz|rzz|rxx)\s+(.+);$", re.IGNORECASE)
     gate1_re = re.compile(r"^(x|y|z|h|s|t)\s+(.+);$", re.IGNORECASE)
     gatep1_re = re.compile(r"^(rx|ry|rz|p|u1)\(([^)]+)\)\s+(.+);$", re.IGNORECASE)
     gateu2_re = re.compile(r"^(u2)\(([^,]+),([^\)]+)\)\s+(.+);$", re.IGNORECASE)
@@ -432,7 +458,7 @@ def circuit_from_qasm(qasm_text: str) -> Circuit:
             q2 = _parse_qubit_ref(ops[1], reg_info)
             if name == "swap":
                 gates.append({"type": "swap", "qubit_1": q1, "qubit_2": q2})
-            elif name in {"crx", "cry", "crz", "rzz"}:
+            elif name in {"crx", "cry", "crz", "rzz", "rxx"}:
                 raise ValueError(
                     f"无法从无参数语句解析 {name}，请检查语法。"
                 )
@@ -447,8 +473,8 @@ def circuit_from_qasm(qasm_text: str) -> Circuit:
                 )
             continue
 
-        # 双比特参数门（crx/cry/crz）
-        m = re.match(r"^(crx|cry|crz|rzz)\(([^)]+)\)\s+(.+);$", line, re.IGNORECASE)
+        # 双比特参数门（crx/cry/crz/rzz/rxx）
+        m = re.match(r"^(crx|cry|crz|rzz|rxx)\(([^)]+)\)\s+(.+);$", line, re.IGNORECASE)
         if m:
             name = m.group(1).lower()
             theta = _parse_qasm_angle(m.group(2))
@@ -457,8 +483,8 @@ def circuit_from_qasm(qasm_text: str) -> Circuit:
                 raise ValueError(f"{name} 操作数错误: {line}")
             q1 = _parse_qubit_ref(ops[0], reg_info)
             q2 = _parse_qubit_ref(ops[1], reg_info)
-            if name == "rzz":
-                gates.append({"type": "rzz", "qubit_1": q1, "qubit_2": q2, "parameter": theta})
+            if name in {"rzz", "rxx"}:
+                gates.append({"type": name, "qubit_1": q1, "qubit_2": q2, "parameter": theta})
                 continue
             gates.append(
                 {

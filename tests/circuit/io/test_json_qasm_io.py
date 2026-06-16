@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from aicir import Circuit, Parameter, cnot, crx, cry, crz, hadamard, rx, rzz, swap, toffoli, u2, u3
+from aicir import Circuit, Parameter, cnot, crx, cry, crz, hadamard, ms_gate, rx, rxx, rzz, swap, toffoli, u2, u3
 from aicir.core.io.json_io import (
     circuit_from_json,
     circuit_to_json,
@@ -167,6 +167,20 @@ class TestJsonQasmIO(unittest.TestCase):
         self.assertEqual(circ.gates[0]["type"], "rzz")
         self.assertEqual(unitary.shape, (8, 8))
         self.assertEqual(rebuilt.gates[0]["type"], "rzz")
+        self.assertEqual(rebuilt.gates[0]["qubit_1"], 0)
+        self.assertEqual(rebuilt.gates[0]["qubit_2"], 2)
+        self.assertAlmostEqual(rebuilt.gates[0]["parameter"], np.pi / 5)
+
+    def test_public_rxx_constructor_and_ms_alias_build_unitary(self):
+        circ = Circuit(rxx(np.pi / 5, qubit_1=0, qubit_2=2), n_qubits=3)
+
+        unitary = circ.unitary()
+        rebuilt = circuit_from_qasm(circuit_to_qasm(circ, version="2.0"))
+
+        self.assertEqual(ms_gate(np.pi / 5, 0, 2), circ.gates[0])
+        self.assertEqual(circ.gates[0]["type"], "rxx")
+        self.assertEqual(unitary.shape, (8, 8))
+        self.assertEqual(rebuilt.gates[0]["type"], "rxx")
         self.assertEqual(rebuilt.gates[0]["qubit_1"], 0)
         self.assertEqual(rebuilt.gates[0]["qubit_2"], 2)
         self.assertAlmostEqual(rebuilt.gates[0]["parameter"], np.pi / 5)

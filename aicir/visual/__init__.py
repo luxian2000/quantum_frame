@@ -1,6 +1,7 @@
 """Visualization utilities for circuits and quantum states."""
 
 from .circuit import circuit_to_mpl, circuit_to_text, draw_circuit, gate_histogram
+from .plot import plot
 from .density import plot_density_matrix, plot_density_real_imag
 from .qas import (
     compare_architectures,
@@ -15,6 +16,7 @@ __all__ = [
     "circuit_to_text",
     "circuit_to_mpl",
     "draw_circuit",
+    "plot",
     "gate_histogram",
     "plot_state_probs",
     "plot_state_amplitudes",

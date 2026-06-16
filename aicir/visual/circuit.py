@@ -5,22 +5,26 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from ..core.circuit import _circuit_to_ascii
+from ..core.circuit import Circuit, _circuit_to_ascii
+from ..ir import circuit_gate_dicts, circuit_instructions, has_circuit_instructions, instruction_name
 from .utils import require_matplotlib
 
 
 def circuit_to_text(circuit: Any) -> str:
     """Return an ASCII diagram for a ``Circuit``-like object."""
-    if not hasattr(circuit, "gates") or not hasattr(circuit, "n_qubits"):
-        raise TypeError("circuit_to_text expects an object with gates and n_qubits")
-    return _circuit_to_ascii(circuit)
+    if not hasattr(circuit, "n_qubits") or not has_circuit_instructions(circuit):
+        raise TypeError("circuit_to_text expects an object with typed IR operations or gates and n_qubits")
+    if hasattr(circuit, "gates"):
+        return _circuit_to_ascii(circuit)
+    compat = Circuit(*circuit_gate_dicts(circuit), n_qubits=int(circuit.n_qubits))
+    return _circuit_to_ascii(compat)
 
 
 def gate_histogram(circuit: Any) -> dict[str, int]:
     """Count gates by their ``type`` field."""
-    if not hasattr(circuit, "gates"):
-        raise TypeError("gate_histogram expects an object with gates")
-    counts = Counter(str(gate.get("type", "unknown")) for gate in circuit.gates)
+    if not has_circuit_instructions(circuit):
+        raise TypeError("gate_histogram expects an object with typed IR operations or gates")
+    counts = Counter(instruction_name(instruction) for instruction in circuit_instructions(circuit))
     return dict(sorted(counts.items()))
 
 

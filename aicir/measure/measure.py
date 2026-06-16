@@ -1,389 +1,288 @@
 """
 aicir/measure/measure.py
 
-测量入口：统一调度 "电路 -> 末态 -> 概率/采样/期望值" 的流程。
+统一测量模型入口：把"电路 -> 轨迹引擎 -> 校验 -> shot 策略 -> 聚合装配"
+串成单一 `Measure.run`。
+
+测量语义（见 README §4 与设计文档）：
+- 线路内嵌 measure 门 = 投影测量（由轨迹引擎逐操作执行、坍缩态）
+- 末端读出 = 由 tm / measure_qubits 控制的 Z 基逐比特测量
+- shots ∈ {None, 0} = exact 模式：单条精确轨迹、不做末端测量（覆盖 tm）
+- shots ≥ 1 = M 条轨迹，按 sm（默认 avg）聚合
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Dict, List, Optional
 
 import numpy as np
 
-from ..core.gates import apply_gate_to_state, gate_to_matrix
-from ..core.density import DensityMatrix
-from ..core.state import StateVector
-from .result import Result
-from .sampler import Sampler
+from ..core.state import State
+from ..ir import (
+    circuit_instructions,
+    has_circuit_instructions,
+    instruction_name,
+    instruction_qubits,
+)
+from .aggregate import aggregate_avg
+from .result import MeasureSpec, Result
+from .trajectory import run_trajectory
+
+
+def _is_measure(g) -> bool:
+    """判断操作是否为线路内嵌 measure/measurement 标记。"""
+    return instruction_name(g).lower() in {"measure", "measurement"}
+
+
+def _is_reset(g) -> bool:
+    """判断操作是否为线路内嵌 reset 标记。"""
+    return instruction_name(g).lower() == "reset"
 
 
 class Measure:
-    """
-    量子测量与结果生成入口。
+    """统一测量模型入口。
 
-    使用方式:
+    使用方式::
+
         measure = Measure(backend)
         result = measure.run(circuit, shots=1024)
-        print(result.counts)
+        print(result.counts(-1))
     """
 
     def __init__(self, backend):
         self.backend = backend
-        self.sampler = Sampler(backend)
-        self._variance_eps = 1e-7
 
     def _resolve_backend(self, circuit):
-        circuit_backend = getattr(circuit, "backend", None)
-        return circuit_backend if circuit_backend is not None else self.backend
+        return getattr(circuit, "backend", None) or self.backend
+
+    # ---------- 校验 ----------
+    @staticmethod
+    def _validate_shots(shots) -> Optional[int]:
+        """归一化 shots：None/0 → None（exact 模式）；其余须为非负整数。"""
+        if isinstance(shots, bool):  # 须在 == 0 之前：False == 0 为真
+            raise ValueError(f"shots 必须是正整数、0 或 None，收到 {shots!r}")
+        if shots is None or shots == 0:
+            return None  # exact 模式
+        if not isinstance(shots, (int, np.integer)) or shots < 0:
+            raise ValueError(f"shots 必须是正整数、0 或 None，收到 {shots!r}")
+        return int(shots)
+
+    def _collect_specs(self, circuit, n: int) -> List[MeasureSpec]:
+        """遍历线路登记每个 measure 操作的 MeasureSpec，并做越界/重复/重名校验。"""
+        specs: List[MeasureSpec] = []
+        ids = set()
+        for op_index, gate in enumerate(circuit_instructions(circuit)):
+            qs = [int(q) for q in instruction_qubits(gate)] or list(range(n))
+            for q in qs:
+                if q < 0 or q >= n:
+                    raise ValueError(f"{instruction_name(gate)} 含越界比特 {q}（n={n}）")
+            if len(set(qs)) != len(qs):
+                raise ValueError(f"{instruction_name(gate)} 含重复比特：{qs}")
+            if _is_measure(gate):
+                # circuit_instructions 返回类型化 Measurement 对象（非 dict），
+                # 须用 getattr 读取 id/basis，否则会被错误地默认。
+                mid = getattr(gate, "id", None)
+                if mid is not None:
+                    if mid in ids:
+                        raise ValueError(f"重复的 measure id={mid!r}")
+                    ids.add(mid)
+                basis = getattr(gate, "basis", "Z")
+                specs.append(MeasureSpec(op_index=op_index, id=mid, qubits=qs, basis=str(basis)))
+        return specs
 
     @staticmethod
-    def _has_gate_sequence(circuit) -> bool:
-        gates = getattr(circuit, "gates", None)
-        return isinstance(gates, Sequence)
+    def _normalize_measure_qubits(mq, n: int) -> List[int]:
+        """归一化显式末端读出比特：越界/重复校验，保留输入顺序（不排序）。"""
+        if isinstance(mq, (int, np.integer)):
+            mq = [int(mq)]
+        out = [int(q) for q in mq]
+        for q in out:
+            if q < 0 or q >= n:
+                raise ValueError(f"measure_qubits 含越界比特 {q}（n={n}）")
+        if len(set(out)) != len(out):
+            raise ValueError(f"measure_qubits 含重复比特：{out}")
+        return out  # 保留输入顺序，不排序
 
-    def _build_initial_state(self, n_qubits: int, backend, initial_state=None) -> StateVector:
-        if initial_state is None:
-            return StateVector.zero_state(n_qubits, backend)
+    @staticmethod
+    def _normalize_snap(snap, n_ops: int) -> set:
+        """归一化 snap 操作下标集合：0<=t<n_ops，去重。"""
+        if snap is None:
+            return set()
+        if isinstance(snap, (int, np.integer)) and not isinstance(snap, bool):
+            snap = [snap]
+        out = set()
+        for t in snap:
+            t = int(t)
+            if t < 0 or t >= n_ops:
+                raise ValueError(f"snap 含越界操作下标 {t}（操作数={n_ops}）")
+            out.add(t)
+        return out
 
-        if isinstance(initial_state, StateVector):
-            if initial_state.n_qubits != n_qubits:
-                raise ValueError("initial_state.n_qubits 与电路 n_qubits 不一致")
-            return initial_state
-
-        return StateVector(initial_state, n_qubits, backend)
-
-    def _build_initial_density_matrix(
-        self,
-        n_qubits: int,
-        backend,
-        initial_density_matrix=None,
-    ) -> DensityMatrix:
-        if initial_density_matrix is None:
-            return DensityMatrix.zero_state(n_qubits, backend)
-
-        if isinstance(initial_density_matrix, DensityMatrix):
-            if initial_density_matrix.n_qubits != n_qubits:
-                raise ValueError("initial_density_matrix.n_qubits 与电路 n_qubits 不一致")
-            return initial_density_matrix
-
-        return DensityMatrix(initial_density_matrix, n_qubits, backend)
-
-    def _circuit_unitary_on_backend(self, circuit, backend):
-        """
-        优先走 `unitary(backend=...)` 路径以在设备端组装/累乘矩阵。
-
-        兼容旧式或外部电路实现：若不支持 backend 参数，则回退到 unitary()。
-        """
-        try:
-            unitary_raw = circuit.unitary(backend=backend)
-        except TypeError:
-            unitary_raw = circuit.unitary()
-        # Fast path: when unitary_raw is already a backend-native tensor on the
-        # target device/dtype, backend.cast can return without host round-trip.
-        return backend.cast(unitary_raw)
-
-    def _evolve_state_vector_gatewise(self, circuit, sv0: StateVector, backend) -> StateVector:
-        sv = sv0
-        for gate in circuit.gates:
-            new_data = apply_gate_to_state(gate, sv.data, sv.n_qubits, backend)
-            if new_data is None:
-                gm = gate_to_matrix(gate, cir_qubits=sv.n_qubits, backend=backend)
-                sv = sv.evolve(gm)
-            else:
-                sv = StateVector(new_data, sv.n_qubits, backend, bit_order=sv.bit_order)
-        return sv
-
-    def _evolve_density_matrix_gatewise(
-        self,
-        circuit,
-        rho0: DensityMatrix,
-        backend,
-        noise_model=None,
-    ) -> DensityMatrix:
-        rho = rho0
-        for gate in circuit.gates:
-            gate_unitary = gate_to_matrix(gate, cir_qubits=rho.n_qubits, backend=backend)
-            rho = rho.evolve(gate_unitary)
-            if noise_model is not None:
-                rho_noisy = noise_model.apply(
-                    rho.data,
-                    n_qubits=rho.n_qubits,
-                    backend=backend,
-                    gate_type=gate.get("type"),
-                )
-                rho = DensityMatrix(rho_noisy, rho.n_qubits, backend)
-        return rho
-
-    def run(
-        self,
-        circuit,
-        shots: Optional[int] = None,
-        initial_state=None,
-        observables: Optional[Dict[str, object]] = None,
-        return_state: bool = True,
-    ) -> Result:
-        """
-        测量一个电路，返回统一结果对象。
+    # ---------- 主入口 ----------
+    def run(self, circuit, shots=1, measure_qubits=None, snap=None,
+            tm=True, sm="avg", seed=None, *,
+            initial_state=None, initial_density_matrix=None,
+            observables=None, return_state=True) -> Result:
+        """统一测量入口。
 
         参数:
-            circuit: 必须具有 `n_qubits` 属性和 `unitary()` 方法
-            shots: 采样次数；为 None 或 0 时不采样，仅返回概率
-            initial_state: 初始态（None 表示 |0...0>）
-            observables: 可观测量字典 {name: operator_matrix}
-            return_state: 是否在结果中附带最终态向量
+            circuit:                 待测电路（需具备 n_qubits 属性）
+            shots:                   采样次数；None 或 0 表示 exact 模式（单条精确轨迹，
+                                     覆盖 tm、不做末端测量）；≥1 表示 M 条轨迹按 sm 聚合
+            measure_qubits:          显式末端读出比特（保留顺序）。与 tm=False、exact 模式互斥
+            snap:                    需记录完整态快照的操作下标集合
+            tm:                      是否在电路执行完后进行末端测量（exact 模式下被覆盖）
+            sm:                      多轨迹聚合模式，目前仅支持 'avg'（'shot'/'cond' 暂未实现）
+            seed:                    随机种子（用于复现）
+            initial_state:           初始态（None 表示 |0...0>）
+            initial_density_matrix:  初始密度矩阵（提供时以密度矩阵模式初始化量子态；
+                                     与 initial_state 互斥）
+            observables:             可观测量字典 {name: operator_matrix}
+            return_state:            是否在结果中附带 state / final_state
         """
         if not hasattr(circuit, "n_qubits"):
             raise TypeError("circuit 需要具备 n_qubits 属性")
-        if not self._has_gate_sequence(circuit) and not hasattr(circuit, "unitary"):
-            raise TypeError("circuit 需要具备 gates 序列或 unitary() 方法")
-
-        n_qubits = int(circuit.n_qubits)
-        if n_qubits <= 0:
+        n = int(circuit.n_qubits)
+        if n <= 0:
             raise ValueError("n_qubits 必须为正整数")
-
         backend = self._resolve_backend(circuit)
-        sampler = Sampler(backend)
 
-        sv0 = self._build_initial_state(n_qubits, backend, initial_state=initial_state)
+        norm_shots = self._validate_shots(shots)             # None=exact
+        exact = norm_shots is None
+        n_ops = len(list(circuit_instructions(circuit))) if has_circuit_instructions(circuit) else 0
+        specs = self._collect_specs(circuit, n)
+        snap_ops = self._normalize_snap(snap, n_ops)
 
-        if self._has_gate_sequence(circuit):
-            # Preferred execution path: apply each gate directly on the state.
-            sv = self._evolve_state_vector_gatewise(circuit, sv0, backend)
+        if sm not in ("avg", "shot", "cond"):
+            raise ValueError(f"sm 必须是 avg/shot/cond，收到 {sm!r}")
+        if sm in ("shot", "cond"):
+            raise NotImplementedError(f"sm={sm!r} 暂未实现（仅支持 avg）")
+
+        # 末端测量解析（exact 模式覆盖 tm；与显式 measure_qubits 冲突报错）
+        mq_explicit = measure_qubits is not None
+        if mq_explicit:
+            norm_mq = self._normalize_measure_qubits(measure_qubits, n)
         else:
-            unitary = self._circuit_unitary_on_backend(circuit, backend)
-            sv = sv0.evolve(unitary)
-        probs_backend = sv.probabilities()
-        probs = backend.to_numpy(probs_backend).real
+            norm_mq = None
+        if not tm and mq_explicit and len(norm_mq) > 0:
+            raise ValueError("tm=False 与非空 measure_qubits 冲突")
+        if exact and mq_explicit and len(norm_mq) > 0:
+            raise ValueError("shots∈{None,0}（exact 模式）覆盖 tm、不做末端测量，"
+                             "与显式 measure_qubits 冲突；如需末端读出请用 shots≥1")
 
-        counts = None
-        use_shots = shots if shots is not None else 0
-        if use_shots > 0:
-            counts = sampler.sample_counts(probs_backend, n_qubits=n_qubits, shots=use_shots)
+        do_terminal = tm and not exact and not (mq_explicit and len(norm_mq) == 0)
+        terminal_qubits = (norm_mq if (mq_explicit and len(norm_mq) > 0) else list(range(n))) if do_terminal else None
+
+        if initial_state is not None and initial_density_matrix is not None:
+            raise ValueError("initial_state 与 initial_density_matrix 互斥，只能提供其一")
+
+        noise_model = getattr(circuit, "noise_model", None)
+        seed_seq = np.random.SeedSequence(seed) if seed is not None else np.random.SeedSequence()
+
+        def fresh_state() -> State:
+            if initial_density_matrix is not None:
+                dm = np.asarray(initial_density_matrix)
+                return State(backend.cast(dm), n, backend)
+            if initial_state is None:
+                return State.zero_state(n, backend)
+            if isinstance(initial_state, State):
+                return initial_state
+            return State(initial_state, n, backend)
+
+        has_incircuit = any(True for g in circuit_instructions(circuit) if _is_measure(g)) if n_ops else False
+        M = 1 if exact else norm_shots
+
+        rng = np.random.default_rng(seed_seq)
+        trajectories = []
+        if has_incircuit or noise_model is not None:
+            for _ in range(M):
+                trajectories.append(run_trajectory(
+                    circuit, fresh_state(), backend, tm=do_terminal,
+                    measure_qubits=terminal_qubits, snap_ops=snap_ops, rng=rng, noise_model=noise_model))
+        else:
+            # 无线路中途随机源：ρ_pre 算一次，末端采样 M 次
+            base = run_trajectory(circuit, fresh_state(), backend, tm=False,
+                                  measure_qubits=None, snap_ops=snap_ops, rng=rng, noise_model=None)
+            from .projector import terminal_z_measure
+            for _ in range(M):
+                if do_terminal:
+                    post, terminal = terminal_z_measure(base.pre, terminal_qubits, rng)
+                else:
+                    post, terminal = base.pre, None
+                trajectories.append(type(base)(pre=base.pre, post=post, incircuit={},
+                                               terminal=terminal, snaps=base.snaps))
+
+        result = self._build_result(trajectories, n, backend, norm_shots, exact, specs,
+                                     terminal_qubits, do_terminal, observables, return_state,
+                                     noise_model=noise_model,
+                                     initial_density_matrix=initial_density_matrix)
+        return result
+
+    def _build_result(self, trajectories, n, backend, norm_shots, exact, specs,
+                      terminal_qubits, do_terminal, observables, return_state,
+                      *, noise_model=None, initial_density_matrix=None) -> Result:
+        """把轨迹集合按 shots 语义折叠成 Result。"""
+        if exact or norm_shots == 1:
+            tr = trajectories[0]
+            state = tr.pre
+            final = tr.post
+            incircuit_outputs = ({op: tr.incircuit[op] for op in (s.op_index for s in specs)}
+                                 if exact else
+                                 {op: np.array([[tr.incircuit[op]]]) for op in (s.op_index for s in specs)})
+            terminal_output = None
+            if do_terminal and tr.terminal is not None:
+                terminal_output = (np.array(tr.terminal) if exact
+                                   else np.array(tr.terminal).reshape(1, -1))
+            snap_states = dict(tr.snaps)
+            probabilities = np.asarray(tr.pre.probabilities()).reshape(-1).astype(np.float64) \
+                if hasattr(tr.pre, "probabilities") else np.abs(np.asarray(state).reshape(-1)) ** 2
+            incircuit_counts = {}
+            terminal_counts = None
+            if not exact:  # shots=1 仍可统计
+                incircuit_counts = {op: {int(tr.incircuit[op]): 1} for op in (s.op_index for s in specs)}
+                if terminal_output is not None:
+                    key = "".join("0" if b == 1 else "1" for b in tr.terminal)
+                    terminal_counts = {key: 1}
+        else:
+            agg = aggregate_avg(trajectories, n, specs, terminal_qubits if do_terminal else None)
+            state = State.from_matrix(np.asarray(agg["state"]), n)
+            final = State.from_matrix(np.asarray(agg["final_state"]), n)
+            incircuit_outputs = agg["incircuit_outputs"]; incircuit_counts = agg["incircuit_counts"]
+            terminal_output = agg["terminal_output"]; terminal_counts = agg["terminal_counts"]
+            snap_states = {t: State.from_matrix(np.asarray(s), n) for t, s in agg["snapshot_states"].items()}
+            probabilities = agg["probabilities"]
 
         exp_vals: Dict[str, float] = {}
         exp_vars: Dict[str, float] = {}
         if observables:
+            state_arr = np.asarray(state)
+            rho = state_arr if (state_arr.ndim == 2 and state_arr.shape[0] == state_arr.shape[1]) else None
+            vec = None if rho is not None else state_arr.reshape(-1, 1)
             for name, op in observables.items():
-                op_backend = backend.cast(backend.to_numpy(op))
-                exp_val = float(backend.to_numpy(sv.expectation(op_backend)))
-                op2 = backend.matmul(op_backend, op_backend)
-                exp2 = float(backend.to_numpy(sv.expectation(op2)))
-                var = exp2 - exp_val * exp_val
-                if abs(var) < self._variance_eps:
-                    var = 0.0
-                exp_vals[name] = exp_val
-                exp_vars[name] = max(var, 0.0)
+                op = np.asarray(op)
+                if rho is not None:
+                    exp_vals[name] = float(np.real(np.trace(rho @ op)))
+                else:
+                    exp_vals[name] = float(np.real((vec.conj().T @ op @ vec)[0, 0]))
 
-        final_state_np = sv.to_numpy() if return_state else None
+        # 判断末态是否为密度矩阵（噪声路径 / 初始密度矩阵输入）
+        is_dm = bool(return_state and final.is_density) if return_state else False
+        state_mode = "density_matrix" if (noise_model is not None or initial_density_matrix is not None or is_dm) else "state_vector"
+
+        meta: Dict[str, object] = {"state_mode": state_mode}
+        if noise_model is not None:
+            meta["noise_model"] = type(noise_model).__name__
 
         return Result(
-            n_qubits=n_qubits,
-            backend_name=backend.name,
-            probabilities=probs,
-            counts=counts,
-            shots=use_shots if use_shots > 0 else None,
-            expectation_values=exp_vals,
-            expectation_variances=exp_vars,
-            final_state=final_state_np,
-            metadata={
-                "measure": "Measure",
-                "circuit_type": type(circuit).__name__,
-                "state_mode": "state_vector",
-            },
+            n_qubits=n, backend_name=type(backend).__name__,
+            probabilities=probabilities, shots=norm_shots,
+            measurement_specs=specs, incircuit_outputs=incircuit_outputs,
+            incircuit_counts=incircuit_counts, terminal_output=terminal_output,
+            terminal_counts=terminal_counts, terminal_qubits=terminal_qubits,
+            state=(state if return_state else None),
+            final_state=(final if return_state else None),
+            final_state_kind=("density_matrix" if is_dm else "state_vector") if return_state else None,
+            expectation_values=exp_vals, expectation_variances=exp_vars,
+            snapshot_states=snap_states,
+            metadata=meta,
         )
-
-    def run_density_matrix(
-        self,
-        circuit,
-        shots: Optional[int] = None,
-        initial_density_matrix=None,
-        observables: Optional[Dict[str, object]] = None,
-        noise_model=None,
-        return_state: bool = True,
-    ) -> Result:
-        """
-        以密度矩阵路径测量一个电路，返回统一结果对象。
-
-        参数:
-            circuit: 必须具有 `n_qubits` 属性和 `unitary()` 方法
-            shots: 采样次数；为 None 或 0 时不采样，仅返回概率
-            initial_density_matrix: 初始密度矩阵（None 表示 |0...0><0...0|）
-            observables: 可观测量字典 {name: operator_matrix}
-            noise_model: NoiseModel，可选。若提供且电路具有 gates，则在每个门后施加噪声。
-            return_state: 是否在结果中附带最终密度矩阵（flatten 一维）
-        """
-        if not hasattr(circuit, "n_qubits"):
-            raise TypeError("circuit 需要具备 n_qubits 属性")
-        if not self._has_gate_sequence(circuit) and not hasattr(circuit, "unitary"):
-            raise TypeError("circuit 需要具备 gates 序列或 unitary() 方法")
-
-        n_qubits = int(circuit.n_qubits)
-        if n_qubits <= 0:
-            raise ValueError("n_qubits 必须为正整数")
-
-        backend = self._resolve_backend(circuit)
-        sampler = Sampler(backend)
-
-        rho0 = self._build_initial_density_matrix(
-            n_qubits,
-            backend,
-            initial_density_matrix=initial_density_matrix,
-        )
-
-        if self._has_gate_sequence(circuit):
-            rho = self._evolve_density_matrix_gatewise(
-                circuit,
-                rho0,
-                backend,
-                noise_model=noise_model,
-            )
-        else:
-            rho = rho0
-            unitary = self._circuit_unitary_on_backend(circuit, backend)
-            rho = rho.evolve(unitary)
-
-        probs = rho.probabilities()
-        probs_backend = backend.cast(probs)
-
-        counts = None
-        use_shots = shots if shots is not None else 0
-        if use_shots > 0:
-            counts = sampler.sample_counts(probs_backend, n_qubits=n_qubits, shots=use_shots)
-
-        exp_vals: Dict[str, float] = {}
-        exp_vars: Dict[str, float] = {}
-        if observables:
-            for name, op in observables.items():
-                op_backend = backend.cast(backend.to_numpy(op))
-                exp_val = float(backend.to_numpy(rho.expectation(op_backend)))
-                op2 = backend.matmul(op_backend, op_backend)
-                exp2 = float(backend.to_numpy(rho.expectation(op2)))
-                var = exp2 - exp_val * exp_val
-                if abs(var) < self._variance_eps:
-                    var = 0.0
-                exp_vals[name] = exp_val
-                exp_vars[name] = max(var, 0.0)
-
-        final_state_np = rho.to_numpy().reshape(-1) if return_state else None
-
-        return Result(
-            n_qubits=n_qubits,
-            backend_name=backend.name,
-            probabilities=np.asarray(probs, dtype=np.float64),
-            counts=counts,
-            shots=use_shots if use_shots > 0 else None,
-            expectation_values=exp_vals,
-            expectation_variances=exp_vars,
-            final_state=final_state_np,
-            metadata={
-                "measure": "Measure",
-                "circuit_type": type(circuit).__name__,
-                "state_mode": "density_matrix",
-                "noise_model": type(noise_model).__name__ if noise_model is not None else None,
-            },
-        )
-
-    def run_batch(
-        self,
-        circuits: Sequence[object],
-        shots: Optional[int] = None,
-        observables: Optional[Dict[str, object]] = None,
-        mode: str = "state_vector",
-        per_circuit_options: Optional[Sequence[Dict[str, Any]]] = None,
-    ) -> List[Result]:
-        """
-        批量运行多个电路。
-
-        参数:
-            circuits: 电路序列，每个元素需具备 n_qubits 和 unitary()
-            shots: 全局采样次数（可被 per_circuit_options 覆盖）
-            observables: 全局可观测量字典（可被 per_circuit_options 覆盖）
-            mode: "state_vector" 或 "density_matrix"
-            per_circuit_options: 每个电路的附加参数字典序列，长度需与 circuits 相同
-        返回:
-            Result 列表，顺序与输入 circuits 一致
-        """
-        if not isinstance(circuits, Sequence) or len(circuits) == 0:
-            raise ValueError("circuits 必须是非空序列")
-
-        if per_circuit_options is not None and len(per_circuit_options) != len(circuits):
-            raise ValueError("per_circuit_options 长度必须与 circuits 一致")
-
-        mode_norm = mode.strip().lower()
-        if mode_norm not in {"state_vector", "density_matrix"}:
-            raise ValueError("mode 仅支持 'state_vector' 或 'density_matrix'")
-
-        indexed_results = []
-        for idx, circ in enumerate(circuits):
-            if hasattr(self.backend, "should_run_batch_index") and not self.backend.should_run_batch_index(idx):
-                continue
-
-            opts = per_circuit_options[idx] if per_circuit_options is not None else {}
-            run_shots = opts.get("shots", shots)
-            run_observables = opts.get("observables", observables)
-            run_return_state = opts.get("return_state", True)
-            label = opts.get("label")
-
-            if mode_norm == "state_vector":
-                result = self.run(
-                    circ,
-                    shots=run_shots,
-                    initial_state=opts.get("initial_state"),
-                    observables=run_observables,
-                    return_state=run_return_state,
-                )
-            else:
-                result = self.run_density_matrix(
-                    circ,
-                    shots=run_shots,
-                    initial_density_matrix=opts.get("initial_density_matrix"),
-                    observables=run_observables,
-                    noise_model=opts.get("noise_model"),
-                    return_state=run_return_state,
-                )
-
-            result.metadata["batch_index"] = idx
-            if label is not None:
-                result.metadata["label"] = str(label)
-            indexed_results.append((idx, result))
-
-        if hasattr(self.backend, "gather_indexed_results"):
-            indexed_results = self.backend.gather_indexed_results(indexed_results)
-        else:
-            indexed_results = sorted(indexed_results, key=lambda item: item[0])
-
-        return [result for _, result in indexed_results]
-
-    def scan_parameters(
-        self,
-        circuit_builder: Callable[[Any], object],
-        param_values: Iterable[Any],
-        shots: Optional[int] = None,
-        observables: Optional[Dict[str, object]] = None,
-        mode: str = "state_vector",
-        return_state: bool = False,
-    ) -> List[Result]:
-        """
-        参数扫描：针对一组参数值构造电路并批量执行。
-
-        返回:
-            Result 列表，每个结果 metadata 包含 `scan_param`
-        """
-        params = list(param_values)
-        if len(params) == 0:
-            raise ValueError("param_values 不能为空")
-
-        circuits = [circuit_builder(p) for p in params]
-        options = [{"return_state": return_state, "label": f"scan_{i}"} for i in range(len(params))]
-        results = self.run_batch(
-            circuits,
-            shots=shots,
-            observables=observables,
-            mode=mode,
-            per_circuit_options=options,
-        )
-
-        for i, p in enumerate(params):
-            results[i].metadata["scan_param"] = p
-            results[i].metadata["scan_index"] = i
-        return results

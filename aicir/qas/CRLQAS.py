@@ -23,11 +23,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from ..channel.backends.numpy_backend import NumpyBackend
-from ..channel.operators import Hamiltonian
+from ..backends.numpy_backend import NumpyBackend
+from ..operators import Hamiltonian
 from ..core.circuit import Circuit
 from ..core.gates import gate_to_matrix
 from ..core.state import State
+from ..ir import instruction_controls, instruction_name, instruction_qubits
 
 
 @dataclass
@@ -207,16 +208,8 @@ def _is_same_gate_signature(lhs: Dict[str, Any], rhs: Dict[str, Any]) -> bool:
 
 
 def _involved_qubits(gate: Dict[str, Any], n_qubits: int) -> List[int]:
-    qubits: List[int] = []
-    if "target_qubit" in gate:
-        qubits.append(int(gate["target_qubit"]))
-    for c in gate.get("control_qubits", []) or []:
-        qubits.append(int(c))
-    if "qubit_1" in gate:
-        qubits.append(int(gate["qubit_1"]))
-    if "qubit_2" in gate:
-        qubits.append(int(gate["qubit_2"]))
-    if not qubits and gate.get("type") in {"identity", "I"}:
+    qubits = [int(q) for q in (*instruction_qubits(gate), *instruction_controls(gate))]
+    if not qubits and instruction_name(gate) in {"identity", "I"}:
         qubits = list(range(n_qubits))
     return sorted(set([q for q in qubits if 0 <= q < n_qubits]))
 
