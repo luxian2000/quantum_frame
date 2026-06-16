@@ -18,6 +18,7 @@ python -m demos.visual_density_demo
 python -m demos.visual_qas_demo
 python -m demos.reset_demo
 python demos/qubo_qaoa_demo.py
+python demos/qubo_tsp_debug_demo.py
 ```
 
 H2 VQE with shot-based Pauli-term energy estimation:
@@ -60,6 +61,21 @@ most likely QUBO assignment:
 
 ```bash
 python demos/qubo_qaoa_demo.py
+```
+
+Debug the QUBO modeling API on a small TSP instance. This verbose demo exposes
+`VariableRegistry`, `ModelContext`, `Polynomial`, constraints, `Model`,
+`QuboBuilder`, QUBO/Ising/QAOA exports, brute-force validation, and solution
+decoding:
+
+```bash
+python demos/qubo_tsp_debug_demo.py
+```
+
+Run the optional dense BasicQAOA step for the same TSP model:
+
+```bash
+python demos/qubo_tsp_debug_demo.py --run-qaoa --qaoa-iters 10
 ```
 
 Verify in-circuit `reset` execution with `result.snap(...)` snapshots:
