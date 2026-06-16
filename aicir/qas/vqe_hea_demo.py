@@ -22,8 +22,8 @@ try:  # pragma: no cover - fallback is tested implicitly when scipy is absent.
 except Exception:  # pragma: no cover
     minimize = None
 
-from ..channel.backends.base import Backend
-from ..channel.backends.numpy_backend import NumpyBackend
+from ..backends.base import Backend
+from ..backends.numpy_backend import NumpyBackend
 from ..measure.measure import Measure
 from ._types import ArchitectureScore, ArchitectureSpec
 from .architecture_candidates import build_common_architectures, qaoa_ansatz
@@ -31,12 +31,12 @@ from .evaluator import evaluate_architectures
 from .task_evaluation import bind_parameters, parameter_count
 
 try:  # pragma: no cover - optional accelerator backend.
-    from ..channel.backends.npu_backend import NPUBackend
+    from ..backends.npu_backend import NPUBackend
 except Exception:  # pragma: no cover
     NPUBackend = None
 
 try:  # pragma: no cover - optional torch backend.
-    from ..channel.backends.torch_backend import TorchBackend
+    from ..backends.gpu_backend import TorchBackend
 except Exception:  # pragma: no cover
     TorchBackend = None
 

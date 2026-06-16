@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
-from ..channel.backends.base import Backend
+from ..backends.base import Backend
 from ..core.circuit import Circuit
 from ..metrics.hardware import HardwareProfile
 from ._types import ArchitectureSpec, SearchConfig
