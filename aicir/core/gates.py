@@ -781,6 +781,28 @@ def _controlled_local_from_base(base_single, control_states):
     return local
 
 
+_MULTI_TARGET_CONTROLLED = {"cx", "cy", "cz", "crx", "cry", "crz"}
+
+
+def _multi_target_subgates(gate):
+    """多目标受控门按目标展开为逐目标的单目标门列表；无需展开时返回 ``None``。
+
+    ``cx([t1, t2], [controls])`` 携带 ``qubits`` 键；展开后的各单目标门彼此
+    对易，故展开顺序不影响结果。单目标门（``target_qubit`` 形式）返回 ``None``。
+    """
+    if canonical_gate_name(gate["type"]) not in _MULTI_TARGET_CONTROLLED:
+        return None
+    targets = gate.get("qubits")
+    if targets is None:
+        return None
+    subgates = []
+    for target in targets:
+        subgate = {key: value for key, value in gate.items() if key != "qubits"}
+        subgate["target_qubit"] = int(target)
+        subgates.append(subgate)
+    return subgates
+
+
 def apply_gate_to_state(gate, state, n_qubits: int, backend):
     """
     直接将局部门作用到态向量，避免构造 2^n × 2^n 全局矩阵。
@@ -790,6 +812,12 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
     """
     gate = normalize_gate(gate)
     gate_type = canonical_gate_name(gate["type"])
+
+    subgates = _multi_target_subgates(gate)
+    if subgates is not None:
+        for subgate in subgates:
+            state = apply_gate_to_state(subgate, state, n_qubits, backend)
+        return state
 
     if gate_type == "identity":
         return state
@@ -911,6 +939,19 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
     gate = normalize_gate(gate)
     gate_type = canonical_gate_name(gate["type"])
     gate_parameter = gate.get("parameter", None)
+
+    subgates = _multi_target_subgates(gate)
+    if subgates is not None:
+        result = None
+        for subgate in subgates:
+            sub_matrix = gate_to_matrix(subgate, cir_qubits, backend=backend)
+            if result is None:
+                result = sub_matrix
+            elif backend is None:
+                result = np.matmul(sub_matrix, result)
+            else:
+                result = backend.matmul(sub_matrix, result)
+        return result
 
     if gate_type == "unitary":
         matrix = _unitary_parameter_matrix(gate_parameter, backend)

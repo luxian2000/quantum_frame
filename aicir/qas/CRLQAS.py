@@ -1,13 +1,27 @@
-"""Curriculum-based RL Quantum Architecture Search (CRLQAS).
+"""基于课程学习强化学习的量子架构搜索 (CRLQAS)。
 
-- Papers: Curriculum reinforcement learning for quantum architecture search under hardware errors
-- Reference: arXiv:2402.03500
+- 论文: Curriculum reinforcement learning for quantum architecture search under hardware errors
+- 参考: arXiv:2402.03500
 
-This implementation follows the core ideas of CRLQAS in a aicir-native form:
-- DDQN chooses circuit architecture actions (gate appends)
-- Adam-SPSA refines all variational parameters after each append
-- curriculum threshold controls success criterion during training
-- random-halt sampling changes per-episode horizon
+本实现以 aicir 原生的形式遵循了 CRLQAS 的核心思想：
+- 使用 DDQN 选择电路架构动作（即添加量子门）
+- 每次添加动作后，使用 Adam-SPSA 算法优化所有变分参数
+- 在训练过程中，通过课程阈值（curriculum threshold）来控制成功标准
+- 采用随机终止（random-halt）采样来改变每个回合的步长（horizon）
+
+输入 (Inputs):
+- hamiltonian: np.ndarray | Hamiltonian。目标哈密顿量矩阵，即我们需要近似其基态能量的物理体系。
+- config: Optional[CRLQASConfig]。算法的超参数配置。
+
+输出 (Outputs):
+- train_crlqas 返回一个 CRLQASResult 数据类，包含：
+  * circuit: 搜索到的最优量子电路架构。
+  * parameters: 优化后的连续参数。
+  * minimum_energy: 达到的最小能量值。
+  * curriculum_threshold: 训练结束时达到的最终课程阈值 (xi_cur)。
+  * episode_best_energies: 记录每个训练回合中找到的最佳能量的列表（可用于绘制收敛曲线）。
+  * q_network_state_dict: 训练好的 DDQN 神经网络权重。
+- crlqas 返回一个 Tuple[Circuit, float]，仅包含最优电路及其对应的最小能量。
 """
 
 from __future__ import annotations

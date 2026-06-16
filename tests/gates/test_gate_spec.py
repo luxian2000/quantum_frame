@@ -32,7 +32,7 @@ def test_aliases_resolve_to_same_spec():
 
 def test_controlled_and_pair_gate_specs():
     cx = get_gate_spec("cx")
-    assert cx.num_qubits == 1
+    assert cx.num_qubits is None  # 支持单目标或多目标 cx([t1, t2], [controls])
     assert cx.num_params == 0
     assert cx.controlled is True
 
