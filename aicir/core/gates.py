@@ -732,6 +732,13 @@ def _backend_index_tensor(indices, reference):
     return indices
 
 
+def _is_npu_complex_tensor(value, backend) -> bool:
+    if torch is None or not isinstance(value, torch.Tensor):
+        return False
+    device = getattr(backend, "_device", getattr(value, "device", None))
+    return bool(getattr(device, "type", None) == "npu" and torch.is_complex(value))
+
+
 def _apply_local_matrix_to_state_flat(state, local_matrix, axes, n_qubits, backend):
     axes = [int(axis) for axis in axes]
     dim_local = 1 << len(axes)
@@ -742,15 +749,26 @@ def _apply_local_matrix_to_state_flat(state, local_matrix, axes, n_qubits, backe
 
     flat = state.reshape(-1)
     indices = _backend_index_tensor(_flat_local_state_indices(axes, n_qubits), flat)
-    gathered = flat[indices]
+    npu_complex = _is_npu_complex_tensor(flat, backend)
+    if npu_complex:
+        gathered = torch.complex(torch.real(flat)[indices], torch.imag(flat)[indices])
+    else:
+        gathered = flat[indices]
     if hasattr(backend, "apply_local_matrix"):
         updated = backend.apply_local_matrix(local_matrix, gathered)
     else:
         updated = backend.matmul(local_matrix, gathered)
 
     if torch is not None and isinstance(flat, torch.Tensor):
-        out = torch.empty_like(flat)
-        out[indices.reshape(-1)] = updated.reshape(-1)
+        if npu_complex:
+            out_real = torch.empty_like(torch.real(flat))
+            out_imag = torch.empty_like(torch.imag(flat))
+            out_real[indices.reshape(-1)] = torch.real(updated).reshape(-1)
+            out_imag[indices.reshape(-1)] = torch.imag(updated).reshape(-1)
+            out = torch.complex(out_real, out_imag)
+        else:
+            out = torch.empty_like(flat)
+            out[indices.reshape(-1)] = updated.reshape(-1)
     else:
         out = np.empty_like(flat)
         out[indices.reshape(-1)] = np.asarray(updated).reshape(-1)

@@ -542,13 +542,14 @@ class TestNPUBackend(unittest.TestCase):
         self.assertTrue(np.allclose(actual, expected))
 
     def test_npu_12q_local_gate_uses_flat_path(self):
-        from aicir.core.gates import _should_use_flat_local_apply
+        from aicir.core.gates import _is_npu_complex_tensor, _should_use_flat_local_apply
 
         backend = NPUBackend(fallback_to_cpu=True)
         backend._device = type("FakeDevice", (), {"type": "npu"})()
 
         self.assertTrue(_should_use_flat_local_apply(backend, 12))
         self.assertFalse(_should_use_flat_local_apply(backend, 8))
+        self.assertTrue(_is_npu_complex_tensor(torch.zeros(4, dtype=torch.complex64), backend))
 
 
 if __name__ == "__main__":
