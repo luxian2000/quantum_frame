@@ -72,7 +72,7 @@ cir.plot()
 #   - op[10] 线路内重置「之后」的态。
 # 说明：snap[i] 记录的是「执行完 op[i] 之后」的态，故 snap=[9,10] 即满足需求。
 # ---------------------------------------------------------------------------
-result = Measure(NumpyBackend()).run(cir, shots=1, snap=[9, 10], seed=11)
+result = Measure(NumpyBackend()).run(cir, shots=1, snap=[8, 9, 10], seed=11)
 
 print("\n=== 概览 ===")
 print(result.summary())
@@ -85,13 +85,14 @@ print("  probabilities :", result.prob("mid"))
 # 【特性 4】两处快照。多轨迹下 snap 返回的是平均态（密度矩阵）。
 def occupation(state):
     return np.round(np.real(np.diag(_as_density(state))), 3)
-
+snap_before_measure = result.snap(8)
 snap_after_measure = result.snap(9)
 snap_after_reset = result.snap(10)
 
 print("\n=== 快照 A：线路内测量之后 (snap @ op[9]) ===")
 print("  shape       :", np.asarray(snap_after_measure).shape)
 print("  占据概率对角 :", occupation(snap_after_measure))
+print("state before measure:", snap_before_measure.ket)
 print("  Dirac (.ket):", snap_after_measure.ket)
 
 print("\n=== 快照 B：线路内重置之后 (snap @ op[10]) ===")

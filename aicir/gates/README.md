@@ -1,59 +1,152 @@
 # aicir.gates
 
-门元信息注册表（GateSpec），NEXT.md 第 7 节的第一片落地。
+门元信息注册表——每个门类型的规范名、比特数、参数个数、别名与显示符号在此**单点注册**，供 IR 校验、转译 Pass、QASM 导出、矩阵构造和绘图等模块统一消费。
 
-## 概述
+## 目录
 
-每个门类型的元信息只在此注册一次：
+| 文件 | 说明 |
+| --- | --- |
+| `spec.py` | `GateSpec` 数据类定义 |
+| `registry.py` | 注册表实现 + 内置门集 `_STANDARD_GATES` |
+| `__init__.py` | 公共 API 导出 |
+
+---
+
+## 1  GateSpec 字段说明
+
+`GateSpec` 是一个 `frozen` 数据类，字段含义如下：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `name` | `str` | 规范门名，与门字典的 `type` 字段一致 |
+| `num_qubits` | `int \| None` | 目标比特数（不含控制位）；`None` = 可变（`identity` / `unitary` / `measure`） |
+| `num_params` | `int \| None` | 参数个数（符号 `Parameter` 计为 1）；`None` = 可变（`unitary` 占位场景可缺省） |
+| `aliases` | `tuple[str, ...]` | 等价的 `type` 写法，如 `"X"` / `"cnot"` / `"ccnot"` |
+| `controlled` | `bool` | 是否必须携带至少一个控制位 |
+| `qasm_name` | `str \| None` | OpenQASM 导出名（`core/io/qasm.py` 的导出表由此派生）；`None` = 暂未约定 |
+| `symbol` | `str \| None` | ASCII / matplotlib 绘图显示符号（受控门为目标位符号）；`None` = 特殊绘制或退回通用 fallback |
+
+---
+
+## 2  公共 API
+
+| 函数 | 说明 |
+| --- | --- |
+| `get_gate_spec(name)` | 按规范名或别名查询 `GateSpec`；未注册返回 `None` |
+| `canonical_gate_name(name)` | 把别名解析为规范名；未注册的名称原样返回 |
+| `register_gate(spec, *, overwrite=False)` | 注册一个 `GateSpec`；冲突时默认报错 |
+| `unregister_gate(name)` | 移除已注册门（含全部别名）；未注册时静默返回 |
+| `registered_gate_names()` | 返回全部已注册门的规范名元组 |
 
 ```python
-from aicir.gates import GateSpec, get_gate_spec, register_gate
+from aicir.gates import GateSpec, get_gate_spec, canonical_gate_name
 
-spec = get_gate_spec("rz")        # GateSpec(name="rz", num_qubits=1, num_params=1, ...)
-get_gate_spec("X")                 # 别名解析 → pauli_x 的 spec
-get_gate_spec("not_a_gate")        # None：未注册门保持宽松
+spec = get_gate_spec("rz")       # GateSpec(name="rz", num_qubits=1, num_params=1, ...)
+get_gate_spec("X")                # 别名解析 → pauli_x 的 spec
+get_gate_spec("not_a_gate")       # None：未注册门保持宽松
 
-from aicir.gates import canonical_gate_name
-canonical_gate_name("cnot")        # "cx"；未注册名称原样返回
+canonical_gate_name("cnot")       # "cx"
+canonical_gate_name("ccnot")      # "toffoli"
+canonical_gate_name("my_gate")    # "my_gate"（未注册，原样返回）
 ```
 
-字段约定：
+---
 
-- `num_qubits`：目标比特数（不含控制位）；`None` 表示可变
-  （`unitary`、`measure`、可作用于整个寄存器的 `identity`）。
-- `num_params`：参数个数，符号 `Parameter` 计为一个；`None` 表示可变
-  （`unitary` 的矩阵参数在绘图占位场景可缺省）。
-- `controlled`：是否必须携带至少一个控制位（`cx`/`cy`/`cz`/`crx`/`cry`/`crz`/`toffoli`）。
-- `aliases`：等价的门字典 `type` 写法（`"X"`、`"cnot"`、`"ccnot"` 等）。
-- `qasm_name`：OpenQASM 导出名（`core/io/qasm.py` 的导出表由此派生）。
-- `symbol`：ASCII/matplotlib 绘图显示符号（受控门为目标位符号）；`None`
-  表示特殊绘制（swap/rzz/rxx/measure）或退回通用 fallback。
+## 3  内置门集
 
-## 当前消费方
+下表列出导入时自动注册的全部内置门（`_STANDARD_GATES`）：
 
-- `aicir.ir.Operation` 构造期校验：已注册门检查目标比特数/参数个数/控制位，
-  未注册门名不受限（自定义门、实验性门可自由使用）。
-- `aicir.transpile.ValidatePass`：结合 `n_qubits` 做越界/冲突/重复比特检查。
-- `aicir.transpile.CanonicalizePass`：把别名门名（`X`/`cnot`/`ccnot`）重写为规范名。
-- `aicir.core.io.qasm`：QASM 导出名以 `GateSpec.qasm_name` 为单一来源，
-  别名经 `canonical_gate_name` 归一，导入表由导出表反推。
-- `aicir.core.gates` 矩阵路径（`gate_to_matrix`/`apply_gate_to_state` 等）：
-  入口经 `canonical_gate_name` 归一后按规范名分发，别名与规范名共享矩阵缓存。
-- 绘图：ASCII（`core/circuit.py`）与 matplotlib（`visual/plot.py`）的显示
-  符号/配色族由 `GateSpec.symbol` 与规范名派生；注册自定义门时携带
-  `symbol` 即可在绘图中直接显示。
+### 3.1  基础单比特门
 
-## 注册自定义门
+| 规范名 | 别名 | 比特数 | 参数数 | QASM 名 | 绘图符号 |
+| --- | --- | :---: | :---: | --- | :---: |
+| `pauli_x` | `X` | 1 | 0 | `x` | X |
+| `pauli_y` | `Y` | 1 | 0 | `y` | Y |
+| `pauli_z` | `Z` | 1 | 0 | `z` | Z |
+| `hadamard` | `H` | 1 | 0 | `h` | H |
+| `s_gate` | `S` | 1 | 0 | `s` | S |
+| `t_gate` | `T` | 1 | 0 | `t` | T |
+| `identity` | `I` | 可变 | 0 | `id` | I |
+
+### 3.2  参数旋转门
+
+| 规范名 | 比特数 | 参数数 | QASM 名 | 绘图符号 |
+| --- | :---: | :---: | --- | :---: |
+| `rx` | 1 | 1 | `rx` | Rx |
+| `ry` | 1 | 1 | `ry` | Ry |
+| `rz` | 1 | 1 | `rz` | Rz |
+| `u2` | 1 | 2 | `u2` | U2 |
+| `u3` | 1 | 3 | `u3` | U3 |
+
+### 3.3  受控门
+
+| 规范名 | 别名 | 目标比特数 | 参数数 | QASM 名 | 目标位符号 |
+| --- | --- | :---: | :---: | --- | :---: |
+| `cx` | `cnot` | 可变 | 0 | `cx` | X |
+| `cy` | — | 1 | 0 | `cy` | Y |
+| `cz` | — | 1 | 0 | `cz` | Z |
+| `crx` | — | 1 | 1 | `crx` | Rx |
+| `cry` | — | 1 | 1 | `cry` | Ry |
+| `crz` | — | 1 | 1 | `crz` | Rz |
+| `toffoli` | `ccnot` | 1 | 0 | `ccx` | X |
+
+> `cx` / `cnot` 的 `num_qubits=None`：支持单目标或多目标写法（多目标等价于多个单目标 CX）。
+
+### 3.4  双比特门
+
+| 规范名 | 比特数 | 参数数 | QASM 名 | 绘图符号 |
+| --- | :---: | :---: | --- | :---: |
+| `swap` | 2 | 0 | `swap` | （专用形状） |
+| `rzz` | 2 | 1 | `rzz` | （专用形状） |
+| `rxx` | 2 | 1 | `rxx` | （专用形状） |
+
+### 3.5  特殊指令
+
+| 规范名 | 别名 | 比特数 | 参数数 | 绘图符号 |
+| --- | --- | :---: | :---: | :---: |
+| `unitary` | — | 可变 | 可变 | U |
+| `measure` | `measurement` | 可变 | 0 | （专用形状） |
+| `reset` | — | 可变 | 0 | \|0⟩ |
+
+---
+
+## 4  注册自定义门
 
 ```python
+from aicir.gates import GateSpec, register_gate, unregister_gate
+
+# 注册
 register_gate(GateSpec(name="my_iswap", num_qubits=2, num_params=0))
+
+# 重复注册默认报错；显式覆盖需传 overwrite=True
+register_gate(
+    GateSpec(name="my_iswap", num_qubits=2, num_params=0, symbol="iSW"),
+    overwrite=True,
+)
+
+# 移除
+unregister_gate("my_iswap")
 ```
 
-重复注册（含别名冲突）默认报错，`register_gate(spec, overwrite=True)` 显式覆盖；
-`unregister_gate(name)` 可移除。
+未注册的门名在 IR 构造和转译中保持**宽松**——自定义门、实验性门可自由使用，不会被校验拒绝。
 
-## 后续方向（尚未实现）
+---
 
-`matrix`/`generator`/`decomposition` 字段（矩阵构造仍由 `gate_to_matrix`
-负责）；`metrics`/`qas` 评分中的别名容忍集合（`DEFAULT_NATIVE_GATES`、
-双比特门判定等）属评分语义，留待单独处理。见 NEXT.md 第 7 节。
+## 5  消费方一览
+
+| 模块 | 用法 |
+| --- | --- |
+| `aicir.ir.Operation` | 构造期校验：已注册门检查目标比特数 / 参数个数 / 控制位 |
+| `aicir.transpile.ValidatePass` | 结合 `n_qubits` 做越界 / 冲突 / 重复比特检查 |
+| `aicir.transpile.CanonicalizePass` | 把别名（`X` / `cnot` / `ccnot`）重写为规范名 |
+| `aicir.core.io.qasm` | QASM 导出名以 `GateSpec.qasm_name` 为单一来源；别名经 `canonical_gate_name` 归一 |
+| `aicir.core.gates`（`gate_to_matrix` 等） | 入口经 `canonical_gate_name` 归一后按规范名分发，别名与规范名共享矩阵缓存 |
+| `aicir.core.circuit`（ASCII 绘图） | 显示符号由 `GateSpec.symbol` 与规范名派生 |
+| `aicir.visual.plot`（matplotlib 绘图） | 配色族与显示符号由规范名派生；注册自定义门时携带 `symbol` 即可直接显示 |
+
+---
+
+## 6  后续方向（尚未实现）
+
+- `matrix` / `generator` / `decomposition` 字段（矩阵构造仍由 `gate_to_matrix` 负责）。
+- `metrics` / `qas` 评分中的别名容忍集合（`DEFAULT_NATIVE_GATES`、双比特门判定等）属评分语义，留待单独处理。
