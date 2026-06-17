@@ -20,7 +20,8 @@ tests/measure/test_measure_run_semantics.py
 - shots > 1          → M 条轨迹 avg 聚合：state 与 final_state 为密度矩阵；
                         output(-1).shape == (M, n_measured)；
                         counts(-1) 为 {"bitstring": N, ...} 裸比特串键
-- measure_qubits     → 与 tm=False 或 exact 模式互斥（均抛 ValueError）
+- measure_qubits     → None=不测；空(默认)=全测；[list]=子集；
+                        exact 模式下忽略 measure_qubits（不报错）
 - result.output/counts 均为方法，target = -1（末端）或操作下标 / id 字符串
 """
 
@@ -67,11 +68,14 @@ def test_default_shots_is_one(m):
     assert sum(result.counts(-1).values()) == 1
 
 
-def test_exact_mode_rejects_explicit_measure_qubits(m):
-    # exact 模式与显式 measure_qubits 冲突
+def test_exact_mode_ignores_measure_qubits(m):
+    # exact 模式忽略 measure_qubits（None/[]/[list] 均不测、不报错）
     for shots in (None, 0):
-        with pytest.raises(ValueError):
-            m.run(bell_circuit(), shots=shots, measure_qubits=[0])
+        for mq in (None, [], [0]):
+            result = m.run(bell_circuit(), shots=shots, measure_qubits=mq)
+            assert result.terminal_qubits is None
+            with pytest.raises(ValueError):
+                result.output(-1)
 
 
 def test_single_shot_state_is_pre_measurement_state_vector(m):

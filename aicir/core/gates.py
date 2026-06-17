@@ -674,18 +674,44 @@ def _apply_local_matrix_to_state(state, local_matrix, axes, n_qubits, backend):
             f"局部门矩阵维度 {local_matrix.shape} 与作用量子比特数量 {len(axes)} 不一致"
         )
 
-    rest_axes = [axis for axis in range(n_qubits) if axis not in axes]
-    perm = axes + rest_axes
+    # 将态向量整形为「目标比特轴 + 合并后的空闲段」的分组张量，而非按比特展开
+    # 成 (2,)*n 的高阶张量。后者在 20+ 量子比特时秩高达 n，超出昇腾 NPU ACL
+    # 算子最多 8 维的限制（aclnnInplaceCopy 报错）。这里把相邻的非目标比特合并
+    # 成单个维度，使工作张量的秩至多为 2*len(axes)+1（Toffoli 也仅 7 维）。
+    target_set = set(axes)
+    group_shape = []          # 分组后各维度大小（行优先，轴 0 为最高位）
+    target_dim_index = {}     # 目标比特 -> 其在 group_shape 中的维度下标
+    gap_dim_indices = []      # 合并后的空闲段维度下标
+    pending_gap = 1
+
+    def _flush_gap():
+        nonlocal pending_gap
+        if pending_gap > 1:
+            gap_dim_indices.append(len(group_shape))
+            group_shape.append(pending_gap)
+            pending_gap = 1
+
+    for qubit in range(n_qubits):
+        if qubit in target_set:
+            _flush_gap()
+            target_dim_index[qubit] = len(group_shape)
+            group_shape.append(2)
+        else:
+            pending_gap *= 2
+    _flush_gap()
+
+    # 前置目标轴需保持 axes 给定的顺序（决定局部矩阵的基排序），其后接空闲段。
+    perm = [target_dim_index[axis] for axis in axes] + gap_dim_indices
     inv_perm = _inverse_permutation(perm)
 
-    psi = state.reshape([2] * n_qubits)
+    psi = state.reshape(group_shape)
     moved = _contiguous_if_torch(_permute_tensor(psi, perm))
     flat = moved.reshape(dim_local, -1)
     if hasattr(backend, "apply_local_matrix"):
         updated = backend.apply_local_matrix(local_matrix, flat)
     else:
         updated = backend.matmul(local_matrix, flat)
-    restored = updated.reshape([2] * len(axes) + [2] * len(rest_axes))
+    restored = updated.reshape([2] * len(axes) + [group_shape[g] for g in gap_dim_indices])
     restored = _contiguous_if_torch(_permute_tensor(restored, inv_perm))
     return restored.reshape(1 << n_qubits, 1)
 

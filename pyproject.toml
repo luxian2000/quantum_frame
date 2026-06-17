@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "aicir"
 description = "从零实现的量子线路模拟器与量子算法框架（态矢量 / 密度矩阵 / 噪声 / VQE·QAOA·VQD·SSVQE / 量子架构搜索 / QML 梯度 / OpenQASM I/O）"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 authors = [{ name = "luxian", email = "xlu8838@gmail.com" }]
 keywords = ["quantum", "quantum-computing", "simulator", "vqe", "qaoa", "qml"]
 classifiers = [
