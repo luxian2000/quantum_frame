@@ -639,6 +639,11 @@ def _contiguous_if_torch(tensor):
     return tensor.contiguous() if torch is not None and isinstance(tensor, torch.Tensor) else tensor
 
 
+def _should_use_flat_local_apply(backend, n_qubits: int) -> bool:
+    device = getattr(backend, "_device", None)
+    return bool(getattr(device, "type", None) == "npu" and int(n_qubits) > 8)
+
+
 def _parameter_cache_key(value):
     if _contains_torch_tensor(value):
         return None
@@ -683,6 +688,9 @@ def _apply_local_matrix_to_state(state, local_matrix, axes, n_qubits, backend):
             f"局部门矩阵维度 {local_matrix.shape} 与作用量子比特数量 {len(axes)} 不一致"
         )
 
+    if _should_use_flat_local_apply(backend, n_qubits):
+        return _apply_local_matrix_to_state_flat(state, local_matrix, axes, n_qubits, backend)
+
     rest_axes = [axis for axis in range(n_qubits) if axis not in axes]
     perm = axes + rest_axes
     inv_perm = _inverse_permutation(perm)
@@ -697,6 +705,56 @@ def _apply_local_matrix_to_state(state, local_matrix, axes, n_qubits, backend):
     restored = updated.reshape([2] * len(axes) + [2] * len(rest_axes))
     restored = _contiguous_if_torch(_permute_tensor(restored, inv_perm))
     return restored.reshape(1 << n_qubits, 1)
+
+
+def _flat_local_state_indices(axes, n_qubits: int):
+    axes = tuple(int(axis) for axis in axes)
+    dim = 1 << int(n_qubits)
+    basis = np.arange(dim, dtype=np.int64)
+    base_mask = np.ones(dim, dtype=bool)
+    for axis in axes:
+        base_mask &= ((basis >> (int(n_qubits) - 1 - axis)) & 1) == 0
+    base_indices = basis[base_mask]
+
+    rows = []
+    for local_index in range(1 << len(axes)):
+        offset = 0
+        for local_pos, axis in enumerate(axes):
+            bit = (local_index >> (len(axes) - 1 - local_pos)) & 1
+            offset |= bit << (int(n_qubits) - 1 - axis)
+        rows.append(base_indices | np.int64(offset))
+    return np.stack(rows, axis=0)
+
+
+def _backend_index_tensor(indices, reference):
+    if torch is not None and isinstance(reference, torch.Tensor):
+        return torch.as_tensor(indices, dtype=torch.long, device=reference.device)
+    return indices
+
+
+def _apply_local_matrix_to_state_flat(state, local_matrix, axes, n_qubits, backend):
+    axes = [int(axis) for axis in axes]
+    dim_local = 1 << len(axes)
+    if local_matrix.shape != (dim_local, dim_local):
+        raise ValueError(
+            f"local gate matrix shape {local_matrix.shape} does not match {len(axes)} target qubit(s)"
+        )
+
+    flat = state.reshape(-1)
+    indices = _backend_index_tensor(_flat_local_state_indices(axes, n_qubits), flat)
+    gathered = flat[indices]
+    if hasattr(backend, "apply_local_matrix"):
+        updated = backend.apply_local_matrix(local_matrix, gathered)
+    else:
+        updated = backend.matmul(local_matrix, gathered)
+
+    if torch is not None and isinstance(flat, torch.Tensor):
+        out = torch.empty_like(flat)
+        out[indices.reshape(-1)] = updated.reshape(-1)
+    else:
+        out = np.empty_like(flat)
+        out[indices.reshape(-1)] = np.asarray(updated).reshape(-1)
+    return out.reshape(1 << n_qubits, 1)
 
 
 def _single_qubit_base_for_gate(gate):
