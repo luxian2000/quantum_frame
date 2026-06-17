@@ -6,8 +6,8 @@ aicir/measure/measure.py
 
 测量语义（见 README §4 与设计文档）：
 - 线路内嵌 measure 门 = 投影测量（由轨迹引擎逐操作执行、坍缩态）
-- 末端读出 = 由 tm / measure_qubits 控制的 Z 基逐比特测量
-- shots ∈ {None, 0} = exact 模式：单条精确轨迹、不做末端测量（覆盖 tm）
+- 末端读出 = 由 `measure_qubits` 控制的 Z 基逐比特测量（None=不测；[]=全部；[list]=子集）
+- shots ∈ {None, 0} = exact 模式：单条精确轨迹、不做末端测量（忽略 measure_qubits）
 - shots ≥ 1 = M 条轨迹，按 sm（默认 avg）聚合
 """
 
