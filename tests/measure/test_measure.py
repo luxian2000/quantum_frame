@@ -19,6 +19,7 @@ tests/measure/test_measure.py
 """
 import unittest
 import unittest.mock
+from types import SimpleNamespace
 
 import numpy as np
 import torch
@@ -58,6 +59,35 @@ class TestMeasure(unittest.TestCase):
 
         self.assertIn("ZZ", result.expectation_values)
         self.assertAlmostEqual(result.expectation_values["ZZ"], 1.0, places=5)
+
+    def test_build_result_converts_probabilities_through_backend(self):
+        class DeviceArray:
+            def __array__(self, dtype=None):
+                raise TypeError("device tensor must be copied through backend")
+
+        class BackendWithDeviceArray(NumpyBackend):
+            def to_numpy(self, tensor):
+                if isinstance(tensor, DeviceArray):
+                    return np.array([1.0, 0.0])
+                return super().to_numpy(tensor)
+
+        pre = SimpleNamespace(probabilities=lambda: DeviceArray())
+        trajectory = SimpleNamespace(pre=pre, post=pre, incircuit={}, terminal=None, snaps={})
+
+        result = Measure(BackendWithDeviceArray())._build_result(
+            [trajectory],
+            1,
+            BackendWithDeviceArray(),
+            1,
+            True,
+            [],
+            None,
+            False,
+            {},
+            False,
+        )
+
+        self.assertTrue(np.allclose(result.probabilities, [1.0, 0.0]))
 
     def test_run_prefers_circuit_bound_backend(self):
         np_backend = NumpyBackend()
