@@ -234,8 +234,8 @@ class Measure:
                 terminal_output = (np.array(tr.terminal) if exact
                                    else np.array(tr.terminal).reshape(1, -1))
             snap_states = dict(tr.snaps)
-            probabilities = np.asarray(tr.pre.probabilities()).reshape(-1).astype(np.float64) \
-                if hasattr(tr.pre, "probabilities") else np.abs(np.asarray(state).reshape(-1)) ** 2
+            probabilities = backend.to_numpy(tr.pre.probabilities()).reshape(-1).astype(np.float64) \
+                if hasattr(tr.pre, "probabilities") else np.abs(backend.to_numpy(state).reshape(-1)) ** 2
             incircuit_counts = {}
             terminal_counts = None
             if not exact:  # shots=1 仍可统计
