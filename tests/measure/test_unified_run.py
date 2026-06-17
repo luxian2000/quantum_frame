@@ -32,7 +32,7 @@ def test_shots_m_terminal_shapes_and_density_state():
 
 def test_incircuit_measure_collapses_and_output_indexed():
     cir = Circuit(hadamard(0), cnot(1, [0]), measure([0, 1]), n_qubits=2)  # op2 = measure
-    r = run(cir, shots=16, tm=False)
+    r = run(cir, shots=16, measure_qubits=None)
     assert r.output(2).shape == (16, 1)
     assert set(np.unique(r.output(2))) <= {1}
 
@@ -44,16 +44,28 @@ def test_terminal_order_preserved_in_output():
     assert r.output(-1).tolist() == [[-1, 1]]
 
 
-def test_conflict_tm_false_with_measure_qubits():
+def test_measure_qubits_none_disables_terminal_in_shot_mode():
     cir = Circuit(hadamard(0), n_qubits=1)
+    r = run(cir, shots=8, measure_qubits=None)
+    assert r.terminal_qubits is None
     with pytest.raises(ValueError):
-        run(cir, tm=False, measure_qubits=[0])
+        r.output(-1)
 
 
-def test_conflict_exact_mode_with_explicit_measure_qubits():
+def test_measure_qubits_empty_reads_all_in_shot_mode():
+    cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
+    r = run(cir, shots=8, measure_qubits=[])
+    assert r.terminal_qubits == [0, 1]
+    assert r.output(-1).shape == (8, 2)
+
+
+def test_exact_mode_ignores_measure_qubits_no_error():
     cir = Circuit(hadamard(0), n_qubits=1)
-    with pytest.raises(ValueError):
-        run(cir, shots=None, measure_qubits=[0])
+    for mq in (None, [], [0]):
+        r = run(cir, shots=None, measure_qubits=mq)
+        assert r.terminal_qubits is None
+        with pytest.raises(ValueError):
+            r.output(-1)
 
 
 def test_invalid_shots():
@@ -70,15 +82,15 @@ def test_invalid_shots():
 
 def test_seed_reproducible():
     cir = Circuit(hadamard(0), measure(0), n_qubits=1)
-    a = run(cir, shots=32, seed=7, tm=False).output(1)
-    b = run(cir, shots=32, seed=7, tm=False).output(1)
+    a = run(cir, shots=32, seed=7, measure_qubits=None).output(1)
+    b = run(cir, shots=32, seed=7, measure_qubits=None).output(1)
     assert np.array_equal(a, b)
 
 
 def test_duplicate_id_raises():
     cir = Circuit(measure(0, id="m"), measure(0, id="m"), n_qubits=1)
     with pytest.raises(ValueError):
-        run(cir, shots=4, tm=False)
+        run(cir, shots=4, measure_qubits=None)
 
 
 def test_sm_shot_not_implemented():
