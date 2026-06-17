@@ -1076,6 +1076,10 @@ class Supernet:
             "selected_cnot_count": self.cnot_count(architecture),
             "selected_two_qubit_count": self.two_qubit_count(architecture),
             "selected_circuit_ascii": _circuit_diagram(circuit),
+            "fine_tuned_parameters": {
+                "|".join(str(part) for part in key): _float_value(value)
+                for key, value in finetune_parameters.items()
+            },
         }
         if task in {"classification", "binary_classification"}:
             for split in ("train", "validation", "test"):
