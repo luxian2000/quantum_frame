@@ -13,6 +13,7 @@ import csv
 import json
 import os
 import sys
+import traceback
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -329,7 +330,7 @@ def main() -> None:
             row["retry_count"] = retry_count
             row["label_status"] = next_label_status_after_failure(retry_count=retry_count).value
             row["failure_reason"] = type(exc).__name__
-            row["last_error_digest"] = str(exc)[:300]
+            row["last_error_digest"] = traceback.format_exc()[-4000:]
         completed += 1
         _write_csv(Path(args.output), rows)
 
