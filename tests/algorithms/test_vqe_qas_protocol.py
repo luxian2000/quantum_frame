@@ -50,6 +50,10 @@ from aicir.qas.demos.vqe_qas_run_fair_labels import (
     _problem_from_row_or_protocol,
     _validate_queue_protocol_versions,
 )
+from aicir.qas.demos.vqe_qas_run_fair_labels_sharded import (
+    _contiguous_shards,
+    _shard_environment,
+)
 from aicir.qas.demos.vqe_qas_labels_to_supernet_sidecar import build_sidecar_records
 from aicir.qas.vqe_hea_demo import (
     HEAMask,
@@ -947,6 +951,21 @@ def test_label_row_records_best_parameters_in_trace(tmp_path: Path) -> None:
     trace = json.loads(labeled["best_trace"])
     assert trace[0]["best_parameters"]
     assert len(trace[0]["best_parameters"]) == parameter_count(_architecture_from_row(row).circuit)
+
+
+def test_fair_label_shards_are_contiguous_and_cover_queue() -> None:
+    assert _contiguous_shards(10, 4) == [(0, 3), (3, 6), (6, 8), (8, 10)]
+    assert _contiguous_shards(3, 8) == [(0, 1), (1, 2), (2, 3)]
+
+
+def test_fair_label_shard_environment_uses_local_rank_without_world_size() -> None:
+    env = _shard_environment({"WORLD_SIZE": "4", "RANK": "2"}, shard_index=1, device_offset=2, num_shards=6)
+
+    assert env["LOCAL_RANK"] == "3"
+    assert env["AICIR_QAS_SHARD_INDEX"] == "1"
+    assert env["AICIR_QAS_NUM_SHARDS"] == "6"
+    assert "WORLD_SIZE" not in env
+    assert "RANK" not in env
 
 
 def test_labels_to_supernet_sidecar_exports_best_params(tmp_path: Path) -> None:

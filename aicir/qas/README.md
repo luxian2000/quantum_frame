@@ -276,6 +276,33 @@ result = supernet_qas(ham, layers=6, supernet_num=5,
                       device="npu:0")
 ```
 
+### 3.6 QAS fair-label 队列的多 NPU 分片
+
+`aicir` 已经内置 `NPUBackend`，QAS 的 fair VQE runner 可通过 `--backend npu` 使用 Ascend NPU。对于 Stage 1.5 / Stage 2 产生的 label queue，推荐使用分片入口把候选行切成多份并行跑；每个分片是独立 VQE 任务，通过 `LOCAL_RANK` 绑定到一张 NPU，不会把单个态向量切成 HCCL 分布式任务。
+
+```bash
+python aicir/qas/demos/vqe_qas_run_fair_labels_sharded.py \
+  --queue outputs/vqe_qas_h2_mog_stage2_demo/h2_molecule_oracle_supernet_round1_queue.csv \
+  --output outputs/vqe_qas_h2_mog_stage2_demo/h2_molecule_oracle_supernet_round1_labels.csv \
+  --work-dir outputs/vqe_qas_h2_mog_stage2_demo/label_shards \
+  --protocol aicir/qas/configs/fair_vqe_protocol_v2.json \
+  --backend npu \
+  --dtype complex64 \
+  --num-shards 4 \
+  --device-offset 0 \
+  --n-seeds 1 \
+  --max-evals 300
+```
+
+关键参数：
+
+- `--num-shards`：队列分片数。4 张卡可设为 `4`，也可以按机器资源改成 `1`、`2`、`8` 等。
+- `--device-offset`：第 0 个 shard 使用的 `LOCAL_RANK` 偏移量；默认 `0` 会使用 `npu:0` 开始的连续设备。例如只想跳过 `npu:0`，可用 `--device-offset 1 --num-shards 3` 使用 `npu:1` 到 `npu:3`。
+- `--backend npu` / `--dtype complex64`：使用 Ascend NPU 后端。若要做 CPU smoke，可改为 `--backend numpy --dtype complex128`。
+- `--work-dir`：保存每个 shard 的临时 queue、临时 label CSV 和最终 summary。
+
+分片器会把原始 queue 连续切块，并给底层 `vqe_qas_run_fair_labels.py` 传入 `--seed-index-offset`，因此同一全局队列行在单进程或多分片运行时使用一致的 seed 派生规则。最终输出仍是一个 benchmark table CSV，可继续用于 oracle calibration、Stage 2 batch planning 和标签回流。
+
 ## 4. MoG_VQE：基于 NSGA-II 的多目标遗传 VQE 拓扑搜索
 
 `MoG_VQE.py` 实现 MoG-VQE 的线路拓扑搜索部分。输入是 block-based hardware-efficient ansatz，算法把线路表示为二量子比特 block 的有序列表，通过插入 block、删除 block 和大尺度变异修改拓扑，并使用 NSGA-II 同时最小化能量和 CNOT 数量。输出是修改后的 aicir `Circuit`、最终 Pareto 前沿和每一代搜索摘要。

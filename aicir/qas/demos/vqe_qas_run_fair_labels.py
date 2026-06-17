@@ -280,6 +280,12 @@ def main() -> None:
     parser.add_argument("--protocol", default="aicir/qas/configs/fair_vqe_protocol_v2.json")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument(
+        "--seed-index-offset",
+        type=int,
+        default=0,
+        help="Offset added to the queue row index when deriving per-row VQE seeds; used by sharded runners.",
+    )
     parser.add_argument("--n-seeds", type=int, default=3)
     parser.add_argument("--success-delta-ref", type=float, default=0.02)
     parser.add_argument("--max-evals", type=int, default=None)
@@ -310,7 +316,7 @@ def main() -> None:
             rows[index] = _label_row(
                 row,
                 protocol=protocol,
-                seed=int(args.seed) + index * 1000,
+                seed=int(args.seed) + (int(args.seed_index_offset) + index) * 1000,
                 n_seeds=int(args.n_seeds),
                 success_delta_ref=float(args.success_delta_ref),
                 max_evals_override=args.max_evals,
