@@ -119,7 +119,7 @@ class Measure:
         return out
 
     # ---------- 主入口 ----------
-    def run(self, circuit, shots=1, measure_qubits=[], snap=None,
+    def run(self, circuit, shots=1, measure_qubits=(), snap=None,
             sm="avg", seed=None, *,
             initial_state=None, initial_density_matrix=None,
             observables=None, return_state=True) -> Result:
@@ -130,7 +130,7 @@ class Measure:
             shots:                   采样次数；None 或 0 表示 exact 模式（单条精确轨迹，
                                      不做末端测量，且忽略 measure_qubits）；≥1 表示 M 条轨迹按 sm 聚合
             measure_qubits:          末端读出比特控制（仅 shot 模式生效）：
-                                     None=不做末端测量；[]（默认）=读出全部比特；
+                                     None=不做末端测量；空（默认）=读出全部比特；
                                      [q0, q1, …]=读出该子集（保留输入顺序）。
                                      exact 模式下该参数被忽略、不报错
             snap:                    需记录完整态快照的操作下标集合
@@ -167,6 +167,7 @@ class Measure:
             terminal_qubits = None
         else:
             norm_mq = self._normalize_measure_qubits(measure_qubits, n)
+            # 空（()/[]）归一化后为空列表，展开为全比特
             terminal_qubits = norm_mq if len(norm_mq) > 0 else list(range(n))
             do_terminal = True
 
