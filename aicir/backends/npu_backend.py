@@ -394,6 +394,8 @@ class NPUBackend(GPUBackend):
         else:
             import numpy as np
 
+            if hasattr(matrix, "detach") and hasattr(matrix, "cpu"):
+                matrix = matrix.detach().cpu()
             array = np.asarray(matrix)
             keep_real = (
                 real_if_possible
