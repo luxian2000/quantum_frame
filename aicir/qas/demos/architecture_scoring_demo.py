@@ -19,9 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from aicir.qas import build_common_architectures, evaluate_architectures
-from aicir.qas.multi_objective_reward import RewardWeights
-from aicir.qas import ArchitectureScore
+from aicir.qas import ArchitectureScore, RewardWeights, build_common_architectures, evaluate_architectures
 from aicir.backends.numpy_backend import NumpyBackend
 
 

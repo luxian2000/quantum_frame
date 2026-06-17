@@ -1,6 +1,7 @@
 import math
 import unittest
 
+from aicir.qas._types import ArchitectureSpec
 from aicir.qas import (
     HEAMask,
     THETA_INIT_RANDOM_UNIFORM_PI,
@@ -36,6 +37,7 @@ from aicir.qas import (
     v3_top_k,
 )
 from aicir.qas.task_evaluation import parameter_count
+from aicir.qas.vqe_hea_demo import VQEDemoProblem, evaluate_vqe_energy
 
 
 class TestVQEHEADemo(unittest.TestCase):
@@ -62,6 +64,23 @@ class TestVQEHEADemo(unittest.TestCase):
         energy = evaluate_h2_energy(architecture, [0.0] * n_params)
 
         self.assertTrue(math.isfinite(energy))
+
+    def test_vqe_energy_uses_unmeasured_state_for_x_terms(self):
+        architecture = ArchitectureSpec.from_gates(
+            name="one_ry",
+            gates=[{"type": "ry", "target_qubit": 0, "parameter": 0.0}],
+            n_qubits=1,
+        )
+        problem = VQEDemoProblem(
+            name="minus_x",
+            n_qubits=1,
+            hamiltonian=[(-1.0, "X")],
+            reference_energy=-1.0,
+        )
+
+        energy = evaluate_vqe_energy(architecture, problem, [math.pi / 2])
+
+        self.assertAlmostEqual(energy, -1.0, places=6)
 
     def test_v3_protocol_helpers_freeze_budget_and_top_k_rules(self):
         self.assertEqual(v3_screening_maxfev(3), 500)

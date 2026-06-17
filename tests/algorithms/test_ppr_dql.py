@@ -11,6 +11,19 @@ except ImportError as exc:
     raise unittest.SkipTest("PPR-DQL tests require torch") from exc
 
 
+class _GateCountEvaluator:
+    def __init__(self):
+        self.seen_gate_counts = []
+
+    def evaluate(self, architecture):
+        self.seen_gate_counts.append(len(architecture.circuit))
+
+        class _Score:
+            weighted_score = float(len(architecture.circuit))
+
+        return _Score()
+
+
 def _fidelity_from_circuit(circuit, target_state: State) -> float:
     evolved = State.zero_state(target_state.n_qubits, backend=target_state.backend).evolve(
         circuit.unitary(backend=target_state.backend)
@@ -59,6 +72,32 @@ class TestPPRDQL(unittest.TestCase):
         self.assertEqual(len(circuit), 1)
         self.assertEqual(circuit.gates[0]["type"], "pauli_x")
         self.assertGreaterEqual(_fidelity_from_circuit(circuit, self.target_state), 0.99)
+
+    def test_train_ppr_dql_can_shape_rewards_with_architecture_evaluator(self):
+        evaluator = _GateCountEvaluator()
+        config = PPRDQLConfig(
+            episode_num=2,
+            max_steps_per_episode=1,
+            batch_size=1,
+            replay_capacity=16,
+            warmup_transitions=1,
+            target_update_interval=1,
+            fidelity_threshold=0.99,
+            gate_penalty=0.0,
+            terminal_bonus=1.0,
+            epsilon_start=0.0,
+            epsilon_end=0.0,
+            epsilon_decay=1.0,
+            action_gates=[{"type": "pauli_x", "target_qubit": 0}],
+            architecture_reward_evaluator=evaluator,
+            architecture_reward_weight=0.5,
+            seed=7,
+        )
+
+        result = train_ppr_dql(self.target_state, config=config)
+
+        self.assertEqual(evaluator.seen_gate_counts, [1, 1, 1])
+        self.assertEqual(result.episode_rewards, [2.5, 2.5])
 
 
 if __name__ == "__main__":

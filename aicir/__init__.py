@@ -208,7 +208,7 @@ else:
 # 导入 ``aicir.measure`` 子包会把 ``aicir.measure`` 属性重新绑定为该子模块，
 # 覆盖上面从 ``.core`` 导入的同名门构造器 ``measure``。这里显式恢复门构造器，
 # 使 ``from aicir import measure`` 始终拿到门构造函数而非子包。
-from .core import measure  # noqa: E402  恢复门构造器绑定
+from .core.circuit import measure  # noqa: E402  恢复门构造器绑定
 
 for _module_name in [
     "chemistry",

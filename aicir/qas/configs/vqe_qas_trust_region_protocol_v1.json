@@ -1,0 +1,134 @@
+{
+  "protocol_version": "vqe_qas_trust_region_oracle_v1",
+  "fair_vqe_protocol_freeze": {
+    "freeze_point": "after_stage0_candidate_grammar_before_first_label",
+    "label_backend": "cpu_numpy",
+    "label_dtype": "complex128",
+    "theta_init_mode": "random_uniform_pi",
+    "optimizer": "COBYLA",
+    "notes": [
+      "Do not mix labels from different protocol_version values.",
+      "Do not generate oracle labels before this protocol is frozen."
+    ]
+  },
+  "stage0": {
+    "coverage_axes": [
+      "family",
+      "entangler_type",
+      "depth_group",
+      "topology",
+      "n_params",
+      "two_q_count",
+      "hamiltonian_coverage"
+    ],
+    "anchor_selection": {
+      "group_by": ["family", "entangler_type", "topology"],
+      "representative": "closest_to_cell_median_n_params_and_two_q_count",
+      "tie_breaker": "canonical_arch_hash"
+    },
+    "compatibility": {
+      "entangler_type": [["cx", "cz"], ["cz", "rzz"]],
+      "topology": [["linear", "ring"]],
+      "family": [["hea", "realamplitudes"], ["qaoa_like", "problem_inspired"]],
+      "depth_group": []
+    }
+  },
+  "first_label_batch": {
+    "default_N0": 96,
+    "minimum_N0": 64,
+    "holdout_fraction": 0.2,
+    "priority": [
+      "hamiltonian_class",
+      "n_qubits",
+      "family",
+      "entangler_type",
+      "depth_group",
+      "topology",
+      "n_params_bucket",
+      "two_q_count_bucket",
+      "hamiltonian_coverage_bucket"
+    ],
+    "holdout_split": {
+      "id": 0.4,
+      "boundary": 0.3,
+      "sparse": 0.3
+    }
+  },
+  "stage1b_zero_cost_filter": {
+    "purpose": "feasibility filter only; not a final ranker",
+    "default_expressibility_metric": "structural_proxy",
+    "default_trainability_metric": "structure_proxy",
+    "optional_expressibility_metrics": ["mmd_relative", "kl_haar"],
+    "optional_trainability_metrics": ["gradient_norm", "gradient_variance"],
+    "trainability_soft_quantile": 0.1,
+    "expressibility_soft_quantile": 0.05,
+    "trainability_hard_floor": 0.01,
+    "expressibility_hard_floor": 0.01,
+    "entanglement_soft_floor": 0.25,
+    "rules": [
+      "hard reject only extreme failures or explicit complexity cap violations",
+      "soft flags enter boundary pool instead of being deleted",
+      "zero_cost_feature_score is recorded as a feature, not used for Stage-1 ranking",
+      "zero_cost_score_is_ranking_signal must be false",
+      "metrics with no spread in the current pool do not trigger soft flags"
+    ]
+  },
+  "trust_region": {
+    "k_min": 5,
+    "abstain_rate_max": 0.4,
+    "target_sparse_abstain_rate": 0.8,
+    "target_tr_coverage": 0.2,
+    "target_tr_in_mae_ratio": 0.5,
+    "distance_scale": "stage0_fixed_iqr",
+    "oracle_policy": "interpolate_or_abstain_never_extrapolate"
+  },
+  "batch": {
+    "default_B": 32,
+    "small_B": 16,
+    "default_quotas": {
+      "local": 12,
+      "boundary": 10,
+      "sparse": 6,
+      "control": 4
+    },
+    "small_quotas": {
+      "local": 6,
+      "boundary": 5,
+      "sparse": 3,
+      "control": 2
+    },
+    "abstain_rate_denominator": "deduplicated_current_trackA_mutation_candidates"
+  },
+  "retry_policy": {
+    "max_retry": 2,
+    "running_timeout_multiplier": 1.5
+  },
+  "label_status": [
+    "pending",
+    "running",
+    "completed",
+    "failed_retryable",
+    "failed_nonretryable",
+    "excluded_protocol_mismatch",
+    "excluded_invalid_candidate",
+    "excluded_duplicate"
+  ],
+  "label_source": [
+    "initial_train",
+    "initial_calibration",
+    "holdout_id",
+    "holdout_boundary",
+    "holdout_sparse",
+    "trackA_local",
+    "trackB_boundary",
+    "trackB_sparse",
+    "control_random",
+    "baseline"
+  ],
+  "hard_rules": [
+    "B1_B2_short_step_vqe_must_not_drive_candidate_selection",
+    "medium_fair_labels_must_not_train_the_oracle",
+    "oracle_low_score_must_not_permanently_delete_candidates",
+    "only_completed_rows_with_current_protocol_version_can_train_or_validate_oracle"
+  ]
+}
