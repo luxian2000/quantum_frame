@@ -490,17 +490,22 @@ class NPUBackend(GPUBackend):
         trace_out = [i for i in range(n_qubits) if i not in keep]
         if not trace_out:
             return rho_real.clone()
-        reshaped = rho_real.reshape([2] * n_qubits + [2] * n_qubits)
-        perm = (
-            keep + trace_out
-            + [k + n_qubits for k in keep]
-            + [t + n_qubits for t in trace_out]
-        )
-        permuted = reshaped.permute(perm)
-        d_keep = 1 << len(keep)
-        d_trace = 1 << len(trace_out)
-        permuted = permuted.reshape(d_keep, d_trace, d_keep, d_trace)
-        return torch.einsum("abcb->ac", permuted)
+        # 逐比特求迹，每步把密度矩阵整形为 (L, 2, R, L, 2, R) 的秩-6 张量并对该
+        # 比特的行/列同一指标求和。避免一次性整形为 [2]*n + [2]*n（秩 2n），后者
+        # 在昇腾 NPU 上 n>4 即超出 ACL 算子最多 8 维的限制。工作张量的秩恒为 6，
+        # 与量子比特总数无关；按降序求迹使保留比特维持原有（升序）次序。
+        remaining = list(range(n_qubits))
+        cur = rho_real
+        for qubit in sorted(trace_out, reverse=True):
+            pos = remaining.index(qubit)
+            m = len(remaining)
+            left = 1 << pos
+            right = 1 << (m - pos - 1)
+            block = cur.reshape(left, 2, right, left, 2, right)
+            cur = block[:, 0, :, :, 0, :] + block[:, 1, :, :, 1, :]
+            cur = cur.reshape(left * right, left * right)
+            remaining.pop(pos)
+        return cur
 
     def partial_trace(self, rho, keep, n_qubits):
         """NPU workaround: partial trace via real/imag split (avoids torch.einsum on complex64)."""

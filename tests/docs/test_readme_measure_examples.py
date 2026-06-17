@@ -23,7 +23,7 @@ def test_bell_zz_incircuit_deterministic_plus1_shots_none():
     """Bell 态 ZZ 联合投影：shots=None 时 output 为标量 +1（确定性），
     态矢仍是 Bell 态（未坍缩到计算基）。"""
     cir = Circuit(hadamard(0), cnot(1, [0]), measure([0, 1], id="zz"), n_qubits=2)
-    r = run(cir, shots=None, tm=False)
+    r = run(cir, shots=None, measure_qubits=None)
 
     # output("zz") 和 output(2) 均应给出标量 +1
     assert r.output("zz") == 1
@@ -38,7 +38,7 @@ def test_bell_zz_incircuit_deterministic_plus1_shots_none():
 def test_bell_zz_incircuit_shots_m_output_shape_and_values():
     """Bell ZZ，shots=8：output(2) 形状 (8,1)，全为 +1；counts(2) 仅含 {1}。"""
     cir = Circuit(hadamard(0), cnot(1, [0]), measure([0, 1]), n_qubits=2)
-    r = run(cir, shots=8, tm=False)
+    r = run(cir, shots=8, measure_qubits=None)
 
     out = r.output(2)
     assert out.shape == (8, 1)
@@ -65,7 +65,7 @@ def test_shots_none_exact_no_terminal_final_equals_state():
 def test_shots_none_counts_raises():
     """shots=None 时调用 counts 应报 RuntimeError（单轨迹模式）。"""
     cir = Circuit(hadamard(0), measure(0), n_qubits=1)
-    r = run(cir, shots=None, tm=False)
+    r = run(cir, shots=None, measure_qubits=None)
     with pytest.raises(RuntimeError):
         r.counts(1)
 

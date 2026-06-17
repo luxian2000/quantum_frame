@@ -6,8 +6,8 @@ aicir/measure/measure.py
 
 测量语义（见 README §4 与设计文档）：
 - 线路内嵌 measure 门 = 投影测量（由轨迹引擎逐操作执行、坍缩态）
-- 末端读出 = 由 tm / measure_qubits 控制的 Z 基逐比特测量
-- shots ∈ {None, 0} = exact 模式：单条精确轨迹、不做末端测量（覆盖 tm）
+- 末端读出 = 由 `measure_qubits` 控制的 Z 基逐比特测量（None=不测；[]=全部；[list]=子集）
+- shots ∈ {None, 0} = exact 模式：单条精确轨迹、不做末端测量（忽略 measure_qubits）
 - shots ≥ 1 = M 条轨迹，按 sm（默认 avg）聚合
 """
 
@@ -119,8 +119,8 @@ class Measure:
         return out
 
     # ---------- 主入口 ----------
-    def run(self, circuit, shots=1, measure_qubits=None, snap=None,
-            tm=True, sm="avg", seed=None, *,
+    def run(self, circuit, shots=1, measure_qubits=(), snap=None,
+            sm="avg", seed=None, *,
             initial_state=None, initial_density_matrix=None,
             observables=None, return_state=True) -> Result:
         """统一测量入口。
@@ -128,10 +128,12 @@ class Measure:
         参数:
             circuit:                 待测电路（需具备 n_qubits 属性）
             shots:                   采样次数；None 或 0 表示 exact 模式（单条精确轨迹，
-                                     覆盖 tm、不做末端测量）；≥1 表示 M 条轨迹按 sm 聚合
-            measure_qubits:          显式末端读出比特（保留顺序）。与 tm=False、exact 模式互斥
+                                     不做末端测量，且忽略 measure_qubits）；≥1 表示 M 条轨迹按 sm 聚合
+            measure_qubits:          末端读出比特控制（仅 shot 模式生效）：
+                                     None=不做末端测量；空（默认）=读出全部比特；
+                                     [q0, q1, …]=读出该子集（保留输入顺序）。
+                                     exact 模式下该参数被忽略、不报错
             snap:                    需记录完整态快照的操作下标集合
-            tm:                      是否在电路执行完后进行末端测量（exact 模式下被覆盖）
             sm:                      多轨迹聚合模式，目前仅支持 'avg'（'shot'/'cond' 暂未实现）
             seed:                    随机种子（用于复现）
             initial_state:           初始态（None 表示 |0...0>）
@@ -158,20 +160,16 @@ class Measure:
         if sm in ("shot", "cond"):
             raise NotImplementedError(f"sm={sm!r} 暂未实现（仅支持 avg）")
 
-        # 末端测量解析（exact 模式覆盖 tm；与显式 measure_qubits 冲突报错）
-        mq_explicit = measure_qubits is not None
-        if mq_explicit:
-            norm_mq = self._normalize_measure_qubits(measure_qubits, n)
+        # 末端读出解析：exact 模式永不测量且忽略 measure_qubits；
+        # shot 模式下 None=off、[]=全部、[list]=子集。
+        if exact or measure_qubits is None:
+            do_terminal = False
+            terminal_qubits = None
         else:
-            norm_mq = None
-        if not tm and mq_explicit and len(norm_mq) > 0:
-            raise ValueError("tm=False 与非空 measure_qubits 冲突")
-        if exact and mq_explicit and len(norm_mq) > 0:
-            raise ValueError("shots∈{None,0}（exact 模式）覆盖 tm、不做末端测量，"
-                             "与显式 measure_qubits 冲突；如需末端读出请用 shots≥1")
-
-        do_terminal = tm and not exact and not (mq_explicit and len(norm_mq) == 0)
-        terminal_qubits = (norm_mq if (mq_explicit and len(norm_mq) > 0) else list(range(n))) if do_terminal else None
+            norm_mq = self._normalize_measure_qubits(measure_qubits, n)
+            # 空（()/[]）归一化后为空列表，展开为全比特
+            terminal_qubits = norm_mq if len(norm_mq) > 0 else list(range(n))
+            do_terminal = True
 
         if initial_state is not None and initial_density_matrix is not None:
             raise ValueError("initial_state 与 initial_density_matrix 互斥，只能提供其一")
