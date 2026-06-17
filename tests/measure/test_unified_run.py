@@ -97,3 +97,14 @@ def test_sm_shot_not_implemented():
     cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
     with pytest.raises(NotImplementedError):
         run(cir, shots=4, snap=[0], sm="shot")
+
+
+def test_shotsampler_defaults_to_full_readout():
+    from aicir.primitives.sampler import ShotSampler
+    # ShotSampler.run 默认 measure_qubits=()，即读出全部比特
+    # SampleResult.counts 是 dict 属性，键格式为 "|bitstring>"
+    cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
+    res = ShotSampler(shots=128).run(cir)
+    counts = res.counts  # SampleResult.counts 是属性，非方法
+    assert sum(counts.values()) == 128
+    assert set(counts) <= {"|00>", "|11>"}
