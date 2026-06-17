@@ -143,6 +143,14 @@ class TestMeasure(unittest.TestCase):
         counts = result.counts(-1)
         self.assertTrue(all(len(k) == 2 for k in counts))
 
+    def test_empty_measure_qubits_reads_all(self):
+        # measure_qubits=[] 表示读出全部比特
+        result = self.measure.run(self.bell, shots=200, measure_qubits=[])
+
+        self.assertEqual(result.terminal_qubits, [0, 1])
+        counts = result.counts(-1)
+        self.assertTrue(all(len(k) == 2 for k in counts))
+
     def test_measure_qubits_validates_indices(self):
         with self.assertRaises(ValueError):
             self.measure.run(self.bell, shots=10, measure_qubits=[5])
