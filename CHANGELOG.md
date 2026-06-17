@@ -6,6 +6,7 @@
 
 ### Added
 
+- `cx` / `cnot` 工厂的第一个参数支持目标位列表：`cx([t1, t2, ...], [controls])` 对每个目标施加同一组控制位，等价于多个共享控制位的单目标 CX（彼此对易）。单目标 `cx(t, [c])` 行为不变；`control_states` 同样适用。多目标门以单个 `Operation`（`qubits=(t1, t2, ...)`）存储，态向量演化、`Circuit.unitary()` 与 OpenQASM 导出在内部按目标自动展开。`cx` 的 `GateSpec.num_qubits` 由 `1` 放宽为 `None`。配套新增 `tests/gates/test_cx_multi_target.py`。
 - 新增 `DiffMethod` 策略注册表（NEXT.md 第 6 节第一片）：子包 `aicir.qml.diff` 提供冻结数据类 `DiffMethod`（字段含 `name`/`fn`/`aliases`/`exact`/`stochastic`/`requires_torch`/`supports_shots`/`supports_noise`）与注册表 API（`register_diff`/`unregister_diff`/`get_diff`/`registered_diffs`/`canonical_diff`/`resolve_diff`），并从 `aicir.qml` 顶层再导出。
 - 新增纯函数选择器 `select_diff(*, backend=None, shots=None, noisy=False)`，按 auto → psr → fd 优先级自动推断梯度方法（`spsa`/`spsr` 不参与自动选择）；已有单元测试覆盖，暂未接入调用方（保留给后续 QNode）。
 - 内置注册 fn-based 全梯度方法：`psr`/`fd`/`auto`/`spsa`/`spsr`；`mpsr`（返回标量混合偏导而非梯度向量）有意排除在注册表之外，仍作为 `qml.mpsr` 直接可用；基于线路的 `ad` 与预条件策略 `qng` 同样不纳入注册表。

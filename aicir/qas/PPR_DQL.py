@@ -1,15 +1,29 @@
-"""PPR-DQL state-synthesis implementation built on aicir primitives.
+"""基于概率策略重用与深度 Q 学习的量子架构搜索 (PPR-DQL)。
 
-- Paper: "Quantum Architecture Search via Continual Reinforcement Learning"
-- Reference: arXiv:2112.05779v1
+- 论文: Quantum Architecture Search via Continual Reinforcement Learning
+- 参考: arXiv:2112.05779v1
 
-This module turns the previous algorithm notes into executable code:
-- environment state is represented with aicir State and Circuit objects
-- observations are per-qubit X/Y/Z expectation values
-- actions append aicir-supported gates to the current circuit
-- learning uses DQN with experience replay and a target network
-- policy reuse follows the PPR idea by mixing archived policies with the
-  current learner during selected episodes
+本实现以 aicir 原生的形式遵循了 PPR-DQL 的核心思想：
+- 使用 aicir State 和 Circuit 表示环境量子态与候选线路。
+- 从 |0...0> 初态开始，通过离散动作向当前线路追加 aicir 支持的量子门。
+- 以每个量子比特的 X/Y/Z 期望值作为 DQN 观测。
+- 使用经验回放和目标网络训练当前 DQN 策略。
+- 通过 PPR (probabilistic policy reuse) 在部分回合中混用历史策略库与当前学习策略，实现持续强化学习中的策略迁移。
+- 以保真度增量减去门惩罚作为奖励，到达目标保真度时加入终止奖励并结束回合。
+
+输入 (Inputs):
+- target_state: State。目标量子态；其后端、量子比特数和态向量用于构造训练环境。
+- config: Optional[PPRDQLConfig]。算法的超参数配置，包括训练回合数、最大线路深度、目标保真度阈值、DQN 学习率、经验回放容量、epsilon-greedy 探索参数、PPR 策略重用概率、动作门集合和随机种子。
+- policy_library: Optional[Sequence[PPRDQLPolicy]]。可选历史策略库；每个策略必须与目标任务具有相同量子比特数和动作空间，用于 PPR 策略重用。
+
+输出 (Outputs):
+- train_ppr_dql 返回一个 PPRDQLResult 数据类，包含：
+  * circuit: 搜索到的最佳量子电路。
+  * policy: 训练后的 PPRDQLPolicy，包含 DQN 网络、动作门集合、量子比特数和策略名称。
+  * best_fidelity: 训练和最终贪心推演中达到的最高保真度。
+  * episode_rewards: 每个训练回合的累计奖励列表（可用于绘制收敛曲线）。
+  * selected_policy_indices: 每个回合选择的策略索引；0 表示当前学习策略，大于 0 表示复用 policy_library 中对应历史策略。
+- ppr_dql_state_to_circuit 返回一个 Circuit，仅包含搜索到的最佳量子电路。
 """
 
 from __future__ import annotations

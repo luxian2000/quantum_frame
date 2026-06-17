@@ -1,14 +1,25 @@
-"""Trust Region-based PPO with Rollback for Quantum Architecture Search.
+"""基于带回滚的真近端策略优化的量子架构搜索 (PPO-RB)。
 
-- Paper:
-X. Zhu and X. Hou, ‘Quantum architecture search via truly proximal policy optimization’, 
+- 论文:
+X. Zhu and X. Hou, "Quantum architecture search via truly proximal policy optimization",
 Sci Rep, vol. 13, no. 1, p. 5157, Mar. 2023, doi: 10.1038/s41598-023-32349-2.
 
+本实现以 aicir 原生的形式遵循了 PPO-RB 的核心思想：
+- 从 |0...0> 初态开始构造候选量子线路。
+- 将“追加一个量子门”建模为离散动作。
+- 以当前密度矩阵的实部和虚部拼接作为策略网络观测。
+- 使用 actor-critic PPO 更新策略，并在 KL 散度超过阈值时采用 rollback surrogate 限制策略漂移。
+- 以保真度增量减去门惩罚作为奖励，到达保真度阈值时可加入终止奖励。
 
-- 从 |0...0> 初态开始
-- 动作为追加一个门到当前线路
-- 输入为目标密度矩阵和保真度阈值 epsilon
-- 输出为优化后的策略参数 theta 与运行策略得到的电路
+输入 (Inputs):
+- target_density_matrix: np.ndarray。目标量子态密度矩阵，维度必须是 2^n x 2^n。
+- epsilon: float。保真度终止阈值；当当前线路制备态与目标密度矩阵的保真度达到该值时回合结束。
+- config: Optional[PPORollbackConfig]。算法的超参数配置，包括训练回合数、最大线路深度、PPO 裁剪系数、KL 阈值、回滚系数、动作门集合、随机种子以及可选的 init_theta 热启动策略参数。
+
+输出 (Outputs):
+- ppo_rb_qas 返回一个 Tuple[Dict[str, torch.Tensor], Circuit]，包含：
+  * theta: 优化后的策略-价值网络参数 state_dict。
+  * circuit: 训练中找到的最佳量子电路；若训练过程中没有记录到有效电路，则使用最终策略贪心运行得到的电路。
 """
 
 from __future__ import annotations

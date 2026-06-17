@@ -2,9 +2,10 @@
 
 `aicir.qas` 是量子构架搜索（Quantum Architecture Search, QAS）模块。
 
-该模块用于自动搜索量子线路结构。当前仓库中包含两类 QAS 实现：一类面向变分量子算法（VQA）的 ansatz 架构搜索，另一类面向给定目标态或哈密顿量任务的强化学习式量子线路搜索。运行下列实现需要可用的 `torch`。
+该模块用于自动搜索量子线路结构。当前仓库中包含多类 QAS 实现：一类面向变分量子算法（VQA）的 ansatz 架构搜索，一类面向给定目标态或哈密顿量任务的强化学习式量子线路搜索，另有面向 VQE ansatz 拓扑压缩的多目标遗传搜索。运行 `supernet.py`、`CRLQAS.py`、`PPR_DQL.py` 和 `PPO_RB.py` 需要可用的 `torch`；`MoG_VQE.py` 的默认路径不依赖 `torch`。
 
 - `supernet.py`：基于超网络和权重共享的 VQA ansatz 架构搜索，支持分类任务和 H2 VQE 示例
+- `MoG_VQE.py`：MoG-VQE（Multiobjective Genetic VQE），输入 block-based hardware-efficient ansatz，使用 NSGA-II 修改线路拓扑，并输出修改后的 aicir `Circuit`
 - `CRLQAS.py`：课程学习 + DDQN + Adam-SPSA 的量子架构搜索（面向哈密顿量能量最小化）
 - `PPR_DQL.py`：基于 aicir 状态演化实现的 PPR-DQL（Probabilistic Policy Reuse with Deep Q-Learning）
 - `PPO_RB.py`：Trust Region-based PPO with Rollback 版本的量子架构搜索
@@ -12,6 +13,7 @@
 ## 1. 已提供能力
 
 - VQA ansatz 搜索：`supernet.py` 使用超网络、权重共享、架构排序和微调，为分类、VQE 或自定义 VQA 目标选择 ansatz。
+- 多目标遗传 VQE 拓扑搜索：`MoG_VQE.py` 将线路表示为二量子比特 block 序列，通过 NSGA-II 同时最小化能量和 CNOT 数量，适合从 block-based HEA 出发压缩 VQE ansatz。
 - 多超网络训练：`supernet.py` 支持 `supernet_num`，每次采样架构后选择损失最小的超网络并只更新该超网络的活跃参数。
 - 内置 VQA 示例：`classification_supernet` 提供 3 量子比特合成二分类任务，`h2_vqe_supernet` 提供 4 量子比特 H2 VQE 任务。
 - 强化学习线路搜索：`PPO_RB.py`、`PPR_DQL.py` 和 `CRLQAS.py` 从空线路出发逐步追加 aicir 支持的量子门，搜索目标态制备或低能量线路。
@@ -70,6 +72,7 @@ result = run("supernet", config=cfg)
 底层专用接口仍然保留，适合需要直接控制某个算法实现的用户：
 
 - `train_supernet(objective, config=None, dataset=None, hamiltonian=None)`
+- `block_hardware_efficient_ansatz(n_qubits, layers=1, topology="linear")` / `run_mog_vqe(initial_ansatz, hamiltonian=None, energy_evaluator=None, config=None, backend=None)`
 - `classification_supernet(config=None)` / `h2_vqe_supernet(config=None)`
 - `ppo_rb_qas(target_density_matrix, epsilon, config=None)`
 - `train_ppr_dql(state, config=None, policy_library=None)` / `ppr_dql_state_to_circuit(...)`
@@ -273,7 +276,109 @@ result = supernet_qas(ham, layers=6, supernet_num=5,
                       device="npu:0")
 ```
 
-## 4. PPO_RB：基于真正近端策略优化的量子架构搜索
+## 4. MoG_VQE：基于 NSGA-II 的多目标遗传 VQE 拓扑搜索
+
+`MoG_VQE.py` 实现 MoG-VQE 的线路拓扑搜索部分。输入是 block-based hardware-efficient ansatz，算法把线路表示为二量子比特 block 的有序列表，通过插入 block、删除 block 和大尺度变异修改拓扑，并使用 NSGA-II 同时最小化能量和 CNOT 数量。输出是修改后的 aicir `Circuit`、最终 Pareto 前沿和每一代搜索摘要。
+
+论文依据：
+
+- D. Chivilikhin, A. Samarin, V. Ulyantsev, I. Iorsh, A. R. Oganov, O. Kyriienko, *MoG-VQE: Multiobjective genetic variational quantum eigensolver*, arXiv:2007.04424, 2020.
+
+当前实现保持 aicir 原生依赖，不强制引入 DEAP 或 CMA-ES。默认参数优化器是轻量的 `separable_es`；若需要严格复现实验中的 CMA-ES，可通过 `energy_evaluator(circuit)` 接入外部优化流程。`MoG_VQE` 当前作为底层专用接口使用，不经过统一 `run(method, ...)` 分发。
+
+### 4.1 输入参数（`block_hardware_efficient_ansatz` / `run_mog_vqe`）
+
+函数签名：
+
+- `block_hardware_efficient_ansatz(n_qubits, layers=1, topology="linear", block_type="generalized_cnot")`
+- `run_mog_vqe(initial_ansatz, hamiltonian=None, energy_evaluator=None, config=None, backend=None)`
+
+| 参数                 | 类型                                                   | 必填 | 说明                                                                                           |
+| -------------------- | ------------------------------------------------------ | ---- | ---------------------------------------------------------------------------------------------- |
+| `initial_ansatz`   | `MOGVQEIndividual \| Circuit \| Sequence[MOGVQEBlock]` | 是   | 初始 block-based HEA 拓扑；传入 `Circuit` 时会从其中的 CNOT 连接提取 block 拓扑。              |
+| `hamiltonian`      | `Hamiltonian \| np.ndarray \| None`                    | 否   | 目标哈密顿量；提供后使用精确态向量能量评估。                                                   |
+| `energy_evaluator` | `Callable[[Circuit], float] \| None`                   | 否   | 自定义能量评估函数；适合接入外部 VQE/CMA-ES/硬件评估流程。                                     |
+| `config`           | `MOGVQEConfig \| None`                                 | 否   | NSGA-II、拓扑变异和参数优化超参数；传 `None` 使用默认值。                                      |
+| `backend`          | `Any \| None`                                          | 否   | aicir 后端；默认为 `NumpyBackend`。                                                            |
+
+`run_mog_vqe` 至少需要 `hamiltonian` 或 `energy_evaluator` 之一。返回值为 `MOGVQEResult`：
+
+- `best_individual`：搜索到的最优 block 拓扑
+- `best_circuit`：搜索到并绑定最优参数后的 aicir `Circuit`
+- `best_energy`：最优线路能量
+- `best_parameters`：最优连续旋转参数
+- `pareto_front`：最终种群中的非支配 Pareto 前沿
+- `population`：最终 NSGA-II 种群
+- `history`：每一代的最优能量、CNOT 数量和 Pareto 前沿摘要
+
+### 4.2 超参数（`MOGVQEConfig`）
+
+| 字段                            | 默认值               | 说明                                                                 |
+| ------------------------------- | -------------------- | -------------------------------------------------------------------- |
+| `population_size`             | `16`               | NSGA-II 种群大小。                                                   |
+| `generations`                 | `10`               | 拓扑搜索代数。                                                       |
+| `mutation_insert_weight`      | `2.0`              | 插入 block 的变异权重。                                              |
+| `mutation_delete_weight`      | `1.0`              | 删除 block 的变异权重。                                              |
+| `mutation_big_weight`         | `0.25`             | 大尺度变异权重；一次执行多次插入/删除。                              |
+| `big_mutation_steps`          | `10`               | 大尺度变异中的插入/删除次数。                                        |
+| `min_blocks`                  | `0`                | 允许保留的最小 block 数。                                            |
+| `max_blocks`                  | `None`             | 允许的最大 block 数；`None` 表示不设上限。                           |
+| `block_type`                  | `"generalized_cnot"` | block 类型；支持 `"generalized_cnot"` 和 `"generalized_two_qubit"`。 |
+| `allowed_edges`               | `None`             | 允许插入 block 的有向连接；`None` 时使用全连接有向边。               |
+| `parameter_optimizer`         | `"separable_es"`   | 固定拓扑参数优化器；支持 `"separable_es"`、`"random"`、`"none"`。   |
+| `parameter_generations`       | `8`                | 参数优化迭代代数。                                                   |
+| `parameter_population_size`   | `8`                | 参数优化每代样本数。                                                 |
+| `parameter_sigma`             | `0.5`              | `separable_es` 的初始扰动尺度。                                      |
+| `parameter_bounds`            | `(-pi, pi)`        | 连续旋转参数范围。                                                   |
+| `seed`                        | `None`             | 随机种子。                                                           |
+
+### 4.3 最小示例（自定义能量函数）
+
+```python
+from aicir.qas import MOGVQEConfig, block_hardware_efficient_ansatz, run_mog_vqe
+
+initial = block_hardware_efficient_ansatz(
+    n_qubits=4,
+    layers=2,
+    topology="linear",
+)
+
+cfg = MOGVQEConfig(
+    population_size=16,
+    generations=20,
+    parameter_generations=10,
+    parameter_population_size=8,
+    seed=42,
+)
+
+def energy_evaluator(circuit):
+    # 替换为你的 VQE 能量、硬件测量能量或外部 CMA-ES 评估流程。
+    return float(len(circuit.gates))
+
+result = run_mog_vqe(initial, energy_evaluator=energy_evaluator, config=cfg)
+
+print(result.best_energy)
+print(result.best_individual.cnot_count)
+print(result.best_circuit.show())
+```
+
+### 4.4 最小示例（哈密顿量能量）
+
+```python
+from aicir.operators import Hamiltonian
+from aicir.qas import MOGVQEConfig, block_hardware_efficient_ansatz, run_mog_vqe
+
+ham = Hamiltonian(n_qubits=2, terms=[("ZZ", -1.0), ("XI", 0.2)])
+initial = block_hardware_efficient_ansatz(n_qubits=2, layers=1, topology="linear")
+cfg = MOGVQEConfig(population_size=8, generations=5, seed=7)
+
+result = run_mog_vqe(initial, hamiltonian=ham, config=cfg)
+
+print(result.best_energy)
+print(result.best_circuit.show())
+```
+
+## 5. PPO_RB：基于真正近端策略优化的量子架构搜索
 
 `PPO_RB` 的输入是目标密度矩阵，输出是策略参数 `theta` 与搜索得到的 `Circuit`。
 
@@ -281,7 +386,7 @@ result = supernet_qas(ham, layers=6, supernet_num=5,
 
 - X. Zhu and X. Hou, *Quantum architecture search via truly proximal policy optimization*, Scientific Reports, 2023, doi: `10.1038/s41598-023-32349-2`.
 
-### 4.1 输入参数（`ppo_rb_qas`）
+### 5.1 输入参数（`ppo_rb_qas`）
 
 函数签名：`ppo_rb_qas(target_density_matrix, epsilon, config=None)`
 
@@ -296,7 +401,7 @@ result = supernet_qas(ham, layers=6, supernet_num=5,
 - `theta: Dict[str, torch.Tensor]`：策略网络参数快照。
 - `circuit: Circuit`：训练过程中发现的最优线路（若未记录到，则回退到当前策略贪婪推演得到的线路）。
 
-### 4.2 超参数（`PPORollbackConfig`）
+### 5.2 超参数（`PPORollbackConfig`）
 
 | 字段                      |    默认值 | 说明                                                                              |
 | ------------------------- | --------: | --------------------------------------------------------------------------------- |
@@ -325,7 +430,7 @@ result = supernet_qas(ham, layers=6, supernet_num=5,
 - 若训练不稳定，可先减小 `learning_rate`，再调 `epsilon_clip` 与 `entropy_coef`。
 - 若线路过长，可增大 `gate_penalty` 或减小 `max_steps_per_episode`。
 
-### 4.3 最小示例（GHZ）
+### 5.3 最小示例（GHZ）
 
 ```python
 import numpy as np
@@ -352,7 +457,7 @@ print(f"线路门数: {len(circuit.gates)}")
 print(circuit.show())
 ```
 
-## 5. PPR_DQL：基于持续强化学习和策略复用的量子架构搜索
+## 6. PPR_DQL：基于持续强化学习和策略复用的量子架构搜索
 
 `PPR_DQL` 的输入是目标 `State`，可直接返回 `Circuit`，也可以返回包含训练信息的结果对象。
 
@@ -360,7 +465,7 @@ print(circuit.show())
 
 - *Quantum Architecture Search via Continual Reinforcement Learning*, arXiv:`2112.05779v1`.
 
-### 5.1 输入参数（`train_ppr_dql` / `ppr_dql_state_to_circuit`）
+### 6.1 输入参数（`train_ppr_dql` / `ppr_dql_state_to_circuit`）
 
 函数签名：
 
@@ -383,7 +488,7 @@ print(circuit.show())
   - `selected_policy_indices: List[int]`：每个 episode 选择的策略索引（`0` 表示当前新策略）
 - `ppr_dql_state_to_circuit(...) -> Circuit`：仅返回线路，便于快速调用
 
-### 5.2 超参数（`PPRDQLConfig`）
+### 6.2 超参数（`PPRDQLConfig`）
 
 | 字段                         |    默认值 | 说明                                                                                       |
 | ---------------------------- | --------: | ------------------------------------------------------------------------------------------ |
@@ -417,7 +522,7 @@ print(circuit.show())
 - 如果后期抖动明显，可降低 `learning_rate`，并减小 `epsilon_end`。
 - 使用 `policy_library` 时，应保证旧策略动作定义与当前任务完全一致。
 
-### 5.3 自定义动作门集合
+### 6.3 自定义动作门集合
 
 `config.ppr_dql(action_gates=...)` 支持自定义动作门集合。每个动作是一个门字典，格式与 `Circuit` 门定义一致。
 
@@ -441,7 +546,7 @@ result = run("ppr_dql", target_state=state, config=cfg)
 circuit = result.circuit
 ```
 
-### 5.4 最小示例（GHZ）
+### 6.4 最小示例（GHZ）
 
 ```python
 import numpy as np
@@ -476,7 +581,7 @@ print(circuit)
 print(circuit.show())
 ```
 
-## 6. CRLQAS：面向硬件误差的课程强化学习量子架构搜索
+## 7. CRLQAS：面向硬件误差的课程强化学习量子架构搜索
 
 `CRLQAS` 的目标是最小化给定哈密顿量的能量。结构搜索由 DDQN 决策，参数优化由 Adam-SPSA 执行。
 
@@ -484,7 +589,7 @@ print(circuit.show())
 
 - *Curriculum reinforcement learning for quantum architecture search under hardware errors*, arXiv:`2402.03500`.
 
-### 6.1 输入参数（`train_crlqas` / `crlqas`）
+### 7.1 输入参数（`train_crlqas` / `crlqas`）
 
 函数签名：
 
@@ -501,7 +606,7 @@ print(circuit.show())
 - `train_crlqas(...) -> CRLQASResult`：包含最优 `circuit`、`minimum_energy`、课程阈值和训练轨迹。
 - `crlqas(...) -> Tuple[Circuit, float]`：快捷接口，仅返回 `(circuit, minimum_energy)`。
 
-### 6.2 超参数（`CRLQASConfig`）
+### 7.2 超参数（`CRLQASConfig`）
 
 | 字段                             |               默认值 | 说明                                                                                               |
 | -------------------------------- | -------------------: | -------------------------------------------------------------------------------------------------- |
@@ -554,7 +659,7 @@ print(circuit.show())
 - 若训练震荡，可降低 `q_learning_rate`，并增大 `target_update_interval`。
 - 对结构化任务建议手动提供 `action_gates`，可显著减少搜索空间。
 
-### 6.3 最小示例（H2）
+### 7.3 最小示例（H2）
 
 ```python
 from aicir.operators import Hamiltonian
@@ -580,7 +685,7 @@ print(result.minimum_energy)
 print(result.circuit.show())
 ```
 
-## 7. 示例脚本
+## 8. 示例脚本
 
 - `PPO_RB_demo_ghz4.py`：使用 PPO-RB 搜索 4 比特 GHZ 线路
 - `PPR_DQL_demo_ghz3.py`：使用 PPR-DQL 搜索 3 比特 GHZ 线路，并导出 OpenQASM 3.0 到 `demos/ppr_dql_ghz3_circuit.qasm`

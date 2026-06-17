@@ -22,6 +22,7 @@ from typing import Dict, List
 from ...gates import canonical_gate_name, get_gate_spec
 from ...ir import circuit_gate_dicts, has_circuit_instructions
 from ..circuit import Circuit
+from ..gates import _multi_target_subgates
 
 _QASM2_HEADER = 'OPENQASM 2.0;\ninclude "qelib1.inc";\n'
 _QASM3_HEADER = 'OPENQASM 3.0;\ninclude "stdgates.inc";\n'
@@ -203,7 +204,11 @@ def circuit_to_qasm(circuit: Circuit, version: str = "2.0") -> str:
         raise ValueError("version 仅支持 '2.0' 或 '3.0'")
 
     # 预扫描：统计可导出的单比特 Z 测量数量，用于声明经典比特寄存器
-    all_gate_dicts = circuit_gate_dicts(circuit)
+    # 多目标受控门先按目标展开为逐目标的单目标门，再走标准单控制导出路径。
+    all_gate_dicts = []
+    for gate in circuit_gate_dicts(circuit):
+        subgates = _multi_target_subgates(gate)
+        all_gate_dicts.extend(subgates if subgates is not None else [gate])
     plain_measure_count = sum(
         1
         for g in all_gate_dicts
