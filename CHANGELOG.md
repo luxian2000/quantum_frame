@@ -2,6 +2,13 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-17
+
+### Changed
+
+- **`Measure.run` 的 `measure_qubits` 语义反转、移除 `tm` 参数**（破坏性接口变更）：
+  `measure_qubits` 成为末端读出的唯一控制项——`None`=不做末端测量；空 `()`（新默认）/`[]`=读出全部比特；`[q0,…]`=读出子集（保留顺序）。原 `tm` 布尔参数删除（原 `tm=False` 等价 `measure_qubits=None`，原 `tm=True` 即默认全测）。exact 模式（`shots∈{None,0}`）下 `measure_qubits` 被忽略、不再报错。`ShotSampler.run` 默认 `measure_qubits=()`。涉及 `aicir/measure/measure.py`、`aicir/primitives/sampler.py`、`aicir/measure/result.py` 及 README §4。
+
 ## 2026-06-16
 
 ### Fixed
