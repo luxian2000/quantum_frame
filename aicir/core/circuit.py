@@ -364,8 +364,12 @@ def _gate_to_column(gate, n_qubits):
     controls = [int(q) for q in gate.get("control_qubits", [])]
 
     if controls:
-        target = int(gate["target_qubit"])
-        involved = controls + [target]
+        # 多目标受控门画作单列：每个目标位一个目标标记，控制位为 ●，整列用竖线相连。
+        if "qubits" in gate:
+            targets = [int(q) for q in gate["qubits"]]
+        else:
+            targets = [int(gate["target_qubit"])]
+        involved = controls + targets
         lo, hi = min(involved), max(involved)
         for q in range(lo, hi):
             between_col[q] = _vertical_cell()
@@ -374,7 +378,8 @@ def _gate_to_column(gate, n_qubits):
         symbol = _controlled_target_symbol(gate_type)
         if symbol is None:
             symbol = _fallback_symbol(gate_type)
-        qubit_col[target] = _symbol_cell(symbol)
+        for target in targets:
+            qubit_col[target] = _symbol_cell(symbol)
 
         label = _rotation_angle_label(gate)
         row_idx = _angle_row_index_for_gate(gate, n_qubits)
@@ -600,6 +605,13 @@ def _controls(control_qubits, control_states):
     return controls, states
 
 
+def _targets(target_qubit):
+    """归一化目标位：单个整数保持单目标，列表/元组升级为多目标。"""
+    if isinstance(target_qubit, (list, tuple)):
+        return tuple(int(qubit) for qubit in target_qubit)
+    return (int(target_qubit),)
+
+
 def pauli_x(target_qubit=0):
     return Operation("pauli_x", qubits=(target_qubit,))
 
@@ -637,8 +649,10 @@ def t_gate(target_qubit=0):
 
 
 def cx(target_qubit, control_qubits, control_states=None):
+    """受控 X 门。``target_qubit`` 可为单个整数（单目标，行为不变）或
+    整数列表/元组（多目标：对每个目标施加同一组控制位，等价于多个单目标 CX）。"""
     controls, states = _controls(control_qubits, control_states)
-    return Operation("cx", qubits=(target_qubit,), controls=controls, control_states=states)
+    return Operation("cx", qubits=_targets(target_qubit), controls=controls, control_states=states)
 
 
 cnot = cx
