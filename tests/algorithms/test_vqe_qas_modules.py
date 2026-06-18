@@ -81,6 +81,60 @@ def test_closed_loop_manual_quota_overrides_auto_defaults() -> None:
     assert resolved.boundary + resolved.sparse + resolved.control == 2
 
 
+def test_closed_loop_adaptive_quotas_prefer_exploration_for_weak_lih_oracle() -> None:
+    from aicir.qas.vqe_loop.vqe_qas_loop import decide_next_round_quotas
+
+    decision = decide_next_round_quotas(
+        n_qubits=12,
+        base_quotas=(3, 2, 2, 1),
+        calibration={
+            "k_min": 3,
+            "tr_in_count": 4,
+            "tr_in_mae": 0.4578,
+            "tr_out_mae": 0.8198,
+            "sparse_abstain_rate": 1.0,
+            "passes": {"overall": False, "sparse_abstain": True},
+        },
+        local_improved=False,
+    )
+
+    assert decision.mode == "balanced_explore"
+    assert (decision.local, decision.boundary, decision.sparse, decision.control) == (1, 2, 3, 2)
+
+
+def test_closed_loop_adaptive_quotas_keep_more_local_when_oracle_passes() -> None:
+    from aicir.qas.vqe_loop.vqe_qas_loop import decide_next_round_quotas
+
+    low_qubit = decide_next_round_quotas(
+        n_qubits=4,
+        base_quotas=(2, 1, 1, 0),
+        calibration={
+            "k_min": 3,
+            "tr_in_count": 5,
+            "tr_in_mae": 0.1,
+            "tr_out_mae": 0.4,
+            "sparse_abstain_rate": 1.0,
+            "passes": {"overall": True, "sparse_abstain": True},
+        },
+    )
+    high_qubit = decide_next_round_quotas(
+        n_qubits=12,
+        base_quotas=(3, 2, 2, 1),
+        calibration={
+            "k_min": 3,
+            "tr_in_count": 5,
+            "tr_in_mae": 0.1,
+            "tr_out_mae": 0.4,
+            "sparse_abstain_rate": 1.0,
+            "passes": {"overall": True, "sparse_abstain": True},
+        },
+    )
+
+    assert low_qubit.mode == "local"
+    assert high_qubit.mode == "local"
+    assert low_qubit.local / sum(low_qubit.as_tuple()) > high_qubit.local / sum(high_qubit.as_tuple())
+
+
 def test_qas_core_modules_expose_mainline_vqe_loop_building_blocks() -> None:
     terms = tfim_chain_hamiltonian(n_qubits=2, J=1.0, h=0.5, periodic=False)
     problem = VQEProblem(name="tfim2", n_qubits=2, hamiltonian=terms, reference_energy=-1.0)
