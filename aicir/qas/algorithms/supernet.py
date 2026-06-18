@@ -34,6 +34,13 @@ from ...core.circuit import Circuit, cx, hadamard, rx, ry, rz, rzz
 from ...core.gates import apply_gate_to_state, gate_to_matrix
 from ...ir import circuit_instructions
 from ...qml.deriv import psr
+from ..primitives.sharding import (
+    shard_context,
+    owned_indices,
+    all_gather,
+    all_reduce_mean,
+    broadcast_parameters,
+)
 
 
 ObjectiveFn = Callable[..., torch.Tensor | float]
@@ -969,17 +976,23 @@ class Supernet:
         if not candidates:
             raise ValueError("ranking requires at least one candidate architecture")
 
-        records: list[dict[str, Any]] = []
-        for architecture in candidates:
+        ctx = shard_context(self.backend)
+        owned = (
+            set(owned_indices(len(candidates), ctx.rank, ctx.world_size))
+            if ctx.is_sharded
+            else set(range(len(candidates)))
+        )
+
+        local_records: list[dict[str, Any]] = []
+        for index, architecture in enumerate(candidates):
+            if index not in owned:
+                continue
             selected_id, losses = self.select_supernet(
-                architecture,
-                objective,
-                dataset,
-                hamiltonian,
-                split=split,
+                architecture, objective, dataset, hamiltonian, split=split,
             )
-            records.append(
+            local_records.append(
                 {
+                    "candidate_index": index,
                     "architecture": architecture,
                     "architecture_indices": self.encode_architecture(architecture),
                     "selected_supernet_id": selected_id,
@@ -989,7 +1002,15 @@ class Supernet:
                     "two_qubit_count": self.two_qubit_count(architecture),
                 }
             )
-        records.sort(key=lambda item: item["score"])
+
+        if ctx.is_sharded:
+            merged: list[dict[str, Any]] = []
+            for part in all_gather(local_records):
+                merged.extend(part)
+            records = merged
+        else:
+            records = local_records
+        records.sort(key=lambda item: (item["score"], item["candidate_index"]))
         for rank, record in enumerate(records, start=1):
             record["rank"] = rank
         return records
