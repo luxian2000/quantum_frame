@@ -60,7 +60,7 @@ class Result:
     def output(self, target: Union[int, str]):
         if target == -1:
             if self.terminal_output is None:
-                raise ValueError("未执行末端测量：output(-1) 不可用（tm=False / measure_qubits=[] / shots∈{None,0}）")
+                raise ValueError("未执行末端测量：output(-1) 不可用（measure_qubits=None / shots∈{None,0}）")
             return self.terminal_output
         idx = self._resolve(target)
         if idx not in self.incircuit_outputs:

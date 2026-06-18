@@ -119,16 +119,22 @@ class GPUBackend(Backend):
         if not trace_out:
             return rho.clone()
 
-        reshaped = rho.reshape([2] * n_qubits + [2] * n_qubits)
-        perm = (keep + trace_out
-                + [k + n_qubits for k in keep]
-                + [t + n_qubits for t in trace_out])
-        permuted = reshaped.permute(perm)
-
-        d_keep = 1 << len(keep)
-        d_trace = 1 << len(trace_out)
-        permuted = permuted.reshape(d_keep, d_trace, d_keep, d_trace)
-        return torch.einsum("abcb->ac", permuted)
+        # 逐比特求迹，每步整形为 (L, 2, R, L, 2, R) 的秩-6 张量并对该比特的行/列
+        # 同一指标求和，避免一次性整形为 [2]*n + [2]*n（秩 2n）。CUDA 允许至多 64
+        # 维，故仅 n>32 时才会触发原限制；此处与 NPU 路径保持一致，工作张量的秩恒为
+        # 6。按降序求迹使保留比特维持原有（升序）次序。
+        remaining = list(range(n_qubits))
+        cur = rho
+        for qubit in sorted(trace_out, reverse=True):
+            pos = remaining.index(qubit)
+            m = len(remaining)
+            left = 1 << pos
+            right = 1 << (m - pos - 1)
+            block = cur.reshape(left, 2, right, left, 2, right)
+            cur = block[:, 0, :, :, 0, :] + block[:, 1, :, :, 1, :]
+            cur = cur.reshape(left * right, left * right)
+            remaining.pop(pos)
+        return cur
 
     def sample(self, probs, shots: int):
         if probs.is_complex():
