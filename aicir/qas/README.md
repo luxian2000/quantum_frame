@@ -353,6 +353,74 @@ python -m aicir.qas.vqe_loop.sharding \
 
 分片器会把原始 queue 连续切块，并给底层 `python -m aicir.qas.vqe_loop.labeling` 传入 `--seed-index-offset`，因此同一全局队列行在单进程或多分片运行时使用一致的 seed 派生规则。最终输出仍是一个 benchmark table CSV，可继续用于 oracle calibration、Stage-2 next-batch planning 和标签回流。
 
+### 3.8 supernet 单次搜索的多 NPU 分片（safe / aggressive）
+
+`supernet_qas`（以及底层 `Supernet.train`）在满足以下条件时自动进入分布式分片路径：backend 为 `NPUBackend` **且** `torch.distributed` 已初始化、`world_size > 1`。任何其他情况——CPU、CUDA 单卡、单进程 NPU 或未初始化分布式——均与原始单卡流程完全一致，不需要调用方做任何分支判断。
+
+> **注意**：在无真实 NPU 的机器上，`NPUBackend` 会透明回退到 CPU，但类型仍为 `NPUBackend`；因此可以在 CPU gloo 通信组下测试分片逻辑，而不需要实体 Ascend 设备。
+
+#### 触发条件
+
+```text
+isinstance(trainer.backend, NPUBackend)
+AND torch.distributed.is_initialized()
+AND torch.distributed.get_world_size() > 1
+```
+
+条件不满足时三个阶段全部退化为本地无操作，行为与单卡完全一致。
+
+#### seed 必须各 rank 相同
+
+所有 rank 须使用**相同的** `seed`，以保证初始权重和排名阶段的候选架构集合在各 rank 上完全一致，分片机制才能产生等价（`safe`）或有意义的数据并行（`aggressive`）结果。
+
+#### 三个阶段的分片方式
+
+##### ranking 阶段
+
+`rank_architectures` 按等距切分把 `ranking_num` 个候选架构分配到各 rank：rank `r` 负责索引 `r, r+world_size, r+2*world_size, ...` 的候选架构，评估完成后经 `all_gather` 合并并统一排序。结果与单卡数值完全一致（每个候选架构只被评估一次，不重复计算）。
+
+##### training 阶段（`mode` 控制）
+
+- **`safe` 模式**：每步对采样的一个架构，将 `W=supernet_num` 次 select 评估（即 `_sharded_select`）按等距切分到各 rank，各 rank 只评估自己拥有的 supernet，`all_gather` 后取全局 argmin 选出最优 supernet；梯度步仅由 rank 0 执行（`loss.backward()` + `optimizer.step()`），其余 rank 跳过更新，步后由 `broadcast_parameters` 把权重广播到所有 rank。数值上与单卡完全等价，加速上限约为 `W`。
+
+- **`aggressive` 模式**：每步各 rank 从本步预先采样的 `world_size` 个架构中取 `arch[rank]`，分别独立做 select → forward → backward，对所有共享参数的梯度执行 `all_reduce_mean` 求平均；随后通过 `all_gather` 取得被任一 rank 选中的 supernet id 并集，**所有 rank 一致地步进这同一组优化器**（梯度已同步、优化器状态一致，因此各 rank 权重保持同步，无需广播）。约等效于 `world_size` 倍吞吐，但各 rank 动态更新不同、训练轨迹与单卡不同；可相应调小 `supernet_steps`（如缩短为原来的 `1/world_size`）。
+
+##### finetune 阶段
+
+`train` 对排名前 `world_size` 的候选架构做并行微调：`is_sharded` 时 rank `r` 微调 `ranking_records[r]`，`all_gather` 后取全局 `score` 最小的 payload 作为最优结果。单卡路径等价于仅微调 top-1。
+
+#### 入口
+
+```python
+from aicir.qas import supernet_qas
+
+# device="npu:0" 时构造 NPUBackend，分布式初始化后自动进入分片路径
+result = supernet_qas(
+    hamiltonian,
+    layers=6,
+    supernet_num=5,
+    supernet_steps=250,
+    finetune_steps=250,
+    device="npu:0",
+    mode="safe",         # 或 "aggressive"
+)
+```
+
+底层配置字段为 `SupernetConfig.shard_mode`；`supernet_qas(..., mode=...)` 会将其转发至该字段。
+
+#### torchrun 启动示例
+
+```bash
+# safe 模式（与单卡数值等价）
+torchrun --nproc_per_node=4 demos/BeH2/BeH2_npu.py --mode safe
+
+# aggressive 模式（数据并行，约 4 倍吞吐，动态与单卡不同）
+torchrun --nproc_per_node=4 demos/BeH2/BeH2_npu.py --mode aggressive
+
+# 无 NPU 本地冒烟测试（单进程，分片路径未激活）
+python demos/BeH2/BeH2_npu.py --allow-cpu-fallback
+```
+
 ## 4. MoG_VQE：基于 NSGA-II 的多目标遗传 VQE 拓扑搜索
 
 `MoG_VQE.py` 实现 MoG-VQE 的线路拓扑搜索部分。输入是 block-based hardware-efficient ansatz，算法把线路表示为二量子比特 block 的有序列表，通过插入 block、删除 block 和大尺度变异修改拓扑，并使用 NSGA-II 同时最小化能量和 CNOT 数量。输出是修改后的 aicir `Circuit`、最终 Pareto 前沿和每一代搜索摘要。

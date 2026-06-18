@@ -15,7 +15,12 @@
 | `passes/cancel_inverse.py` | `CancelInversePass` |
 | `passes/merge_rotations.py` | `MergeRotationsPass` |
 | `passes/commute_single_qubit.py` | `CommuteSingleQubitPass` |
+| `passes/decompose.py` | `DecomposePass`（高级门分解到目标门集） |
+| `passes/layout.py` | `LayoutPass`（logical→physical 重标号） |
+| `passes/routing.py` | `RoutingPass`（沿耦合图插 SWAP） |
 | `passes/_local_rewrite.py` | 底层重写引擎（内部模块） |
+
+> 面向硬件目标的 `DecomposePass` / `LayoutPass` / `RoutingPass` 消费 `aicir.devices.Target`（门集 + 耦合拓扑），详见第 4.6–4.8 节。
 
 ---
 
@@ -78,6 +83,10 @@ optimized = pm.run(circuit)
 | `"cancel_inverse"` / `"cancel"` | `CancelInversePass` |
 | `"merge_rotations"` / `"merge_rotation"` | `MergeRotationsPass` |
 | `"commute_single_qubit"` / `"commute"` | `CommuteSingleQubitPass` |
+| `"decompose"` | `DecomposePass`（默认目标门集 `("cx",)`） |
+| `"layout"` | `LayoutPass`（平凡布局） |
+
+> `RoutingPass` 需要 `Target`，不能用字符串名构造；请直接传入实例。
 
 ### 2.3  运行
 
@@ -218,6 +227,78 @@ optimized = CommuteSingleQubitPass(max_reorder_hops=8).run(circuit)
 
 跨越后若找到可消去 / 可合并的同比特门，则执行消去或合并；否则保持原位。
 
+### 4.6  DecomposePass — 高级门分解
+
+把高级双比特门分解到目标门集，保持幺正等价。内置经数值验证的标准规则：
+
+| 高级门 | 分解 |
+| --- | --- |
+| `swap(a, b)` | `cx(a,[b]) · cx(b,[a]) · cx(a,[b])` |
+| `cz(t,[c])` | `h(t) · cx(t,[c]) · h(t)` |
+| `cy(t,[c])` | `rz(-π/2,t) · cx(t,[c]) · rz(π/2,t)` |
+
+```python
+from aicir.transpile import DecomposePass
+from aicir.devices import Target
+
+# 显式门集
+out = DecomposePass(basis_gates=("cx",)).run(circuit)
+# 或从 Target 取门集
+out = DecomposePass(target=Target(n_qubits=4, basis_gates=("cx", "hadamard", "rz"))).run(circuit)
+```
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `basis_gates` | `("cx",)` | 目标原生门集（支持别名）；门集内的门保留不动 |
+| `target` | `None` | 传入 `Target` 时从中取 `basis_gates`（与 `basis_gates` 二选一） |
+| `skip_unsupported` | `False` | `True` 时对不在门集且无规则的门保持原样；`False` 时这类双比特门抛 `ValueError` |
+
+- 受控形式仅支持单控制位（`control_states=(1,)`）。
+- 规则展开产生 `hadamard`/`rz`；本片不再把任意单比特门进一步做 Euler 基底翻译（留待后续）。
+
+### 4.7  LayoutPass — 逻辑→物理布局
+
+按给定的 logical→physical 映射重新标号比特，不插入任何门，线路在比特置换意义下与原线路等价。
+
+```python
+from aicir.transpile import LayoutPass
+from aicir.devices import Target
+
+target = Target(n_qubits=4, coupling_map=[(0, 1), (1, 2), (2, 3)])
+out = LayoutPass(initial_layout={0: 2, 1: 3}, target=target).run(circuit)  # 输出 n_qubits=4
+out = LayoutPass([3, 1]).run(circuit)   # 序列形式：逻辑 0→3, 逻辑 1→1
+out = LayoutPass().run(circuit)          # None=平凡恒等布局
+```
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `initial_layout` | `None` | `dict`（`logical→physical`）或序列（下标=逻辑位，值=物理位）；`None`=恒等 |
+| `target` | `None` | 给出时输出 `n_qubits` 取 `target.n_qubits` 并校验物理位范围 |
+
+- 映射必须单射（不同逻辑位不能映射到同一物理位）。
+- 自动择优布局（按拓扑/噪声）留待后续。
+
+### 4.8  RoutingPass — 拓扑路由
+
+沿 `Target.coupling_map` 最短路径插入 SWAP，使每个双比特门作用在相邻物理比特上；施加该门后按相反顺序插回 SWAP 复位，因此整条线路与原线路**完全幺正等价**（无需跟踪置换）。
+
+```python
+from aicir.transpile import RoutingPass
+from aicir.devices import Target
+
+target = Target(n_qubits=4, coupling_map=[(0, 1), (1, 2), (2, 3)])
+out = RoutingPass(target=target).run(circuit)
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `target` | 提供 `coupling_map` 的 `Target`（必填）；全连接时本 pass 为恒等 |
+
+- 假设线路比特已是物理比特（通常先经 `LayoutPass`）。
+- 仅支持单比特门与恰好 2 个不同比特的双比特门；更高阶门（如 `toffoli`）抛 `NotImplementedError`。
+- SWAP 数非最优；基于置换跟踪的最优路由留待后续。
+- 典型组合：`LayoutPass → RoutingPass → DecomposePass`（把插入的 `swap` 再分解为 `cx`）。
+
 ---
 
 ## 5  编写自定义 Pass
@@ -277,3 +358,8 @@ optimized = pm.run(circuit)
 | `CancelInversePass` | Pass | 相邻逆门消去 |
 | `MergeRotationsPass` | Pass | 同轴旋转合并 |
 | `CommuteSingleQubitPass` | Pass | 交换律回看优化 |
+| `DecomposePass` | Pass | 高级门分解到目标门集 |
+| `LayoutPass` | Pass | logical→physical 比特重标号 |
+| `RoutingPass` | Pass | 沿耦合图插入 SWAP 满足拓扑 |
+
+> `Target`（硬件目标描述）从 `aicir.devices` 导入，是 `DecomposePass`/`LayoutPass`/`RoutingPass` 的共同输入。
