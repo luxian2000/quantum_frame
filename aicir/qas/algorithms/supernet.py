@@ -157,6 +157,7 @@ class SupernetConfig:
     ranking_strategy: str = "random"
     use_evolutionary_ranking: bool = False
     noise_mode: str = "none"
+    shard_mode: str = "safe"
     noise_config: NoiseConfig | None = None
 
 
@@ -286,6 +287,9 @@ class Supernet:
         ranking_strategy = str(cfg.ranking_strategy).strip().lower()
         if ranking_strategy not in {"random", "evolutionary"}:
             raise ValueError("ranking_strategy must be 'random' or 'evolutionary'")
+        shard_mode = str(cfg.shard_mode).strip().lower()
+        if shard_mode not in {"safe", "aggressive"}:
+            raise ValueError("shard_mode must be 'safe' or 'aggressive'")
         if cfg.n_qubits <= 0:
             raise ValueError("n_qubits must be positive")
         if cfg.layers <= 0:
@@ -1469,6 +1473,7 @@ def supernet_qas(
     seed: int = 2,
     device: str = "cpu",
     use_parameter_shift: bool = False,
+    mode: str = "safe",
     **config_overrides: Any,
 ) -> SupernetResult:
     """Search and fine-tune a ground-state-preparing ansatz for ``hamiltonian``.
@@ -1500,6 +1505,7 @@ def supernet_qas(
         seed: Random seed.
         device: Torch device string (``"cpu"``, ``"cuda"``, ``"npu:0"`` ...).
         use_parameter_shift: Use parameter-shift gradients instead of autograd.
+        mode: 分片模式，转发至 ``SupernetConfig.shard_mode``；可选值 ``"safe"`` 或 ``"aggressive"``。
         **config_overrides: Any remaining :class:`SupernetConfig` field.
 
     Returns:
@@ -1516,6 +1522,7 @@ def supernet_qas(
     if two_qubit_pairs is None:
         two_qubit_pairs = _default_two_qubit_pairs(int(n_qubits))
     task = config_overrides.pop("task", "vqe")
+    config_overrides.setdefault("shard_mode", mode)
 
     config = SupernetConfig(
         n_qubits=int(n_qubits),
