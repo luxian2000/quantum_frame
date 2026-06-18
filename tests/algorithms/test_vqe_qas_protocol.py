@@ -41,6 +41,8 @@ from aicir.qas.vqe_loop.preparation import (
 from aicir.qas.vqe_loop.next_batch import (
     _supernet_priority,
     _attach_supernet_sidecar,
+    _derive_task_context,
+    _queue_row,
 )
 from aicir.qas.vqe_loop.supernet_screening import _screening_sidecar_record
 from aicir.qas.vqe_loop.labeling import (
@@ -577,6 +579,43 @@ def test_plan_next_batch_attaches_supernet_sidecar_by_architecture_id() -> None:
     assert enriched["screening_energy_is_final_label"] == "false"
     assert _supernet_priority(enriched) == -2.5
     assert _supernet_priority({"architecture_id": "plain"}) == 0.0
+
+
+def test_next_batch_queue_row_inherits_literal_hamiltonian_task_from_benchmark() -> None:
+    benchmark_rows = [
+        {
+            "architecture_id": "train_a",
+            "label_status": LabelStatus.COMPLETED.value,
+            "protocol_version": "fair_vqe_protocol_v2",
+            "hamiltonian_id": "lih_sto3g_jw_r15",
+            "hamiltonian_class": "molecular_lih",
+            "hamiltonian_terms": json.dumps([[-0.1, "II"], [0.2, "ZZ"]]),
+            "reference_energy": "-7.882",
+            "n_qubits": "12",
+        }
+    ]
+    candidate_row = {
+        "architecture_id": "new_arch",
+        "n_qubits": "12",
+        "hamiltonian_id": "tfim_12q",
+        "hamiltonian_class": "tfim",
+        "hamiltonian_terms": "",
+        "reference_energy": "",
+    }
+
+    task_context = _derive_task_context(benchmark_rows, protocol_version="fair_vqe_protocol_v2")
+    row = _queue_row(
+        candidate_row,
+        source=LabelSource.TRACKA_LOCAL,
+        protocol_version="fair_vqe_protocol_v2",
+        batch_id="round1",
+        task_context=task_context,
+    )
+
+    assert row["hamiltonian_id"] == "lih_sto3g_jw_r15"
+    assert row["hamiltonian_class"] == "molecular_lih"
+    assert row["hamiltonian_terms"] == json.dumps([[-0.1, "II"], [0.2, "ZZ"]])
+    assert row["reference_energy"] == "-7.882"
 
 
 def test_load_warm_start_vector_reads_relative_param_reference(tmp_path: Path) -> None:
