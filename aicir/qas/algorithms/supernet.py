@@ -1332,7 +1332,9 @@ class Supernet:
                 "ranking_index": cand_index,
                 "n_qubits": int(local_circuit.n_qubits),
                 "gates": list(local_circuit.gates),
-                "numeric_parameters": {str(k): float(v) for k, v in local_params.items()},
+                # 使用真实 ParameterKey（纯 tuple，可序列化）作为键，保证 all_gather
+                # 后各 rank 能用胜出架构的键直接索引 _final_metrics/_loss。
+                "numeric_parameters": {key: float(value) for key, value in local_params.items()},
             }
         else:
             local_payload = None  # rank 数多于候选架构数
@@ -1351,11 +1353,10 @@ class Supernet:
         best_circuit = Circuit(
             *best_payload["gates"], n_qubits=best_payload["n_qubits"], backend=self.backend,
         )
-        # _final_metrics 需要以 ParameterKey 为键的参数字典（用于 _loss 查参及格式化输出），
-        # 因此直接使用当前 rank 微调得到的 local_params（其键类型正确）。
-        # 单卡路径下 cand_index==0 且 best_payload["ranking_index"]==0，
-        # local_params 即为胜出架构的参数，与改动前完全一致。
-        finetune_parameters = local_params
+        # 使用全局胜出 payload 中的参数（真实 ParameterKey → float），确保所有 rank
+        # 的 _final_metrics 都基于同一套胜出参数计算，避免非胜出 rank 用自己的参数
+        # 与胜出架构错配。单卡路径下 best_payload == local_payload，语义不变。
+        finetune_parameters = best_payload["numeric_parameters"]
         # finetune_log 仅在本 rank 产出胜出结果时为真实日志，否则为空列表。
         finetune_log = local_finetune_log if (best_payload["ranking_index"] == cand_index) else []
         finetune_score = best_payload["score"]
