@@ -43,6 +43,15 @@ def _infer_n_qubits(terms: tuple[tuple[float, str], ...] | None, explicit: int |
     return int(next(iter(widths)))
 
 
+def _auto_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"", "auto", "none"}:
+        return None
+    return int(text)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the VQE-QAS closed loop")
     parser.add_argument("--hamiltonian", default=None, help="JSON file containing [[coeff, pauli], ...] terms")
@@ -50,15 +59,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hamiltonian-class", default="literal")
     parser.add_argument("--n-qubits", type=int, default=None)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--rounds", type=int, default=1)
-    parser.add_argument("--initial-labels", type=int, default=24)
+    parser.add_argument("--rounds", default="auto")
+    parser.add_argument("--initial-labels", default="auto")
+    parser.add_argument("--batch-size", default="auto")
     parser.add_argument("--holdout-fraction", type=float, default=0.25)
     parser.add_argument("--k-min", type=int, default=3)
     parser.add_argument("--d-max", type=float, default=0.28125)
-    parser.add_argument("--local", type=int, default=4)
-    parser.add_argument("--boundary", type=int, default=2)
-    parser.add_argument("--sparse", type=int, default=2)
-    parser.add_argument("--control", type=int, default=0)
+    parser.add_argument("--local", type=int, default=None)
+    parser.add_argument("--boundary", type=int, default=None)
+    parser.add_argument("--sparse", type=int, default=None)
+    parser.add_argument("--control", type=int, default=None)
+    parser.add_argument("--patience", type=int, default=2)
+    parser.add_argument("--min-improvement", type=float, default=1.0e-8)
     parser.add_argument("--ea-population", type=int, default=32)
     parser.add_argument("--ea-generations", type=int, default=8)
     parser.add_argument("--ea-seed-count", type=int, default=12)
@@ -69,27 +81,34 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backend", default="numpy")
     parser.add_argument("--dtype", default="complex128")
     parser.add_argument("--protocol", default="aicir/qas/vqe_loop/fair_label_protocol.json")
+    parser.add_argument("--no-layerwise", action="store_true")
+    parser.add_argument("--layerwise-count", default="auto")
+    parser.add_argument("--layerwise-layers", type=int, default=3)
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     terms = _load_hamiltonian_terms(args.hamiltonian)
+    n_qubits = _infer_n_qubits(terms, args.n_qubits)
     config = ClosedLoopConfig(
         output_dir=Path(args.output_dir),
-        n_qubits=_infer_n_qubits(terms, args.n_qubits),
+        n_qubits=n_qubits,
         hamiltonian_terms=terms,
         hamiltonian_id=str(args.hamiltonian_id),
         hamiltonian_class=str(args.hamiltonian_class),
-        rounds=int(args.rounds),
-        initial_labels=int(args.initial_labels),
+        rounds=_auto_int(args.rounds),
+        initial_labels=_auto_int(args.initial_labels),
+        batch_size=_auto_int(args.batch_size),
         holdout_fraction=float(args.holdout_fraction),
         k_min=int(args.k_min),
         d_max=float(args.d_max),
-        local=int(args.local),
-        boundary=int(args.boundary),
-        sparse=int(args.sparse),
-        control=int(args.control),
+        local=args.local,
+        boundary=args.boundary,
+        sparse=args.sparse,
+        control=args.control,
+        patience=int(args.patience),
+        min_improvement=float(args.min_improvement),
         ea_population=int(args.ea_population),
         ea_generations=int(args.ea_generations),
         ea_seed_count=int(args.ea_seed_count),
@@ -100,6 +119,9 @@ def main(argv: list[str] | None = None) -> None:
         backend=str(args.backend),
         dtype=str(args.dtype),
         protocol=Path(args.protocol),
+        include_layerwise=not bool(args.no_layerwise),
+        layerwise_count=_auto_int(args.layerwise_count),
+        layerwise_layers=int(args.layerwise_layers),
     )
     result = run_vqe_qas_closed_loop(config)
     print(json.dumps({key: str(value) for key, value in result.__dict__.items()}, ensure_ascii=False, indent=2))
