@@ -41,6 +41,46 @@ def test_closed_loop_entry_can_stamp_literal_hamiltonian_terms_into_queue(tmp_pa
     assert rows[0]["hamiltonian_terms"] == '[[-1.0, "ZI"], [-0.5, "IX"]]'
 
 
+def test_closed_loop_auto_defaults_scale_with_qubits() -> None:
+    from aicir.qas.vqe_loop.vqe_qas_loop import (
+        default_initial_labels_for_qubits,
+        default_max_rounds_for_qubits,
+        resolve_closed_loop_defaults,
+    )
+
+    assert default_initial_labels_for_qubits(4) == 12
+    assert default_initial_labels_for_qubits(8) == 24
+    assert default_initial_labels_for_qubits(12) == 36
+    assert default_initial_labels_for_qubits(16) == 48
+
+    assert default_max_rounds_for_qubits(4) == 4
+    assert default_max_rounds_for_qubits(8) == 4
+    assert default_max_rounds_for_qubits(12) == 2
+    assert default_max_rounds_for_qubits(16) == 2
+
+    resolved = resolve_closed_loop_defaults(n_qubits=12)
+    assert resolved.initial_labels == 36
+    assert resolved.rounds == 2
+    assert (resolved.local, resolved.boundary, resolved.sparse, resolved.control) == (3, 2, 2, 1)
+
+
+def test_closed_loop_manual_quota_overrides_auto_defaults() -> None:
+    from aicir.qas.vqe_loop.vqe_qas_loop import resolve_closed_loop_defaults
+
+    resolved = resolve_closed_loop_defaults(
+        n_qubits=12,
+        initial_labels=40,
+        rounds=5,
+        batch_size=6,
+        local=4,
+    )
+
+    assert resolved.initial_labels == 40
+    assert resolved.rounds == 5
+    assert resolved.local == 4
+    assert resolved.boundary + resolved.sparse + resolved.control == 2
+
+
 def test_qas_core_modules_expose_mainline_vqe_loop_building_blocks() -> None:
     terms = tfim_chain_hamiltonian(n_qubits=2, J=1.0, h=0.5, periodic=False)
     problem = VQEProblem(name="tfim2", n_qubits=2, hamiltonian=terms, reference_energy=-1.0)

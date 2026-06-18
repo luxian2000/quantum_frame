@@ -16,7 +16,7 @@ The default user entry point is:
 python -m aicir.qas.vqe_loop \
   --hamiltonian h2_terms.json \
   --output-dir outputs/qas_h2_loop \
-  --rounds 2 \
+  --rounds auto \
   --backend numpy \
   --dtype complex128
 ```
@@ -33,6 +33,23 @@ python -m aicir.qas.vqe_loop \
 
 If `--hamiltonian` is omitted, pass `--n-qubits`; the run then uses the TFIM defaults in `fair_label_protocol.json`.
 
+By default, the one-entry runner uses qubit-scaled budgets:
+
+| qubits | initial labels | per-round labels | max rounds |
+| --- | ---: | ---: | ---: |
+| `<=4` | 12 | 4 | 4 |
+| `5-8` | 24 | 6 | 4 |
+| `9-12` | 36 | 8 | 2 |
+| `>12` | 48 | 12 | 2 |
+
+The per-round labels are split across local / boundary / sparse / control
+tracks.  Users can override either the total with `--batch-size` or individual
+quotas with `--local`, `--boundary`, `--sparse`, and `--control`.
+
+The loop also stops early when no new best `fair_best_energy` is found for
+`--patience` consecutive rounds.  The default is `--patience 2` and
+`--min-improvement 1e-8`.
+
 ## Main Flow
 
 `python -m aicir.qas.vqe_loop` calls `run_vqe_qas_closed_loop()` in `vqe_qas_loop.py`.
@@ -44,7 +61,7 @@ vqe_qas_loop.py
   -> preparation.py
   -> stamp_literal_hamiltonian_terms()
   -> labeling.py
-  -> stage2.py
+  -> stage2.py  # repeated until max rounds or patience stop
        -> next_batch.py
             -> selection_ops.py
        -> labeling.py
@@ -104,6 +121,21 @@ Which candidates are selected for Track-A local search or Track-B expansion?
 The default local proposal path is MoG-EA/NSGA-II. Farthest-first is used for boundary/sparse expansion, not as a replacement for MoG-EA.
 
 ## Useful Commands
+
+Run an automatic multi-round loop:
+
+```bash
+python -m aicir.qas.vqe_loop \
+  --hamiltonian lih_terms.json \
+  --hamiltonian-id lih_sto3g_jw_r15 \
+  --hamiltonian-class molecular_lih \
+  --output-dir outputs/qas_lih_loop \
+  --rounds auto \
+  --batch-size auto \
+  --patience 2 \
+  --backend npu \
+  --dtype complex64
+```
 
 Prepare initial candidates and queue:
 
