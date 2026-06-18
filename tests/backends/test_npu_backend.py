@@ -516,6 +516,41 @@ class TestNPUBackend(unittest.TestCase):
             energy.backward()  # must not raise on the NPU restriction
         self.assertIsNotNone(theta.grad)
 
+    def test_flat_local_gate_application_matches_tensor_path_for_12q(self):
+        from aicir.backends.numpy_backend import NumpyBackend
+        from aicir.core.gates import (
+            _apply_local_matrix_to_state,
+            _apply_local_matrix_to_state_flat,
+        )
+
+        backend = NumpyBackend()
+        rng = np.random.default_rng(7)
+        state = rng.normal(size=(1 << 12, 1)) + 1j * rng.normal(size=(1 << 12, 1))
+        local = np.asarray(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=np.complex64,
+        )
+
+        expected = _apply_local_matrix_to_state(state, local, [2, 10], 12, backend)
+        actual = _apply_local_matrix_to_state_flat(state, local, [2, 10], 12, backend)
+
+        self.assertTrue(np.allclose(actual, expected))
+
+    def test_npu_12q_local_gate_uses_flat_path(self):
+        from aicir.core.gates import _is_npu_complex_tensor, _should_use_flat_local_apply
+
+        backend = NPUBackend(fallback_to_cpu=True)
+        backend._device = type("FakeDevice", (), {"type": "npu"})()
+
+        self.assertTrue(_should_use_flat_local_apply(backend, 12))
+        self.assertFalse(_should_use_flat_local_apply(backend, 8))
+        self.assertTrue(_is_npu_complex_tensor(torch.zeros(4, dtype=torch.complex64), backend))
+
 
 if __name__ == "__main__":
     unittest.main()

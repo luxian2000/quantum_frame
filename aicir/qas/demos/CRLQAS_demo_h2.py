@@ -8,7 +8,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from aicir.qas.CRLQAS import AdamSPSAConfig, CRLQASConfig, train_crlqas
+from aicir.qas.algorithms.CRLQAS import AdamSPSAConfig, CRLQASConfig, train_crlqas
 from aicir.operators import Hamiltonian
 from aicir.core.io.qasm import save_circuit_qasm3
 

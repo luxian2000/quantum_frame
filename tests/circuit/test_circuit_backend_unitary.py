@@ -1,7 +1,10 @@
 import unittest
 
 import numpy as np
-import torch
+try:
+    import torch
+except ModuleNotFoundError as exc:
+    raise unittest.SkipTest("TorchBackend unitary tests require torch") from exc
 
 from aicir import Circuit, TorchBackend, cnot, crz, hadamard, ms_gate, rx, rxx, rzz
 from aicir.core.gates import apply_gate_to_state, gate_to_matrix
