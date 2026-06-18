@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import config as qas_config
-from .CRLQAS import train_crlqas
-from .PPO_RB import ppo_rb_qas
-from .PPR_DQL import train_ppr_dql
-from .supernet import classification_supernet, h2_vqe_supernet, train_supernet
+from ..algorithms.CRLQAS import train_crlqas
+from ..algorithms.PPO_RB import ppo_rb_qas
+from ..algorithms.PPR_DQL import train_ppr_dql
+from ..algorithms.supernet import classification_supernet, h2_vqe_supernet, train_supernet
 
 QASMethod = str
 
@@ -42,7 +42,7 @@ def available_qas_methods() -> tuple[str, ...]:
 def default_qas_config(method: QASMethod, **kwargs: Any) -> Any:
     """Return a config object for a QAS method.
 
-    Prefer ``aicir.qas.config.<method>(...)`` in user-facing code. This helper
+    Prefer ``aicir.qas.core.config.<method>(...)`` in user-facing code. This helper
     remains as a method-name based compatibility wrapper.
     """
 

@@ -1,7 +1,7 @@
 import numpy as np
 
 from aicir.core.circuit import Circuit, cx
-from aicir.qas.MoG_VQE import (
+from aicir.qas.algorithms.MoG_VQE import (
     MOGVQEConfig,
     block_hardware_efficient_ansatz,
     extract_blocks_from_circuit,

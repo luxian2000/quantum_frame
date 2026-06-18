@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
-from ..backends.base import Backend
-from ..core.circuit import Circuit
-from ..ir import circuit_instruction_count
+from ...backends.base import Backend
+from ...core.circuit import Circuit
+from ...ir import circuit_instruction_count
 from ._utils import count_parameters, count_two_qubit_gates
 
 
@@ -163,6 +163,22 @@ class SearchConfig:
     n_samples: int = 200
     include_common_candidates: bool = True
     active_metrics: Dict[str, str] = field(default_factory=dict)
+    candidate_budget: Optional[int] = None
+    seed: int = 1234
+    max_depth: Optional[int] = None
+    max_parameters: Optional[int] = None
+    max_two_qubit_gates: Optional[int] = None
+    allowed_gates: Optional[Sequence[str]] = None
+    topology: Optional[Sequence[tuple[int, int]]] = None
+    top_k: Optional[int] = None
+    search_strategy: str = "preset"
+    search_generations: int = 2
+    population_size: int = 12
+    mutation_rate: float = 0.25
+    beam_width: int = 4
+    progressive_keep: Optional[int] = None
+    reflective_mutation: bool = False
+    reflection_strength: float = 0.7
 
 
 @dataclass

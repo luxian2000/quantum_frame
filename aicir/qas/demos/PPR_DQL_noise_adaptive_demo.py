@@ -17,15 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from aicir.qas import PPRDQLConfig, load_default_ion_trap_noise_config, train_ppr_dql
-from aicir.qas.multi_objective_reward import (
-    ExpressibilityScore,
-    HardwareEfficiencyScore,
-    MultiObjectiveReward,
-    NoiseRobustnessScore,
-    RewardWeights,
-    TrainabilityScore,
-)
+from aicir.qas import ArchitectureEvaluator, PPRDQLConfig, RewardWeights, load_default_ion_trap_noise_config, train_ppr_dql
 from aicir.backends.numpy_backend import NumpyBackend
 from aicir.core.circuit import Circuit
 from aicir.core.state import State
@@ -36,20 +28,16 @@ def _prepare_target_state(backend: NumpyBackend) -> State:
     return State.zero_state(2, backend=backend).evolve(circuit.unitary(backend=backend))
 
 
-def _make_config(*, noise_aware: bool) -> PPRDQLConfig:
-    fast_reward = MultiObjectiveReward(
+def _make_config(*, noise_aware: bool, backend: NumpyBackend) -> PPRDQLConfig:
+    architecture_evaluator = ArchitectureEvaluator(
+        backend=backend,
         weights=RewardWeights(
             expressibility=0.20,
             trainability=0.20,
             noise_robustness=0.40,
             hardware_efficiency=0.20,
         ),
-        expressibility_score=ExpressibilityScore(n_samples=20),
-        trainability_score=TrainabilityScore(n_samples=10),
-        noise_robustness_score=NoiseRobustnessScore(n_samples=20),
-        hardware_efficiency_score=HardwareEfficiencyScore(),
-        fidelity_weight=0.2,
-        penalty_weight=0.02,
+        n_samples=20,
     )
 
     return PPRDQLConfig(
@@ -66,9 +54,8 @@ def _make_config(*, noise_aware: bool) -> PPRDQLConfig:
         epsilon_end=0.0,
         epsilon_decay=1.0,
         action_gates=[{"type": "pauli_x", "target_qubit": 0}],
-        use_noise_adaptive_reward=noise_aware,
-        multi_objective_reward=fast_reward if noise_aware else None,
-        multi_objective_reward_weight=0.5,
+        architecture_reward_evaluator=architecture_evaluator if noise_aware else None,
+        architecture_reward_weight=0.5 if noise_aware else 0.0,
         seed=7,
         log_interval=0,
     )
@@ -107,8 +94,8 @@ def main() -> None:
     print(f"noise_rules: {len(noise_model.rules)}")
     print("target task: prepare X on qubit 0 from |00>")
 
-    baseline = train_ppr_dql(target_state, config=_make_config(noise_aware=False))
-    noise_aware = train_ppr_dql(target_state, config=_make_config(noise_aware=True))
+    baseline = train_ppr_dql(target_state, config=_make_config(noise_aware=False, backend=backend))
+    noise_aware = train_ppr_dql(target_state, config=_make_config(noise_aware=True, backend=backend))
 
     _summarize_run("baseline reward", baseline)
     _summarize_run("noise-aware reward", noise_aware)

@@ -7,11 +7,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from ..backends.base import Backend
-from ..noise.model import NoiseModel
-from ..core.circuit import Circuit
-from ..core.gates import gate_to_matrix
-from ..core.state import State
+from ...backends.base import Backend
+from ...noise.model import NoiseModel
+from ...core.circuit import Circuit
+from ...core.gates import gate_to_matrix
+from ...core.state import State
 from ._utils import ensure_backend
 from .evaluator import ArchitectureEvaluator
 from ._types import ArchitectureSpec

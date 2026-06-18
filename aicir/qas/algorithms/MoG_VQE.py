@@ -40,9 +40,9 @@ from typing import Any, Callable, Literal, Sequence
 
 import numpy as np
 
-from ..backends.numpy_backend import NumpyBackend
-from ..core.circuit import Circuit, cx, ry, rz
-from ..operators import Hamiltonian
+from ...backends.numpy_backend import NumpyBackend
+from ...core.circuit import Circuit, cx, ry, rz
+from ...operators import Hamiltonian
 
 
 Edge = tuple[int, int]

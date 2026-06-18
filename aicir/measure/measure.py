@@ -232,8 +232,8 @@ class Measure:
                 terminal_output = (np.array(tr.terminal) if exact
                                    else np.array(tr.terminal).reshape(1, -1))
             snap_states = dict(tr.snaps)
-            probabilities = np.asarray(tr.pre.probabilities()).reshape(-1).astype(np.float64) \
-                if hasattr(tr.pre, "probabilities") else np.abs(np.asarray(state).reshape(-1)) ** 2
+            probabilities = backend.to_numpy(tr.pre.probabilities()).reshape(-1).astype(np.float64) \
+                if hasattr(tr.pre, "probabilities") else np.abs(backend.to_numpy(state).reshape(-1)) ** 2
             incircuit_counts = {}
             terminal_counts = None
             if not exact:  # shots=1 仍可统计
@@ -253,11 +253,11 @@ class Measure:
         exp_vals: Dict[str, float] = {}
         exp_vars: Dict[str, float] = {}
         if observables:
-            state_arr = np.asarray(state)
+            state_arr = backend.to_numpy(state)
             rho = state_arr if (state_arr.ndim == 2 and state_arr.shape[0] == state_arr.shape[1]) else None
             vec = None if rho is not None else state_arr.reshape(-1, 1)
             for name, op in observables.items():
-                op = np.asarray(op)
+                op = backend.to_numpy(op)
                 if rho is not None:
                     exp_vals[name] = float(np.real(np.trace(rho @ op)))
                 else:

@@ -5,7 +5,7 @@
 包含：
 - 随机图的节点数与边集；
 - MaxCut Ising 哈密顿量项 ``MAXCUT_HAMILTONIAN_TERMS``；
-- ``aicir.qas.supernet`` 搜索 + 微调得到的 VQE 线路 ``VQE_CIRCUIT_JSON``；
+- ``aicir.qas.algorithms.supernet`` 搜索 + 微调得到的 VQE 线路 ``VQE_CIRCUIT_JSON``；
 - 重建辅助函数 ``build_hamiltonian()`` / ``build_vqe_circuit()``。
 """
 
