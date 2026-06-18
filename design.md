@@ -534,3 +534,150 @@ multiple specialized simulation engines
 This keeps `aicir` pragmatic: QML gets the fast tensor path, QAS gets circuits
 as mutable searchable data, and QEC gets the polynomial-time representation it
 needs instead of forcing every workload through a dense state vector simulator.
+
+## 9. Implementation Schedule
+
+This breaks every phase in Section 6 into concrete, assignable work items and
+sorts them by **Serial Execution** (must run in order — dependency bottlenecks)
+versus **Parallel Execution** (independent tracks for concurrent teams). Each
+item lists its dependency; per-phase files and verification commands are in
+Section 6.
+
+### 9.0 Dependency Graph
+
+```text
+Phase 1 (Planner Contracts)  ── SERIAL ROOT, blocks everything
+   │
+   ├── Track A ── Phase 2 (Batched QML) ──serial──> Phase 3 (QAS prefilters)
+   │
+   ├── Track B ── Phase 4 (QEC contracts) ──serial──> Phase 5 (Stabilizer engines)
+   │              Phase 6 (Noisy scaling)  ──parallel with 4/5──
+   │
+   └── Track C ── Phase 7 (Tensor-network/MPS)  ──independent, lowest priority──
+```
+
+| Stage | Type | Depends on | Owner |
+| :--- | :--- | :--- | :--- |
+| Phase 1 | Serial root | None | Core architect(s) |
+| Phase 2 → Phase 3 | Serial within Track A | Phase 1 | Team A (QML/QAS) |
+| Phase 4 → Phase 5 | Serial within Track B | Phase 1 | Team B (QEC) |
+| Phase 6 | Parallel inside Track B | Phase 1 | Team B (Noise) |
+| Phase 7 | Independent | Phase 1 | Team C (Optional) |
+
+Tracks A, B, and C run fully in parallel once Phase 1 lands.
+
+### 9.1 Serial Execution — Foundational Core
+
+Must be completed before the parallel tracks can integrate.
+
+**Phase 1: Planner Contracts & Core API (global bottleneck)**
+*Introduces the routing mechanism with no behavior change. The five items are
+themselves serial (1.1 → 1.2/1.3 → 1.4 → 1.5).*
+
+| Item | Task | Depends on |
+| :--- | :--- | :--- |
+| 1.1 | Define immutable `ExecutionPlan` dataclass (`task`, `engine`, `backend_name`, `shots`, `supports_grad`, `noisy`, `batched`, `warnings`) | — |
+| 1.2 | Add planner metadata to `EstimateResult.metadata` and `SampleResult.metadata` without breaking existing fields | 1.1 |
+| 1.3 | Implement `select_execution_plan(circuit, *, task="auto", backend=None, shots=None, noise_model=None, engine="auto")` | 1.1 |
+| 1.4 | Route `SVEstimator`, `ShotEstimator`, `ShotSampler` through the planner **for metadata only** — execution stays behaviorally identical | 1.2, 1.3 |
+| 1.5 | Tests proving existing primitive outputs are unchanged except for added metadata | 1.4 |
+
+**Gate:** Phase 1 must be green (`pytest tests/primitives`) before forking the
+parallel tracks below.
+
+### 9.2 Parallel Execution Tracks
+
+Once Phase 1 is complete, staff split into three independent tracks.
+
+#### Track A — QML & QAS (Tensor & Batching focus) — Team A
+
+**Phase 2: Strengthen batched QML and variational execution**
+*Serial prerequisite for Phase 3.*
+
+| Item | Task | Depends on |
+| :--- | :--- | :--- |
+| 2.1 | Helper functions to evolve a `Circuit` through `BatchSV` when the gate set is supported | Phase 1 |
+| 2.2 | Clear fallback metadata when a circuit cannot use `BatchSV` | 2.1 |
+| 2.3 | Grouped parameter batches for fixed-topology VQE/QML evaluation | 2.1 |
+| 2.4 | Keep `NumpyBackend` / `GPUBackend` / `NPUBackend` unchanged for non-batched calls (regression guard) | 2.1 |
+| 2.5 | Tests comparing `BatchSV` output vs. normal state vector path for small circuits | 2.1–2.4 |
+
+**Phase 3: QAS prefilters, cache hooks, grouped evaluation**
+*Depends on Phase 2 (reuses the batched evaluation path).*
+
+| Item | Task | Depends on |
+| :--- | :--- | :--- |
+| 3.1 | Stable circuit-structure hash from `CircuitIR` ops/qubits/controls/gate names, excluding trainable param values when weight sharing is intended | Phase 2 |
+| 3.2 | Optional structural prefilters: depth, two-qubit count, entangler topology, trainability proxies, hardware efficiency | Phase 2 |
+| 3.3 | Cache interface for candidate scores and reusable prefix/suffix states | 3.1 |
+| 3.4 | Grouped evaluation for candidates with compatible topology | 3.2, 3.3 |
+| 3.5 | Ensure MoG_VQE and existing QAS algorithms use the same evaluator path | 3.4 |
+
+#### Track B — QEC & Noise (Stabilizers & Trajectories focus) — Team B
+
+*Track B has its own serial chain (Phase 4 → Phase 5) plus Phase 6 in parallel
+with that chain. With enough staff, split into B1 (engines: Phase 4→5) and
+B2 (noise: Phase 6).*
+
+**Phase 4: QEC result contracts & Clifford analysis**
+*Serial prerequisite for Phase 5.*
+
+| Item | Task | Depends on |
+| :--- | :--- | :--- |
+| 4.1 | `QECResult` with `syndrome_history`, `logical_error_rate`, `decoder_metadata`, `pauli_frame`, `metadata` | Phase 1 |
+| 4.2 | Clifford gate classification helpers using gate registry + typed IR accessors | Phase 1 |
+| 4.3 | Pauli-measurement and reset capability checks | 4.2 |
+| 4.4 | Tests for classification of Clifford / non-Clifford / measurement / reset circuits | 4.1–4.3 |
+
+**Phase 5: Stabilizer/tableau & Pauli-frame engines**
+*Depends on Phase 4.*
+
+| Item | Task | Depends on |
+| :--- | :--- | :--- |
+| 5.1 | Tableau state init, Clifford gate updates, Pauli measurement, reset, shot sampling | Phase 4 |
+| 5.2 | Pauli-frame correction tracking, separate from physical gate application | Phase 4 |
+| 5.3 | QEC sampler facade returning `QECResult` | 5.1, 5.2, 4.1 |
+| 5.4 | Cross-check small Clifford circuits against state vector / density-matrix path | 5.1 |
+| 5.5 | Planner dispatch for `task="qec"` when circuit is Clifford-compatible | 5.3, Phase 1 |
+
+**Phase 6: Noisy scaling paths**
+*Parallel with Phases 4/5 (only depends on Phase 1).*
+
+| Item | Task | Depends on |
+| :--- | :--- | :--- |
+| 6.1 | Keep density matrix simulation as the exact small-system reference (guard) | Phase 1 |
+| 6.2 | Add/extend trajectory execution for larger noisy circuits | Phase 1 |
+| 6.3 | Share `NoiseModel` definitions across density matrix, trajectory, and QEC paths | 6.2 |
+| 6.4 | Planner rules for density-matrix limits and trajectory fallback | 6.2, Phase 1 |
+| 6.5 | Statistical tests with deterministic seeds and tolerances | 6.1–6.4 |
+
+> Item 6.3 touches `aicir/qec/noise.py`; coordinate the shared `NoiseModel`
+> surface with B1 once Phase 4's `aicir/qec/` package exists.
+
+#### Track C — Optional Engines — Team C
+
+**Phase 7: Tensor-network/MPS engine**
+*Independent, lowest priority. Only depends on Phase 1's planner module.*
+
+| Item | Task | Depends on |
+| :--- | :--- | :--- |
+| 7.1 | Opt-in MPS support for 1D local circuits | Phase 1 |
+| 7.2 | Exact comparisons against state vector for small circuits | 7.1 |
+| 7.3 | Do **not** enable automatic planner selection until benchmarks justify it | 7.1 |
+| 7.4 | Keep optional dependencies optional | 7.1 |
+
+### 9.3 Scheduling Summary
+
+| When | Serial work | Parallel work |
+| :--- | :--- | :--- |
+| Sprint 0 | **Phase 1** (1.1→1.5) by core architects | — |
+| Sprint 1+ | Phase 2→3 (Team A); Phase 4→5 (Team B1) | Phase 6 (Team B2); Phase 7 (Team C) |
+
+**Critical path:** Phase 1 → (longest of: Phase 2→3 *or* Phase 4→5). Phases 6
+and 7 should never sit on the critical path; staff them only after the dependent
+serial chains (A and B1) are covered.
+
+**Cross-cutting (per Section 7):** any item that changes a public surface must
+also update `README.md`, `CHANGELOG.md`, and the relevant submodule README, and
+must preserve the listed public symbols and `Circuit.gates` compatibility. Keep
+optional dependencies optional throughout.
