@@ -136,7 +136,7 @@ def lih_vqe_qas_config(**overrides) -> SupernetConfig:
 def search_ground_state_qas(hamiltonian: Hamiltonian, **overrides) -> SupernetResult:
     """Search a ground-state-preparing circuit for ``hamiltonian`` with supernet.
 
-    Wraps :mod:`aicir.qas.supernet`: it sets up a weight-shared supernet, samples
+    Wraps :mod:`aicir.qas.algorithms.supernet`: it sets up a weight-shared supernet, samples
     and optimises ansatze in one stage, ranks them, and fine-tunes the best one.
     The returned result exposes the fine-tuned energy, the fixed-ansatz VQE
     baseline, and the selected circuit in ``final_metrics``.

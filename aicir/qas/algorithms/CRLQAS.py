@@ -37,12 +37,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from ..backends.numpy_backend import NumpyBackend
-from ..operators import Hamiltonian
-from ..core.circuit import Circuit
-from ..core.gates import gate_to_matrix
-from ..core.state import State
-from ..ir import instruction_controls, instruction_name, instruction_qubits
+from ...backends.numpy_backend import NumpyBackend
+from ...operators import Hamiltonian
+from ...core.circuit import Circuit
+from ...core.gates import gate_to_matrix
+from ...core.state import State
+from ...ir import instruction_controls, instruction_name, instruction_qubits
 
 
 @dataclass

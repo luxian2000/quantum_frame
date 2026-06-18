@@ -10,7 +10,11 @@ import math
 from typing import Iterable
 
 import numpy as np
-import torch
+
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None
 
 from ..gates import canonical_gate_name
 from ..ir.operation import normalize_gate
@@ -56,7 +60,8 @@ def _controlled_from_base_backend(base_single, target_qubit: int, control_qubits
     result = backend.tensor_product(*matrices)
     identity_backend = backend.eye(1 << n_qubits)
     if (
-        isinstance(identity_backend, torch.Tensor)
+        torch is not None
+        and isinstance(identity_backend, torch.Tensor)
         and isinstance(result, torch.Tensor)
         and torch.is_complex(identity_backend)
         and torch.is_complex(result)
@@ -91,7 +96,7 @@ def _toffoli_backend(target_qubit=2, control_qubits=(0, 1), control_states=None,
 
 
 def _unitary_parameter_matrix(value, backend=None):
-    if isinstance(value, torch.Tensor):
+    if torch is not None and isinstance(value, torch.Tensor):
         if backend is not None and hasattr(backend, "_device"):
             return backend.cast(value)
         return value.detach().cpu().numpy().astype(_CDTYPE)
@@ -335,6 +340,8 @@ def _rxx(theta, qubit_1=0, qubit_2=1):
 
 
 def _contains_torch_tensor(value) -> bool:
+    if torch is None:
+        return False
     if isinstance(value, torch.Tensor):
         return True
     if isinstance(value, (list, tuple)):
@@ -343,6 +350,8 @@ def _contains_torch_tensor(value) -> bool:
 
 
 def _first_torch_tensor(value):
+    if torch is None:
+        return None
     if isinstance(value, torch.Tensor):
         return value
     if isinstance(value, (list, tuple)):
@@ -581,7 +590,7 @@ def _expand_local_matrix_to_full(local_matrix, axes, n_qubits: int, backend=None
             f"局部门矩阵维度 {tuple(local_matrix.shape)} 与作用量子比特数量 {len(axes)} 不一致"
         )
 
-    if isinstance(local_matrix, torch.Tensor):
+    if torch is not None and isinstance(local_matrix, torch.Tensor):
         zero = local_matrix.new_tensor(0.0 + 0.0j)
         rows = []
         for row_index in range(dim):
@@ -621,13 +630,18 @@ def _inverse_permutation(perm):
 
 
 def _permute_tensor(tensor, perm):
-    if isinstance(tensor, torch.Tensor):
+    if torch is not None and isinstance(tensor, torch.Tensor):
         return tensor.permute(perm)
     return np.transpose(tensor, perm)
 
 
 def _contiguous_if_torch(tensor):
-    return tensor.contiguous() if isinstance(tensor, torch.Tensor) else tensor
+    return tensor.contiguous() if torch is not None and isinstance(tensor, torch.Tensor) else tensor
+
+
+def _should_use_flat_local_apply(backend, n_qubits: int) -> bool:
+    device = getattr(backend, "_device", None)
+    return bool(getattr(device, "type", None) == "npu" and int(n_qubits) > 8)
 
 
 def _parameter_cache_key(value):
@@ -674,6 +688,9 @@ def _apply_local_matrix_to_state(state, local_matrix, axes, n_qubits, backend):
             f"局部门矩阵维度 {local_matrix.shape} 与作用量子比特数量 {len(axes)} 不一致"
         )
 
+    if _should_use_flat_local_apply(backend, n_qubits):
+        return _apply_local_matrix_to_state_flat(state, local_matrix, axes, n_qubits, backend)
+
     # 将态向量整形为「目标比特轴 + 合并后的空闲段」的分组张量，而非按比特展开
     # 成 (2,)*n 的高阶张量。后者在 20+ 量子比特时秩高达 n，超出昇腾 NPU ACL
     # 算子最多 8 维的限制（aclnnInplaceCopy 报错）。这里把相邻的非目标比特合并
@@ -714,6 +731,74 @@ def _apply_local_matrix_to_state(state, local_matrix, axes, n_qubits, backend):
     restored = updated.reshape([2] * len(axes) + [group_shape[g] for g in gap_dim_indices])
     restored = _contiguous_if_torch(_permute_tensor(restored, inv_perm))
     return restored.reshape(1 << n_qubits, 1)
+
+
+def _flat_local_state_indices(axes, n_qubits: int):
+    axes = tuple(int(axis) for axis in axes)
+    dim = 1 << int(n_qubits)
+    basis = np.arange(dim, dtype=np.int64)
+    base_mask = np.ones(dim, dtype=bool)
+    for axis in axes:
+        base_mask &= ((basis >> (int(n_qubits) - 1 - axis)) & 1) == 0
+    base_indices = basis[base_mask]
+
+    rows = []
+    for local_index in range(1 << len(axes)):
+        offset = 0
+        for local_pos, axis in enumerate(axes):
+            bit = (local_index >> (len(axes) - 1 - local_pos)) & 1
+            offset |= bit << (int(n_qubits) - 1 - axis)
+        rows.append(base_indices | np.int64(offset))
+    return np.stack(rows, axis=0)
+
+
+def _backend_index_tensor(indices, reference):
+    if torch is not None and isinstance(reference, torch.Tensor):
+        return torch.as_tensor(indices, dtype=torch.long, device=reference.device)
+    return indices
+
+
+def _is_npu_complex_tensor(value, backend) -> bool:
+    if torch is None or not isinstance(value, torch.Tensor):
+        return False
+    device = getattr(backend, "_device", getattr(value, "device", None))
+    return bool(getattr(device, "type", None) == "npu" and torch.is_complex(value))
+
+
+def _apply_local_matrix_to_state_flat(state, local_matrix, axes, n_qubits, backend):
+    axes = [int(axis) for axis in axes]
+    dim_local = 1 << len(axes)
+    if local_matrix.shape != (dim_local, dim_local):
+        raise ValueError(
+            f"local gate matrix shape {local_matrix.shape} does not match {len(axes)} target qubit(s)"
+        )
+
+    flat = state.reshape(-1)
+    indices = _backend_index_tensor(_flat_local_state_indices(axes, n_qubits), flat)
+    npu_complex = _is_npu_complex_tensor(flat, backend)
+    if npu_complex:
+        gathered = torch.complex(torch.real(flat)[indices], torch.imag(flat)[indices])
+    else:
+        gathered = flat[indices]
+    if hasattr(backend, "apply_local_matrix"):
+        updated = backend.apply_local_matrix(local_matrix, gathered)
+    else:
+        updated = backend.matmul(local_matrix, gathered)
+
+    if torch is not None and isinstance(flat, torch.Tensor):
+        if npu_complex:
+            out_real = torch.empty_like(torch.real(flat))
+            out_imag = torch.empty_like(torch.imag(flat))
+            out_real[indices.reshape(-1)] = torch.real(updated).reshape(-1)
+            out_imag[indices.reshape(-1)] = torch.imag(updated).reshape(-1)
+            out = torch.complex(out_real, out_imag)
+        else:
+            out = torch.empty_like(flat)
+            out[indices.reshape(-1)] = updated.reshape(-1)
+    else:
+        out = np.empty_like(flat)
+        out[indices.reshape(-1)] = np.asarray(updated).reshape(-1)
+    return out.reshape(1 << n_qubits, 1)
 
 
 def _single_qubit_base_for_gate(gate):
@@ -773,7 +858,7 @@ def _controlled_local_from_base(base_single, control_states):
     control_states = [int(state) for state in control_states]
     n_controls = len(control_states)
     dim = 1 << (n_controls + 1)
-    if isinstance(base_single, torch.Tensor):
+    if torch is not None and isinstance(base_single, torch.Tensor):
         rows = []
         control_index = 0
         for state in control_states:

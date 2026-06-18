@@ -1,6 +1,6 @@
 # QAS Candidate Architecture Library
 
-本文档说明当前 `architecture_candidates.py` 中预设候选架构库的定义、线路组成和适用场景。候选库的目标不是只做目标态制备，而是给噪声自适应 QAS 提供一批可比较、可排名的 ansatz / architecture candidates。
+本文档说明当前 `library/architectures.py` 中预设候选架构库的定义、线路组成和适用场景。候选库的目标不是只做目标态制备，而是给噪声自适应 QAS 提供一批可比较、可排名的 ansatz / architecture candidates。
 
 ## 1. 公共约定
 

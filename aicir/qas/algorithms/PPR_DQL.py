@@ -38,10 +38,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from ..core.circuit import Circuit
-from ..core.gates import gate_to_matrix
-from ..core.state import State
-from ..ir import instruction_name, instruction_to_gate_dict
+from ...core.circuit import Circuit
+from ...core.gates import gate_to_matrix
+from ...core.state import State
+from ...ir import instruction_name, instruction_to_gate_dict
+from ..core._types import ArchitectureSpec
+from ..core.evaluator import ArchitectureEvaluator
 
 
 def _normalize_state_vector(vector: np.ndarray) -> np.ndarray:
@@ -136,6 +138,8 @@ class PPRDQLConfig:
     temperature_init: float = 0.0
     temperature_step: float = 0.01
     action_gates: Optional[List[Dict[str, Any]]] = None
+    architecture_reward_evaluator: Optional[Any] = None
+    architecture_reward_weight: float = 0.0
     seed: int = 42
     log_interval: int = 0
 
@@ -213,6 +217,10 @@ class _PPRDQLEnv:
         self.max_steps = int(config.max_steps_per_episode)
         self.gate_penalty = float(config.gate_penalty)
         self.terminal_bonus = float(config.terminal_bonus)
+        self.architecture_reward_weight = float(config.architecture_reward_weight)
+        self.architecture_reward_evaluator = config.architecture_reward_evaluator
+        if self.architecture_reward_weight != 0.0 and self.architecture_reward_evaluator is None:
+            self.architecture_reward_evaluator = ArchitectureEvaluator(backend=self.backend)
         self.action_gates = _validate_action_gates(
             _default_action_gates(self.n_qubits) if config.action_gates is None else config.action_gates,
             self.n_qubits,
@@ -225,6 +233,7 @@ class _PPRDQLEnv:
         self.circuit_gates: List[Dict[str, Any]] = []
         self.steps = 0
         self.prev_fidelity = 0.0
+        self.prev_architecture_score = 0.0
 
     @property
     def state_dim(self) -> int:
@@ -238,6 +247,7 @@ class _PPRDQLEnv:
         self.circuit_gates = []
         self.steps = 0
         self.prev_fidelity = self._fidelity_of_current_state()
+        self.prev_architecture_score = 0.0
         return self._observation()
 
     def _build_state(self) -> State:
@@ -268,6 +278,14 @@ class _PPRDQLEnv:
 
         fidelity = self._fidelity_of_current_state()
         reward = fidelity - self.prev_fidelity - self.gate_penalty
+        architecture_score = None
+        if self.architecture_reward_evaluator is not None and self.architecture_reward_weight != 0.0:
+            architecture_score = self.architecture_reward_evaluator.evaluate(
+                ArchitectureSpec(name=f"ppr_dql_step_{self.steps}", circuit=self.build_circuit())
+            )
+            architecture_delta = float(architecture_score.weighted_score) - self.prev_architecture_score
+            reward += self.architecture_reward_weight * architecture_delta
+            self.prev_architecture_score = float(architecture_score.weighted_score)
         if fidelity >= self.fidelity_threshold:
             reward += self.terminal_bonus
         self.prev_fidelity = fidelity
@@ -277,6 +295,7 @@ class _PPRDQLEnv:
             "fidelity": fidelity,
             "gate_count": len(self.circuit_gates),
             "circuit": self.build_circuit(),
+            "architecture_score": architecture_score,
         }
         return self._observation(), float(reward), bool(done), info
 
@@ -366,6 +385,9 @@ def train_ppr_dql(
         raise ValueError("fidelity_threshold 必须在 (0, 1] 区间")
     if cfg.batch_size <= 0 or cfg.replay_capacity <= 0:
         raise ValueError("batch_size 和 replay_capacity 必须是正整数")
+
+    if cfg.architecture_reward_weight < 0.0:
+        raise ValueError("architecture_reward_weight must be non-negative")
 
     np.random.seed(cfg.seed)
     random.seed(cfg.seed)

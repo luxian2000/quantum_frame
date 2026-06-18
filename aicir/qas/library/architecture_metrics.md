@@ -46,7 +46,7 @@ weighted_score =
 | 噪声鲁棒性 | `ion_trap_error_budget_proxy`  | `noise/metrics.py::ion_trap_error_budget_proxy`, `noise/ion_trap.py`                   | 使用默认离子阱噪声配置估计线路 error budget             |
 | 硬件效率   | `native_depth_twoq_efficiency` | `metrics/hardware.py::native_depth_twoq_efficiency`                                      | 使用 native gate 比例、深度、双比特门密度评估硬件友好度 |
 
-`structure_proxy` 和 `native_depth_twoq_efficiency` 是 `evaluator.py` 中登记的 active 指标名，真实计算分别在 `metrics/trainability.py` 和 `metrics/hardware.py` 中。`multi_objective_reward.py` 保留 legacy RL reward wrapper；新主线不再从 reward 层直接 import 具体指标函数。
+`structure_proxy` 和 `native_depth_twoq_efficiency` 是 `evaluator.py` 中登记的 active 指标名，真实计算分别在 `metrics/trainability.py` 和 `metrics/hardware.py` 中。legacy RL multi-objective wrapper 已移除；RL 代码通过 `ArchitectureEvaluator` 获取 `weighted_score`，`reward.py` 只保留权重合成职责。
 
 ## 3. 表达能力组
 

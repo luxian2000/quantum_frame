@@ -7,7 +7,7 @@ import torch
 
 from aicir.operators import Hamiltonian
 from aicir.backends.gpu_backend import TorchBackend
-from aicir.qas.supernet import h2_hamiltonian, prepare_classification_dataset
+from aicir.qas.algorithms.supernet import h2_hamiltonian, prepare_classification_dataset
 from aicir.qas import (
     Architecture,
     LayerArchitecture,
@@ -511,7 +511,7 @@ def _parameter_shift_fixture():
 
 
 def test_parameter_shift_update_uses_qml_psr(monkeypatch):
-    import aicir.qas.supernet as vqa_qas_module
+    import aicir.qas.algorithms.supernet as vqa_qas_module
 
     qas, active, loss_closure = _parameter_shift_fixture()
     captured = {}

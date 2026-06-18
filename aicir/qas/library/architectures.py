@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from ..backends.base import Backend
-from ._types import ArchitectureSpec
+from ...backends.base import Backend
+from ..core._types import ArchitectureSpec
 
 
 Edge = Tuple[int, int]

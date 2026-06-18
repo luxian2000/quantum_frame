@@ -4,11 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from .CRLQAS import AdamSPSAConfig, CRLQASConfig
-from .PPO_RB import PPORollbackConfig
-from .PPR_DQL import PPRDQLConfig
-from .supernet import SupernetConfig
-
 QASMethod = str
 
 _PUBLIC_METHODS = ("supernet", "supernet_classification", "supernet_h2", "ppo_rb", "ppr_dql", "crlqas")
@@ -34,22 +29,28 @@ _METHOD_ALIASES = {
 }
 
 
-def supernet(**kwargs: Any) -> SupernetConfig:
+def supernet(**kwargs: Any) -> Any:
     """Build a ``supernet`` config with optional field overrides."""
+
+    from ..algorithms.supernet import SupernetConfig
 
     return _build(SupernetConfig, kwargs)
 
 
-def supernet_classification(**kwargs: Any) -> SupernetConfig:
+def supernet_classification(**kwargs: Any) -> Any:
     """Build a ``supernet`` config for the built-in classification task."""
+
+    from ..algorithms.supernet import SupernetConfig
 
     values = {"task": "classification"}
     values.update(kwargs)
     return _build(SupernetConfig, values)
 
 
-def supernet_h2(**kwargs: Any) -> SupernetConfig:
+def supernet_h2(**kwargs: Any) -> Any:
     """Build a ``supernet`` config for the built-in H2 VQE task."""
+
+    from ..algorithms.supernet import SupernetConfig
 
     values = {
         "n_qubits": 4,
@@ -65,20 +66,26 @@ def supernet_h2(**kwargs: Any) -> SupernetConfig:
     return _build(SupernetConfig, values)
 
 
-def ppo_rb(**kwargs: Any) -> PPORollbackConfig:
+def ppo_rb(**kwargs: Any) -> Any:
     """Build a ``PPO_RB`` config with optional field overrides."""
+
+    from ..algorithms.PPO_RB import PPORollbackConfig
 
     return _build(PPORollbackConfig, kwargs)
 
 
-def ppr_dql(**kwargs: Any) -> PPRDQLConfig:
+def ppr_dql(**kwargs: Any) -> Any:
     """Build a ``PPR_DQL`` config with optional field overrides."""
+
+    from ..algorithms.PPR_DQL import PPRDQLConfig
 
     return _build(PPRDQLConfig, kwargs)
 
 
-def crlqas(**kwargs: Any) -> CRLQASConfig:
+def crlqas(**kwargs: Any) -> Any:
     """Build a ``CRLQAS`` config with optional field overrides."""
+
+    from ..algorithms.CRLQAS import CRLQASConfig
 
     values = dict(kwargs)
     if isinstance(values.get("adam_spsa"), dict):
@@ -86,8 +93,10 @@ def crlqas(**kwargs: Any) -> CRLQASConfig:
     return _build(CRLQASConfig, values)
 
 
-def adam_spsa(**kwargs: Any) -> AdamSPSAConfig:
+def adam_spsa(**kwargs: Any) -> Any:
     """Build the nested Adam-SPSA config used by ``CRLQAS``."""
+
+    from ..algorithms.CRLQAS import AdamSPSAConfig
 
     return _build(AdamSPSAConfig, kwargs)
 

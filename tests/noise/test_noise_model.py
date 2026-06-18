@@ -9,13 +9,13 @@ from aicir import (
     Measure,
     NoiseModel,
     PhaseFlipChannel,
-    TorchBackend,
+    NumpyBackend,
 )
 
 
 class TestNoiseModel(unittest.TestCase):
     def setUp(self):
-        self.backend = TorchBackend(device="cpu")
+        self.backend = NumpyBackend()
         self.measure = Measure(self.backend)
 
     def test_bit_flip_full_probability(self):
