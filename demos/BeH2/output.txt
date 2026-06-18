@@ -1,0 +1,109 @@
+========================================================================================
+BeH2 NPU hyperparameter sweep
+========================================================================================
+started at               : 2026-06-18T10:24:30
+finished at              : 2026-06-18T10:28:45
+platform                 : Linux-4.19.90-2107.6.0.0251.71.oe1.bclinux.aarch64-aarch64-with-glibc2.35
+devices                  : npu:0, npu:1, npu:2, npu:3
+total wall-clock time    : 255.2 s
+successful / failed      : 0 / 6
+circuit module           : /root/work/filestorage/luxian/quantum_frame/demos/BeH2/output.py
+
+device report:
+  torch version            : 2.4.0
+  torch.npu.is_available() : True
+  torch.npu.device_count() : 4
+
+results sorted by fine-tuned energy:
+rank  status  device  layers  supernet_num  seed  fine_tuned_energy(Ha)  baseline_energy(Ha)  CNOT/2q  seconds  function
+--------------------------------------------------------------------------------------------------------------------------------------------
+   -  error   npu:0        4             6     7                    nan                  nan  -  -  -
+   -  error   npu:1        4            12     7                    nan                  nan  -  -  -
+   -  error   npu:2        6             6     7                    nan                  nan  -  -  -
+   -  error   npu:3        6            12     7                    nan                  nan  -  -  -
+   -  error   unassigned       8             6     7                    nan                  nan  -  -  -
+   -  error   unassigned       8            12     7                    nan                  nan  -  -  -
+
+failed runs:
+----------------------------------------------------------------------------------------
+run_id=run_000 device=npu:0 layers=4 supernet_num=6
+worker exited without writing result JSON
+Exception in thread Thread-1:
+Traceback (most recent call last):
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/threading.py", line 1016, in _bootstrap_inner
+    self.run()
+  File "/usr/local/Ascend/ascend-toolkit/latest/python/site-packages/tbe/common/repository_manager/utils/multiprocess_util.py", line 91, in run
+    key, func, args, kwargs = self.task_q.get(timeout=TIMEOUT)
+  File "<string>", line 2, in get
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/managers.py", line 818, in _callmethod
+    kind, result = conn.recv()
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/connection.py", line 250, in recv
+    buf = self._recv_bytes()
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/connection.py", line 414, in _recv_bytes
+    buf = self._recv(4)
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/connection.py", line 383, in _recv
+    raise EOFError
+EOFError
+----------------------------------------------------------------------------------------
+run_id=run_001 device=npu:1 layers=4 supernet_num=12
+worker exited without writing result JSON
+Exception in thread Thread-1:
+Traceback (most recent call last):
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/threading.py", line 1016, in _bootstrap_inner
+    self.run()
+  File "/usr/local/Ascend/ascend-toolkit/latest/python/site-packages/tbe/common/repository_manager/utils/multiprocess_util.py", line 91, in run
+    key, func, args, kwargs = self.task_q.get(timeout=TIMEOUT)
+  File "<string>", line 2, in get
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/managers.py", line 818, in _callmethod
+    kind, result = conn.recv()
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/connection.py", line 250, in recv
+    buf = self._recv_bytes()
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/connection.py", line 414, in _recv_bytes
+    buf = self._recv(4)
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/connection.py", line 383, in _recv
+    raise EOFError
+EOFError
+----------------------------------------------------------------------------------------
+run_id=run_002 device=npu:2 layers=6 supernet_num=6
+worker exited without writing result JSON
+Exception in thread Thread-1:
+Traceback (most recent call last):
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/threading.py", line 1016, in _bootstrap_inner
+    self.run()
+  File "/usr/local/Ascend/ascend-toolkit/latest/python/site-packages/tbe/common/repository_manager/utils/multiprocess_util.py", line 91, in run
+    key, func, args, kwargs = self.task_q.get(timeout=TIMEOUT)
+  File "<string>", line 2, in get
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/managers.py", line 818, in _callmethod
+    kind, result = conn.recv()
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/connection.py", line 250, in recv
+    buf = self._recv_bytes()
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/connection.py", line 414, in _recv_bytes
+    buf = self._recv(4)
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/connection.py", line 383, in _recv
+    raise EOFError
+EOFError
+----------------------------------------------------------------------------------------
+run_id=run_003 device=npu:3 layers=6 supernet_num=12
+worker exited without writing result JSON
+Exception in thread Thread-1:
+Traceback (most recent call last):
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/threading.py", line 1016, in _bootstrap_inner
+    self.run()
+  File "/usr/local/Ascend/ascend-toolkit/latest/python/site-packages/tbe/common/repository_manager/utils/multiprocess_util.py", line 91, in run
+    key, func, args, kwargs = self.task_q.get(timeout=TIMEOUT)
+  File "<string>", line 2, in get
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/managers.py", line 818, in _callmethod
+    kind, result = conn.recv()
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/connection.py", line 250, in recv
+    buf = self._recv_bytes()
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/connection.py", line 414, in _recv_bytes
+    buf = self._recv(4)
+  File "/root/miniconda3/envs/cm-model/lib/python3.10/multiprocessing/connection.py", line 383, in _recv
+    raise EOFError
+EOFError
+----------------------------------------------------------------------------------------
+run_id=run_004 device=unassigned layers=8 supernet_num=6
+no devices left after worker failures
+----------------------------------------------------------------------------------------
+run_id=run_005 device=unassigned layers=8 supernet_num=12
+no devices left after worker failures
