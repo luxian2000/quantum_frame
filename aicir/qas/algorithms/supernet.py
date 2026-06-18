@@ -904,6 +904,39 @@ class Supernet:
         selected = min(range(len(losses)), key=losses.__getitem__)
         return selected, losses
 
+    def _aggressive_step(self, objective, dataset, hamiltonian, ctx):
+        # 所有 rank 以相同顺序采样 world_size 个架构；本 rank 负责 arch[rank]。
+        archs = [self.sample_architecture() for _ in range(ctx.world_size)]
+        architecture = archs[ctx.rank]
+        selected_id, candidate_losses = self.select_supernet(
+            architecture, objective, dataset, hamiltonian, split="train",
+        )
+        loss, _, active_keys, active_tensors = self._loss(
+            architecture, selected_id, objective, dataset, hamiltonian, split="train",
+        )
+        # 清零所有共享参数的梯度，对本 rank 的 loss 做反向传播。
+        for param in self.shared_parameters.values():
+            param.grad = None
+        if loss.requires_grad:
+            loss.backward()
+        ordered_keys = sorted(self.shared_parameters.keys(), key=str)
+        grads = [
+            (self.shared_parameters[k].grad
+             if self.shared_parameters[k].grad is not None
+             else torch.zeros_like(self.shared_parameters[k]))
+            for k in ordered_keys
+        ]
+        all_reduce_mean(grads)
+        for key, grad in zip(ordered_keys, grads):
+            self.shared_parameters[key].grad = grad
+        # 步进所有被某个 rank 选中的 supernet 的优化器。
+        selected_ids = set()
+        for ids in all_gather([selected_id]):
+            selected_ids.update(ids)
+        for supernet_id in sorted(selected_ids):
+            self._optimizers[supernet_id].step()
+        return architecture, selected_id, candidate_losses, _float_value(loss), active_keys
+
     def optimize_supernet(
         self,
         objective: ObjectiveFn | str | None,
@@ -912,8 +945,25 @@ class Supernet:
     ) -> list[dict[str, Any]]:
         ctx = shard_context(self.backend)
         safe_sharded = ctx.is_sharded and self.config.shard_mode.lower() == "safe"
+        aggressive_sharded = ctx.is_sharded and self.config.shard_mode.lower() == "aggressive"
         log: list[dict[str, Any]] = []
         for step in range(self.config.supernet_steps):
+            if aggressive_sharded:
+                architecture, selected_id, candidate_losses, loss_float, active_keys = (
+                    self._aggressive_step(objective, dataset, hamiltonian, ctx)
+                )
+                grad_norm = 0.0
+                log.append({
+                    "step": step, "architecture": architecture,
+                    "architecture_indices": self.encode_architecture(architecture),
+                    "selected_supernet_id": selected_id,
+                    "candidate_losses": candidate_losses, "loss": loss_float,
+                    "gradient_norm": grad_norm,
+                    "active_parameter_count": len(active_keys),
+                    "cnot_count": self.cnot_count(architecture),
+                    "two_qubit_count": self.two_qubit_count(architecture),
+                })
+                continue
             architecture = self.sample_architecture()
             if safe_sharded:
                 selected_id, candidate_losses = self._sharded_select(
