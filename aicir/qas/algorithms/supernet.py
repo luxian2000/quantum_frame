@@ -272,7 +272,8 @@ class Supernet:
         self._two_qubit_layouts = self._build_two_qubit_layouts()
         self._readout_index_cache: dict[int, torch.Tensor] = {}
         self._hamiltonian_cache: dict[int, torch.Tensor] = {}
-        self._pauli_expectation_cache: dict[int, list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, float]]] = {}
+        self._basis_index_cache: dict[int, torch.Tensor] = {}
+        self._pauli_expectation_cache: dict[int, list[tuple[int, int, int, float, float]]] = {}
 
         self.shared_parameters: dict[ParameterKey, torch.nn.Parameter] = {}
         self._supernet_parameter_lists: list[list[torch.nn.Parameter]] = []
@@ -604,51 +605,60 @@ class Supernet:
     def _pauli_term_cache(
         self,
         hamiltonian: Hamiltonian,
-    ) -> list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, float]]:
+    ) -> list[tuple[int, int, int, float, float]]:
         cache_key = id(hamiltonian)
         if cache_key in self._pauli_expectation_cache:
             return self._pauli_expectation_cache[cache_key]
 
         n_qubits = int(hamiltonian.n_qubits)
-        dim = 1 << n_qubits
-        cached_terms: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, float]] = []
+        cached_terms: list[tuple[int, int, int, float, float]] = []
         for term in hamiltonian._terms:
-            mapped_indices: list[int] = []
-            phase_real: list[float] = []
-            phase_imag: list[float] = []
+            flip_mask = 0
+            sign_mask = 0
+            y_count = 0
             labels = term.qubit_labels
-            for index in range(dim):
-                mapped = index
-                phase = 1.0 + 0.0j
-                for qubit, label in enumerate(labels):
-                    if label == "I":
-                        continue
-                    bit_shift = n_qubits - qubit - 1
-                    bit = (index >> bit_shift) & 1
-                    if label == "X":
-                        mapped ^= 1 << bit_shift
-                    elif label == "Y":
-                        mapped ^= 1 << bit_shift
-                        phase *= 1.0j if bit == 0 else -1.0j
-                    elif label == "Z":
-                        if bit:
-                            phase *= -1.0
-                mapped_indices.append(mapped)
-                phase_real.append(float(phase.real))
-                phase_imag.append(float(phase.imag))
+            for qubit, label in enumerate(labels):
+                bit_mask = 1 << (n_qubits - qubit - 1)
+                if label in {"X", "Y"}:
+                    flip_mask ^= bit_mask
+                if label in {"Y", "Z"}:
+                    sign_mask ^= bit_mask
+                if label == "Y":
+                    y_count += 1
 
             coefficient = complex(term.coefficient)
             cached_terms.append(
                 (
-                    torch.tensor(mapped_indices, dtype=torch.long, device=self.device),
-                    torch.tensor(phase_real, dtype=torch.float32, device=self.device),
-                    torch.tensor(phase_imag, dtype=torch.float32, device=self.device),
+                    flip_mask,
+                    sign_mask,
+                    y_count % 4,
                     float(coefficient.real),
                     float(coefficient.imag),
                 )
             )
         self._pauli_expectation_cache[cache_key] = cached_terms
         return cached_terms
+
+    def _basis_indices(self, dim: int) -> torch.Tensor:
+        cached = self._basis_index_cache.get(dim)
+        if cached is None or cached.device != self.device:
+            cached = torch.arange(dim, dtype=torch.long, device=self.device)
+            self._basis_index_cache[dim] = cached
+        return cached
+
+    def _pauli_signs(self, basis_indices: torch.Tensor, sign_mask: int) -> torch.Tensor | None:
+        if sign_mask == 0:
+            return None
+        parity = torch.zeros_like(basis_indices, dtype=torch.bool)
+        bit = 0
+        mask = int(sign_mask)
+        while mask:
+            if mask & 1:
+                parity = torch.logical_xor(parity, ((basis_indices >> bit) & 1).to(torch.bool))
+            mask >>= 1
+            bit += 1
+        ones = torch.ones_like(basis_indices, dtype=torch.float32)
+        return torch.where(parity, -ones, ones)
 
     def _hamiltonian_expectation(self, state: torch.Tensor, hamiltonian: Hamiltonian | np.ndarray | torch.Tensor | None) -> torch.Tensor:
         if hamiltonian is None:
@@ -660,15 +670,33 @@ class Supernet:
             state_real = torch.real(state)
             state_imag = torch.imag(state)
             energy = torch.zeros((), dtype=torch.float32, device=self.device)
-            for mapped_indices, phase_real, phase_imag, coefficient_real, coefficient_imag in self._pauli_term_cache(hamiltonian):
-                mapped_real = state_real.index_select(0, mapped_indices)
-                mapped_imag = state_imag.index_select(0, mapped_indices)
+            basis_indices = self._basis_indices(state.numel())
+            for flip_mask, sign_mask, y_phase, coefficient_real, coefficient_imag in self._pauli_term_cache(hamiltonian):
+                if flip_mask:
+                    mapped_indices = torch.bitwise_xor(basis_indices, flip_mask)
+                    mapped_real = state_real.index_select(0, mapped_indices)
+                    mapped_imag = state_imag.index_select(0, mapped_indices)
+                else:
+                    mapped_real = state_real
+                    mapped_imag = state_imag
                 overlap_real = mapped_real * state_real + mapped_imag * state_imag
                 overlap_imag = mapped_real * state_imag - mapped_imag * state_real
-                phased_real = overlap_real * phase_real - overlap_imag * phase_imag
-                phased_imag = overlap_real * phase_imag + overlap_imag * phase_real
-                term_real = phased_real.sum()
-                term_imag = phased_imag.sum()
+                signs = self._pauli_signs(basis_indices, sign_mask)
+                if signs is not None:
+                    overlap_real = overlap_real * signs
+                    overlap_imag = overlap_imag * signs
+                if y_phase == 0:
+                    term_real = overlap_real.sum()
+                    term_imag = overlap_imag.sum()
+                elif y_phase == 1:
+                    term_real = -overlap_imag.sum()
+                    term_imag = overlap_real.sum()
+                elif y_phase == 2:
+                    term_real = -overlap_real.sum()
+                    term_imag = -overlap_imag.sum()
+                else:
+                    term_real = overlap_imag.sum()
+                    term_imag = -overlap_real.sum()
                 energy = energy + coefficient_real * term_real - coefficient_imag * term_imag
             return energy
         return self.backend.expectation_sv(state, self._hamiltonian_matrix(hamiltonian))
@@ -869,7 +897,8 @@ class Supernet:
 
         def objective(theta: np.ndarray) -> float:
             _write_values(theta)
-            return _float_value(loss_closure())
+            with torch.no_grad():
+                return _float_value(loss_closure())
 
         gradients = np.asarray(psr(objective, base_values), dtype=float).reshape(-1)
 
@@ -1141,7 +1170,8 @@ class Supernet:
             return loss_value
 
         if self.config.finetune_steps == 0 or optimizer is None:
-            loss = loss_closure()
+            with torch.no_grad():
+                loss = loss_closure()
             best_loss = _float_value(loss)
 
         for step in range(self.config.finetune_steps if optimizer is not None else 0):
@@ -1254,7 +1284,7 @@ class Supernet:
 
         parameters = [self._new_shared_parameter() for _ in range(total)]
         optimizer = torch.optim.Adam(parameters, lr=self.config.finetune_learning_rate) if parameters else None
-        steps = max(1, self.config.finetune_steps)
+        steps = int(self.config.finetune_steps)
         best_energy = math.inf
 
         def energy_closure() -> torch.Tensor:
@@ -1279,11 +1309,16 @@ class Supernet:
             state = self._simulate_gates(gates)
             return self._hamiltonian_expectation(state, hamiltonian)
 
+        if steps == 0 or optimizer is None:
+            return _float_value(energy_closure())
+
         for _ in range(steps):
             loss = energy_closure()
             best_energy = min(best_energy, _float_value(loss))
-            if optimizer is not None:
-                optimizer.zero_grad(set_to_none=True)
+            optimizer.zero_grad(set_to_none=True)
+            if self.config.use_parameter_shift:
+                self._parameter_shift_update(parameters, optimizer, energy_closure)
+            else:
                 loss.backward()
                 optimizer.step()
         return float(best_energy)
