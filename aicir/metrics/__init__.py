@@ -1,5 +1,6 @@
 """Shared algorithm-level metric implementations."""
 
+from .circuit_structure import entanglement_coverage_score, parameter_count, structural_expressibility_proxy_score
 from .expressibility import KL_Haar_divergence, KL_Haar_relative, MMD_relative
 from .hardware import (
     DEFAULT_NATIVE_GATES,
@@ -30,6 +31,9 @@ __all__ = [
     "KL_Haar_noisy",
     "MMD_relative",
     "MMD_noisy",
+    "entanglement_coverage_score",
+    "parameter_count",
+    "structural_expressibility_proxy_score",
     "DEFAULT_NATIVE_GATES",
     "HardwareProfile",
     "comparative_expressibility",

@@ -1,14 +1,31 @@
-"""Problem instances for task-level QAS validation."""
+"""VQE problem helpers used by the QAS closed loop."""
 
-from .base import ProblemInstance
-from .maxcut import MaxCutInstance, maxcut_line, maxcut_ring
-from .resource_allocation import ResourceAllocationInstance, small_resource_allocation
+from .hamiltonians import (
+    H2_HAMILTONIAN,
+    H2_REFERENCE_ENERGY,
+    ISING4_HAMILTONIAN,
+    VQEDemoProblem,
+    VQEProblem,
+    exact_ground_energy,
+    h2_demo_problem,
+    h2_hamiltonian_matrix,
+    hamiltonian_matrix,
+    ising4_demo_problem,
+    tfim_chain_demo_problem,
+    tfim_chain_hamiltonian,
+)
 
 __all__ = [
-    "MaxCutInstance",
-    "ProblemInstance",
-    "ResourceAllocationInstance",
-    "maxcut_line",
-    "maxcut_ring",
-    "small_resource_allocation",
+    "H2_HAMILTONIAN",
+    "H2_REFERENCE_ENERGY",
+    "ISING4_HAMILTONIAN",
+    "VQEDemoProblem",
+    "VQEProblem",
+    "exact_ground_energy",
+    "h2_demo_problem",
+    "h2_hamiltonian_matrix",
+    "hamiltonian_matrix",
+    "ising4_demo_problem",
+    "tfim_chain_demo_problem",
+    "tfim_chain_hamiltonian",
 ]
