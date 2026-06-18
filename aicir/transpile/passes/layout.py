@@ -24,6 +24,8 @@ class LayoutPass(TransformationPass):
       或序列（下标为逻辑位、值为物理位）。``None`` 表示平凡布局（恒等，不改动）。
     - ``target``：可选 ``Target``；给出时输出线路的 ``n_qubits`` 取
       ``target.n_qubits``，并校验物理位落在 ``[0, target.n_qubits)``。
+      未给 ``target`` 时，输出 ``n_qubits`` 自动取「逻辑位数」与「最大物理位+1」
+      的较大值——即映射到较大物理下标会相应加宽线路。
 
     映射必须是单射（不同逻辑位不能映射到同一物理位）。
     """

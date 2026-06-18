@@ -65,3 +65,22 @@ def test_disconnected_coupling_raises():
     target = Target(n_qubits=3, coupling_map=[(0, 1)])  # qubit 2 isolated
     with pytest.raises(ValueError):
         RoutingPass(target=target).run(cir)
+
+
+def test_scratch_qubit_is_restored_for_later_gate():
+    # cx(3,[0]) 在 0-1-2-3 链上路由时，比特 1、2 被用作 SWAP 暂存；
+    # 之后作用在比特 1 上的门必须看到已复位的状态——靠整体幺正等价锁定该不变量。
+    cir = Circuit(hadamard(1), cx(3, [0]), hadamard(1), cx(1, [2]), n_qubits=4)
+    target = Target(n_qubits=4, coupling_map=[(0, 1), (1, 2), (2, 3)])
+    out = RoutingPass(target=target).run(cir)
+    assert _all_two_qubit_coupled(out, target)
+    assert _equiv(cir, out)
+
+
+def test_swap_insertion_is_symmetric():
+    # swap-and-restore：插入的 SWAP 必须前后成对（数量为偶数），保证置换被复位。
+    cir = Circuit(cx(3, [0]), n_qubits=4)
+    target = Target(n_qubits=4, coupling_map=[(0, 1), (1, 2), (2, 3)])
+    out = RoutingPass(target=target).run(cir)
+    n_swaps = sum(1 for g in circuit_gate_dicts(out) if g["type"] == "swap")
+    assert n_swaps > 0 and n_swaps % 2 == 0
