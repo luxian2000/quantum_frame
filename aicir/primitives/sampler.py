@@ -90,7 +90,7 @@ class ShotSampler(BaseSampler):
         if self.shots <= 0:
             raise ValueError("shots must be positive")
 
-    def run(self, circuits, *, shots: int | None = None, measure_qubits=None):
+    def run(self, circuits, *, shots: int | None = None, measure_qubits=()):
         items, single = normalize_run_inputs(circuits)
         use_shots = self.shots if shots is None else int(shots)
         measure = Measure(self.backend)
