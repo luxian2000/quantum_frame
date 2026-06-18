@@ -15,6 +15,8 @@ def _pass_from_name(name: str) -> TransformationPass:
         CancelInversePass,
         CanonicalizePass,
         CommuteSingleQubitPass,
+        DecomposePass,
+        LayoutPass,
         MergeRotationsPass,
         ValidatePass,
     )
@@ -29,6 +31,8 @@ def _pass_from_name(name: str) -> TransformationPass:
         "merge_rotation": MergeRotationsPass,
         "commute_single_qubit": CommuteSingleQubitPass,
         "commute": CommuteSingleQubitPass,
+        "decompose": DecomposePass,
+        "layout": LayoutPass,
     }
     try:
         return mapping[key]()

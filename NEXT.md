@@ -120,6 +120,8 @@ optimized = pm.run(circuit)
 
 短期可以让 `optimize_circuit` 继续存在，但内部委托给默认 `PassManager`。
 
+当前状态：`aicir.transpile` 提供 `TransformationPass`/`PassManager`/`default_optimization_pipeline`，本地优化 pass `CancelInversePass`/`MergeRotationsPass`/`CommuteSingleQubitPass`，结构 pass `ValidatePass`/`CanonicalizePass`，以及第二批面向硬件目标的 pass：`DecomposePass`（高级门分解到目标门集，内置 `swap→3×cx`、`cz→h·cx·h`、`cy→rz·cx·rz` 标准规则，仅单控制位，规则展开产生 `hadamard`/`rz`，暂不做任意单比特门的 Euler 基底翻译）、`LayoutPass`（显式/平凡 logical→physical 重标号，比特置换意义下等价）、`RoutingPass`（沿耦合图最短路径插 SWAP 并对称复位，整线路完全幺正等价，SWAP 数非最优）。三者消费 `aicir.devices.Target`（门集 + 耦合拓扑）；`PassManager` 字符串名支持 `decompose`/`layout`。尚未开始：基于置换跟踪的最优路由、自动择优布局、任意单比特门的目标基底翻译、`DecomposePass` 的 `GateSpec.decomposition` 字段驱动。
+
 ### 3. 引入硬件目标描述 `Target`
 
 当前已有 backend、noise 和 metrics 中的硬件 profile，但还没有统一描述硬件能力的对象。建议新增：
@@ -143,6 +145,8 @@ Target(
 - `vqc`：选择 Estimator/Sampler 执行路径。
 - `qas`：限制搜索空间和硬件效率评分。
 - `metrics`：计算拓扑映射效率、native gate 效率和噪声敏感性。
+
+当前状态：第一片已落地。`aicir.devices` 提供冻结数据类 `Target`，字段含 `n_qubits`/`basis_gates`/`coupling_map` 与四个执行能力标志；`basis_gates` 按 `GateSpec` 规范名归一，`coupling_map` 按无向图处理并在构造时校验比特范围。提供门集查询 `supports(gate)` 与拓扑查询 `coupled(a, b)`/`neighbors(q)`/`fully_connected`。`DecomposePass`/`LayoutPass`/`RoutingPass` 已作为首批消费方。尚未接入 `measure`/`vqc`/`qas`/`metrics`。
 
 ### 4. 建立 `Sampler` 和 `Estimator` primitives
 
@@ -268,10 +272,10 @@ GateSpec(
 
 主要目标是减少重复逻辑，并为真实硬件或受限模拟器铺路。
 
-1. 新增 `Target`。
-2. 新增 `GateSpec` 注册表。
-3. 让 QASM、visual、qml、metrics、qas 从 `GateSpec` 获取门元信息。
-4. 实现基础 `DecomposePass`、`LayoutPass` 和 `RoutingPass`。
+1. 新增 `Target`。已落地：`aicir.devices.Target`（见第 3 节当前状态）。
+2. 新增 `GateSpec` 注册表。已落地（见第 7 节当前状态）。
+3. 让 QASM、visual、qml、metrics、qas 从 `GateSpec` 获取门元信息。部分可用：QASM/visual/IR 校验已接入；metrics/qas 评分语义待迁。
+4. 实现基础 `DecomposePass`、`LayoutPass` 和 `RoutingPass`。已落地（见第 2 节当前状态）；消费 `Target` 的门集与耦合拓扑。
 
 ### 第三阶段：QNode 和自动微分工作流
 

@@ -1,3 +1,5 @@
-"""Device target and hardware-capability placeholders."""
+"""Device target and hardware-capability descriptions."""
 
-__all__: list[str] = []
+from .target import Target
+
+__all__ = ["Target"]

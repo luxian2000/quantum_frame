@@ -2,6 +2,17 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-18
+
+### Added
+
+- 新增硬件目标描述 `Target`（NEXT.md 第 3 节第一片）：子包 `aicir.devices` 提供冻结数据类 `Target`（字段含 `n_qubits`/`basis_gates`/`coupling_map`/`supports_shots`/`supports_statevector`/`supports_density_matrix`/`supports_autodiff`），`basis_gates` 按 `GateSpec` 规范名归一，`coupling_map` 按无向图处理；提供门集查询 `supports(gate)` 与拓扑查询 `coupled(a, b)`/`neighbors(q)`/`fully_connected`。配套 `tests/devices/test_target.py`。
+- 新增 `aicir.transpile` 编译 pass（NEXT.md 第 2 节、推进顺序第二阶段第 4 项）：
+  - `DecomposePass(basis_gates=..., target=..., skip_unsupported=False)`：把高级双比特门分解到目标门集，内置经数值验证的标准规则 `swap→3×cx`、`cz→h·cx·h`、`cy→rz·cx·rz`（仅单控制位）；门集内的门原样保留，不在门集且无规则的双比特门默认抛 `ValueError`。规则展开产生 `hadamard`/`rz`，暂不对任意单比特门做 Euler 基底翻译。
+  - `LayoutPass(initial_layout=..., target=...)`：按逻辑->物理映射（`dict` 或序列）重标号比特，不插门，比特置换意义下与原线路等价；`None` 为平凡恒等布局；映射须单射，可由 `Target` 限定物理位宽与范围。
+  - `RoutingPass(target=...)`：沿耦合图最短路径插入 SWAP 使每个双比特门作用在相邻物理比特上，施加后按相反顺序插回 SWAP 复位，因此整条线路与原线路**完全幺正等价**（SWAP 数非最优，基于置换跟踪的最优路由留待后续）；全连接 `Target` 时为恒等，>2 比特门抛 `NotImplementedError`。
+  - 三者从 `aicir.transpile` 导出；`PassManager` 字符串名新增 `"decompose"`（默认 `cx` 门集）与 `"layout"`（平凡布局）。配套 `tests/transpile/test_decompose_pass.py`、`test_layout_pass.py`、`test_routing_pass.py`。
+
 ## 2026-06-17
 
 ### Changed
