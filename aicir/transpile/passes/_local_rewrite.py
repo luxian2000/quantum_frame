@@ -184,6 +184,30 @@ def _copy_gate(gate: dict[str, Any]) -> dict[str, Any]:
     return dict(instruction_to_gate_dict(gate))
 
 
+_QUBIT_INT_FIELDS = ("target_qubit", "qubit_1", "qubit_2")
+_QUBIT_LIST_FIELDS = ("qubits", "targets", "control_qubits")
+
+
+def remap_gate(gate: dict[str, Any], mapping) -> dict[str, Any]:
+    """返回 ``gate`` 的副本，把其中所有比特下标按 ``mapping`` 重映射。
+
+    ``mapping`` 可为 ``dict`` 或可调用对象（``old -> new``）。覆盖
+    ``target_qubit``/``qubit_1``/``qubit_2`` 单值字段与 ``qubits``/
+    ``targets``/``control_qubits`` 列表字段；其余字段原样保留。
+    """
+
+    fn = mapping.__getitem__ if hasattr(mapping, "__getitem__") else mapping
+    out = _copy_gate(gate)
+    for key in _QUBIT_INT_FIELDS:
+        if out.get(key) is not None:
+            out[key] = int(fn(int(out[key])))
+    for key in _QUBIT_LIST_FIELDS:
+        value = out.get(key)
+        if value is not None:
+            out[key] = [int(fn(int(q))) for q in value]
+    return out
+
+
 def circuit_from_gates(circuit: Circuit, gates: Iterable[dict[str, Any]]) -> Circuit:
     return Circuit(
         *[_copy_gate(gate) for gate in gates],
