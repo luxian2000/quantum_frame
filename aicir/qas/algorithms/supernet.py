@@ -34,6 +34,13 @@ from ...core.circuit import Circuit, cx, hadamard, rx, ry, rz, rzz
 from ...core.gates import apply_gate_to_state, gate_to_matrix
 from ...ir import circuit_instructions
 from ...qml.deriv import psr
+from ..primitives.sharding import (
+    shard_context,
+    owned_indices,
+    all_gather,
+    all_reduce_mean,
+    broadcast_parameters,
+)
 
 
 ObjectiveFn = Callable[..., torch.Tensor | float]
@@ -157,6 +164,7 @@ class SupernetConfig:
     ranking_strategy: str = "random"
     use_evolutionary_ranking: bool = False
     noise_mode: str = "none"
+    shard_mode: str = "safe"
     noise_config: NoiseConfig | None = None
 
 
@@ -286,6 +294,9 @@ class Supernet:
         ranking_strategy = str(cfg.ranking_strategy).strip().lower()
         if ranking_strategy not in {"random", "evolutionary"}:
             raise ValueError("ranking_strategy must be 'random' or 'evolutionary'")
+        shard_mode = str(cfg.shard_mode).strip().lower()
+        if shard_mode not in {"safe", "aggressive"}:
+            raise ValueError("shard_mode must be 'safe' or 'aggressive'")
         if cfg.n_qubits <= 0:
             raise ValueError("n_qubits must be positive")
         if cfg.layers <= 0:
@@ -874,22 +885,98 @@ class Supernet:
         optimizer.step()
         return grad_norm
 
+    def _sharded_select(self, architecture, objective, dataset, hamiltonian, split, ctx):
+        """仅评估本 rank 拥有的 supernet id，all-gather 后返回完整损失向量。"""
+        owned = set(owned_indices(self.config.supernet_num, ctx.rank, ctx.world_size))
+        local = []
+        with torch.no_grad():
+            for supernet_id in range(self.config.supernet_num):
+                if supernet_id not in owned:
+                    continue
+                loss, _, _, _ = self._loss(
+                    architecture, supernet_id, objective, dataset, hamiltonian, split=split,
+                )
+                local.append((supernet_id, _float_value(loss)))
+        losses = [math.inf] * self.config.supernet_num
+        for part in all_gather(local):
+            for supernet_id, value in part:
+                losses[supernet_id] = value
+        selected = min(range(len(losses)), key=losses.__getitem__)
+        return selected, losses
+
+    def _aggressive_step(self, objective, dataset, hamiltonian, ctx):
+        # 所有 rank 以相同顺序采样 world_size 个架构；本 rank 负责 arch[rank]。
+        archs = [self.sample_architecture() for _ in range(ctx.world_size)]
+        architecture = archs[ctx.rank]
+        selected_id, candidate_losses = self.select_supernet(
+            architecture, objective, dataset, hamiltonian, split="train",
+        )
+        loss, _, active_keys, active_tensors = self._loss(
+            architecture, selected_id, objective, dataset, hamiltonian, split="train",
+        )
+        # 清零所有共享参数的梯度，对本 rank 的 loss 做反向传播。
+        for param in self.shared_parameters.values():
+            param.grad = None
+        if loss.requires_grad:
+            loss.backward()
+        ordered_keys = sorted(self.shared_parameters.keys(), key=str)
+        grads = [
+            (self.shared_parameters[k].grad
+             if self.shared_parameters[k].grad is not None
+             else torch.zeros_like(self.shared_parameters[k]))
+            for k in ordered_keys
+        ]
+        all_reduce_mean(grads)
+        for key, grad in zip(ordered_keys, grads):
+            self.shared_parameters[key].grad = grad
+        # 步进所有被某个 rank 选中的 supernet 的优化器。
+        selected_ids = set()
+        for ids in all_gather([selected_id]):
+            selected_ids.update(ids)
+        for supernet_id in sorted(selected_ids):
+            self._optimizers[supernet_id].step()
+        return architecture, selected_id, candidate_losses, _float_value(loss), active_keys
+
     def optimize_supernet(
         self,
         objective: ObjectiveFn | str | None,
         dataset: Any = None,
         hamiltonian: Any = None,
     ) -> list[dict[str, Any]]:
+        ctx = shard_context(self.backend)
+        safe_sharded = ctx.is_sharded and self.config.shard_mode.lower() == "safe"
+        aggressive_sharded = ctx.is_sharded and self.config.shard_mode.lower() == "aggressive"
         log: list[dict[str, Any]] = []
         for step in range(self.config.supernet_steps):
+            if aggressive_sharded:
+                architecture, selected_id, candidate_losses, loss_float, active_keys = (
+                    self._aggressive_step(objective, dataset, hamiltonian, ctx)
+                )
+                grad_norm = 0.0
+                log.append({
+                    "step": step, "architecture": architecture,
+                    "architecture_indices": self.encode_architecture(architecture),
+                    "selected_supernet_id": selected_id,
+                    "candidate_losses": candidate_losses, "loss": loss_float,
+                    "gradient_norm": grad_norm,
+                    "active_parameter_count": len(active_keys),
+                    "cnot_count": self.cnot_count(architecture),
+                    "two_qubit_count": self.two_qubit_count(architecture),
+                })
+                continue
             architecture = self.sample_architecture()
-            selected_id, candidate_losses = self.select_supernet(
-                architecture,
-                objective,
-                dataset,
-                hamiltonian,
-                split="train",
-            )
+            if safe_sharded:
+                selected_id, candidate_losses = self._sharded_select(
+                    architecture, objective, dataset, hamiltonian, "train", ctx
+                )
+            else:
+                selected_id, candidate_losses = self.select_supernet(
+                    architecture,
+                    objective,
+                    dataset,
+                    hamiltonian,
+                    split="train",
+                )
             optimizer = self._optimizers[selected_id]
 
             def loss_closure() -> torch.Tensor:
@@ -912,7 +999,10 @@ class Supernet:
                 split="train",
             )
             active_tensors = _unique_tensors(active_tensors)
-            if self.config.use_parameter_shift:
+            # safe_sharded 模式下仅 rank 0 执行梯度步，其余 rank 跳过优化器更新
+            if safe_sharded and ctx.rank != 0:
+                grad_norm = 0.0
+            elif self.config.use_parameter_shift:
                 grad_norm = self._parameter_shift_update(active_tensors, optimizer, loss_closure)
             else:
                 optimizer.zero_grad(set_to_none=True)
@@ -920,6 +1010,9 @@ class Supernet:
                     loss.backward()
                 grad_norm = self._grad_norm(active_tensors)
                 optimizer.step()
+            if safe_sharded:
+                # rank 0 完成梯度步后广播共享参数，保持各 rank 权重一致
+                broadcast_parameters(self.shared_parameters, src=0)
 
             record = {
                 "step": step,
@@ -965,17 +1058,23 @@ class Supernet:
         if not candidates:
             raise ValueError("ranking requires at least one candidate architecture")
 
-        records: list[dict[str, Any]] = []
-        for architecture in candidates:
+        ctx = shard_context(self.backend)
+        owned = (
+            set(owned_indices(len(candidates), ctx.rank, ctx.world_size))
+            if ctx.is_sharded
+            else set(range(len(candidates)))
+        )
+
+        local_records: list[dict[str, Any]] = []
+        for index, architecture in enumerate(candidates):
+            if index not in owned:
+                continue
             selected_id, losses = self.select_supernet(
-                architecture,
-                objective,
-                dataset,
-                hamiltonian,
-                split=split,
+                architecture, objective, dataset, hamiltonian, split=split,
             )
-            records.append(
+            local_records.append(
                 {
+                    "candidate_index": index,
                     "architecture": architecture,
                     "architecture_indices": self.encode_architecture(architecture),
                     "selected_supernet_id": selected_id,
@@ -985,7 +1084,15 @@ class Supernet:
                     "two_qubit_count": self.two_qubit_count(architecture),
                 }
             )
-        records.sort(key=lambda item: item["score"])
+
+        if ctx.is_sharded:
+            merged: list[dict[str, Any]] = []
+            for part in all_gather(local_records):
+                merged.extend(part)
+            records = merged
+        else:
+            records = local_records
+        records.sort(key=lambda item: (item["score"], item["candidate_index"]))
         for rank, record in enumerate(records, start=1):
             record["rank"] = rank
         return records
@@ -1007,7 +1114,16 @@ class Supernet:
         hamiltonian: Any = None,
     ) -> tuple[Circuit, dict[ParameterKey, torch.nn.Parameter], list[dict[str, Any]], float]:
         parameters = self._finetune_parameters(architecture, supernet_id)
-        optimizer = torch.optim.Adam(list(parameters.values()), lr=self.config.finetune_learning_rate)
+        params_list = list(parameters.values())
+        # 当架构全为零参数门（identity/Hadamard）时，params_list 为空，
+        # torch.optim.Adam([]) 会抛出 ValueError；此时跳过优化器创建和训练循环，
+        # 仅评估一次损失即可，与 finetune_steps==0 的路径保持一致。
+        if params_list:
+            optimizer: torch.optim.Optimizer | None = torch.optim.Adam(
+                params_list, lr=self.config.finetune_learning_rate
+            )
+        else:
+            optimizer = None
         log: list[dict[str, Any]] = []
         best_loss = math.inf
         best_values = {key: value.detach().clone() for key, value in parameters.items()}
@@ -1024,11 +1140,11 @@ class Supernet:
             )
             return loss_value
 
-        if self.config.finetune_steps == 0:
+        if self.config.finetune_steps == 0 or optimizer is None:
             loss = loss_closure()
             best_loss = _float_value(loss)
 
-        for step in range(self.config.finetune_steps):
+        for step in range(self.config.finetune_steps if optimizer is not None else 0):
             loss = loss_closure()
             active = list(parameters.values())
             if self.config.use_parameter_shift:
@@ -1201,16 +1317,58 @@ class Supernet:
             hamiltonian=hamiltonian,
             split=ranking_split,
         )
-        best_record = ranking_records[0]
+        # 分片感知的 Top-K 并行微调：每个 rank 负责一个候选架构，
+        # 全局汇聚后选出得分最低的最优架构。单卡路径等价于原逻辑。
+        ctx = shard_context(self.backend)
+        if ctx.is_sharded:
+            cand_index = ctx.rank
+        else:
+            cand_index = 0
+
+        if cand_index < len(ranking_records):
+            local_record = ranking_records[cand_index]
+            local_arch = local_record["architecture"]
+            local_supernet_id = int(local_record["selected_supernet_id"])
+            local_circuit, local_params, local_finetune_log, local_score = (
+                self.finetune_architecture(
+                    local_arch, local_supernet_id, objective,
+                    dataset=dataset, hamiltonian=hamiltonian,
+                )
+            )
+            local_payload = {
+                "score": float(local_score),
+                "supernet_id": local_supernet_id,
+                "ranking_index": cand_index,
+                "n_qubits": int(local_circuit.n_qubits),
+                "gates": list(local_circuit.gates),
+                # 使用真实 ParameterKey（纯 tuple，可序列化）作为键，保证 all_gather
+                # 后各 rank 能用胜出架构的键直接索引 _final_metrics/_loss。
+                "numeric_parameters": {key: float(value.detach()) for key, value in local_params.items()},
+            }
+        else:
+            local_payload = None  # rank 数多于候选架构数
+            local_params = {}
+            local_finetune_log: list[dict[str, Any]] = []
+
+        if ctx.is_sharded:
+            payloads = [p for p in all_gather(local_payload) if p is not None]
+            best_payload = min(payloads, key=lambda p: p["score"])
+        else:
+            best_payload = local_payload
+
+        best_record = ranking_records[best_payload["ranking_index"]]
         best_architecture = best_record["architecture"]
-        selected_supernet_id = int(best_record["selected_supernet_id"])
-        best_circuit, finetune_parameters, finetune_log, finetune_score = self.finetune_architecture(
-            best_architecture,
-            selected_supernet_id,
-            objective,
-            dataset=dataset,
-            hamiltonian=hamiltonian,
+        selected_supernet_id = int(best_payload["supernet_id"])
+        best_circuit = Circuit(
+            *best_payload["gates"], n_qubits=best_payload["n_qubits"], backend=self.backend,
         )
+        # 使用全局胜出 payload 中的参数（真实 ParameterKey → float），确保所有 rank
+        # 的 _final_metrics 都基于同一套胜出参数计算，避免非胜出 rank 用自己的参数
+        # 与胜出架构错配。单卡路径下 best_payload == local_payload，语义不变。
+        finetune_parameters = best_payload["numeric_parameters"]
+        # finetune_log 仅在本 rank 产出胜出结果时为真实日志，否则为空列表。
+        finetune_log = local_finetune_log if (best_payload["ranking_index"] == cand_index) else []
+        finetune_score = best_payload["score"]
         final_metrics = self._final_metrics(
             best_architecture,
             best_circuit,
@@ -1469,6 +1627,7 @@ def supernet_qas(
     seed: int = 2,
     device: str = "cpu",
     use_parameter_shift: bool = False,
+    mode: str = "safe",
     **config_overrides: Any,
 ) -> SupernetResult:
     """Search and fine-tune a ground-state-preparing ansatz for ``hamiltonian``.
@@ -1500,6 +1659,7 @@ def supernet_qas(
         seed: Random seed.
         device: Torch device string (``"cpu"``, ``"cuda"``, ``"npu:0"`` ...).
         use_parameter_shift: Use parameter-shift gradients instead of autograd.
+        mode: 分片模式，转发至 ``SupernetConfig.shard_mode``；可选值 ``"safe"`` 或 ``"aggressive"``。
         **config_overrides: Any remaining :class:`SupernetConfig` field.
 
     Returns:
@@ -1516,6 +1676,7 @@ def supernet_qas(
     if two_qubit_pairs is None:
         two_qubit_pairs = _default_two_qubit_pairs(int(n_qubits))
     task = config_overrides.pop("task", "vqe")
+    config_overrides.setdefault("shard_mode", mode)
 
     config = SupernetConfig(
         n_qubits=int(n_qubits),
