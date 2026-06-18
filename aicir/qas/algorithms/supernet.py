@@ -1114,7 +1114,16 @@ class Supernet:
         hamiltonian: Any = None,
     ) -> tuple[Circuit, dict[ParameterKey, torch.nn.Parameter], list[dict[str, Any]], float]:
         parameters = self._finetune_parameters(architecture, supernet_id)
-        optimizer = torch.optim.Adam(list(parameters.values()), lr=self.config.finetune_learning_rate)
+        params_list = list(parameters.values())
+        # 当架构全为零参数门（identity/Hadamard）时，params_list 为空，
+        # torch.optim.Adam([]) 会抛出 ValueError；此时跳过优化器创建和训练循环，
+        # 仅评估一次损失即可，与 finetune_steps==0 的路径保持一致。
+        if params_list:
+            optimizer: torch.optim.Optimizer | None = torch.optim.Adam(
+                params_list, lr=self.config.finetune_learning_rate
+            )
+        else:
+            optimizer = None
         log: list[dict[str, Any]] = []
         best_loss = math.inf
         best_values = {key: value.detach().clone() for key, value in parameters.items()}
@@ -1131,11 +1140,11 @@ class Supernet:
             )
             return loss_value
 
-        if self.config.finetune_steps == 0:
+        if self.config.finetune_steps == 0 or optimizer is None:
             loss = loss_closure()
             best_loss = _float_value(loss)
 
-        for step in range(self.config.finetune_steps):
+        for step in range(self.config.finetune_steps if optimizer is not None else 0):
             loss = loss_closure()
             active = list(parameters.values())
             if self.config.use_parameter_shift:
@@ -1334,7 +1343,7 @@ class Supernet:
                 "gates": list(local_circuit.gates),
                 # 使用真实 ParameterKey（纯 tuple，可序列化）作为键，保证 all_gather
                 # 后各 rank 能用胜出架构的键直接索引 _final_metrics/_loss。
-                "numeric_parameters": {key: float(value) for key, value in local_params.items()},
+                "numeric_parameters": {key: float(value.detach()) for key, value in local_params.items()},
             }
         else:
             local_payload = None  # rank 数多于候选架构数
