@@ -33,7 +33,7 @@ from ...operators import Hamiltonian
 from ...core.circuit import Circuit, cx, hadamard, rx, ry, rz, rzz
 from ...core.gates import apply_gate_to_state, gate_to_matrix
 from ...ir import circuit_instructions
-from ..qml.deriv import psr
+from ...qml.deriv import psr
 
 
 ObjectiveFn = Callable[..., torch.Tensor | float]
