@@ -10,6 +10,9 @@ PPO-RB 面向小规模目标态制备，不适合 16 量子比特分子哈密顿
 - ``safe``：与单卡数值完全等价，跨 rank 梯度同步后更新权重。
 - ``aggressive``：数据并行（约 world_size 倍吞吐），各 rank 动态步不同。
 
+16 比特 BeH2 Hamiltonian 含 1313 个 Pauli 项。NPU 版本默认使用参数移位梯度，
+避免 autograd 为每个 Pauli 项保留大反向图；如需对比可传 ``--gradient ad``。
+
 每个 rank 通过 ``LOCAL_RANK`` 绑定一张 NPU，与 ``demos/demo_npu.py`` /
 ``aicir/qas/README.md`` 的 NPU 约定一致。搜索完成后返回的 ``SupernetResult``
 在所有 rank 上均为全局最优，由 rank 0 落盘：
@@ -78,6 +81,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("safe", "aggressive"),
         default="safe",
         help="训练分片模式：safe=与单卡数值等价；aggressive=数据并行(~world_size 倍，动态不同)。",
+    )
+    parser.add_argument(
+        "--gradient",
+        choices=("psr", "ad"),
+        default="psr",
+        help="梯度方式：psr=参数移位（默认，内存友好）；ad=autograd（更快但 16 比特 BeH2 易 OOM/SIGKILL）。",
     )
     parser.add_argument(
         "--output",
@@ -171,10 +180,14 @@ def main(argv: list[str] | None = None) -> None:
             "seed": args.seed,          # 同一 seed，保证各 rank 权重/候选集一致
             "device": device,
             "mode": args.mode,
+            "use_parameter_shift": args.gradient == "psr",
         }
     )
 
-    _log(f"start sharded supernet search (seed={args.seed}, mode={args.mode}) ...", rank)
+    _log(
+        f"start sharded supernet search (seed={args.seed}, mode={args.mode}, gradient={args.gradient}) ...",
+        rank,
+    )
     started_at = datetime.now().isoformat(timespec="seconds")
     start = time.time()
     result = supernet_qas(hamiltonian, **kwargs)
