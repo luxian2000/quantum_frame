@@ -12,6 +12,10 @@
   - `LayoutPass(initial_layout=..., target=...)`：按逻辑->物理映射（`dict` 或序列）重标号比特，不插门，比特置换意义下与原线路等价；`None` 为平凡恒等布局；映射须单射，可由 `Target` 限定物理位宽与范围。
   - `RoutingPass(target=...)`：沿耦合图最短路径插入 SWAP 使每个双比特门作用在相邻物理比特上，施加后按相反顺序插回 SWAP 复位，因此整条线路与原线路**完全幺正等价**（SWAP 数非最优，基于置换跟踪的最优路由留待后续）；全连接 `Target` 时为恒等，>2 比特门抛 `NotImplementedError`。
   - 三者从 `aicir.transpile` 导出；`PassManager` 字符串名新增 `"decompose"`（默认 `cx` 门集）与 `"layout"`（平凡布局）。配套 `tests/transpile/test_decompose_pass.py`、`test_layout_pass.py`、`test_routing_pass.py`。
+- `aicir.qas` supernet 支持单次搜索的多 NPU 分片：新增 `SupernetConfig.shard_mode`
+  与 `supernet_qas(..., mode="safe"|"aggressive")`。仅在分布式 NPU 运行下生效，
+  分片 training / ranking / finetune 三个阶段；`safe` 与单卡数值等价，`aggressive` 为数据并行。
+  `demos/BeH2/BeH2_npu.py` 改为同种子单次分片搜索并新增 `--mode`。
 
 ## 2026-06-17
 
