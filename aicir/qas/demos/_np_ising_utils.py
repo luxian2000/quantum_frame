@@ -6,7 +6,7 @@ This module turns the Hamiltonian-cycle / Hamiltonian-path formulations from
     Frontiers in Physics 2 (2014), Section 7.1, Eq. (56).
 
 into an aicir :class:`~aicir.operators.Hamiltonian` whose ground state
-encodes the solution, so that :mod:`aicir.qas.supernet` can search a circuit that
+encodes the solution, so that :mod:`aicir.qas.algorithms.supernet` can search a circuit that
 prepares it.
 
 Pipeline
@@ -342,7 +342,7 @@ def solve_ground_state_qas(
     """
     import numpy as np
 
-    from ..supernet import SupernetConfig, train_supernet
+    from ..algorithms.supernet import SupernetConfig, train_supernet
     from ...measure import Measure
 
     if two_qubit_pairs is None:

@@ -486,7 +486,7 @@ def test_plot_accepts_gate_list_and_qasm_and_json(plt, tmp_path):
 
 
 def test_plot_accepts_architecture_spec(plt, tmp_path):
-    from aicir.qas._types import ArchitectureSpec
+    from aicir.qas.core._types import ArchitectureSpec
 
     spec = ArchitectureSpec.from_gates("my_ansatz", [hadamard(0), cnot(1, [0])], n_qubits=2)
 

@@ -1,47 +1,49 @@
+"""Regression tests for the QAS closed-loop protocol helpers.
+
+These tests cover split geometry, trust-region abstain behavior, MoG-EA
+selection, literal-Hamiltonian labels, supernet sidecars, and sharded runners.
+"""
+
 import json
 from pathlib import Path
 
-from aicir.qas.vqe_qas_protocol import (
+from aicir.qas.vqe_loop.protocol import (
     BENCHMARK_TABLE_FIELDS,
-    DistanceScales,
     LabelSource,
     LabelStatus,
     ZeroCostStatus,
-    CandidateRecord,
     append_benchmark_rows,
+    next_label_status_after_failure,
+)
+from aicir.qas.vqe_loop.geometry import (
+    DistanceScales,
+    CandidateRecord,
     assign_repaired_holdout_sources,
-    compute_abstain_rate,
     derive_trust_region_d_max,
     extract_pauli_hamiltonian_features,
     fit_distance_scales,
     hamiltonian_feature_distance,
-    next_label_status_after_failure,
     task_aware_composite_distance,
-    select_ea_candidates,
-    select_latest_ea_candidates,
-    select_farthest_first,
     select_initial_label_batch,
     select_stage0_anchors,
-    select_target_fewshot_batch,
     trust_region_geometry,
 )
-from aicir.qas.demos.vqe_qas_prepare_oracle import (
+from aicir.qas.vqe_loop.selection_ops import (
+    compute_abstain_rate,
+    select_farthest_first,
+    select_mog_ea_candidates,
+)
+from aicir.qas.vqe_loop.preparation import (
     _apply_zero_cost_stage1b,
     candidate_record_from_layerwise_gene,
     candidate_record_from_mask,
 )
-from aicir.qas.demos.vqe_qas_plan_target_fewshot import (
-    _candidate_record_from_row_for_target,
-    _queue_row_for_target,
-    _terms_for_candidate_row,
-)
-from aicir.qas.demos.vqe_qas_plan_next_batch import (
+from aicir.qas.vqe_loop.next_batch import (
     _supernet_priority,
     _attach_supernet_sidecar,
 )
-from aicir.qas.demos.vqe_qas_supernet_screen import _screening_sidecar_record
-from aicir.qas.demos.vqe_qas_compare_transfer_oracle import compare_transfer_oracles
-from aicir.qas.demos.vqe_qas_run_fair_labels import (
+from aicir.qas.vqe_loop.supernet_screening import _screening_sidecar_record
+from aicir.qas.vqe_loop.labeling import (
     _architecture_from_row,
     _label_row,
     _load_warm_start_vector,
@@ -50,18 +52,18 @@ from aicir.qas.demos.vqe_qas_run_fair_labels import (
     _problem_from_row_or_protocol,
     _validate_queue_protocol_versions,
 )
-from aicir.qas.demos.vqe_qas_run_fair_labels_sharded import (
+from aicir.qas.vqe_loop.sharding import (
     _contiguous_shards,
     _shard_environment,
 )
-from aicir.qas.demos.vqe_qas_labels_to_supernet_sidecar import build_sidecar_records
-from aicir.qas.vqe_hea_demo import (
+from aicir.qas.vqe_loop.sidecars import build_sidecar_records
+from aicir.qas.primitives.ansatz import (
     HEAMask,
     LayerwiseAnsatzGene,
     architecture_from_layerwise_gene,
     sample_layerwise_genes,
 )
-from aicir.qas.task_evaluation import parameter_count
+from aicir.metrics.circuit_structure import parameter_count
 
 
 def _candidate(index: int, family: str, entangler: str, topology: str, depth: str) -> CandidateRecord:
@@ -286,55 +288,7 @@ def test_track_b_farthest_first_is_deterministic() -> None:
     assert len(first) == 6
 
 
-def test_ea_candidates_rank_by_fitness_and_exclude_labeled() -> None:
-    records = [
-        CandidateRecord(
-            architecture_id=f"cand_{index}",
-            canonical_arch_hash=f"hash_{index}",
-            family="hea",
-            entangler_type="cx",
-            topology="linear",
-            depth_group="L1",
-            n_params=float(index + 1),
-            two_q_count=2.0,
-            metadata={"hea_mask": [4, index, "ry", "cx", "ry", "linear"]},
-        )
-        for index in range(4)
-    ]
-
-    selected = select_ea_candidates(
-        records,
-        seeds=[records[0]],
-        excluded_ids={"cand_0"},
-        fitness=lambda candidate: float(candidate.metadata["hea_mask"][1]),
-        population_size=4,
-        generations=2,
-        mutation_rate=0.0,
-        crossover_rate=0.0,
-        limit=2,
-        random_seed=7,
-    )
-
-    assert [candidate.architecture_id for candidate in selected] == ["cand_3", "cand_2"]
-
-
-def test_ea_candidates_fall_back_when_gene_metadata_is_missing() -> None:
-    records = [_candidate(index, "hea", "cx", "linear", "L1") for index in range(4)]
-    selected = select_ea_candidates(
-        records,
-        seeds=[],
-        excluded_ids={"cand_3"},
-        fitness=lambda candidate: -float(candidate.n_params),
-        population_size=3,
-        generations=1,
-        limit=3,
-        random_seed=5,
-    )
-
-    assert [candidate.architecture_id for candidate in selected] == ["cand_0", "cand_1", "cand_2"]
-
-
-def test_latest_ea_uses_mog_vqe_nsga2_selection() -> None:
+def test_mog_ea_uses_nsga2_selection() -> None:
     records = [
         CandidateRecord(
             architecture_id=f"mog_{index}",
@@ -356,7 +310,7 @@ def test_latest_ea_uses_mog_vqe_nsga2_selection() -> None:
     ]
     scores = {record.architecture_id: float(index) for index, record in enumerate(records)}
 
-    selected, backend = select_latest_ea_candidates(
+    selected, backend = select_mog_ea_candidates(
         records,
         seeds=[records[0]],
         excluded_ids={"mog_0"},
@@ -374,10 +328,10 @@ def test_latest_ea_uses_mog_vqe_nsga2_selection() -> None:
     assert [candidate.architecture_id for candidate in selected] == ["mog_3", "mog_2"]
 
 
-def test_latest_ea_uses_mog_vqe_proxy_when_no_explicit_blocks_are_available() -> None:
+def test_mog_ea_uses_proxy_blocks_when_no_explicit_blocks_are_available() -> None:
     records = [_candidate(index, "hea", "cx", "linear", "L1") for index in range(4)]
 
-    selected, backend = select_latest_ea_candidates(
+    selected, backend = select_mog_ea_candidates(
         records,
         seeds=[],
         excluded_ids={"cand_3"},
@@ -524,150 +478,13 @@ def test_task_aware_distance_separates_same_architecture_across_hamiltonians() -
     assert task_aware_composite_distance(old, new, scales) > 0.0
 
 
-def test_target_fewshot_batch_selects_only_target_hamiltonian() -> None:
-    records = []
-    for hamiltonian_id in ["tfim_source", "tfim_target"]:
-        for index in range(8):
-            records.append(
-                CandidateRecord(
-                    architecture_id=f"{hamiltonian_id}_{index}",
-                    canonical_arch_hash=f"{hamiltonian_id}_hash_{index}",
-                    family="hea",
-                    entangler_type=["cx", "cz"][index % 2],
-                    topology=["linear", "ring"][index % 2],
-                    depth_group=["L1", "L2"][index % 2],
-                    n_params=10 + index,
-                    two_q_count=2 + index % 3,
-                    hamiltonian_id=hamiltonian_id,
-                    metadata={"n_qubits": 4 if index < 4 else 6},
-                )
-            )
-
-    selected = select_target_fewshot_batch(
-        records,
-        target_hamiltonian_id="tfim_target",
-        total_labels=6,
-        holdout_fraction=0.25,
-        group_key="n_qubits",
-    )
-
-    assert len(selected) == 6
-    assert all(architecture_id.startswith("tfim_target_") for architecture_id in selected)
-    assert LabelSource.TARGET_FEWSHOT_TRAIN in selected.values()
-    assert any(source.value.startswith("target_holdout_") for source in selected.values())
-
-
-def test_target_fewshot_batch_forwards_small_batch_geometry_knobs() -> None:
-    records = []
-    for index, record in enumerate(_pool()):
-        records.append(
-            CandidateRecord(
-                architecture_id=f"source_{index}",
-                canonical_arch_hash=f"source_hash_{index}",
-                family=record.family,
-                entangler_type=record.entangler_type,
-                topology=record.topology,
-                depth_group=record.depth_group,
-                n_params=record.n_params,
-                two_q_count=record.two_q_count,
-                hamiltonian_id="source_h",
-            )
-        )
-        records.append(
-            CandidateRecord(
-                architecture_id=f"target_{index}",
-                canonical_arch_hash=f"target_hash_{index}",
-                family=record.family,
-                entangler_type=record.entangler_type,
-                topology=record.topology,
-                depth_group=record.depth_group,
-                n_params=record.n_params,
-                two_q_count=record.two_q_count,
-                hamiltonian_id="target_h",
-            )
-        )
-
-    selected = select_target_fewshot_batch(
-        records,
-        target_hamiltonian_id="target_h",
-        total_labels=12,
-        holdout_fraction=0.25,
-        trust_d_max=0.40,
-        k_min=3,
-    )
-
-    assert selected
-    assert all(architecture_id.startswith("target_") for architecture_id in selected)
-    assert LabelSource.TARGET_HOLDOUT_ID in selected.values()
-
-
-def test_target_fewshot_row_helpers_override_hamiltonian_fields() -> None:
-    terms = [(-1.0, "ZZ"), (0.5, "XI")]
-    features = extract_pauli_hamiltonian_features(terms)
-    row = {
-        "architecture_id": "4q_arch",
-        "canonical_arch_hash": "hash",
-        "family": "hea",
-        "entangler_type": "cx",
-        "topology": "linear",
-        "depth_group": "L1",
-        "n_params": "8",
-        "two_q_count": "3",
-        "n_qubits": "4",
-        "hamiltonian_id": "old_h",
-        "hamiltonian_class": "tfim",
-        "hamiltonian_coverage": "0.6",
-        "hea_mask": '[4, 1, "ry", "cx", "ry", "linear"]',
-    }
-
-    record = _candidate_record_from_row_for_target(
-        row,
-        target_hamiltonian_id="new_h",
-        target_hamiltonian_class="ising_x",
-        hamiltonian_features=features,
-    )
-    queued = _queue_row_for_target(
-        row,
-        source=LabelSource.TARGET_FEWSHOT_TRAIN,
-        protocol_version="fair_vqe_protocol_v1",
-        batch_id="target_batch",
-        target_hamiltonian_id="new_h",
-        target_hamiltonian_class="ising_x",
-        hamiltonian_features=features,
-        hamiltonian_terms=terms,
-    )
-
-    assert record.hamiltonian_id == "new_h"
-    assert record.hamiltonian_class == "ising_x"
-    assert record.hamiltonian_features["n_terms"] == 2
-    assert queued["hamiltonian_id"] == "new_h"
-    assert queued["hamiltonian_class"] == "ising_x"
-    assert queued["source"] == LabelSource.TARGET_FEWSHOT_TRAIN.value
-    assert "\"n_terms\": 2.0" in queued["hamiltonian_coverage_features"]
-    assert queued["hamiltonian_terms"] == json.dumps(terms, ensure_ascii=False)
-
-
-def test_target_fewshot_planner_can_generate_scaled_tfim_terms_per_row() -> None:
-    class Args:
-        target_tfim_J = 0.8
-        target_tfim_h = 0.3
-        target_tfim_boundary = "OBC"
-
-    terms = _terms_for_candidate_row({"n_qubits": "4"}, Args(), [])
-
-    assert len(terms) == 7
-    assert all(len(pauli) == 4 for _coeff, pauli in terms)
-    assert (-0.8, "ZZII") in terms
-    assert (-0.3, "XIII") in terms
-
-
 def test_benchmark_table_schema_keeps_literal_hamiltonian_terms() -> None:
     assert "hamiltonian_terms" in BENCHMARK_TABLE_FIELDS
 
 
 def test_fair_label_runner_builds_target_problem_from_row_terms() -> None:
     protocol = {
-        "protocol_version": "fair_vqe_protocol_v1",
+        "protocol_version": "fair_vqe_protocol_v2",
         "frozen": True,
         "hamiltonian": {"J": 1.0, "h": 0.5, "boundary": "OBC"},
     }
@@ -684,89 +501,6 @@ def test_fair_label_runner_builds_target_problem_from_row_terms() -> None:
     assert tuple(problem.hamiltonian) == ((-0.25, "ZZ"), (-0.75, "XI"))
     assert problem.reference_energy < 0
 
-
-def _completed_label_row(
-    architecture_id: str,
-    *,
-    hamiltonian_id: str,
-    source: str,
-    energy: float,
-    family: str = "hea",
-    entangler: str = "cx",
-    topology: str = "linear",
-    depth: str = "L1",
-    features: str = "{}",
-) -> dict[str, str]:
-    return {
-        "architecture_id": architecture_id,
-        "canonical_arch_hash": architecture_id,
-        "protocol_version": "fair_vqe_protocol_v1",
-        "source": source,
-        "label_status": LabelStatus.COMPLETED.value,
-        "n_qubits": "4",
-        "hamiltonian_id": hamiltonian_id,
-        "hamiltonian_class": "tfim",
-        "family": family,
-        "depth_group": depth,
-        "entangler_type": entangler,
-        "topology": topology,
-        "n_params": "8",
-        "two_q_count": "3",
-        "hamiltonian_coverage": "0.5",
-        "hamiltonian_coverage_features": features,
-        "fair_best_energy": str(energy),
-    }
-
-
-def test_compare_transfer_oracles_splits_source_target_and_holdout() -> None:
-    target_features = '{"n_terms": 2, "x_fraction": 0.5, "z_fraction": 0.5}'
-    source_features = '{"n_terms": 2, "x_fraction": 0.0, "z_fraction": 1.0}'
-    rows = [
-        _completed_label_row("source_a", hamiltonian_id="source_h", source=LabelSource.INITIAL_TRAIN.value, energy=-1.0, features=source_features),
-        _completed_label_row("source_b", hamiltonian_id="source_h", source=LabelSource.INITIAL_TRAIN.value, energy=-1.2, entangler="cz", features=source_features),
-        _completed_label_row("target_train", hamiltonian_id="target_h", source=LabelSource.TARGET_FEWSHOT_TRAIN.value, energy=-2.0, features=target_features),
-        _completed_label_row("target_holdout", hamiltonian_id="target_h", source=LabelSource.TARGET_HOLDOUT_ID.value, energy=-2.1, features=target_features),
-    ]
-
-    report = compare_transfer_oracles(rows, target_hamiltonian_id="target_h", protocol_version="fair_vqe_protocol_v1", k_min=1)
-
-    assert report["n_source_train"] == 2
-    assert report["n_target_train"] == 1
-    assert report["n_target_holdout"] == 1
-    assert report["scenarios"]["target_only"]["n_train"] == 1
-    assert report["scenarios"]["source_plus_target"]["n_train"] == 3
-    assert report["scenarios"]["source_only"]["n_train"] == 2
-    assert report["scenarios"]["target_only"]["mae"] == 0.10000000000000009
-
-
-def test_compare_transfer_oracles_allows_same_architecture_across_hamiltonians() -> None:
-    rows = [
-        _completed_label_row(
-            "same_arch",
-            hamiltonian_id="source_h",
-            source=LabelSource.INITIAL_TRAIN.value,
-            energy=-1.0,
-        ),
-        _completed_label_row(
-            "same_arch",
-            hamiltonian_id="target_h",
-            source=LabelSource.TARGET_HOLDOUT_ID.value,
-            energy=-2.0,
-        ),
-    ]
-
-    report = compare_transfer_oracles(
-        rows,
-        target_hamiltonian_id="target_h",
-        protocol_version="fair_vqe_protocol_v1",
-        k_min=1,
-        d_max=1.0,
-    )
-
-    assert report["scenarios"]["source_only"]["predicted"] == 1
-    assert report["scenarios"]["source_only"]["mae"] == 1.0
-
-
 def test_append_benchmark_rows_replaces_same_task_pending_and_keeps_cross_hamiltonian() -> None:
     base = [
         {
@@ -781,7 +515,7 @@ def test_append_benchmark_rows_replaces_same_task_pending_and_keeps_cross_hamilt
             "hamiltonian_id": "target_h",
             "protocol_version": "fair_vqe_protocol_v2",
             "label_status": LabelStatus.COMPLETED.value,
-            "source": LabelSource.TARGET_FEWSHOT_TRAIN.value,
+            "source": LabelSource.HOLDOUT_ID.value,
             "fair_best_energy": "-2.0",
         },
     ]
@@ -928,7 +662,7 @@ def test_run_fair_labels_treats_json_empty_ansatz_gene_as_missing() -> None:
 
 
 def test_label_row_records_best_parameters_in_trace(tmp_path: Path) -> None:
-    protocol = _load_protocol(Path(__file__).resolve().parents[2] / "aicir" / "qas" / "configs" / "fair_vqe_protocol_v2.json")
+    protocol = _load_protocol(Path(__file__).resolve().parents[2] / "aicir" / "qas" / "vqe_loop" / "fair_label_protocol.json")
     row = {
         "architecture_id": "param_trace_demo",
         "n_qubits": "2",
@@ -1053,25 +787,16 @@ def test_fair_label_runner_reads_json_hea_mask() -> None:
 
 
 def test_fair_label_protocol_v2_is_explicitly_frozen_and_unmeasured() -> None:
-    protocol = _load_protocol(Path(__file__).resolve().parents[2] / "aicir" / "qas" / "configs" / "fair_vqe_protocol_v2.json")
+    protocol = _load_protocol(Path(__file__).resolve().parents[2] / "aicir" / "qas" / "vqe_loop" / "fair_label_protocol.json")
     assert protocol["frozen"] is True
     assert protocol["protocol_version"] == "fair_vqe_protocol_v2"
     assert protocol["energy_evaluation"]["state"] == "unmeasured_state"
     assert protocol["energy_evaluation"]["shots"] is None
 
 
-def test_fair_label_runner_rejects_legacy_v1_protocol_after_energy_fix() -> None:
-    try:
-        _load_protocol(Path(__file__).resolve().parents[2] / "aicir" / "qas" / "configs" / "fair_vqe_protocol_v1.json")
-    except ValueError as exc:
-        assert "fair_vqe_protocol_v2" in str(exc)
-    else:  # pragma: no cover
-        raise AssertionError("legacy v1 labels must not be generated after the energy fix")
-
-
 def test_fair_label_runner_rejects_blank_queue_protocol_version() -> None:
     try:
-        _validate_queue_protocol_versions([{"architecture_id": "a", "protocol_version": ""}], "fair_vqe_protocol_v1")
+        _validate_queue_protocol_versions([{"architecture_id": "a", "protocol_version": ""}], "fair_vqe_protocol_v2")
     except ValueError as exc:
         assert "protocol_version" in str(exc)
     else:  # pragma: no cover

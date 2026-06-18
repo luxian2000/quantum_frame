@@ -1,0 +1,42 @@
+{
+  "protocol_version": "fair_vqe_protocol_v2",
+  "frozen": true,
+  "scope": "QAS fair VQE labels computed from the unmeasured final state",
+  "energy_evaluation": {
+    "state": "unmeasured_state",
+    "shots": null
+  },
+  "hamiltonian": {
+    "default_class": "tfim",
+    "J": 1.0,
+    "h": 0.5,
+    "boundary": "OBC"
+  },
+  "theta_initialization": {
+    "mode": "random_uniform_pi",
+    "range": [-3.141592653589793, 3.141592653589793]
+  },
+  "optimizer": {
+    "name": "COBYLA",
+    "rhobeg": 1.0,
+    "tol": 1e-6,
+    "final_maxfev": "max(1000, 200 * n_params)"
+  },
+  "required_outputs": [
+    "fair_best_energy",
+    "fair_mean_energy",
+    "fair_std_energy",
+    "fair_success_rate",
+    "delta_ref",
+    "reference_energy",
+    "n_seeds",
+    "max_evals",
+    "nfev",
+    "walltime_s",
+    "best_trace"
+  ],
+  "versioning_rules": [
+    "Rows from different protocol_version values must not train or validate the same oracle.",
+    "Any future change to energy evaluation, optimizer defaults, label budget, initialization, or reference construction requires a new protocol_version."
+  ]
+}

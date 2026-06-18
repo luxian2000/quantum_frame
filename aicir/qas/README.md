@@ -2,13 +2,22 @@
 
 `aicir.qas` 是量子构架搜索（Quantum Architecture Search, QAS）模块。
 
-该模块用于自动搜索量子线路结构。当前仓库中包含多类 QAS 实现：一类面向变分量子算法（VQA）的 ansatz 架构搜索，一类面向给定目标态或哈密顿量任务的强化学习式量子线路搜索，另有面向 VQE ansatz 拓扑压缩的多目标遗传搜索。运行 `supernet.py`、`CRLQAS.py`、`PPR_DQL.py` 和 `PPO_RB.py` 需要可用的 `torch`；`MoG_VQE.py` 的默认路径不依赖 `torch`。
+该模块用于自动搜索量子线路结构。当前仓库中包含多类 QAS 实现：一类面向变分量子算法（VQA）的 ansatz 架构搜索，一类面向给定目标态或哈密顿量任务的强化学习式量子线路搜索，另有面向 VQE ansatz 拓扑压缩的多目标遗传搜索。算法实现位于 `aicir/qas/algorithms/`；运行 `supernet.py`、`CRLQAS.py`、`PPR_DQL.py` 和 `PPO_RB.py` 需要可用的 `torch`，`MoG_VQE.py` 的默认路径不依赖 `torch`。
 
-- `supernet.py`：基于超网络和权重共享的 VQA ansatz 架构搜索，支持分类任务和 H2 VQE 示例
-- `MoG_VQE.py`：MoG-VQE（Multiobjective Genetic VQE），输入 block-based hardware-efficient ansatz，使用 NSGA-II 修改线路拓扑，并输出修改后的 aicir `Circuit`
-- `CRLQAS.py`：课程学习 + DDQN + Adam-SPSA 的量子架构搜索（面向哈密顿量能量最小化）
-- `PPR_DQL.py`：基于 aicir 状态演化实现的 PPR-DQL（Probabilistic Policy Reuse with Deep Q-Learning）
-- `PPO_RB.py`：Trust Region-based PPO with Rollback 版本的量子架构搜索
+- `algorithms/supernet.py`：基于超网络和权重共享的 VQA ansatz 架构搜索，支持分类任务和 H2 VQE 示例
+- `algorithms/MoG_VQE.py`：MoG-VQE（Multiobjective Genetic VQE），输入 block-based hardware-efficient ansatz，使用 NSGA-II 修改线路拓扑，并输出修改后的 aicir `Circuit`
+- `algorithms/CRLQAS.py`：课程学习 + DDQN + Adam-SPSA 的量子架构搜索（面向哈密顿量能量最小化）
+- `algorithms/PPR_DQL.py`：基于 aicir 状态演化实现的 PPR-DQL（Probabilistic Policy Reuse with Deep Q-Learning）
+- `algorithms/PPO_RB.py`：Trust Region-based PPO with Rollback 版本的量子架构搜索
+
+当前代码分层：
+
+- `core/`：传统 QAS 的类型、评估器、reward、search env、统一 runner/config。
+- `primitives/`：可复用 ansatz 构造和 backend 解析工具。
+- `algorithms/`：MoG-VQE、PPO-RB、PPR-DQL、CRLQAS、supernet 等具体算法实现。
+- `library/`：可复用候选架构库。
+- `problems/`：VQE/QAS 问题和 Hamiltonian 构造。
+- `vqe_loop/`：VQE-QAS 闭环，包括一键入口、fair-label 协议、trust-region geometry、Stage-2 selection/search、fair VQE、oracle calibration 和多 NPU 分片。
 
 ## 1. 已提供能力
 
@@ -216,7 +225,7 @@ H = -0.042 + 0.178(Z0 + Z1) - 0.243(Z2 + Z3)
 
 对任意分子/自定义哈密顿量做 VQE ansatz 搜索时，无需手工拼装 `SupernetConfig`。封装函数 `supernet_qas` 把最常调节的几个旋钮直接做成参数，其余字段使用经过验证的 VQE 默认值；`n_qubits` 和 `two_qubit_pairs` 会自动从哈密顿量推断。
 
-> 命名说明：函数名为 `supernet_qas`（区别于子模块 `aicir.qas.supernet`，避免名称冲突），可直接从包层级导入：`from aicir.qas import supernet_qas`。
+> 命名说明：函数名为 `supernet_qas`（区别于子模块 `aicir.qas.algorithms.supernet`，避免名称冲突），可直接从包层级导入：`from aicir.qas import supernet_qas`。
 
 函数签名：
 
@@ -276,16 +285,57 @@ result = supernet_qas(ham, layers=6, supernet_num=5,
                       device="npu:0")
 ```
 
-### 3.6 QAS fair-label 队列的多 NPU 分片
+### 3.6 VQE-QAS 一键闭环入口
+
+VQE-QAS 的闭环代码放在 `aicir.qas.vqe_loop`，和 `algorithms/` 下的 MoG-VQE、PPO-RB 等算法实现并列但隔离。常规使用优先调用包级入口：
+
+```bash
+python -m aicir.qas.vqe_loop \
+  --hamiltonian h2_terms.json \
+  --output-dir outputs/qas_h2_loop \
+  --rounds 2 \
+  --backend numpy \
+  --dtype complex128
+```
+
+Python API 入口仍然保留：
+
+```python
+from pathlib import Path
+from aicir.qas.vqe_loop import ClosedLoopConfig, run_vqe_qas_closed_loop
+
+h2_terms = [
+    (-0.09706626816762543, "IIII"),
+    (0.17141282644776914, "ZIII"),
+    (0.12039548242542646, "XXXX"),
+]
+
+result = run_vqe_qas_closed_loop(
+    ClosedLoopConfig(
+        output_dir=Path("outputs/qas_h2_loop"),
+        n_qubits=4,
+        hamiltonian_terms=h2_terms,
+        hamiltonian_id="h2_sto3g_jw_0735",
+        rounds=2,
+        backend="numpy",
+        dtype="complex128",
+    )
+)
+print(result.final_benchmark_table)
+```
+
+详细模块职责、调用顺序、协议边界和辅助命令见 `aicir/qas/vqe_loop/README.md`。闭环逻辑不再放在 demos 或 cli 包里；服务模块可直接通过 `python -m aicir.qas.vqe_loop.<module>` 作为命令入口使用。
+
+### 3.7 QAS fair-label 队列的多 NPU 分片
 
 `aicir` 已经内置 `NPUBackend`，QAS 的 fair VQE runner 可通过 `--backend npu` 使用 Ascend NPU。对于 Stage 1.5 / Stage 2 产生的 label queue，推荐使用分片入口把候选行切成多份并行跑；每个分片是独立 VQE 任务，通过 `LOCAL_RANK` 绑定到一张 NPU，不会把单个态向量切成 HCCL 分布式任务。
 
 ```bash
-python aicir/qas/demos/vqe_qas_run_fair_labels_sharded.py \
-  --queue outputs/vqe_qas_h2_mog_stage2_demo/h2_molecule_oracle_supernet_round1_queue.csv \
-  --output outputs/vqe_qas_h2_mog_stage2_demo/h2_molecule_oracle_supernet_round1_labels.csv \
-  --work-dir outputs/vqe_qas_h2_mog_stage2_demo/label_shards \
-  --protocol aicir/qas/configs/fair_vqe_protocol_v2.json \
+python -m aicir.qas.vqe_loop.sharding \
+  --queue outputs/qas_stage2/round1/round1_queue.csv \
+  --output outputs/qas_stage2/round1/round1_labels.csv \
+  --work-dir outputs/qas_stage2/round1/label_shards \
+  --protocol aicir/qas/vqe_loop/fair_label_protocol.json \
   --backend npu \
   --dtype complex64 \
   --num-shards 4 \
@@ -301,7 +351,7 @@ python aicir/qas/demos/vqe_qas_run_fair_labels_sharded.py \
 - `--backend npu` / `--dtype complex64`：使用 Ascend NPU 后端。若要做 CPU smoke，可改为 `--backend numpy --dtype complex128`。
 - `--work-dir`：保存每个 shard 的临时 queue、临时 label CSV 和最终 summary。
 
-分片器会把原始 queue 连续切块，并给底层 `vqe_qas_run_fair_labels.py` 传入 `--seed-index-offset`，因此同一全局队列行在单进程或多分片运行时使用一致的 seed 派生规则。最终输出仍是一个 benchmark table CSV，可继续用于 oracle calibration、Stage 2 batch planning 和标签回流。
+分片器会把原始 queue 连续切块，并给底层 `python -m aicir.qas.vqe_loop.labeling` 传入 `--seed-index-offset`，因此同一全局队列行在单进程或多分片运行时使用一致的 seed 派生规则。最终输出仍是一个 benchmark table CSV，可继续用于 oracle calibration、Stage-2 next-batch planning 和标签回流。
 
 ## 4. MoG_VQE：基于 NSGA-II 的多目标遗传 VQE 拓扑搜索
 

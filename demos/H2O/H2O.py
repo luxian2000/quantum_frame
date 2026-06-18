@@ -10,7 +10,7 @@ Jordan-Wigner mapping. The constant term includes the nuclear repulsion energy
 and active-space inactive-energy offset reported by Qiskit Nature.
 
 The script then searches a ground-state-preparing circuit with the supernet
-QAS method (``aicir.qas.supernet``), in the same style as ``demos/LiH``, and
+QAS method (``aicir.qas.algorithms.supernet``), in the same style as ``demos/LiH``, and
 records it to ``H2O_cir.py`` / ``H2O_cir.qasm`` / ``H2O_cir.png``.
 """
 
@@ -171,7 +171,7 @@ def h2o_vqe_qas_config(**overrides) -> SupernetConfig:
 def search_ground_state_qas(hamiltonian: Hamiltonian, **overrides) -> SupernetResult:
     """Search a ground-state-preparing circuit for ``hamiltonian`` with supernet.
 
-    Wraps :mod:`aicir.qas.supernet`: it sets up a weight-shared supernet, samples
+    Wraps :mod:`aicir.qas.algorithms.supernet`: it sets up a weight-shared supernet, samples
     and optimises ansatze in one stage, ranks them, and fine-tunes the best one.
     The returned result exposes the fine-tuned energy, the fixed-ansatz VQE
     baseline, and the selected circuit in ``final_metrics``.

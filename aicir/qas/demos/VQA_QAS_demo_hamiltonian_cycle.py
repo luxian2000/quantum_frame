@@ -1,7 +1,7 @@
 """Demo: supernet for the Hamiltonian-cycle problem (Lucas 2014, Eq. 56).
 
 We encode "does graph G admit a Hamiltonian cycle?" as the ground state of a
-diagonal Ising Hamiltonian, then let :mod:`aicir.qas.supernet` search a circuit
+diagonal Ising Hamiltonian, then let :mod:`aicir.qas.algorithms.supernet` search a circuit
 that prepares that ground state. The optimal computational-basis state is
 decoded back into the cycle ordering.
 
