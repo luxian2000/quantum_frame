@@ -183,6 +183,27 @@ def _predict(neighbors: list[tuple[float, CandidateRecord, float]], k: int) -> f
     return weighted_sum / weight_total
 
 
+def _derive_task_context(benchmark_rows: list[dict[str, str]], protocol_version: str) -> dict[str, str]:
+    """Return the active Hamiltonian task fields that Stage-2 queues must preserve."""
+
+    task_fields = (
+        "n_qubits",
+        "hamiltonian_id",
+        "hamiltonian_class",
+        "hamiltonian_terms",
+        "reference_energy",
+    )
+    completed = _completed_rows(benchmark_rows, protocol_version)
+    source_rows = completed or [
+        row for row in benchmark_rows
+        if row.get("protocol_version") in {"", protocol_version}
+    ]
+    for row in source_rows:
+        if row.get("hamiltonian_id") or row.get("hamiltonian_terms"):
+            return {field: row.get(field, "") for field in task_fields}
+    return {}
+
+
 def _derive_d_max(labeled: list[tuple[CandidateRecord, float]], scales, k_min: int) -> float:
     kth_distances: list[float] = []
     for candidate, _energy in labeled:
@@ -192,9 +213,18 @@ def _derive_d_max(labeled: list[tuple[CandidateRecord, float]], scales, k_min: i
     return 1.5 * median(kth_distances) if kth_distances else 0.0
 
 
-def _queue_row(candidate_row: dict[str, str], *, source: LabelSource, protocol_version: str, batch_id: str) -> dict[str, Any]:
+def _queue_row(
+    candidate_row: dict[str, str],
+    *,
+    source: LabelSource,
+    protocol_version: str,
+    batch_id: str,
+    task_context: dict[str, str] | None = None,
+) -> dict[str, Any]:
     row = {field: "" for field in BENCHMARK_TABLE_FIELDS}
     row.update({field: candidate_row.get(field, "") for field in row})
+    if task_context:
+        row.update({field: value for field, value in task_context.items() if value not in {"", None}})
     row.update(
         {
             "protocol_version": protocol_version,
@@ -202,10 +232,10 @@ def _queue_row(candidate_row: dict[str, str], *, source: LabelSource, protocol_v
             "source": source.value,
             "label_status": LabelStatus.PENDING.value,
             "retry_count": 0,
-            "hamiltonian_id": candidate_row.get("hamiltonian_id")
-            or f"{candidate_row.get('hamiltonian_class', 'tfim')}_{candidate_row.get('n_qubits', '')}q",
-            "hamiltonian_coverage_features": candidate_row.get("hamiltonian_coverage_features")
-            or candidate_row.get("hamiltonian_coverage", ""),
+            "hamiltonian_id": row.get("hamiltonian_id")
+            or f"{row.get('hamiltonian_class', 'tfim')}_{row.get('n_qubits', '')}q",
+            "hamiltonian_coverage_features": row.get("hamiltonian_coverage_features")
+            or row.get("hamiltonian_coverage", ""),
         }
     )
     return row
@@ -256,6 +286,7 @@ def main() -> None:
     candidate_rows = [_attach_supernet_sidecar(row, sidecar) for row in _read_csv(Path(args.candidates))]
     benchmark_rows = _read_csv(Path(args.benchmark_table))
     completed = _completed_rows(benchmark_rows, args.protocol_version)
+    task_context = _derive_task_context(benchmark_rows, args.protocol_version)
     labeled_ids = _labeled_ids(benchmark_rows, args.protocol_version)
     candidate_by_id = {row["architecture_id"]: row for row in candidate_rows}
     candidate_records = [_row_to_candidate(row) for row in candidate_rows]
@@ -399,7 +430,13 @@ def main() -> None:
         _take_unique(selected, remaining, LabelSource.TRACKB_BOUNDARY, target_total)
 
     queue_rows = [
-        _queue_row(row, source=source, protocol_version=args.protocol_version, batch_id=args.batch_id)
+        _queue_row(
+            row,
+            source=source,
+            protocol_version=args.protocol_version,
+            batch_id=args.batch_id,
+            task_context=task_context,
+        )
         for row, source in selected[:target_total]
     ]
     _write_csv(Path(args.output), queue_rows)
