@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import List, Optional, Sequence
 
-from ..backends.base import Backend
-from ..noise.model import NoiseModel
+from ...backends.base import Backend
+from ...noise.model import NoiseModel
 from ._types import ArchitectureSpec, SearchConfig, SearchResult
-from .candidates import build_common_architectures
+from ..library.architectures import build_common_architectures
 from .evaluator import ArchitectureEvaluator
 from .reward import RewardWeights
 

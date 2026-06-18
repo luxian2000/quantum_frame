@@ -1,6 +1,6 @@
 """QAS 架构评估器（ArchitectureEvaluator）演示。
 
-`aicir.qas.evaluator` 提供「架构级」打分：对每个候选线路，在四个正交目标
+`aicir.qas.core.evaluator` 提供「架构级」打分：对每个候选线路，在四个正交目标
 组上各用一个激活指标打分，再按权重合成一个 weighted_score 用于排名。
 
 四个目标组（默认激活指标）：

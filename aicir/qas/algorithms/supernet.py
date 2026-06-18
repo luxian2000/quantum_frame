@@ -27,13 +27,13 @@ from typing import Any, Callable, Mapping, Sequence
 import numpy as np
 import torch
 
-from ..backends.gpu_backend import GPUBackend
-from ..backends.npu_backend import NPUBackend
-from ..operators import Hamiltonian
-from ..core.circuit import Circuit, cx, hadamard, rx, ry, rz, rzz
-from ..core.gates import apply_gate_to_state, gate_to_matrix
-from ..ir import circuit_instructions
-from ..qml.deriv import psr
+from ...backends.gpu_backend import GPUBackend
+from ...backends.npu_backend import NPUBackend
+from ...operators import Hamiltonian
+from ...core.circuit import Circuit, cx, hadamard, rx, ry, rz, rzz
+from ...core.gates import apply_gate_to_state, gate_to_matrix
+from ...ir import circuit_instructions
+from ...qml.deriv import psr
 
 
 ObjectiveFn = Callable[..., torch.Tensor | float]
@@ -1076,6 +1076,10 @@ class Supernet:
             "selected_cnot_count": self.cnot_count(architecture),
             "selected_two_qubit_count": self.two_qubit_count(architecture),
             "selected_circuit_ascii": _circuit_diagram(circuit),
+            "fine_tuned_parameters": {
+                "|".join(str(part) for part in key): _float_value(value)
+                for key, value in finetune_parameters.items()
+            },
         }
         if task in {"classification", "binary_classification"}:
             for split in ("train", "validation", "test"):

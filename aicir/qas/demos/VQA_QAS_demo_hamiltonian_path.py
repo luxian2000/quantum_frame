@@ -3,7 +3,7 @@
 The Hamiltonian-path formulation is the cycle formulation without the
 wrap-around transition (we do not require the first and last vertices to be
 joined). We encode it as the ground state of a diagonal Ising Hamiltonian and
-let :mod:`aicir.qas.supernet` search a circuit preparing that ground state.
+let :mod:`aicir.qas.algorithms.supernet` search a circuit preparing that ground state.
 
 Instance: the 3-vertex path graph with edges {0-1, 1-2}. It admits the
 Hamiltonian path 0 -> 1 -> 2 (energy 0) but NO Hamiltonian cycle, because

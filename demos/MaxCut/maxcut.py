@@ -4,7 +4,7 @@
 1. 生成一个 ``n_nodes`` 个节点的随机图（默认 10 个节点）。
 2. 由图构造 MaxCut 对应的 Ising 哈密顿量，并把它写入
    ``maxcut_hamiltonian.py``。
-3. 使用 ``aicir.qas.supernet``（``supernet_qas`` 封装入口）搜索并微调
+3. 使用 ``aicir.qas.algorithms.supernet``（``supernet_qas`` 封装入口）搜索并微调
    该哈密顿量的基态 VQE 线路，把线路一并记录到
    ``maxcut_hamiltonian.py``。
 4. 把上述 VQE 线路绘制为 ``maxcut_hamiltonian.png``。
@@ -273,7 +273,7 @@ def render_hamiltonian_module(
 包含：
 - 随机图的节点数与边集；
 - MaxCut Ising 哈密顿量项 ``MAXCUT_HAMILTONIAN_TERMS``；
-- ``aicir.qas.supernet`` 搜索 + 微调得到的 VQE 线路 ``VQE_CIRCUIT_JSON``；
+- ``aicir.qas.algorithms.supernet`` 搜索 + 微调得到的 VQE 线路 ``VQE_CIRCUIT_JSON``；
 - 重建辅助函数 ``build_hamiltonian()`` / ``build_vqe_circuit()``。
 """
 

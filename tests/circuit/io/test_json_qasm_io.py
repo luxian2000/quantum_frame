@@ -3,7 +3,6 @@ import tempfile
 import unittest
 
 import numpy as np
-import torch
 
 from aicir import Circuit, Parameter, cnot, crx, cry, crz, hadamard, ms_gate, rx, rxx, rzz, swap, toffoli, u2, u3
 from aicir.core.io.json_io import (
@@ -130,9 +129,9 @@ class TestJsonQasmIO(unittest.TestCase):
         ext = Circuit(
             {"type": "u2", "target_qubit": 0, "parameter": [np.pi / 7, np.pi / 9]},
             u3(np.pi / 3, np.pi / 5, np.pi / 8, target_qubit=1),
-            crx(torch.tensor(np.pi / 4), target_qubit=1, control_qubits=[0]),
-            cry(torch.tensor(np.pi / 6), target_qubit=2, control_qubits=[1]),
-            crz(torch.tensor(np.pi / 10), target_qubit=0, control_qubits=[2]),
+            crx(np.pi / 4, target_qubit=1, control_qubits=[0]),
+            cry(np.pi / 6, target_qubit=2, control_qubits=[1]),
+            crz(np.pi / 10, target_qubit=0, control_qubits=[2]),
             toffoli(target_qubit=2, control_qubits=[0, 1]),
             n_qubits=3,
         )

@@ -2,7 +2,12 @@ import unittest
 
 import numpy as np
 
-from aicir.qas import AdamSPSAConfig, CRLQASConfig, crlqas, train_crlqas
+try:
+    from aicir.qas import AdamSPSAConfig, CRLQASConfig, crlqas, train_crlqas
+except ImportError as exc:
+    if "AdamSPSAConfig" not in str(exc):
+        raise
+    raise unittest.SkipTest("CRLQAS tests require torch") from exc
 
 
 class TestCRLQAS(unittest.TestCase):
