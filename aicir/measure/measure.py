@@ -255,11 +255,11 @@ class Measure:
         exp_vals: Dict[str, float] = {}
         exp_vars: Dict[str, float] = {}
         if observables:
-            state_arr = np.asarray(state)
+            state_arr = backend.to_numpy(state)
             rho = state_arr if (state_arr.ndim == 2 and state_arr.shape[0] == state_arr.shape[1]) else None
             vec = None if rho is not None else state_arr.reshape(-1, 1)
             for name, op in observables.items():
-                op = np.asarray(op)
+                op = backend.to_numpy(op)
                 if rho is not None:
                     exp_vals[name] = float(np.real(np.trace(rho @ op)))
                 else:
