@@ -383,7 +383,7 @@ AND torch.distributed.get_world_size() > 1
 
 - **`safe` 模式**：每步对采样的一个架构，将 `W=supernet_num` 次 select 评估（即 `_sharded_select`）按等距切分到各 rank，各 rank 只评估自己拥有的 supernet，`all_gather` 后取全局 argmin 选出最优 supernet；梯度步仅由 rank 0 执行（`loss.backward()` + `optimizer.step()`），其余 rank 跳过更新，步后由 `broadcast_parameters` 把权重广播到所有 rank。数值上与单卡完全等价，加速上限约为 `W`。
 
-- **`aggressive` 模式**：每步各 rank 从本步预先采样的 `world_size` 个架构中取 `arch[rank]`，分别独立做 select → forward → backward，对所有共享参数的梯度执行 `all_reduce_mean` 求平均，所有被某个 rank 选中的 supernet 各自步进对应的优化器。约等效于 `world_size` 倍吞吐，但各 rank 动态更新不同、训练轨迹与单卡不同；可相应调小 `supernet_steps`（如缩短为原来的 `1/world_size`）。
+- **`aggressive` 模式**：每步各 rank 从本步预先采样的 `world_size` 个架构中取 `arch[rank]`，分别独立做 select → forward → backward，对所有共享参数的梯度执行 `all_reduce_mean` 求平均；随后通过 `all_gather` 取得被任一 rank 选中的 supernet id 并集，**所有 rank 一致地步进这同一组优化器**（梯度已同步、优化器状态一致，因此各 rank 权重保持同步，无需广播）。约等效于 `world_size` 倍吞吐，但各 rank 动态更新不同、训练轨迹与单卡不同；可相应调小 `supernet_steps`（如缩短为原来的 `1/world_size`）。
 
 ##### finetune 阶段
 
