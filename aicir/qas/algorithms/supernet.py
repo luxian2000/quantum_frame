@@ -1308,16 +1308,57 @@ class Supernet:
             hamiltonian=hamiltonian,
             split=ranking_split,
         )
-        best_record = ranking_records[0]
+        # 分片感知的 Top-K 并行微调：每个 rank 负责一个候选架构，
+        # 全局汇聚后选出得分最低的最优架构。单卡路径等价于原逻辑。
+        ctx = shard_context(self.backend)
+        if ctx.is_sharded:
+            cand_index = ctx.rank
+        else:
+            cand_index = 0
+
+        if cand_index < len(ranking_records):
+            local_record = ranking_records[cand_index]
+            local_arch = local_record["architecture"]
+            local_supernet_id = int(local_record["selected_supernet_id"])
+            local_circuit, local_params, local_finetune_log, local_score = (
+                self.finetune_architecture(
+                    local_arch, local_supernet_id, objective,
+                    dataset=dataset, hamiltonian=hamiltonian,
+                )
+            )
+            local_payload = {
+                "score": float(local_score),
+                "supernet_id": local_supernet_id,
+                "ranking_index": cand_index,
+                "n_qubits": int(local_circuit.n_qubits),
+                "gates": list(local_circuit.gates),
+                "numeric_parameters": {str(k): float(v) for k, v in local_params.items()},
+            }
+        else:
+            local_payload = None  # rank 数多于候选架构数
+            local_params = {}
+            local_finetune_log: list[dict[str, Any]] = []
+
+        if ctx.is_sharded:
+            payloads = [p for p in all_gather(local_payload) if p is not None]
+            best_payload = min(payloads, key=lambda p: p["score"])
+        else:
+            best_payload = local_payload
+
+        best_record = ranking_records[best_payload["ranking_index"]]
         best_architecture = best_record["architecture"]
-        selected_supernet_id = int(best_record["selected_supernet_id"])
-        best_circuit, finetune_parameters, finetune_log, finetune_score = self.finetune_architecture(
-            best_architecture,
-            selected_supernet_id,
-            objective,
-            dataset=dataset,
-            hamiltonian=hamiltonian,
+        selected_supernet_id = int(best_payload["supernet_id"])
+        best_circuit = Circuit(
+            *best_payload["gates"], n_qubits=best_payload["n_qubits"], backend=self.backend,
         )
+        # _final_metrics 需要以 ParameterKey 为键的参数字典（用于 _loss 查参及格式化输出），
+        # 因此直接使用当前 rank 微调得到的 local_params（其键类型正确）。
+        # 单卡路径下 cand_index==0 且 best_payload["ranking_index"]==0，
+        # local_params 即为胜出架构的参数，与改动前完全一致。
+        finetune_parameters = local_params
+        # finetune_log 仅在本 rank 产出胜出结果时为真实日志，否则为空列表。
+        finetune_log = local_finetune_log if (best_payload["ranking_index"] == cand_index) else []
+        finetune_score = best_payload["score"]
         final_metrics = self._final_metrics(
             best_architecture,
             best_circuit,
