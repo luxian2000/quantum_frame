@@ -34,6 +34,21 @@ class ClosedLoopResolvedDefaults:
 
 
 @dataclass(frozen=True)
+class QuotaDecision:
+    """Stage-2 quota decision derived from oracle calibration quality."""
+
+    mode: str
+    local: int
+    boundary: int
+    sparse: int
+    control: int
+    reason: str
+
+    def as_tuple(self) -> tuple[int, int, int, int]:
+        return self.local, self.boundary, self.sparse, self.control
+
+
+@dataclass(frozen=True)
 class ClosedLoopConfig:
     """Configuration for a small VQE-QAS closed-loop run."""
 
@@ -127,6 +142,110 @@ def _batch_quotas_from_total(total: int) -> tuple[int, int, int, int]:
     sparse = min(total - local - boundary, max(0, round(total * 0.2)))
     control = max(0, total - local - boundary - sparse)
     return int(local), int(boundary), int(sparse), int(control)
+
+
+def _quota_from_weights(total: int, weights: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
+    total = max(0, int(total))
+    if total == 0:
+        return 0, 0, 0, 0
+    raw = [max(0.0, float(weight)) for weight in weights]
+    weight_total = sum(raw)
+    if weight_total <= 0:
+        return 0, 0, 0, total
+    scaled = [total * weight / weight_total for weight in raw]
+    floors = [int(value) for value in scaled]
+    remainder = total - sum(floors)
+    order = sorted(range(4), key=lambda index: (scaled[index] - floors[index], -index), reverse=True)
+    for index in order[:remainder]:
+        floors[index] += 1
+    return tuple(floors)  # type: ignore[return-value]
+
+
+def _local_cap_for_qubits(n_qubits: int, total: int, mode: str) -> int:
+    n = int(n_qubits)
+    total = int(total)
+    if mode == "local":
+        fraction = 0.55 if n <= 4 else 0.45 if n <= 8 else 0.35 if n <= 12 else 0.30
+    elif mode == "balanced_explore":
+        fraction = 0.30 if n <= 4 else 0.25 if n <= 8 else 0.20
+    else:
+        fraction = 0.20 if n <= 8 else 0.15
+    return max(0, int(round(total * fraction)))
+
+
+def _apply_local_cap(quotas: tuple[int, int, int, int], *, n_qubits: int, mode: str) -> tuple[int, int, int, int]:
+    local, boundary, sparse, control = quotas
+    total = local + boundary + sparse + control
+    cap = _local_cap_for_qubits(n_qubits, total, mode)
+    if local <= cap:
+        return quotas
+    extra = local - cap
+    local = cap
+    # Exploration surplus goes first to sparse, then boundary/control.
+    sparse += (extra + 1) // 2
+    boundary += extra // 2
+    return local, boundary, sparse, control
+
+
+def _calibration_float(calibration: dict[str, object], key: str) -> float | None:
+    raw = calibration.get(key)
+    if raw in {"", None}:
+        return None
+    try:
+        return float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def decide_next_round_quotas(
+    *,
+    n_qubits: int,
+    base_quotas: tuple[int, int, int, int],
+    calibration: dict[str, object] | None,
+    local_improved: bool | None = None,
+) -> QuotaDecision:
+    """Choose local/exploration quota mix from trust-region calibration."""
+
+    total = sum(int(value) for value in base_quotas)
+    if total <= 0:
+        return QuotaDecision("none", 0, 0, 0, 0, "empty_batch")
+    if not calibration:
+        local, boundary, sparse, control = _apply_local_cap(base_quotas, n_qubits=n_qubits, mode="explore")
+        return QuotaDecision("explore", local, boundary, sparse, control, "missing_calibration")
+
+    passes = calibration.get("passes", {})
+    if not isinstance(passes, dict):
+        passes = {}
+    k_min = int(calibration.get("k_min") or 3)
+    tr_in_count = int(calibration.get("tr_in_count") or 0)
+    tr_in_mae = _calibration_float(calibration, "tr_in_mae")
+    tr_out_mae = _calibration_float(calibration, "tr_out_mae")
+    sparse_abstain_rate = _calibration_float(calibration, "sparse_abstain_rate")
+    mae_ratio = (tr_in_mae / tr_out_mae) if tr_in_mae is not None and tr_out_mae not in {None, 0.0} else None
+    sparse_ok = sparse_abstain_rate is not None and sparse_abstain_rate >= 0.8
+    weak_signal = tr_in_count > 0 and tr_in_mae is not None and tr_out_mae is not None and tr_in_mae < tr_out_mae and sparse_ok
+
+    if bool(passes.get("overall")) and tr_in_count >= k_min and (mae_ratio is None or mae_ratio <= 0.5):
+        mode = "local"
+        weights = (0.55, 0.25, 0.10, 0.10) if int(n_qubits) <= 8 else (0.40, 0.25, 0.20, 0.15)
+        reason = "oracle_passed"
+    elif weak_signal:
+        mode = "balanced_explore"
+        weights = (0.25, 0.30, 0.30, 0.15) if int(n_qubits) <= 8 else (0.15, 0.25, 0.35, 0.25)
+        reason = "weak_tr_signal"
+    else:
+        mode = "explore"
+        weights = (0.15, 0.35, 0.35, 0.15) if int(n_qubits) <= 8 else (0.10, 0.35, 0.35, 0.20)
+        reason = "oracle_not_trusted"
+
+    quotas = _apply_local_cap(_quota_from_weights(total, weights), n_qubits=n_qubits, mode=mode)
+    if local_improved is False and mode != "explore" and quotas[0] > 1:
+        local, boundary, sparse, control = quotas
+        local -= 1
+        sparse += 1
+        quotas = local, boundary, sparse, control
+        reason += "_local_failed"
+    return QuotaDecision(mode, quotas[0], quotas[1], quotas[2], quotas[3], reason)
 
 
 def _resolve_batch_quotas(
@@ -249,6 +368,32 @@ def _is_improvement(previous_best: float | None, current_best: float | None, min
     return current_best < previous_best - float(min_improvement)
 
 
+def _load_json(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _local_source_improved(labels_path: Path, previous_best: float | None, min_improvement: float) -> bool:
+    if previous_best is None or not labels_path.exists():
+        return False
+    _fieldnames, rows = _read_csv(labels_path)
+    for row in rows:
+        if row.get("source") != "trackA_local" or row.get("fair_best_energy") in {"", None}:
+            continue
+        try:
+            energy = float(row["fair_best_energy"])
+        except (TypeError, ValueError):
+            continue
+        if energy < previous_best - float(min_improvement):
+            return True
+    return False
+
+
 def stamp_literal_hamiltonian_terms(
     csv_path: str | Path,
     terms: Sequence[PauliTerm],
@@ -355,10 +500,13 @@ def run_vqe_qas_closed_loop(config: ClosedLoopConfig) -> ClosedLoopResult:
     best_energy, best_architecture = _best_completed_label(benchmark)
     no_improvement_rounds = 0
     stop_reason = "max_rounds"
+    base_quotas = (resolved.local, resolved.boundary, resolved.sparse, resolved.control)
+    next_quota_decision = QuotaDecision("default", *base_quotas, reason="initial_round")
     for round_index in range(1, int(resolved.rounds) + 1):
         batch_id = f"round{round_index}"
         round_dir = output_dir / batch_id
         previous_best = best_energy
+        quota_decision = next_quota_decision
         _run_module(
             "aicir.qas.vqe_loop.stage2",
             [
@@ -375,13 +523,13 @@ def run_vqe_qas_closed_loop(config: ClosedLoopConfig) -> ClosedLoopResult:
                 "--d-max",
                 str(config.d_max),
                 "--local",
-                str(resolved.local),
+                str(quota_decision.local),
                 "--boundary",
-                str(resolved.boundary),
+                str(quota_decision.boundary),
                 "--sparse",
-                str(resolved.sparse),
+                str(quota_decision.sparse),
                 "--control",
-                str(resolved.control),
+                str(quota_decision.control),
                 "--ea-population",
                 str(config.ea_population),
                 "--ea-generations",
@@ -405,8 +553,18 @@ def run_vqe_qas_closed_loop(config: ClosedLoopConfig) -> ClosedLoopResult:
         )
         benchmark = round_dir / f"{batch_id}_benchmark_table.csv"
         summaries.append(round_dir / f"{batch_id}_loop_summary.json")
+        labels_path = round_dir / f"{batch_id}_labels.csv"
+        calibration_path = round_dir / f"{batch_id}_oracle_calibration.json"
         current_best, current_architecture = _best_completed_label(benchmark)
         improved = _is_improvement(previous_best, current_best, config.min_improvement)
+        local_improved = _local_source_improved(labels_path, previous_best, config.min_improvement)
+        calibration = _load_json(calibration_path)
+        next_quota_decision = decide_next_round_quotas(
+            n_qubits=config.n_qubits,
+            base_quotas=base_quotas,
+            calibration=calibration,
+            local_improved=local_improved,
+        )
         if improved:
             best_energy = current_best
             best_architecture = current_architecture
@@ -426,6 +584,23 @@ def run_vqe_qas_closed_loop(config: ClosedLoopConfig) -> ClosedLoopResult:
                 "best_after": current_best,
                 "best_architecture": current_architecture,
                 "improved": improved,
+                "local_improved": local_improved,
+                "quota_mode": quota_decision.mode,
+                "quota_reason": quota_decision.reason,
+                "batch_quotas": {
+                    "local": quota_decision.local,
+                    "boundary": quota_decision.boundary,
+                    "sparse": quota_decision.sparse,
+                    "control": quota_decision.control,
+                },
+                "next_quota_mode": next_quota_decision.mode,
+                "next_quota_reason": next_quota_decision.reason,
+                "next_batch_quotas": {
+                    "local": next_quota_decision.local,
+                    "boundary": next_quota_decision.boundary,
+                    "sparse": next_quota_decision.sparse,
+                    "control": next_quota_decision.control,
+                },
                 "no_improvement_rounds": no_improvement_rounds,
             }
         )
@@ -444,6 +619,14 @@ def run_vqe_qas_closed_loop(config: ClosedLoopConfig) -> ClosedLoopResult:
             "boundary": resolved.boundary,
             "sparse": resolved.sparse,
             "control": resolved.control,
+        },
+        "next_batch_quotas": {
+            "mode": next_quota_decision.mode,
+            "reason": next_quota_decision.reason,
+            "local": next_quota_decision.local,
+            "boundary": next_quota_decision.boundary,
+            "sparse": next_quota_decision.sparse,
+            "control": next_quota_decision.control,
         },
         "patience": int(config.patience),
         "min_improvement": float(config.min_improvement),

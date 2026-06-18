@@ -50,6 +50,20 @@ The loop also stops early when no new best `fair_best_energy` is found for
 `--patience` consecutive rounds.  The default is `--patience 2` and
 `--min-improvement 1e-8`.
 
+After each Stage-2 round, the next round's quota mix is adapted from oracle
+calibration:
+
+- `local`: used only when `overall=true`, enough in-TR holdout exists, the
+  in-TR MAE is clearly better than out-of-TR MAE, and sparse abstain is healthy.
+- `balanced_explore`: used when there is a weak TR signal (`tr_in_count > 0`,
+  `tr_in_mae < tr_out_mae`, and sparse abstain is healthy), but `overall=false`.
+- `explore`: used when the oracle has no reliable TR support, TR error is not
+  better than out-of-TR error, or sparse abstain is poor.
+
+Higher-qubit runs cap the local fraction more aggressively. For example, a 12q
+run with weak TR signal uses `local=1, boundary=2, sparse=3, control=2` for an
+8-label round.
+
 ## Main Flow
 
 `python -m aicir.qas.vqe_loop` calls `run_vqe_qas_closed_loop()` in `vqe_qas_loop.py`.
