@@ -307,3 +307,49 @@ GateSpec(
 - PennyLane QNode: https://docs.pennylane.ai/en/stable/introduction/circuits.html
 - PennyLane interfaces: https://docs.pennylane.ai/en/stable/introduction/interfaces.html
 - PennyLane compilation transforms: https://docs.pennylane.ai/en/stable/introduction/compiling_circuits.html
+
+## QAS 和 QML 待办任务清单 (Pending Tasks)
+
+基于当前进度，以下是 QAS 和 QML 模块待完成的任务：
+
+### 1. 量子架构搜索 (QAS)
+
+#### 1.1 扩展评估指标
+`aicir.qas.evaluator.ArchitectureEvaluator` 中的部分高级评估指标目前仍为 `todo` 状态：
+*   **Expressibility:** 
+    *   `frame_potential`
+    *   `entangling_capability`
+    *   `transformer_predictor`
+*   **Trainability:** 
+    *   `gradient_variance`
+    *   `gradient_norm`
+    *   `barren_plateau_risk`
+*   **Noise Robustness:** 
+    *   `ideal_noisy_score_gap`
+    *   `per_source_ablation`
+*   **Hardware Efficiency:** 
+    *   `connectivity_penalty`
+    *   `calibrated_error_cost`
+    *   `latency_cost`
+
+#### 1.2 含噪声的可微 QAS (Noisy Differentiable QAS)
+*   目前 `supernet.py` 中的 `NoiseConfig` 仅为占位符。需要完成含噪声信道下解析梯度的计算与评估机制。
+
+#### 1.3 硬件目标集成 (Hardware Target Integration)
+*   将 QAS 搜索空间和硬件效率评分迁移至统一的 `Target` 抽象（定义后端能力、拓扑、原生门集），而不是依赖硬编码的 `DEFAULT_NATIVE_GATES` 等代理。
+
+---
+
+### 2. 量子机器学习 (QML)
+
+#### 2.1 PennyLane 风格的 `QNode` 抽象
+*   实现 `QNode` 接口（例如 `@qnode(device="numpy", diff_method="psr")`）。
+*   统一“量子函数 + 设备 + 测量 + 梯度”，减少算法间重复的参数绑定和后端指定代码。
+
+#### 2.2 整合梯度选择器
+*   虽然已实现梯度注册表和自动选择机制 (`select_diff`)，但尚未被高层接口调用。
+*   **任务**：将 `select_diff` 接入即将引入的 `QNode` 或 `Estimator` primitives 中，以便在不支持 Torch 时自动降级到 `psr` 或 `fd`。
+
+#### 2.3 `GateSpec` 元数据扩充
+*   向 `GateSpec` 注册表添加解析梯度所需的 `generator` 和 `decomposition` 字段。
+*   允许 QML 梯度方法自动内省门类是否支持解析参数移位等计算，而无需硬编码判断。
