@@ -885,22 +885,48 @@ class Supernet:
         optimizer.step()
         return grad_norm
 
+    def _sharded_select(self, architecture, objective, dataset, hamiltonian, split, ctx):
+        """仅评估本 rank 拥有的 supernet id，all-gather 后返回完整损失向量。"""
+        owned = set(owned_indices(self.config.supernet_num, ctx.rank, ctx.world_size))
+        local = []
+        with torch.no_grad():
+            for supernet_id in range(self.config.supernet_num):
+                if supernet_id not in owned:
+                    continue
+                loss, _, _, _ = self._loss(
+                    architecture, supernet_id, objective, dataset, hamiltonian, split=split,
+                )
+                local.append((supernet_id, _float_value(loss)))
+        losses = [math.inf] * self.config.supernet_num
+        for part in all_gather(local):
+            for supernet_id, value in part:
+                losses[supernet_id] = value
+        selected = min(range(len(losses)), key=losses.__getitem__)
+        return selected, losses
+
     def optimize_supernet(
         self,
         objective: ObjectiveFn | str | None,
         dataset: Any = None,
         hamiltonian: Any = None,
     ) -> list[dict[str, Any]]:
+        ctx = shard_context(self.backend)
+        safe_sharded = ctx.is_sharded and self.config.shard_mode.lower() == "safe"
         log: list[dict[str, Any]] = []
         for step in range(self.config.supernet_steps):
             architecture = self.sample_architecture()
-            selected_id, candidate_losses = self.select_supernet(
-                architecture,
-                objective,
-                dataset,
-                hamiltonian,
-                split="train",
-            )
+            if safe_sharded:
+                selected_id, candidate_losses = self._sharded_select(
+                    architecture, objective, dataset, hamiltonian, "train", ctx
+                )
+            else:
+                selected_id, candidate_losses = self.select_supernet(
+                    architecture,
+                    objective,
+                    dataset,
+                    hamiltonian,
+                    split="train",
+                )
             optimizer = self._optimizers[selected_id]
 
             def loss_closure() -> torch.Tensor:
@@ -923,7 +949,10 @@ class Supernet:
                 split="train",
             )
             active_tensors = _unique_tensors(active_tensors)
-            if self.config.use_parameter_shift:
+            # safe_sharded 模式下仅 rank 0 执行梯度步，其余 rank 跳过优化器更新
+            if safe_sharded and ctx.rank != 0:
+                grad_norm = 0.0
+            elif self.config.use_parameter_shift:
                 grad_norm = self._parameter_shift_update(active_tensors, optimizer, loss_closure)
             else:
                 optimizer.zero_grad(set_to_none=True)
@@ -931,6 +960,9 @@ class Supernet:
                     loss.backward()
                 grad_norm = self._grad_norm(active_tensors)
                 optimizer.step()
+            if safe_sharded:
+                # rank 0 完成梯度步后广播共享参数，保持各 rank 权重一致
+                broadcast_parameters(self.shared_parameters, src=0)
 
             record = {
                 "step": step,
