@@ -6,6 +6,14 @@
 
 ### Added
 
+- **QAS 模块化第一片：`SearchStrategy` 协议 + 策略注册表，开始取代 `runner.py` 的硬编码 `if` 分发链。**
+  新增 `aicir.qas.core.strategy.SearchStrategy`（抽象基类，契约 `run(request) -> 结果`）与
+  `aicir.qas.core.registry`（`StrategySpec` 冻结数据类 + `register_strategy`/`get_strategy`/
+  `get_spec`/`registered_strategies`/`unregister_strategy`，镜像 `DiffMethod`/`GateSpec` 习惯）。
+  内置策略在 `aicir.qas.algorithms.strategies` 适配并注册。`run(method, ...)` 先查注册表、命中
+  走 `strategy.run`，未命中回落旧分支。**当前仅 `supernet` 迁移**为 `SupernetStrategy`；其余方法
+  （`ppo_rb`/`ppr_dql`/`crlqas`/`supernet_classification`/`supernet_h2`）仍走旧分支，对用户行为
+  与返回值不变。配套 `tests/qas/test_strategy_registry.py`。
 - **新增 PennyLane 风格量子函数 `qfun`（NEXT.md §5 第一片）。** 新模块 `aicir/qml/qfun.py`
   导出 `qfun` 装饰器与 `QFun` 类，统一"量子函数 + 设备 + 测量 + 梯度"：
   `@qfun(device=..., differential=..., observable=..., shots=None)` 包装一个**返回
@@ -34,6 +42,15 @@
 
 ### Changed
 
+- **QAS 结构简化（安全片）：解散误命名的 `aicir.qas.primitives`，并消除重名 `sharding`。**
+  - `qas/primitives/` 与顶层 `aicir.primitives`（Sampler/Estimator）名称冲突、内容也非「primitives」，整体解散：
+    `ansatz.py` → `qas/library/`，`backend_utils.py` 与 NPU `sharding.py` → `qas/core/`。
+  - `qas/vqe_loop/sharding.py`（fair-label 队列分片 CLI 调度器）改名 `shard_scheduler.py`，与
+    `core/sharding.py`（NPU 集合通信原语）区分；CLI 命令相应改为
+    `python -m aicir.qas.vqe_loop.shard_scheduler`。
+  - 纯文件搬迁 + import 路径更新，无行为变化；导入改为
+    `from aicir.qas.library.ansatz import ...` / `from aicir.qas.core.backend_utils import ...` /
+    `from aicir.qas.core.sharding import ...`。
 - **线路结构优化统一收归 `aicir.transpile`，并移除与 `aicir.optimizer` 的重复实现。**
   - `aicir.optimizer.circuit` 模块整体移除；其中重复的本地化简规则（与
     `transpile/passes/_local_rewrite.py` 逐行重复）不再保留，门字典列表的不动点

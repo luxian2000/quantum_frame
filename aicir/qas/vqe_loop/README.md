@@ -93,7 +93,7 @@ Module responsibilities:
 - `selection_ops.py`: pure Stage-2 selection operators: MoG-EA proposals, farthest-first expansion, and abstain-rate summaries.
 - `calibration.py`: evaluates trust-region oracle quality on holdout rows.
 - `fair_vqe.py`: evaluates and optimizes one architecture on one VQE problem using the frozen fair-label policy.
-- `sharding.py`: splits a fair-label queue into independent shards for multi-NPU or multi-process runs.
+- `shard_scheduler.py`: splits a fair-label queue into independent shards for multi-NPU or multi-process runs.
 - `sidecars.py`: converts completed fair labels into supernet warm-start/rank sidecars.
 - `supernet_screening.py`: optional supernet screening sidecar generation.
 - `protocol.py`: benchmark-table schema, label states, append/merge rules, and retry transitions.
@@ -174,7 +174,7 @@ python -m aicir.qas.vqe_loop.labeling \
 Run fair labels as independent shards:
 
 ```bash
-python -m aicir.qas.vqe_loop.sharding \
+python -m aicir.qas.vqe_loop.shard_scheduler \
   --queue outputs/qas_stage2/round1/round1_queue.csv \
   --output outputs/qas_stage2/round1/round1_labels.csv \
   --work-dir outputs/qas_stage2/round1/label_shards \
@@ -196,7 +196,7 @@ python -m aicir.qas.vqe_loop.stage2 \
 
 ## Notes
 
-- `sharding.py` is a task-parallel queue runner; it does not change the fair-label protocol.
+- `shard_scheduler.py` is a task-parallel queue runner; it does not change the fair-label protocol.
 - `sidecars.py` and `supernet_screening.py` are optional helpers. They do not produce final labels.
 - `fair_vqe.py` is not a general VQE frontend; it is the fair-label execution layer used by VQE-QAS.
 - `next_batch.py` is workflow code. `selection_ops.py` is the small operator library it calls.

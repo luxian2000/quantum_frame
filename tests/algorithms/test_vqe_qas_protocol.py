@@ -54,12 +54,12 @@ from aicir.qas.vqe_loop.labeling import (
     _problem_from_row_or_protocol,
     _validate_queue_protocol_versions,
 )
-from aicir.qas.vqe_loop.sharding import (
+from aicir.qas.vqe_loop.shard_scheduler import (
     _contiguous_shards,
     _shard_environment,
 )
 from aicir.qas.vqe_loop.sidecars import build_sidecar_records
-from aicir.qas.primitives.ansatz import (
+from aicir.qas.library.ansatz import (
     HEAMask,
     LayerwiseAnsatzGene,
     architecture_from_layerwise_gene,
