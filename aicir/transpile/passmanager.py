@@ -83,8 +83,8 @@ class PassManager:
         return current
 
 
-def default_optimization_pipeline(*, max_rounds: int = 64, max_reorder_hops: int = 8) -> PassManager:
-    """Return the default local circuit-optimization pipeline."""
+def _optimize_pipeline(*, max_rounds: int = 64, max_reorder_hops: int = 8) -> PassManager:
+    """构造默认的本地线路优化流水线（cancel→merge→commute，跑到不动点）。"""
 
     from .passes import CancelInversePass, CommuteSingleQubitPass, MergeRotationsPass
 
@@ -97,3 +97,14 @@ def default_optimization_pipeline(*, max_rounds: int = 64, max_reorder_hops: int
         fixed_point=True,
         max_rounds=max_rounds,
     )
+
+
+def optimize(circuit: Circuit, *, max_rounds: int = 64, max_reorder_hops: int = 8) -> Circuit:
+    """对线路应用默认本地优化流水线，返回优化后的新线路。
+
+    线路结构优化的统一入口；等价于
+    ``_optimize_pipeline(...).run(circuit)``。需要自定义 pass 顺序时
+    直接用 :class:`PassManager`。
+    """
+
+    return _optimize_pipeline(max_rounds=max_rounds, max_reorder_hops=max_reorder_hops).run(circuit)

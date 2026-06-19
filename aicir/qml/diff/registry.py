@@ -1,15 +1,21 @@
-"""DiffMethod 注册表：按规范名或别名查询梯度方法、解析 fn。
+"""DiffMethod 注册表：按规范名或别名查询微分方法、解析 fn。
 
-NEXT.md §6 第一片。内置 fn-based 全梯度方法在导入时注册一次：
-``psr``/``fd``/``auto``/``spsa``/``spsr``。``mpsr`` 因返回标量混合偏导、
-不满足 ``(fn, params) -> 梯度向量`` 契约，刻意排除（仍可用 ``qml.mpsr``）。
+NEXT.md §6。内置方法在导入时注册一次，按 ``category`` 分三类：
+
+- ``fn_gradient``：``psr``/``fd``/``auto``/``spsa``/``spsr``；
+- ``circuit_gradient``：``ad``（伴随微分）；
+- ``preconditioner``：``qng``/``bdqng``/``kqng``/``dqng``。
+
+``mpsr`` 因返回标量混合偏导、不满足任何统一契约，刻意排除（仍可用 ``qml.mpsr``）。
+``resolve_diff``/``select_diff`` 只对 ``fn_gradient`` 生效，保证经典优化器分发安全；
+``ad``/``qng`` 族仅供 ``get_diff``/``registered_diffs(category=...)`` 检索发现。
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
-from ..deriv import auto, fd, psr, spsa, spsr
+from ..deriv import ad, auto, bdqng, dqng, fd, kqng, psr, qng, spsa, spsr
 from .spec import DiffMethod
 
 _REGISTRY: dict[str, DiffMethod] = {}
@@ -56,10 +62,12 @@ def get_diff(name: str) -> DiffMethod | None:
     return _LOOKUP.get(str(name))
 
 
-def registered_diffs() -> tuple[str, ...]:
-    """返回全部已注册方法的规范名。"""
+def registered_diffs(category: str | None = None) -> tuple[str, ...]:
+    """返回已注册方法的规范名；``category`` 非空时按类别过滤。"""
 
-    return tuple(_REGISTRY)
+    if category is None:
+        return tuple(_REGISTRY)
+    return tuple(name for name, spec in _REGISTRY.items() if spec.category == category)
 
 
 def canonical_diff(name: str) -> str:
@@ -70,12 +78,17 @@ def canonical_diff(name: str) -> str:
 
 
 def resolve_diff(name: str) -> Callable[..., Any]:
-    """返回方法对应的可调用 ``fn``；未注册名抛 ``ValueError`` 并列出已注册方法。"""
+    """返回 ``fn_gradient`` 方法对应的可调用 ``fn``。
+
+    仅解析 ``(fn, params) -> 梯度向量`` 契约的方法，供经典优化器统一分发；
+    未注册名、或 ``circuit_gradient``/``preconditioner`` 类别（如 ``ad``/``qng``）
+    均抛 ``ValueError``。
+    """
 
     spec = _LOOKUP.get(str(name))
-    if spec is None:
-        available = ", ".join(sorted(registered_diffs()))
-        raise ValueError(f"unknown diff method {name!r}; registered methods: {available}")
+    if spec is None or spec.category != "fn_gradient":
+        available = ", ".join(sorted(registered_diffs(category="fn_gradient")))
+        raise ValueError(f"unknown fn-gradient method {name!r}; registered methods: {available}")
     return spec.fn
 
 
@@ -121,10 +134,13 @@ def select_diff(*, backend: Any = None, shots: Any = None, noisy: bool = False) 
 
 
 # ---------------------------------------------------------------------------
-# 内置 fn-based 全梯度方法（与 deriv.py 中函数一一对应）
+# 内置微分方法（与 deriv.py 中函数一一对应）。capability 字段只为 fn_gradient
+# 的 select_diff 服务；circuit_gradient/preconditioner 均从态向量求值，故标注
+# supports_shots/noise=False。
 # ---------------------------------------------------------------------------
 
 _STANDARD_METHODS = (
+    # fn_gradient: (fn, params) -> 梯度向量
     DiffMethod("psr", psr, exact=True),
     DiffMethod("fd", fd),
     DiffMethod(
@@ -133,6 +149,16 @@ _STANDARD_METHODS = (
     ),
     DiffMethod("spsa", spsa, stochastic=True),
     DiffMethod("spsr", spsr, stochastic=True),
+    # circuit_gradient: (circuit, observable) -> 梯度（伴随微分，精确，需态向量）
+    DiffMethod(
+        "ad", ad, category="circuit_gradient", exact=True,
+        supports_shots=False, supports_noise=False,
+    ),
+    # preconditioner: (fn, state_fn, params) -> 方向/度规（量子自然梯度族，需态向量）
+    DiffMethod("qng", qng, category="preconditioner", supports_shots=False, supports_noise=False),
+    DiffMethod("bdqng", bdqng, category="preconditioner", supports_shots=False, supports_noise=False),
+    DiffMethod("kqng", kqng, category="preconditioner", supports_shots=False, supports_noise=False),
+    DiffMethod("dqng", dqng, category="preconditioner", supports_shots=False, supports_noise=False),
 )
 
 for _spec in _STANDARD_METHODS:

@@ -7,7 +7,7 @@ from aicir import (
     Operation as TopLevelOperation,
 )
 from aicir.backends import NumpyBackend
-from aicir.operators import Hamiltonian
+from aicir.core.operators import Hamiltonian
 from aicir.core.circuit import Circuit, Parameter
 from aicir.ir import Operation, normalize_gate
 

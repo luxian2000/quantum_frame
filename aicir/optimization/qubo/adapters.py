@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from ...operators import Hamiltonian
+from ...core.operators import Hamiltonian
 from .modeling.backends import IsingModel, QAOATerm
 
 

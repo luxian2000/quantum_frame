@@ -349,7 +349,7 @@ def test_ad_returns_expectation_value_when_requested():
 
 
 def test_ad_accepts_hamiltonian_observable():
-    from aicir.operators import Hamiltonian
+    from aicir.core.operators import Hamiltonian
 
     backend = NumpyBackend()
     circuit = Circuit(ry(0.5, 0), n_qubits=1)

@@ -76,7 +76,7 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | 参数        | 说明                                                                            |
 | ----------- | ------------------------------------------------------------------------------- |
 | `fn`      | 接受 `torch.Tensor`（`requires_grad=True`）参数，返回可微标量张量的目标函数 |
-| `backend` | Torch/NPU 后端（决定参数的 dtype 和 device，默认 CPU GPUBackend）             |
+| `backend` | Torch/NPU 后端（决定参数的 dtype 和 device，默认 CPU GPUBackend）               |
 
 #### `psr(fn, params, *, shift=π/2, coefficient=0.5)`
 
@@ -120,12 +120,12 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 
 #### `ad(circuit, observable, *, backend=None, return_value=False)`
 
-| 参数             | 说明                                                                      |
-| ---------------- | ------------------------------------------------------------------------- |
+| 参数             | 说明                                                                          |
+| ---------------- | ----------------------------------------------------------------------------- |
 | `circuit`      | 完全绑定参数的 `Circuit` 对象（含 `rx/ry/rz/crx/cry/crz/rzz/rxx` 可微门） |
-| `observable`   | Hermitian 算符矩阵或 `Hamiltonian` 对象                                 |
-| `backend`      | 计算后端（默认 `NumpyBackend`）                                         |
-| `return_value` | 若为 `True`，同时返回期望值 `⟨O⟩`                                   |
+| `observable`   | Hermitian 算符矩阵或 `Hamiltonian` 对象                                     |
+| `backend`      | 计算后端（默认 `NumpyBackend`）                                             |
+| `return_value` | 若为 `True`，同时返回期望值 `⟨O⟩`                                       |
 
 #### `qng(fn, state_fn, params, *, grad=None, qfim=None, gradient_method="psr", gradient_kwargs=None, shift=π/2, coefficient=0.5, metric_eps=1e-3, damping=1e-6, backend=None, return_gradient=False, return_qfim=False)`
 
@@ -880,20 +880,26 @@ theta, value = rotosolve(objective, np.array([0.5]), return_value=True)
 
 上面的 `deriv.py` 把每种梯度方法实现为独立函数；`aicir/qml/diff/` 在其上叠加一层**策略注册表**，把 fn-based 全梯度方法（统一契约 `(fn, params, **kw) -> 梯度向量`）按名字单点登记，便于按字符串解析、按上下文自动选择、以及注册自定义方法。它镜像 `aicir/gates/` 的 `GateSpec` 注册表习惯，全部 API 从 `aicir.qml` 顶层再导出。
 
-内置注册的 5 个方法：`psr` / `fd` / `auto` / `spsa` / `spsr`。`mpsr` 有意**不**纳入注册表（它返回标量混合偏导，不满足全梯度契约），仍可作为 `qml.mpsr` 直接调用；电路型 `ad` 与预条件 `qng/bdqng/kqng/dqng` 也不在注册表内（非 fn-based）。
+注册表按 `category` 索引**全部** 10 个内置方法，分三类（契约各异）：
+
+- `fn_gradient`（`(fn, params) -> 梯度向量`）：`psr` / `fd` / `auto` / `spsa` / `spsr`；**唯一**参与 `resolve_diff`/`select_diff` 自动分发的类别。
+- `circuit_gradient`（`(circuit, observable) -> 梯度`）：`ad`（伴随微分）。
+- `preconditioner`（`(fn, state_fn, params) -> 方向/度规`）：`qng` / `bdqng` / `kqng` / `dqng`。
+
+`mpsr` 有意**不**纳入注册表（它返回标量混合偏导，不满足任何统一契约），仍可作为 `qml.mpsr` 直接调用。`ad` 与 `qng` 族虽登记入表（供 `get_diff`/`registered_diffs(category=...)` 检索发现），但 `resolve_diff` 仅解析 `fn_gradient`——`resolve_diff('ad'|'qng')` 抛 `ValueError`，确保经典优化器不会拿到签名不兼容的可调用。
 
 ### API 一览
 
-| 函数 | 说明 |
-| --- | --- |
-| `DiffMethod` | 冻结数据类，描述一个方法：`name`、`fn`、`aliases`、`exact`、`stochastic`、`requires_torch`、`supports_shots`、`supports_noise` |
-| `register_diff(spec, *, overwrite=False)` | 注册一个 `DiffMethod`；名称/别名冲突时报错 |
-| `unregister_diff(name)` | 注销一个方法（含别名），未注册则静默 |
-| `get_diff(name) -> DiffMethod \| None` | 按规范名或别名查 spec，未注册返回 `None` |
-| `registered_diffs() -> tuple[str, ...]` | 返回全部已注册方法的规范名 |
-| `canonical_diff(name) -> str` | 别名 → 规范名；未注册名原样返回 |
-| `resolve_diff(name) -> Callable` | 返回方法对应的可调用 `fn`；未注册名抛 `ValueError`（信息列出已注册方法） |
-| `select_diff(*, backend=None, shots=None, noisy=False) -> str` | 按上下文选择方法名（纯函数） |
+| 函数                                                             | 说明                                                                                                                                                         |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DiffMethod`                                                   | 冻结数据类，描述一个方法：`name`、`fn`、`aliases`、`category`、`exact`、`stochastic`、`requires_torch`、`supports_shots`、`supports_noise` |
+| `register_diff(spec, *, overwrite=False)`                      | 注册一个 `DiffMethod`；名称/别名冲突时报错                                                                                                                 |
+| `unregister_diff(name)`                                        | 注销一个方法（含别名），未注册则静默                                                                                                                         |
+| `get_diff(name) -> DiffMethod \| None`                          | 按规范名或别名查 spec，未注册返回 `None`                                                                                                                   |
+| `registered_diffs(category=None) -> tuple[str, ...]`           | 返回已注册方法的规范名；`category` 非空时按类别过滤                                                                                                        |
+| `canonical_diff(name) -> str`                                  | 别名 → 规范名；未注册名原样返回                                                                                                                             |
+| `resolve_diff(name) -> Callable`                               | 返回 `fn_gradient` 方法的 `fn`；未注册名或非 `fn_gradient` 类别（如 `ad`/`qng`）抛 `ValueError`                                                  |
+| `select_diff(*, backend=None, shots=None, noisy=False) -> str` | 按上下文选择方法名（纯函数）                                                                                                                                 |
 
 ### `select_diff` 选择策略
 
@@ -904,7 +910,8 @@ theta, value = rotosolve(objective, np.array([0.5]), return_value=True)
 ```python
 from aicir.qml import resolve_diff, select_diff, registered_diffs
 
-registered_diffs()                 # ('psr', 'fd', 'auto', 'spsa', 'spsr')
+registered_diffs()                 # 全部 10 项（含 ad/qng 族）
+registered_diffs(category="fn_gradient")  # ('psr', 'fd', 'auto', 'spsa', 'spsr')
 
 grad_fn = resolve_diff("psr")      # 即 deriv.psr 本身
 # grad = grad_fn(objective, params)
@@ -940,7 +947,43 @@ register_diff(DiffMethod("mygrad", my_grad, exact=False))
 unregister_diff("mygrad")
 ```
 
-> `select_diff` 目前已实现并单测，但尚未接入任何调用方（保留给后续 PennyLane 风格 QNode）。当前自动选择仅在用户显式调用 `select_diff` 时生效。
+> `select_diff` 的首个调用方是下面的 `qfun`：`@qfun(..., diff_method="auto")` 的 `.grad` 即经 `select_diff(backend, shots, noisy)` 自动择优。
+
+## 16. 量子函数 `qfun`（`aicir.qml.qfun`）
+
+`qfun` 把"量子函数 + 设备 + 测量 + 梯度"统一成一个可调用对象，是上面注册表的高层消费方。约定：被装饰的函数**构造并返回一个 `Circuit`**（不依赖全局 tape），观测量在装饰器上用 `observable=` 声明；调用得期望值，`.grad` 得梯度。
+
+```python
+from aicir import Circuit, Hamiltonian, ry
+from aicir.qml import qfun
+
+H = Hamiltonian([("Z", 1.0)])
+
+@qfun(device="numpy", diff_method="psr", observable=H)
+def cost(theta):
+    c = Circuit(n_qubits=1)
+    c.append(ry(theta, 0))
+    return c
+
+cost(0.3)        # 期望值 <H> = cos(0.3)
+cost.grad(0.3)   # 梯度 = -sin(0.3)
+```
+
+### 装饰器参数
+
+| 参数            | 默认        | 说明                                                                                                           |
+| --------------- | ----------- | -------------------------------------------------------------------------------------------------------------- |
+| `device`      | `"numpy"` | 后端：`numpy`/`cpu` → `NumpyBackend`，`gpu`/`torch` → `GPUBackend`，`npu` → `NPUBackend`    |
+| `diff_method` | `"psr"`   | 梯度方法名，经 §15 注册表 `resolve_diff` 解析（仅 `fn_gradient`）；`"auto"` 走 `select_diff` 自动择优 |
+| `observable`  | 必填        | 可观测量（如 `Hamiltonian`），经 `observable.to_matrix(backend)` 求矩阵                                    |
+| `shots`       | `None`    | `None`/`0` 为精确期望；正整数走 shot 估计                                                                  |
+
+### 行为约定
+
+- 函数体必须返回 `Circuit`，否则抛 `TypeError`；返回线路含未绑定参数抛 `ValueError`。
+- 支持单个可训练位置参数（标量或一维数组）；`grad` 返回与输入同形（标量入 → 标量出）。
+- `diff_method="auto"` 在非 Torch 后端降级为 `psr`，有 shots/噪声时同样回退（见 §15 选择策略）。
+- 观测量声明在装饰器（而非函数体内 `return expval(H)`），故暂不提供 `expval` 帮助器。
 
 ---
 
