@@ -34,7 +34,7 @@ from ...core.circuit import Circuit, cx, hadamard, rx, ry, rz, rzz
 from ...core.gates import apply_gate_to_state, gate_to_matrix
 from ...ir import circuit_instructions
 from ...qml.deriv import psr
-from ..primitives.sharding import (
+from ..core.sharding import (
     shard_context,
     owned_indices,
     all_gather,

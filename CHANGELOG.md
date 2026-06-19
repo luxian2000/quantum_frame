@@ -42,6 +42,15 @@
 
 ### Changed
 
+- **QAS 结构简化（安全片）：解散误命名的 `aicir.qas.primitives`，并消除重名 `sharding`。**
+  - `qas/primitives/` 与顶层 `aicir.primitives`（Sampler/Estimator）名称冲突、内容也非「primitives」，整体解散：
+    `ansatz.py` → `qas/library/`，`backend_utils.py` 与 NPU `sharding.py` → `qas/core/`。
+  - `qas/vqe_loop/sharding.py`（fair-label 队列分片 CLI 调度器）改名 `shard_scheduler.py`，与
+    `core/sharding.py`（NPU 集合通信原语）区分；CLI 命令相应改为
+    `python -m aicir.qas.vqe_loop.shard_scheduler`。
+  - 纯文件搬迁 + import 路径更新，无行为变化；导入改为
+    `from aicir.qas.library.ansatz import ...` / `from aicir.qas.core.backend_utils import ...` /
+    `from aicir.qas.core.sharding import ...`。
 - **线路结构优化统一收归 `aicir.transpile`，并移除与 `aicir.optimizer` 的重复实现。**
   - `aicir.optimizer.circuit` 模块整体移除；其中重复的本地化简规则（与
     `transpile/passes/_local_rewrite.py` 逐行重复）不再保留，门字典列表的不动点
