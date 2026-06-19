@@ -4,6 +4,25 @@
 
 ## 2026-06-19
 
+### Added
+
+- **`DiffMethod` 注册表第二片（NEXT.md §6）：按 `category` 索引全部内置微分方法。**
+  - `DiffMethod` 新增 `category` 字段（`__post_init__` 校验），取值
+    `fn_gradient`（`(fn, params) -> 梯度向量`）/ `circuit_gradient`
+    （`(circuit, observable) -> 梯度`）/ `preconditioner`
+    （`(fn, state_fn, params) -> 方向/度规`）。
+  - 注册表新增内置项：`ad`（`circuit_gradient`，伴随微分）与 `qng`/`bdqng`/
+    `kqng`/`dqng`（`preconditioner`，量子自然梯度族）；连同原有
+    `psr`/`fd`/`auto`/`spsa`/`spsr` 共十项。
+  - `registered_diffs(category=None)` 支持按类别过滤检索。
+  - 契约安全：`resolve_diff` 与 `select_diff` **仅对 `fn_gradient` 生效**——
+    `resolve_diff('ad'|'qng'|...)` 抛 `ValueError`，避免经典优化器拿到签名
+    不兼容的可调用；`ad`/`qng` 族仅经 `get_diff`/`registered_diffs(category=...)`
+    发现。`mpsr` 仍有意不纳入。
+  - capability 字段（`exact`/`stochastic`/`requires_torch`/`supports_*`）只服务
+    `fn_gradient` 的 `select_diff` 优选；`ad`/`qng` 族从态向量求值，标注
+    `supports_shots/noise=False`。
+
 ### Changed
 
 - **线路结构优化统一收归 `aicir.transpile`，并移除与 `aicir.optimizer` 的重复实现。**

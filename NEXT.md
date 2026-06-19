@@ -203,7 +203,11 @@ grad = cost.grad(0.1)
 
 QNode、Estimator 和参数优化器可以通过同一策略表选择梯度实现。
 
-当前状态：第一片已落地。新增子包 `aicir.qml.diff`（`spec.py` 定义冻结数据类 `DiffMethod`，字段含 `name`/`fn`/`aliases`/`exact`/`stochastic`/`requires_torch`/`supports_shots`/`supports_noise`；`registry.py` 实现注册表与选择器），并从 `aicir.qml` 顶层再导出。注册表公开 API：`register_diff`/`unregister_diff`/`get_diff`/`registered_diffs`/`canonical_diff`/`resolve_diff`；纯函数选择器 `select_diff(*, backend=None, shots=None, noisy=False)` 按 auto → psr → fd 优先级自动选择（`spsa`/`spsr` 不参与自动选择）。内置注册的 fn-based 全梯度方法为 `psr`/`fd`/`auto`/`spsa`/`spsr` 五项；`mpsr`（返回标量混合偏导而非梯度向量）**有意不纳入注册表**，仍作为 `qml.mpsr` 直接可用。注册范围为 fn-based 全梯度方法；基于线路的 `ad` 与预条件策略 `qng` 不在注册表中。`aicir/optimizer/params.py` 的 `_gradient_from_method` 已改为经 `resolve_diff` 分发，使 `GD`/`Adam`/`ScipyMinimize` 可统一访问所有内置方法；对 `requires_torch=True` 的方法（即 `auto`）在经典黑盒目标路径上加守卫并抛出明确错误。`select_diff` 已有单元测试，但**尚未接入任何调用方**（保留给 NEXT.md §5 的 QNode 使用）。`aicir/qml/deriv.py` 未改动；`vqc`/`qas` 保持原有 `from ..qml.deriv import psr` 路径，参数移位单一实现不变。
+当前状态：第一、二片已落地。新增子包 `aicir.qml.diff`（`spec.py` 定义冻结数据类 `DiffMethod`，字段含 `name`/`fn`/`aliases`/`category`/`exact`/`stochastic`/`requires_torch`/`supports_shots`/`supports_noise`；`registry.py` 实现注册表与选择器），并从 `aicir.qml` 顶层再导出。注册表公开 API：`register_diff`/`unregister_diff`/`get_diff`/`registered_diffs(category=None)`/`canonical_diff`/`resolve_diff`；纯函数选择器 `select_diff(*, backend=None, shots=None, noisy=False)` 按 auto → psr → fd 优先级自动选择（`spsa`/`spsr` 不参与自动选择）。
+
+第二片：注册表按 `category` 分三类索引**全部**内置微分方法——`fn_gradient`（`(fn, params) -> 梯度向量`：`psr`/`fd`/`auto`/`spsa`/`spsr`）、`circuit_gradient`（`(circuit, observable) -> 梯度`：`ad` 伴随微分）、`preconditioner`（`(fn, state_fn, params) -> 方向/度规`：`qng`/`bdqng`/`kqng`/`dqng`）。`category` 在 `DiffMethod.__post_init__` 校验。`registered_diffs(category=...)` 可按类别过滤检索。契约安全：`resolve_diff` 与 `select_diff` **只对 `fn_gradient` 生效**——`resolve_diff('ad'|'qng'|...)` 抛 `ValueError`，保证经典优化器分发不会拿到签名不兼容的可调用；`ad`/`qng` 族仅供 `get_diff`/`registered_diffs(category=...)` 检索发现。`mpsr`（返回标量混合偏导）仍**有意不纳入注册表**，作为 `qml.mpsr` 直接可用。capability 字段（`exact`/`stochastic`/`requires_torch`/`supports_*`）只为 `fn_gradient` 的 `select_diff` 优选服务；`ad` 与 `qng` 族均从态向量求值，标注 `supports_shots/noise=False`。
+
+`aicir/optimizer/params.py` 的 `_gradient_from_method` 已改为经 `resolve_diff` 分发，使 `GD`/`Adam`/`ScipyMinimize` 可统一访问所有内置 fn-gradient 方法；对 `requires_torch=True` 的方法（即 `auto`）在经典黑盒目标路径上加守卫并抛出明确错误。`select_diff` 已有单元测试，但**尚未接入任何调用方**（保留给 NEXT.md §5 的 QNode 使用——QNode 尚未实现，此项依赖 §5）。`aicir/qml/deriv.py` 未改动；`vqc`/`qas` 保持原有 `from ..qml.deriv import psr` 路径，参数移位单一实现不变。
 
 ### 7. 建立 GateSpec 注册表
 
