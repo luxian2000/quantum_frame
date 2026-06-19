@@ -2,7 +2,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from aicir.qas.primitives.sharding import (
+from aicir.qas.core.sharding import (
     ShardContext,
     owned_indices,
     shard_context,

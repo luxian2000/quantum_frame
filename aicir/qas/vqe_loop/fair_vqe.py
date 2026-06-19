@@ -19,7 +19,7 @@ from ...metrics.circuit_structure import parameter_count
 from ...optimizer import COBYLA
 from ...vqc import BasicVQE
 from ..core._types import ArchitectureSpec
-from ..primitives.backend_utils import resolve_qas_backend
+from ..core.backend_utils import resolve_qas_backend
 from ..problems.hamiltonians import VQEProblem, h2_demo_problem, hamiltonian_matrix
 
 

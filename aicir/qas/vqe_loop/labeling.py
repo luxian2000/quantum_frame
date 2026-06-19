@@ -22,13 +22,13 @@ import numpy as np
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from aicir.qas.primitives.ansatz import (
+from aicir.qas.library.ansatz import (
     HEAMask,
     LayerwiseAnsatzGene,
     architecture_from_layerwise_gene,
     architecture_from_hea_mask,
 )
-from aicir.qas.primitives.backend_utils import resolve_qas_backend
+from aicir.qas.core.backend_utils import resolve_qas_backend
 from aicir.qas.vqe_loop.fair_vqe import (
     fair_vqe_final_maxfev,
     optimize_vqe_energy,
