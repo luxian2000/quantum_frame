@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable
 from typing import Any
 
@@ -9,6 +10,9 @@ import numpy as np
 
 from ...core.circuit import Circuit
 from ...ir import instruction_to_gate_dict
+
+_DEFAULT_MAX_ROUNDS = 64
+_DEFAULT_MAX_REORDER_HOPS = 8
 
 
 def _gate_family_from_name(name: str) -> str | None:
@@ -249,3 +253,42 @@ def commute_single_qubit_gates(
             continue
         out.append(gate)
     return out
+
+
+def _optimize_gate_dict_list(
+    gates: Iterable[dict[str, Any]], *, max_reorder_hops: int = _DEFAULT_MAX_REORDER_HOPS
+) -> list[dict[str, Any]]:
+    """单趟交错执行 commute/cancel/merge 规则。"""
+
+    out: list[dict[str, Any]] = []
+    for g in gates:
+        gate = copy.deepcopy(g)
+        if _is_single_qubit_gate(gate) and _consume_single_qubit_gate_by_lookback(
+            out, gate, max_reorder_hops=max_reorder_hops
+        ):
+            continue
+        if out and _try_consume_against_gate_at(out, len(out) - 1, gate):
+            continue
+        out.append(gate)
+    return out
+
+
+def optimize_gates(
+    gates: Iterable[dict[str, Any]],
+    *,
+    max_rounds: int = _DEFAULT_MAX_ROUNDS,
+    max_reorder_hops: int = _DEFAULT_MAX_REORDER_HOPS,
+) -> list[dict[str, Any]]:
+    """对门字典列表反复应用本地化简规则，直到不动点。
+
+    本地化简规则的单一来源；``optimize_basic`` 的 dict/dag 路径与
+    transpile 的 pass 流水线都从这里取规则。
+    """
+
+    current = [instruction_to_gate_dict(gate) for gate in copy.deepcopy(list(gates))]
+    for _ in range(max_rounds):
+        nxt = _optimize_gate_dict_list(current, max_reorder_hops=max_reorder_hops)
+        if nxt == current:
+            return nxt
+        current = nxt
+    return current

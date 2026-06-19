@@ -2,6 +2,25 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-19
+
+### Changed
+
+- **线路结构优化统一收归 `aicir.transpile`，并移除与 `aicir.optimizer` 的重复实现。**
+  - `aicir.optimizer.circuit` 模块整体移除；其中重复的本地化简规则（与
+    `transpile/passes/_local_rewrite.py` 逐行重复）不再保留，门字典列表的不动点
+    化简统一为 `_local_rewrite.optimize_gates`（规则单一来源）。
+  - `optimize_basic` / `optimize_circuit`（多格式：dict / OpenQASM 文本 / DAG）迁至
+    `aicir.transpile.rewrite`，并由 `aicir.transpile` 导出。`aicir.optimizer` 现仅提供
+    经典参数优化器（`Adam`/`SPSA`/`minimize` 等）。
+  - `aicir.transpile.default_optimization_pipeline()` 重命名为
+    `aicir.transpile.optimize(circuit) -> Circuit`（直接返回优化后的新线路，
+    等价于旧的 `default_optimization_pipeline().run(circuit)`）；不再保留旧名。
+    `optimize_circuit(circuit)` 为其 Circuit 专用别名。
+  - 受影响导入：`from aicir.optimizer import optimize_basic/optimize_circuit`
+    → `from aicir.transpile import optimize_basic/optimize_circuit`；
+    `default_optimization_pipeline` → `optimize`。
+
 ## 2026-06-18
 
 ### Added
