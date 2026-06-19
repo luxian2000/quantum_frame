@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import config as qas_config
+from .registry import get_strategy
+from ..algorithms import strategies as _strategies  # noqa: F401  注册内置策略（import 副作用）
 from ..algorithms.CRLQAS import train_crlqas
 from ..algorithms.PPO_RB import ppo_rb_qas
 from ..algorithms.PPR_DQL import train_ppr_dql
-from ..algorithms.supernet import classification_supernet, h2_vqe_supernet, train_supernet
+from ..algorithms.supernet import classification_supernet, h2_vqe_supernet
 
 QASMethod = str
 
@@ -60,13 +62,11 @@ def run(request: QASRunConfig | QASMethod, **kwargs: Any) -> Any:
     run_config = _as_run_config(request, kwargs)
     method = qas_config.canonical_method(run_config.method)
 
-    if method == "supernet":
-        return train_supernet(
-            objective=run_config.objective,
-            config=run_config.config,
-            dataset=run_config.dataset,
-            hamiltonian=run_config.hamiltonian,
-        )
+    # 已迁移为 SearchStrategy 的方法走注册表；未注册的回落到下方旧分支。
+    strategy = get_strategy(method)
+    if strategy is not None:
+        return strategy.run(run_config)
+
     if method == "supernet_classification":
         return classification_supernet(config=run_config.config)
     if method == "supernet_h2":

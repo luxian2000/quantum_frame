@@ -93,6 +93,21 @@ result = run("supernet", config=cfg)
 from aicir.qas import config, run
 ```
 
+### 2.1 SearchStrategy 协议与策略注册表（模块化进行中）
+
+`run(method, ...)` 的方法分发正从硬编码 `if` 链迁移为**策略注册表**，与
+`aicir.qml.diff`（`DiffMethod`）、`aicir.gates`（`GateSpec`）同一习惯：
+
+- `aicir.qas.core.strategy.SearchStrategy`：抽象基类，每种算法实现 `run(request) -> 结果`。
+- `aicir.qas.core.registry`：`StrategySpec`（`name`/`strategy`/`aliases`/`requires_torch`）
+  + `register_strategy`/`get_strategy`/`get_spec`/`registered_strategies`/`unregister_strategy`。
+- 内置策略在 `aicir.qas.algorithms.strategies` 中适配并注册（import 副作用）。
+
+`run()` 先查注册表：命中则走 `strategy.run(run_config)`，未命中回落到旧分支。
+当前**仅 `supernet` 已迁移**为 `SupernetStrategy`；`ppo_rb`/`ppr_dql`/`crlqas`/
+`supernet_classification`/`supernet_h2` 仍走旧分支，行为不变，后续逐个适配。
+对用户而言 `run("supernet", ...)` 调用方式与返回值完全不变。
+
 ## 3. supernet：面向变分量子算法的超网络架构搜索
 
 `supernet.py` 面向 VQA ansatz 结构搜索，使用一阶段超网络、按层权重共享、架构排序和选中 ansatz 微调。
