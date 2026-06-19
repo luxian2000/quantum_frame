@@ -947,7 +947,7 @@ register_diff(DiffMethod("mygrad", my_grad, exact=False))
 unregister_diff("mygrad")
 ```
 
-> `select_diff` 的首个调用方是下面的 `qfun`：`@qfun(..., diff_method="auto")` 的 `.grad` 即经 `select_diff(backend, shots, noisy)` 自动择优。
+> `select_diff` 的首个调用方是下面的 `qfun`：`@qfun(..., differential="auto")` 的 `.grad` 即经 `select_diff(backend, shots, noisy)` 自动择优。
 
 ## 16. 量子函数 `qfun`（`aicir.qml.qfun`）
 
@@ -959,7 +959,7 @@ from aicir.qml import qfun
 
 H = Hamiltonian([("Z", 1.0)])
 
-@qfun(device="numpy", diff_method="psr", observable=H)
+@qfun(device="numpy", differential="psr", observable=H)
 def cost(theta):
     c = Circuit(n_qubits=1)
     c.append(ry(theta, 0))
@@ -974,7 +974,7 @@ cost.grad(0.3)   # 梯度 = -sin(0.3)
 | 参数            | 默认        | 说明                                                                                                           |
 | --------------- | ----------- | -------------------------------------------------------------------------------------------------------------- |
 | `device`      | `"numpy"` | 后端：`numpy`/`cpu` → `NumpyBackend`，`gpu`/`torch` → `GPUBackend`，`npu` → `NPUBackend`    |
-| `diff_method` | `"psr"`   | 梯度方法名，经 §15 注册表 `resolve_diff` 解析（仅 `fn_gradient`）；`"auto"` 走 `select_diff` 自动择优 |
+| `differential` | `"psr"`   | 梯度方法名，经 §15 注册表 `resolve_diff` 解析（仅 `fn_gradient`）；`"auto"` 走 `select_diff` 自动择优 |
 | `observable`  | 必填        | 可观测量（如 `Hamiltonian`），经 `observable.to_matrix(backend)` 求矩阵                                    |
 | `shots`       | `None`    | `None`/`0` 为精确期望；正整数走 shot 估计                                                                  |
 
@@ -982,7 +982,7 @@ cost.grad(0.3)   # 梯度 = -sin(0.3)
 
 - 函数体必须返回 `Circuit`，否则抛 `TypeError`；返回线路含未绑定参数抛 `ValueError`。
 - 支持单个可训练位置参数（标量或一维数组）；`grad` 返回与输入同形（标量入 → 标量出）。
-- `diff_method="auto"` 在非 Torch 后端降级为 `psr`，有 shots/噪声时同样回退（见 §15 选择策略）。
+- `differential="auto"` 在非 Torch 后端降级为 `psr`，有 shots/噪声时同样回退（见 §15 选择策略）。
 - 观测量声明在装饰器（而非函数体内 `return expval(H)`），故暂不提供 `expval` 帮助器。
 
 ---
