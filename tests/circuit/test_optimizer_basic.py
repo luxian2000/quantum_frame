@@ -2,7 +2,7 @@ import numpy as np
 
 from aicir.core.circuit import Circuit
 from aicir.core.io.dag import circuit_to_dag
-from aicir.optimizer import optimize_basic
+from aicir.transpile import optimize_basic
 
 
 def test_optimize_basic_dict_cancellations():
@@ -185,7 +185,7 @@ def test_optimize_basic_dict_safe_limited_reorder_not_cross_non_commuting_cnot_c
 
 
 def test_optimize_circuit_public_entry_optimizes_circuit_objects():
-    from aicir.optimizer import optimize_circuit
+    from aicir.transpile import optimize_circuit
 
     circuit = Circuit(
         {"type": "hadamard", "target_qubit": 0},

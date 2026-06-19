@@ -16,7 +16,7 @@ torch = pytest.importorskip("torch")
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from aicir.operators import Hamiltonian
+from aicir.core.operators import Hamiltonian
 from aicir.qas.algorithms.supernet import supernet_qas
 
 

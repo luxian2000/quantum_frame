@@ -201,7 +201,7 @@ from aicir import (
 from aicir.qml import psr, spsr, multipsr
 
 # 线路编译与优化 pass pipeline
-from aicir.transpile import PassManager, default_optimization_pipeline
+from aicir.transpile import PassManager, optimize, optimize_basic, optimize_circuit
 
 # 门元信息注册表（GateSpec）
 from aicir.gates import GateSpec, get_gate_spec, register_gate, canonical_gate_name
@@ -1061,11 +1061,11 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 | `aicir/gates`             | [`aicir/gates/README.md`](aicir/gates/README.md)                         | GateSpec 门元信息注册表：目标比特数/参数个数/别名/QASM 名/绘图符号的单一来源。             |
 | `aicir/metrics`           | [`aicir/metrics/README.md`](aicir/metrics/README.md)                     | 任务无关的量子线路评分指标，供 QAS、VQE ansatz 筛选等架构层任务复用。                      |
 | `aicir/optimization/qubo` | [`aicir/optimization/qubo/README.md`](aicir/optimization/qubo/README.md) | QUBO 建模、Ising/Hamiltonian 转换、BasicQAOA 矩阵入口与结果解码。                          |
-| `aicir/optimizer`         | [`aicir/optimizer/README.md`](aicir/optimizer/README.md)                 | `aicir.optimizer.circuit` 的线路化简、旋转门合并和固定点优化策略。                       |
+| `aicir/optimizer`         | [`aicir/optimizer/README.md`](aicir/optimizer/README.md)                 | VQE/VQA 经典参数优化器（`Adam`/`SPSA`/`minimize` 等）；线路结构优化已迁至 `aicir.transpile`。 |
 | `aicir/primitives`        | [`aicir/primitives/README.md`](aicir/primitives/README.md)               | Sampler/Estimator primitives 统一执行入口与 `SampleResult`/`EstimateResult` 结果对象。 |
 | `aicir/qas`               | [`aicir/qas/README.md`](aicir/qas/README.md)                             | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。                                    |
 | `aicir/qml`               | [`aicir/qml/README.md`](aicir/qml/README.md)                             | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。                   |
-| `aicir/transpile`         | [`aicir/transpile/README.md`](aicir/transpile/README.md)                 | 线路编译与优化流水线，包含 `PassManager` 和本地线路化简 pass。                           |
+| `aicir/transpile`         | [`aicir/transpile/README.md`](aicir/transpile/README.md)                 | 线路编译与优化流水线：`PassManager`、`optimize` 入口、多格式 `optimize_basic`/`optimize_circuit` 与本地化简 pass。 |
 | `aicir/visual`           | [`aicir/visual/README.md`](aicir/visual/README.md)                     | 线路图、态向量/概率分布、密度矩阵热力图，以及 QAS / metrics 结果可视化。 |
 | `aicir/vqc`               | [`aicir/vqc/README.md`](aicir/vqc/README.md)                             | VQE、QAOA、VQD、SSVQE 等基础变分算法实现，以及可复用的参数化线路 ansatz 模板。             |
 | `demos`                   | [`demos/README.md`](demos/README.md)                                     | 演示 `aicir.visual` 模块的示例脚本，涵盖线路、态向量、密度矩阵和 QAS 结果可视化。        |

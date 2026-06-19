@@ -38,7 +38,7 @@ import torch
 import torch.nn as nn
 
 from ...backends.numpy_backend import NumpyBackend
-from ...operators import Hamiltonian
+from ...core.operators import Hamiltonian
 from ...core.circuit import Circuit
 from ...core.gates import gate_to_matrix
 from ...core.state import State

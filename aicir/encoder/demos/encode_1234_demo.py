@@ -16,7 +16,7 @@ from aicir.encoder.amplitude import AmplitudeEncoder
 from aicir.encoder.angle import AngleEncoder
 from aicir.encoder.basis import BasisEncoder
 from aicir.core.io.qasm import circuit_to_qasm3
-from aicir.optimizer import optimize_basic
+from aicir.transpile import optimize_basic
 
 
 def _angle_equivalent(a, b, atol=1e-6):

@@ -13,7 +13,7 @@ from typing import Iterable
 import numpy as np
 
 from ..backends.numpy_backend import NumpyBackend
-from ..operators import Hamiltonian
+from ..core.operators import Hamiltonian
 
 
 PauliTerm = tuple[complex, str]

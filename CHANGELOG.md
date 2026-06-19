@@ -2,6 +2,53 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-19
+
+### Added
+
+- **新增 PennyLane 风格量子函数 `qfun`（NEXT.md §5 第一片）。** 新模块 `aicir/qml/qfun.py`
+  导出 `qfun` 装饰器与 `QFun` 类，统一"量子函数 + 设备 + 测量 + 梯度"：
+  `@qfun(device=..., diff_method=..., observable=..., shots=None)` 包装一个**返回
+  `Circuit`** 的函数；`cost(x)` 得期望值，`cost.grad(x)` 得梯度。`device` 映射
+  `numpy`/`cpu`/`gpu`/`torch`/`npu` 后端；`diff_method` 经 `aicir.qml.diff` 注册表分发
+  （`"auto"` 走 `select_diff`——`qfun` 是 `select_diff` 的首个真实调用方），观测量经
+  `observable.to_matrix(backend)`、测量走 `Measure.run` 精确路径。支持单个可训练位置
+  参数（标量/一维数组）。设计上观测量声明在装饰器、函数体显式返回 `Circuit`（不依赖
+  全局 tape，规避门队列化的侵入与误捕获）；故暂不提供 `expval`。配套 `tests/qfun/test_qfun.py`。
+- **`DiffMethod` 注册表第二片（NEXT.md §6）：按 `category` 索引全部内置微分方法。**
+  - `DiffMethod` 新增 `category` 字段（`__post_init__` 校验），取值
+    `fn_gradient`（`(fn, params) -> 梯度向量`）/ `circuit_gradient`
+    （`(circuit, observable) -> 梯度`）/ `preconditioner`
+    （`(fn, state_fn, params) -> 方向/度规`）。
+  - 注册表新增内置项：`ad`（`circuit_gradient`，伴随微分）与 `qng`/`bdqng`/
+    `kqng`/`dqng`（`preconditioner`，量子自然梯度族）；连同原有
+    `psr`/`fd`/`auto`/`spsa`/`spsr` 共十项。
+  - `registered_diffs(category=None)` 支持按类别过滤检索。
+  - 契约安全：`resolve_diff` 与 `select_diff` **仅对 `fn_gradient` 生效**——
+    `resolve_diff('ad'|'qng'|...)` 抛 `ValueError`，避免经典优化器拿到签名
+    不兼容的可调用；`ad`/`qng` 族仅经 `get_diff`/`registered_diffs(category=...)`
+    发现。`mpsr` 仍有意不纳入。
+  - capability 字段（`exact`/`stochastic`/`requires_torch`/`supports_*`）只服务
+    `fn_gradient` 的 `select_diff` 优选；`ad`/`qng` 族从态向量求值，标注
+    `supports_shots/noise=False`。
+
+### Changed
+
+- **线路结构优化统一收归 `aicir.transpile`，并移除与 `aicir.optimizer` 的重复实现。**
+  - `aicir.optimizer.circuit` 模块整体移除；其中重复的本地化简规则（与
+    `transpile/passes/_local_rewrite.py` 逐行重复）不再保留，门字典列表的不动点
+    化简统一为 `_local_rewrite.optimize_gates`（规则单一来源）。
+  - `optimize_basic` / `optimize_circuit`（多格式：dict / OpenQASM 文本 / DAG）迁至
+    `aicir.transpile.rewrite`，并由 `aicir.transpile` 导出。`aicir.optimizer` 现仅提供
+    经典参数优化器（`Adam`/`SPSA`/`minimize` 等）。
+  - `aicir.transpile.default_optimization_pipeline()` 重命名为
+    `aicir.transpile.optimize(circuit) -> Circuit`（直接返回优化后的新线路，
+    等价于旧的 `default_optimization_pipeline().run(circuit)`）；不再保留旧名。
+    `optimize_circuit(circuit)` 为其 Circuit 专用别名。
+  - 受影响导入：`from aicir.optimizer import optimize_basic/optimize_circuit`
+    → `from aicir.transpile import optimize_basic/optimize_circuit`；
+    `default_optimization_pipeline` → `optimize`。
+
 ## 2026-06-18
 
 ### Added
@@ -16,6 +63,18 @@
   与 `supernet_qas(..., mode="safe"|"aggressive")`。仅在分布式 NPU 运行下生效，
   分片 training / ranking / finetune 三个阶段；`safe` 与单卡数值等价，`aggressive` 为数据并行。
   `demos/BeH2/BeH2_npu.py` 改为同种子单次分片搜索并新增 `--mode`。
+
+### Fixed
+
+- **BeH2 16 比特 NPU supernet QAS 运行被 `SIGKILL` 终止的排查与内存修复**：
+  远端执行 `torchrun --nproc_per_node=4 demos/BeH2/BeH2_npu.py` 时，4 个 rank 均成功初始化 NPU 后进入
+  `start sharded supernet search`，约 12 分钟后 torch elastic 报告 rank 3 `exitcode: -9`
+  / `Signal 9 (SIGKILL)`；Ascend TBE 后台线程随后输出的 `EOFError`、`ConnectionResetError` 判定为子进程被杀后的连带现象，而不是首要异常。该任务规模为 16 qubits、1313 个 Pauli 项、默认 `layers=4`、`supernet_num=6`、`supernet_steps=300`、`ranking_num=120`、`finetune_steps=500`，单次精确能量评估和训练反向图都很重。
+  - 第一次尝试：检查 `BeH2_npu.py` 与 `supernet.py` 后确认 `Hamiltonian` 没有走稠密矩阵路径，而是逐 Pauli 项计算期望；初步判断为 Pauli 项缓存、autograd 图与多 rank 并发共同导致内存压力，真正失败点是系统层 `SIGKILL`。结果：定位方向成立，但尚未改代码。
+  - 第二次尝试：把 Pauli 项缓存从每项常驻 `mapped_indices + phase_real + phase_imag` 改为 `mapped_indices + int8 phase_code`，希望减少两个 float phase 向量。结果：相关 supernet 测试通过，但本地 CPU 回退最小 BeH2 smoke 仍被 `exit code 137` 杀掉，说明仅压缩 phase 不够。
+  - 第三次尝试：进一步删除每项常驻 `mapped_indices`，改为共享 basis index 加每项 `flip_mask` 临时生成映射索引。结果：相关测试通过，但本地 smoke 仍被杀，说明除常驻索引外，纯评估/训练中的 autograd 图仍是重要内存来源。
+  - 第四次尝试：将 `demos/BeH2/BeH2_npu.py` 默认梯度切为参数移位（新增 `--gradient psr|ad`，默认 `psr`），并让参数移位黑盒评估与 `finetune_steps=0` 纯评估路径进入 `torch.no_grad()`，避免对 1313 个 Pauli 项构建不用的反向图；baseline 的 `finetune_steps=0` 也不再强制做一次 backward。结果：`pytest tests/test_supernet_sharding.py tests/test_vqa_qas.py -q` 通过（28 项）；本地 CPU 回退 16 比特 BeH2 smoke 仍可能因环境资源不足被 `exit code 137` 杀掉，但已消除两个明确的内存放大因素。
+  - 第五次尝试：将 Pauli 期望缓存进一步压缩为每项仅保存 `flip_mask`、`sign_mask`、`y_count mod 4` 与系数，完全不常驻 Pauli phase/index 大张量；求值时用共享 `basis_indices` 临时计算奇偶符号。结果：相关 supernet 测试继续通过；当前建议远端 NPU 先用默认 `--gradient psr` 重跑正式命令，若仍被杀，先用 `--layers 1 --supernet-num 1 --supernet-steps 1 --ranking-num 1 --finetune-steps 0` 做链路验证，再逐步放大规模。
 
 ## 2026-06-17
 

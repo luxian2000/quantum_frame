@@ -26,7 +26,7 @@ import torch
 
 from aicir import Circuit, Measure, TorchBackend, cnot, hadamard, measure, pauli_x, reset, ry
 from aicir.backends import NumpyBackend
-from aicir.operators import Hamiltonian
+from aicir.core.operators import Hamiltonian
 from aicir.core.circuit import crx, rxx, swap, toffoli
 from aicir.core.gates import apply_gate_to_state, gate_to_matrix
 from aicir.core.state import State

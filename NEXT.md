@@ -22,7 +22,7 @@
 `aicir` 已经具备较完整的研究型量子算法框架雏形：
 
 - `aicir.core` 提供 `Circuit`、门构造器、参数绑定和 QASM/JSON 互转。
-- `aicir.backends` 提供 NumPy、GPU、NPU 后端；`aicir.noise` 提供噪声模型；`aicir.operators` 提供 Pauli/Hamiltonian 算符（均已从旧 `aicir.channel` 上移到顶层）。
+- `aicir.backends` 提供 NumPy、GPU、NPU 后端；`aicir.noise` 提供噪声模型；`aicir.core.operators` 提供 Pauli/Hamiltonian 算符（顶层 `aicir` 仍再导出 `Hamiltonian`/`PauliOp`/`PauliString`）。
 - `aicir.measure` 提供测量、采样和 Pauli 项能量估计。
 - `aicir.optimizer` 提供线路结构优化和经典参数优化器。
 - `aicir.qml` 提供参数移位、有限差分、自动微分、伴随微分、量子自然梯度等方法。
@@ -38,7 +38,8 @@
 ```text
 aicir/
 |-- core/              # 保留：Circuit、Parameter、基础构造入口
-|   `-- io/            # QASM/JSON 等基础序列化
+|   |-- io/            # QASM/JSON 等基础序列化
+|   `-- operators.py   # 已落地：PauliOp/PauliString/Hamiltonian（顶层 aicir 再导出）
 |-- ir/                # 新增：Operation、Measurement、Observable、CircuitIR
 |-- gates/             # 新增：GateSpec 注册表、门元信息、分解规则
 |-- transpile/         # 新增：Pass、PassManager、线路编译与优化
@@ -46,10 +47,8 @@ aicir/
 |-- devices/           # 新增：Target、设备能力、连接拓扑、硬件约束
 |-- backends/          # 已落地：从 channel/backends 上移到顶层
 |-- noise/             # 已落地：从 channel/noise 上移到顶层
-|-- operators.py       # 已落地：从 channel/operators 上移到顶层（PauliOp/PauliString/Hamiltonian）
 |-- primitives/        # 新增：Sampler、Estimator、统一执行结果
-|-- qnode/             # 新增：QNode、expval、probs、sample
-|-- qml/               # 保留：梯度方法；新增 diff method 注册表
+|-- qml/               # 保留：梯度方法；diff method 注册表；qfun（PennyLane 风格量子函数）
 |-- optimizer/         # 保留：经典参数优化；线路优化逐步迁到 transpile
 |-- measure/           # 保留兼容；底层逐步委托 primitives
 |-- vqc/               # 保留：VQE/QAOA/VQD/SSVQE，逐步调用 Estimator/QNode
@@ -190,6 +189,10 @@ grad = cost.grad(0.1)
 
 这可以成为 `aicir.qml` 和 `aicir.vqc` 的公共底座。`BasicVQE`、`BasicQAOA` 后续可以接受 QNode 或内部构造 QNode，减少算法类中重复的参数绑定和测量逻辑。
 
+当前状态：第一片已落地，命名为 `qfun`（`aicir/qml/qfun.py`，从 `aicir.qml` 导出 `qfun` 装饰器与 `QFun` 类）。统一"量子函数 + 设备 + 测量 + 梯度"为一个可调用对象：`@qfun(device=..., diff_method=..., observable=..., shots=None)` 包装一个**返回 `Circuit`** 的函数（不依赖全局 tape，规避门工厂队列化的侵入式改动与误捕获风险——见设计取舍）；调用得期望值 `cost(x)`，`cost.grad(x)` 得梯度。`device` 映射 `numpy`/`cpu`→`NumpyBackend`、`gpu`/`torch`→`GPUBackend`、`npu`→`NPUBackend`；`diff_method` 经 §6 的 `aicir.qml.diff` 注册表分发，`"auto"` 走 `select_diff(backend, shots, noisy)` 自动优选，其余经 `resolve_diff`（仅 `fn_gradient`）。观测量经 `observable.to_matrix(backend)`，测量走 `Measure.run(..., observables=..., shots=None)` 精确路径。支持单个可训练位置参数（标量或一维数组）。配套 `tests/qfun/test_qfun.py`（`<Z>=cosθ`、`grad=-sinθ` 解析校验、`auto` 选择、契约守卫）。
+
+与 §5 原草图的有意差异：观测量声明在装饰器（`observable=`）而非函数体内 `return expval(H)`；函数体显式 `return Circuit`。因此暂未提供 `expval` 测量帮助器。尚未做：多参数/多测量、`BasicVQE`/`BasicQAOA` 接入 `qfun`、shot 估计与噪声路径的便捷封装。
+
 ### 6. 把梯度方法做成策略注册表
 
 `aicir.qml` 已经包含多种梯度方法，但选择逻辑分散。建议新增 `DiffMethod` 注册表：
@@ -203,7 +206,11 @@ grad = cost.grad(0.1)
 
 QNode、Estimator 和参数优化器可以通过同一策略表选择梯度实现。
 
-当前状态：第一片已落地。新增子包 `aicir.qml.diff`（`spec.py` 定义冻结数据类 `DiffMethod`，字段含 `name`/`fn`/`aliases`/`exact`/`stochastic`/`requires_torch`/`supports_shots`/`supports_noise`；`registry.py` 实现注册表与选择器），并从 `aicir.qml` 顶层再导出。注册表公开 API：`register_diff`/`unregister_diff`/`get_diff`/`registered_diffs`/`canonical_diff`/`resolve_diff`；纯函数选择器 `select_diff(*, backend=None, shots=None, noisy=False)` 按 auto → psr → fd 优先级自动选择（`spsa`/`spsr` 不参与自动选择）。内置注册的 fn-based 全梯度方法为 `psr`/`fd`/`auto`/`spsa`/`spsr` 五项；`mpsr`（返回标量混合偏导而非梯度向量）**有意不纳入注册表**，仍作为 `qml.mpsr` 直接可用。注册范围为 fn-based 全梯度方法；基于线路的 `ad` 与预条件策略 `qng` 不在注册表中。`aicir/optimizer/params.py` 的 `_gradient_from_method` 已改为经 `resolve_diff` 分发，使 `GD`/`Adam`/`ScipyMinimize` 可统一访问所有内置方法；对 `requires_torch=True` 的方法（即 `auto`）在经典黑盒目标路径上加守卫并抛出明确错误。`select_diff` 已有单元测试，但**尚未接入任何调用方**（保留给 NEXT.md §5 的 QNode 使用）。`aicir/qml/deriv.py` 未改动；`vqc`/`qas` 保持原有 `from ..qml.deriv import psr` 路径，参数移位单一实现不变。
+当前状态：第一、二片已落地。新增子包 `aicir.qml.diff`（`spec.py` 定义冻结数据类 `DiffMethod`，字段含 `name`/`fn`/`aliases`/`category`/`exact`/`stochastic`/`requires_torch`/`supports_shots`/`supports_noise`；`registry.py` 实现注册表与选择器），并从 `aicir.qml` 顶层再导出。注册表公开 API：`register_diff`/`unregister_diff`/`get_diff`/`registered_diffs(category=None)`/`canonical_diff`/`resolve_diff`；纯函数选择器 `select_diff(*, backend=None, shots=None, noisy=False)` 按 auto → psr → fd 优先级自动选择（`spsa`/`spsr` 不参与自动选择）。
+
+第二片：注册表按 `category` 分三类索引**全部**内置微分方法——`fn_gradient`（`(fn, params) -> 梯度向量`：`psr`/`fd`/`auto`/`spsa`/`spsr`）、`circuit_gradient`（`(circuit, observable) -> 梯度`：`ad` 伴随微分）、`preconditioner`（`(fn, state_fn, params) -> 方向/度规`：`qng`/`bdqng`/`kqng`/`dqng`）。`category` 在 `DiffMethod.__post_init__` 校验。`registered_diffs(category=...)` 可按类别过滤检索。契约安全：`resolve_diff` 与 `select_diff` **只对 `fn_gradient` 生效**——`resolve_diff('ad'|'qng'|...)` 抛 `ValueError`，保证经典优化器分发不会拿到签名不兼容的可调用；`ad`/`qng` 族仅供 `get_diff`/`registered_diffs(category=...)` 检索发现。`mpsr`（返回标量混合偏导）仍**有意不纳入注册表**，作为 `qml.mpsr` 直接可用。capability 字段（`exact`/`stochastic`/`requires_torch`/`supports_*`）只为 `fn_gradient` 的 `select_diff` 优选服务；`ad` 与 `qng` 族均从态向量求值，标注 `supports_shots/noise=False`。
+
+`aicir/optimizer/params.py` 的 `_gradient_from_method` 已改为经 `resolve_diff` 分发，使 `GD`/`Adam`/`ScipyMinimize` 可统一访问所有内置 fn-gradient 方法；对 `requires_torch=True` 的方法（即 `auto`）在经典黑盒目标路径上加守卫并抛出明确错误。`select_diff` 已有单元测试，并已由 §5 的 `qfun` 接入：`@qfun(..., diff_method="auto")` 的 `.grad` 经 `select_diff(backend, shots, noisy)` 自动选择梯度方法（首个真实调用方）。`aicir/qml/deriv.py` 未改动；`vqc`/`qas` 保持原有 `from ..qml.deriv import psr` 路径，参数移位单一实现不变。
 
 ### 7. 建立 GateSpec 注册表
 
@@ -351,8 +358,8 @@ GateSpec(
 *   统一“量子函数 + 设备 + 测量 + 梯度”，减少算法间重复的参数绑定和后端指定代码。
 
 #### 2.2 整合梯度选择器
-*   虽然已实现梯度注册表和自动选择机制 (`select_diff`)，但尚未被高层接口调用。
-*   **任务**：将 `select_diff` 接入即将引入的 `QNode` 或 `Estimator` primitives 中，以便在不支持 Torch 时自动降级到 `psr` 或 `fd`。
+*   梯度注册表和自动选择机制 (`select_diff`) 已实现，并已由 `qfun`（`diff_method="auto"`）接入为首个调用方。
+*   **任务**：将 `select_diff` 进一步接入 `Estimator` primitives，以便在不支持 Torch 时自动降级到 `psr` 或 `fd`。
 
 #### 2.3 `GateSpec` 元数据扩充
 *   向 `GateSpec` 注册表添加解析梯度所需的 `generator` 和 `decomposition` 字段。
