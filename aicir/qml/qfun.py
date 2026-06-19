@@ -10,7 +10,7 @@ from aicir.qml import qfun
 
 H = Hamiltonian([("Z", 1.0)])
 
-@qfun(device="numpy", diff_method="psr", observable=H)
+@qfun(device="numpy", differential="psr", observable=H)
 def cost(theta):
     c = Circuit(n_qubits=1)
     c.append(ry(theta, 0))
@@ -62,7 +62,7 @@ class QFun:
         fn: Callable[[Any], Circuit],
         *,
         device: Any = "numpy",
-        diff_method: str = "psr",
+        differential: str = "psr",
         observable: Any = None,
         shots: Any = None,
     ) -> None:
@@ -70,7 +70,7 @@ class QFun:
             raise ValueError("qfun 需要 observable=（如 Hamiltonian）")
         self._fn = fn
         self.device = device
-        self.diff_method = diff_method
+        self.differential = differential
         self.observable = observable
         self.shots = shots
         self._backend = _make_backend(device)
@@ -102,7 +102,7 @@ class QFun:
         return self._energy(param)
 
     def _gradient_fn(self) -> Callable[..., Any]:
-        name = str(self.diff_method).lower()
+        name = str(self.differential).lower()
         if name == "auto":
             name = select_diff(backend=self._backend, shots=self.shots, noisy=False)
         return resolve_diff(name)
@@ -123,13 +123,13 @@ class QFun:
 def qfun(
     *,
     device: Any = "numpy",
-    diff_method: str = "psr",
+    differential: str = "psr",
     observable: Any = None,
     shots: Any = None,
 ) -> Callable[[Callable[[Any], Circuit]], QFun]:
     """装饰器：把"返回 Circuit 的量子函数"包成带 ``.grad`` 的 :class:`QFun`。"""
 
     def deco(fn: Callable[[Any], Circuit]) -> QFun:
-        return QFun(fn, device=device, diff_method=diff_method, observable=observable, shots=shots)
+        return QFun(fn, device=device, differential=differential, observable=observable, shots=shots)
 
     return deco
