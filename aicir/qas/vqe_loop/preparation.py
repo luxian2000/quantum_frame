@@ -29,7 +29,7 @@ from aicir.metrics.circuit_structure import (
 from aicir.metrics.trainability import structure_proxy
 from aicir.metrics.hardware import native_depth_twoq_efficiency
 from aicir.qas.core.reward import RewardWeights
-from aicir.qas.primitives.ansatz import (
+from aicir.qas.library.ansatz import (
     HEAMask,
     LayerwiseAnsatzGene,
     architecture_from_hea_mask,
@@ -37,7 +37,7 @@ from aicir.qas.primitives.ansatz import (
     enumerate_hea_masks,
     sample_layerwise_genes,
 )
-from aicir.qas.primitives.backend_utils import (
+from aicir.qas.core.backend_utils import (
     resolve_qas_backend,
 )
 from aicir.qas.vqe_loop.protocol import (

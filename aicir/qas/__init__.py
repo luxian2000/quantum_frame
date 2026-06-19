@@ -30,7 +30,7 @@ from .algorithms.MoG_VQE import (
 )
 from .core.reward import RewardComposer, RewardWeights
 from .core.search_env import NoisyQASEnv, QASState
-from .primitives.ansatz import (
+from .library.ansatz import (
     HEAMask,
     LayerwiseAnsatzGene,
     architecture_from_hea_mask,
@@ -38,7 +38,7 @@ from .primitives.ansatz import (
     enumerate_hea_masks,
     sample_layerwise_genes,
 )
-from .primitives.backend_utils import backend_runtime_metadata, resolve_qas_backend
+from .core.backend_utils import backend_runtime_metadata, resolve_qas_backend
 from .vqe_loop.fair_vqe import (
     THETA_INIT_RANDOM_UNIFORM_PI,
     THETA_INIT_ZERO_DIAGNOSTIC,

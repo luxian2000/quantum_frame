@@ -12,10 +12,9 @@
 
 当前代码分层：
 
-- `core/`：传统 QAS 的类型、评估器、reward、search env、统一 runner/config。
-- `primitives/`：可复用 ansatz 构造和 backend 解析工具。
-- `algorithms/`：MoG-VQE、PPO-RB、PPR-DQL、CRLQAS、supernet 等具体算法实现。
-- `library/`：可复用候选架构库。
+- `core/`：传统 QAS 的类型、评估器、reward、search env、统一 runner/config、`SearchStrategy`/策略注册表、backend 解析（`backend_utils`）与 NPU 分片原语（`sharding`）。
+- `algorithms/`：MoG-VQE、PPO-RB、PPR-DQL、CRLQAS、supernet 等具体算法实现，及其 `SearchStrategy` 适配（`strategies.py`）。
+- `library/`：可复用候选架构库与 ansatz 构造（`ansatz.py`）。
 - `problems/`：VQE/QAS 问题和 Hamiltonian 构造。
 - `vqe_loop/`：VQE-QAS 闭环，包括一键入口、fair-label 协议、trust-region geometry、Stage-2 selection/search、fair VQE、oracle calibration 和多 NPU 分片。
 
@@ -92,6 +91,21 @@ result = run("supernet", config=cfg)
 ```python
 from aicir.qas import config, run
 ```
+
+### 2.1 SearchStrategy 协议与策略注册表（模块化进行中）
+
+`run(method, ...)` 的方法分发正从硬编码 `if` 链迁移为**策略注册表**，与
+`aicir.qml.diff`（`DiffMethod`）、`aicir.gates`（`GateSpec`）同一习惯：
+
+- `aicir.qas.core.strategy.SearchStrategy`：抽象基类，每种算法实现 `run(request) -> 结果`。
+- `aicir.qas.core.registry`：`StrategySpec`（`name`/`strategy`/`aliases`/`requires_torch`）
+  + `register_strategy`/`get_strategy`/`get_spec`/`registered_strategies`/`unregister_strategy`。
+- 内置策略在 `aicir.qas.algorithms.strategies` 中适配并注册（import 副作用）。
+
+`run()` 先查注册表：命中则走 `strategy.run(run_config)`，未命中回落到旧分支。
+当前**仅 `supernet` 已迁移**为 `SupernetStrategy`；`ppo_rb`/`ppr_dql`/`crlqas`/
+`supernet_classification`/`supernet_h2` 仍走旧分支，行为不变，后续逐个适配。
+对用户而言 `run("supernet", ...)` 调用方式与返回值完全不变。
 
 ## 3. supernet：面向变分量子算法的超网络架构搜索
 
@@ -331,7 +345,7 @@ print(result.final_benchmark_table)
 `aicir` 已经内置 `NPUBackend`，QAS 的 fair VQE runner 可通过 `--backend npu` 使用 Ascend NPU。对于 Stage 1.5 / Stage 2 产生的 label queue，推荐使用分片入口把候选行切成多份并行跑；每个分片是独立 VQE 任务，通过 `LOCAL_RANK` 绑定到一张 NPU，不会把单个态向量切成 HCCL 分布式任务。
 
 ```bash
-python -m aicir.qas.vqe_loop.sharding \
+python -m aicir.qas.vqe_loop.shard_scheduler \
   --queue outputs/qas_stage2/round1/round1_queue.csv \
   --output outputs/qas_stage2/round1/round1_labels.csv \
   --work-dir outputs/qas_stage2/round1/label_shards \
