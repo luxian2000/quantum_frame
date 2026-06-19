@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from ..operators import Hamiltonian, PauliOp, PauliString
+from ..core.operators import Hamiltonian, PauliOp, PauliString
 
 
 _KIND_ALIASES = {

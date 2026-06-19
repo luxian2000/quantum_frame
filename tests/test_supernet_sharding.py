@@ -3,7 +3,7 @@ import pytest
 pytest.importorskip("torch")
 
 from aicir.qas.algorithms.supernet import SupernetConfig, Supernet, supernet_qas
-from aicir.operators import Hamiltonian
+from aicir.core.operators import Hamiltonian
 
 
 def test_shard_mode_defaults_to_safe():
@@ -30,7 +30,7 @@ def test_rank_architectures_single_process_unchanged():
                          supernet_steps=1, ranking_num=4, finetune_steps=0,
                          two_qubit_pairs=((0, 1),), task="vqe", seed=3)
     trainer = Supernet(cfg)
-    from aicir.operators import Hamiltonian
+    from aicir.core.operators import Hamiltonian
     ham = Hamiltonian(n_qubits=2, terms=[("ZZ", -1.0), ("XI", 0.2)])
     records = trainer.rank_architectures("vqe", hamiltonian=ham, split="train")
     assert len(records) == 4

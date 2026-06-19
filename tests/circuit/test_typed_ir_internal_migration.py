@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from aicir import CircuitIR, Measurement, NumpyBackend, Operation
-from aicir.operators import Hamiltonian
+from aicir.core.operators import Hamiltonian
 from aicir.core.gates import gate_to_matrix
 from aicir.core.io.json_io import circuit_from_json, circuit_to_json
 from aicir.core.io.qasm import circuit_to_qasm

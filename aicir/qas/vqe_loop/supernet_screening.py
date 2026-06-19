@@ -18,7 +18,7 @@ from typing import Any, Sequence
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from aicir.operators import Hamiltonian
+from aicir.core.operators import Hamiltonian
 from aicir.qas.vqe_loop.geometry import parse_pauli_hamiltonian_terms
 
 
