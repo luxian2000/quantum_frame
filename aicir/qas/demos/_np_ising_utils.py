@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from itertools import product
 from typing import Dict, Iterable, List, Sequence, Tuple
 
-from ...operators import Hamiltonian
+from ...core.operators import Hamiltonian
 
 # A binary variable is identified by (vertex, position).
 Var = Tuple[int, int]

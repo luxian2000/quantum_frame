@@ -13,7 +13,7 @@ from aicir.qas.algorithms.MoG_VQE import (
     block_hardware_efficient_ansatz,
     run_mog_vqe,
 )
-from aicir.operators import Hamiltonian
+from aicir.core.operators import Hamiltonian
 from aicir.core.io.qasm import save_circuit_qasm3
 
 

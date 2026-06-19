@@ -6,6 +6,15 @@
 
 ### Added
 
+- **新增 PennyLane 风格量子函数 `qfun`（NEXT.md §5 第一片）。** 新模块 `aicir/qml/qfun.py`
+  导出 `qfun` 装饰器与 `QFun` 类，统一"量子函数 + 设备 + 测量 + 梯度"：
+  `@qfun(device=..., diff_method=..., observable=..., shots=None)` 包装一个**返回
+  `Circuit`** 的函数；`cost(x)` 得期望值，`cost.grad(x)` 得梯度。`device` 映射
+  `numpy`/`cpu`/`gpu`/`torch`/`npu` 后端；`diff_method` 经 `aicir.qml.diff` 注册表分发
+  （`"auto"` 走 `select_diff`——`qfun` 是 `select_diff` 的首个真实调用方），观测量经
+  `observable.to_matrix(backend)`、测量走 `Measure.run` 精确路径。支持单个可训练位置
+  参数（标量/一维数组）。设计上观测量声明在装饰器、函数体显式返回 `Circuit`（不依赖
+  全局 tape，规避门队列化的侵入与误捕获）；故暂不提供 `expval`。配套 `tests/qfun/test_qfun.py`。
 - **`DiffMethod` 注册表第二片（NEXT.md §6）：按 `category` 索引全部内置微分方法。**
   - `DiffMethod` 新增 `category` 字段（`__post_init__` 校验），取值
     `fn_gradient`（`(fn, params) -> 梯度向量`）/ `circuit_gradient`

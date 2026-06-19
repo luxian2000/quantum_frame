@@ -8,7 +8,7 @@ aicir/operators.py
 示例::
 
     from aicir.backends import GPUBackend
-    from aicir.operators import Hamiltonian
+    from aicir.core.operators import Hamiltonian
 
     bk = GPUBackend()
 
@@ -28,8 +28,8 @@ from typing import TYPE_CHECKING, Dict, List, Union
 import numpy as np
 
 if TYPE_CHECKING:
-    from .backends.base import Backend
-    from .core.state import State
+    from ..backends.base import Backend
+    from .state import State
 
 # ── 单比特泡利矩阵（NumPy 常量，用于构造复杂算符）──────────────────────
 _I = np.array([[1, 0], [0, 1]], dtype=np.complex64)
@@ -401,7 +401,7 @@ class Hamiltonian:
         返回:
             实数期望值
         """
-        from .core.state import State
+        from .state import State
 
         H_mat = self.to_matrix(backend)
         if isinstance(state, State):

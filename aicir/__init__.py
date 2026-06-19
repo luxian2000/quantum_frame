@@ -37,7 +37,7 @@ else:
         ]
     )
 
-from .operators import Hamiltonian, PauliOp, PauliString
+from .core.operators import Hamiltonian, PauliOp, PauliString
 
 _export(
     [
