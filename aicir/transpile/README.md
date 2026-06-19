@@ -9,7 +9,8 @@
 | 文件 / 目录 | 说明 |
 | --- | --- |
 | `base.py` | `TransformationPass` 抽象基类 |
-| `passmanager.py` | `PassManager` 流水线管理器 + `default_optimization_pipeline` |
+| `passmanager.py` | `PassManager` 流水线管理器 + `optimize`（默认优化入口） |
+| `rewrite.py` | 多格式前端 `optimize_basic` / `optimize_circuit`（dict/qasm/dag） |
 | `passes/` | 内置 pass 实现 |
 | `passes/basic.py` | `ValidatePass` / `CanonicalizePass` |
 | `passes/cancel_inverse.py` | `CancelInversePass` |
@@ -30,7 +31,7 @@
 
 ```python
 from aicir import Circuit, hadamard, pauli_x, rx
-from aicir.transpile import default_optimization_pipeline
+from aicir.transpile import optimize
 
 circuit = Circuit(
     hadamard(0),
@@ -42,7 +43,7 @@ circuit = Circuit(
     n_qubits=3,
 )
 
-optimized = default_optimization_pipeline().run(circuit)
+optimized = optimize(circuit)   # 返回优化后的新 Circuit
 # optimized 只剩 rx(0.3, 1)
 ```
 
@@ -98,14 +99,14 @@ optimized = pm.run(circuit)   # 返回变换后的 Circuit 副本
 
 ---
 
-## 3  default_optimization_pipeline
+## 3  optimize — 默认优化入口
 
-预配置的默认本地优化流水线：
+线路结构优化的统一入口。对线路应用预配置的默认本地优化流水线，返回优化后的新线路：
 
 ```python
-from aicir.transpile import default_optimization_pipeline
+from aicir.transpile import optimize
 
-pm = default_optimization_pipeline(max_rounds=64, max_reorder_hops=8)
+optimized = optimize(circuit, max_rounds=64, max_reorder_hops=8)
 ```
 
 | 参数 | 默认 | 说明 |
@@ -113,7 +114,7 @@ pm = default_optimization_pipeline(max_rounds=64, max_reorder_hops=8)
 | `max_rounds` | `64` | 不动点迭代最大轮次 |
 | `max_reorder_hops` | `8` | `CommuteSingleQubitPass` 的最大回看步数 |
 
-等价于：
+等价于运行以下流水线：
 
 ```python
 PassManager(
@@ -124,8 +125,11 @@ PassManager(
     ],
     fixed_point=True,
     max_rounds=64,
-)
+).run(circuit)
 ```
+
+`optimize_circuit(circuit)` 是 Circuit 专用别名，等价于 `optimize(circuit)`；
+`optimize_basic(obj)` 是多格式前端（dict / OpenQASM 文本 / DAG），按输入类型分派并保持输出类型不变（详见第 5 节）。
 
 ---
 
@@ -332,14 +336,15 @@ optimized = pm.run(circuit)
 
 ---
 
-## 6  与旧接口的关系
+## 6  入口选择
 
-`aicir.optimizer.optimize_circuit(circuit)` 仍然可用，内部委托给 `default_optimization_pipeline()`。
+线路结构优化已统一收归本模块（旧的 `aicir.optimizer.circuit` /
+`default_optimization_pipeline` 已移除）。
 
 | 场景 | 推荐方式 |
 | --- | --- |
-| 简单优化，兼容旧代码 | `optimize_circuit(circuit)` |
-| 需要默认优化流水线 | `default_optimization_pipeline().run(circuit)` |
+| 优化一个 `Circuit` | `optimize(circuit)` 或等价的 `optimize_circuit(circuit)` |
+| 优化 dict / OpenQASM / DAG | `optimize_basic(obj)` |
 | 需要自定义编译流程 | `PassManager([...]).run(circuit)` |
 
 ---
@@ -352,7 +357,9 @@ optimized = pm.run(circuit)
 | --- | --- | --- |
 | `TransformationPass` | 抽象基类 | 自定义 pass 的基类 |
 | `PassManager` | 类 | 流水线调度器 |
-| `default_optimization_pipeline` | 函数 | 返回预配置的默认优化 `PassManager` |
+| `optimize` | 函数 | 默认本地优化入口，返回优化后的新 `Circuit` |
+| `optimize_circuit` | 函数 | `optimize` 的 Circuit 专用别名 |
+| `optimize_basic` | 函数 | 多格式前端（dict / OpenQASM / DAG） |
 | `ValidatePass` | Pass | 结构校验 |
 | `CanonicalizePass` | Pass | 门名规范化 |
 | `CancelInversePass` | Pass | 相邻逆门消去 |

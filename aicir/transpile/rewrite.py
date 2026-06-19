@@ -1,11 +1,21 @@
-"""Local rewrite optimizer for circuit dict/qasm/dag forms."""
+"""多格式本地线路化简前端（dict / qasm / dag）。
+
+线路结构优化的统一入口在 :func:`aicir.transpile.optimize`；本模块在其
+基础上提供：
+
+- :func:`optimize_circuit`：Circuit 专用包装，等价于 ``optimize``；
+- :func:`optimize_basic`：根据输入类型分派到 dict/qasm/dag 路径。
+
+dict/dag 路径复用 :func:`._local_rewrite.optimize_gates`（本地化简规则的
+单一来源），qasm 路径是独立的正则文本改写。
+"""
 
 from __future__ import annotations
 
 import copy
 import re
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 
@@ -14,214 +24,30 @@ from ..ir import (
     has_circuit_instructions,
     instruction_controls,
     instruction_qubits,
-    instruction_to_gate_dict,
 )
+from .passes._local_rewrite import _gate_family_from_name, optimize_gates
+from .passmanager import optimize
 
 
-_DEFAULT_MAX_ROUNDS = 64
-_DEFAULT_MAX_REORDER_HOPS = 8
+def optimize_circuit(
+    circuit: Circuit,
+    *,
+    max_rounds: int = 64,
+    max_reorder_hops: int = 8,
+) -> Circuit:
+    """返回 :class:`~aicir.core.circuit.Circuit` 的优化副本。
 
+    Circuit 专用入口，等价于 :func:`aicir.transpile.optimize`，保留
+    ``n_qubits`` 与绑定的 backend。
+    """
 
-def _gate_family_from_name(name: str) -> str | None:
-    low = str(name).strip().lower()
-    if low in {"pauli_x", "x"}:
-        return "x"
-    if low in {"pauli_y", "y"}:
-        return "y"
-    if low in {"pauli_z", "z"}:
-        return "z"
-    if low in {"hadamard", "h"}:
-        return "h"
-    if low in {"cx", "cnot"}:
-        return "cnot"
-    if low in {"s", "s_gate"}:
-        return "s"
-    if low in {"sdg", "sdag", "s_dagger", "sdagger"}:
-        return "sdg"
-    if low in {"rx"}:
-        return "rx"
-    if low in {"ry"}:
-        return "ry"
-    if low in {"rz"}:
-        return "rz"
-    return None
-
-
-def _normalize_control_states(gate: dict[str, Any]) -> tuple[int, ...]:
-    gate = instruction_to_gate_dict(gate)
-    controls = tuple(int(q) for q in instruction_controls(gate))
-    raw = gate.get("control_states")
-    return tuple(1 for _ in controls) if raw is None else tuple(int(x) for x in raw)
+    if not hasattr(circuit, "n_qubits") or not has_circuit_instructions(circuit):
+        raise TypeError("optimize_circuit 输入必须是 Circuit 或 CircuitIR-like 对象")
+    return optimize(circuit, max_rounds=max_rounds, max_reorder_hops=max_reorder_hops)
 
 
 def _gate_qubits(gate: dict[str, Any]) -> list[int]:
     return sorted(set(int(q) for q in (*instruction_qubits(gate), *instruction_controls(gate))))
-
-
-def _is_single_qubit_gate(gate: dict[str, Any]) -> bool:
-    fam = _gate_family_from_name(gate.get("type", ""))
-    if fam not in {"x", "y", "z", "h", "s", "sdg", "rx", "ry", "rz"}:
-        return False
-    if gate.get("target_qubit") is None:
-        return False
-    if gate.get("control_qubits") or gate.get("qubit_1") is not None or gate.get("qubit_2") is not None:
-        return False
-    if gate.get("qubits") is not None or gate.get("targets") is not None:
-        return False
-    return True
-
-
-def _cnot_control_target(gate: dict[str, Any]) -> tuple[int, int] | None:
-    fam = _gate_family_from_name(gate.get("type", ""))
-    if fam != "cnot" or gate.get("target_qubit") is None:
-        return None
-    controls = tuple(int(x) for x in (gate.get("control_qubits", []) or []))
-    if len(controls) != 1:
-        return None
-    return controls[0], int(gate["target_qubit"])
-
-
-def _is_cnot_gate(gate: dict[str, Any]) -> bool:
-    return _cnot_control_target(gate) is not None
-
-
-def _single_qubit_commutes_with_cnot_gate(single: dict[str, Any], cnot: dict[str, Any]) -> bool:
-    if not _is_single_qubit_gate(single):
-        return False
-    pair = _cnot_control_target(cnot)
-    if pair is None:
-        return False
-
-    ctrl, targ = pair
-    q = int(single["target_qubit"])
-    fam = _gate_family_from_name(single.get("type", ""))
-    if q == ctrl and fam in {"z", "s", "sdg", "rz"}:
-        return True
-    if q == targ and fam in {"x", "rx"}:
-        return True
-    return False
-
-
-def _cancel_gate_pair(prev: dict[str, Any], curr: dict[str, Any]) -> bool:
-    pf = _gate_family_from_name(prev.get("type", ""))
-    cf = _gate_family_from_name(curr.get("type", ""))
-
-    if pf is None or cf is None:
-        return False
-
-    # X/Y/Z/H on the same target qubit: G,G -> I
-    if pf == cf and pf in {"x", "y", "z", "h"}:
-        return int(prev.get("target_qubit", -1)) == int(curr.get("target_qubit", -1))
-
-    # cnot,cnot with identical (control,target[,control_state]) -> I
-    if pf == cf == "cnot":
-        p_controls = tuple(int(x) for x in (prev.get("control_qubits", []) or []))
-        c_controls = tuple(int(x) for x in (curr.get("control_qubits", []) or []))
-        if len(p_controls) != 1 or len(c_controls) != 1:
-            return False
-        return (
-            p_controls == c_controls
-            and int(prev.get("target_qubit", -1)) == int(curr.get("target_qubit", -1))
-            and _normalize_control_states(prev) == _normalize_control_states(curr)
-        )
-
-    # S + Sdg or Sdg + S on same target qubit
-    if {pf, cf} == {"s", "sdg"}:
-        return int(prev.get("target_qubit", -1)) == int(curr.get("target_qubit", -1))
-
-    return False
-
-
-def _try_merge_rotation_at(gates: list[dict[str, Any]], index: int, gate: dict[str, Any]) -> bool:
-    prev = gates[index]
-    gf = _gate_family_from_name(gate.get("type", ""))
-    pf = _gate_family_from_name(prev.get("type", ""))
-    if (
-        gf in {"rx", "ry", "rz"}
-        and pf == gf
-        and int(prev.get("target_qubit", -1)) == int(gate.get("target_qubit", -1))
-        and not (prev.get("control_qubits") or [])
-        and not (gate.get("control_qubits") or [])
-    ):
-        prev_param = float(prev.get("parameter", 0.0))
-        curr_param = float(gate.get("parameter", 0.0))
-        merged_param = prev_param + curr_param
-        if np.isclose(merged_param, 0.0, atol=1e-15):
-            del gates[index]
-        else:
-            prev["parameter"] = merged_param
-        return True
-    return False
-
-
-def _try_consume_against_gate_at(gates: list[dict[str, Any]], index: int, gate: dict[str, Any]) -> bool:
-    if _cancel_gate_pair(gates[index], gate):
-        del gates[index]
-        return True
-    return _try_merge_rotation_at(gates, index, gate)
-
-
-def _consume_single_qubit_gate_by_lookback(
-    gates: list[dict[str, Any]], gate: dict[str, Any], *, max_reorder_hops: int
-) -> bool:
-    hops = 0
-    idx = len(gates) - 1
-    while idx >= 0 and hops < max_reorder_hops:
-        prev = gates[idx]
-
-        if _is_cnot_gate(prev):
-            if _single_qubit_commutes_with_cnot_gate(gate, prev):
-                hops += 1
-                idx -= 1
-                continue
-            break
-
-        if not _is_single_qubit_gate(prev):
-            break
-
-        if int(prev["target_qubit"]) != int(gate["target_qubit"]):
-            hops += 1
-            idx -= 1
-            continue
-
-        return _try_consume_against_gate_at(gates, idx, gate)
-
-    return False
-
-
-def _optimize_gate_dict_list(
-    gates: Iterable[dict[str, Any]], *, max_reorder_hops: int = _DEFAULT_MAX_REORDER_HOPS
-) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for g in gates:
-        gate = copy.deepcopy(g)
-
-        if _is_single_qubit_gate(gate) and _consume_single_qubit_gate_by_lookback(
-            out, gate, max_reorder_hops=max_reorder_hops
-        ):
-            continue
-
-        if out and _try_consume_against_gate_at(out, len(out) - 1, gate):
-            continue
-
-        out.append(gate)
-    return out
-
-
-def _optimize_gate_dict_list_fixed_point(
-    gates: Iterable[dict[str, Any]],
-    *,
-    max_rounds: int = _DEFAULT_MAX_ROUNDS,
-    max_reorder_hops: int = _DEFAULT_MAX_REORDER_HOPS,
-) -> list[dict[str, Any]]:
-    current = copy.deepcopy(list(gates))
-    current = [instruction_to_gate_dict(gate) for gate in current]
-    for _ in range(max_rounds):
-        nxt = _optimize_gate_dict_list(current, max_reorder_hops=max_reorder_hops)
-        if nxt == current:
-            return nxt
-        current = nxt
-    return current
 
 
 @dataclass
@@ -590,10 +416,10 @@ def optimize_basic(
         if isinstance(obj, Circuit) or (hasattr(obj, "n_qubits") and has_circuit_instructions(obj)):
             return optimize_circuit(obj)
         if isinstance(obj, list):
-            return _optimize_gate_dict_list_fixed_point(obj)
+            return optimize_gates(obj)
         if isinstance(obj, dict) and "gates" in obj:
             out = copy.deepcopy(obj)
-            out["gates"] = _optimize_gate_dict_list_fixed_point(obj["gates"])
+            out["gates"] = optimize_gates(obj["gates"])
             return out
         raise TypeError("dict 输入需为 Circuit、list[dict] 或含 gates 的 dict")
 
@@ -613,7 +439,7 @@ def optimize_basic(
             A = np.asarray(obj["A"], dtype=np.float32)
             T = np.asarray(obj["type_onehot"], dtype=np.float32)
             gates = _dag_nodes_from_arrays(X, A, T, list(gate_types))
-            gates_opt = _optimize_gate_dict_list_fixed_point(gates)
+            gates_opt = optimize_gates(gates)
             X2, A2, T2 = _dag_arrays_from_gates(gates_opt, list(gate_types))
             out = copy.deepcopy(obj)
             out["X"], out["A"], out["type_onehot"] = X2, A2, T2
@@ -627,33 +453,10 @@ def optimize_basic(
             A = np.asarray(obj[1], dtype=np.float32)
             T = np.asarray(obj[2], dtype=np.float32)
             gates = _dag_nodes_from_arrays(X, A, T, list(dag_gate_types))
-            gates_opt = _optimize_gate_dict_list_fixed_point(gates)
+            gates_opt = optimize_gates(gates)
             X2, A2, T2 = _dag_arrays_from_gates(gates_opt, list(dag_gate_types))
             return (X2, A2, T2) if isinstance(obj, tuple) else [X2, A2, T2]
 
         raise TypeError("dag 输入需为 (X,A,type_onehot) 或含 X/A/type_onehot 的 dict")
 
     raise ValueError(f"不支持的 input_type: {kind}")
-
-
-def optimize_circuit(
-    circuit: Circuit,
-    *,
-    max_rounds: int = _DEFAULT_MAX_ROUNDS,
-    max_reorder_hops: int = _DEFAULT_MAX_REORDER_HOPS,
-) -> Circuit:
-    """Return an optimized copy of a :class:`~aicir.core.circuit.Circuit`.
-
-    The method applies the same conservative local rewrite rules as
-    :func:`optimize_basic` on the Circuit/dict path and preserves ``n_qubits``
-    and the bound backend.
-    """
-
-    if not hasattr(circuit, "n_qubits") or not has_circuit_instructions(circuit):
-        raise TypeError("optimize_circuit 输入必须是 Circuit 或 CircuitIR-like 对象")
-    from ..transpile import default_optimization_pipeline
-
-    return default_optimization_pipeline(
-        max_rounds=max_rounds,
-        max_reorder_hops=max_reorder_hops,
-    ).run(circuit)
