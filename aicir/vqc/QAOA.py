@@ -7,7 +7,7 @@ for combinatorial optimization with alternating problem/mixer Hamiltonian layers
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 
@@ -71,7 +71,7 @@ class QAOAResult:
     energy: float
     gammas: np.ndarray
     betas: np.ndarray
-    statevector: np.ndarray
+    statevector: np.ndarray | None
     energy_history: list[float]
 
 
@@ -86,12 +86,32 @@ class BasicQAOA:
 
     def __init__(
         self,
-        problem_hamiltonian: np.ndarray,
-        p: int,
+        problem_hamiltonian: np.ndarray | None = None,
+        p: int = 1,
         n_qubits: int | None = None,
         mixer_hamiltonian: np.ndarray | None = None,
         seed: int | None = None,
+        *,
+        cost: Any = None,
     ) -> None:
+        self.cost = cost
+        if cost is not None:
+            if getattr(cost, "_multi", False):
+                raise ValueError("BasicQAOA 的 cost 必须是单观测量 qfun（多观测量无标量能量）")
+            if not callable(cost) or not hasattr(cost, "grad"):
+                raise TypeError("cost 必须是可调用且带 .grad 的对象（如 qfun）")
+            self.p = int(p)
+            if self.p <= 0:
+                raise ValueError("p must be a positive integer")
+            self.n_qubits = None
+            self.dim = None
+            self.problem_hamiltonian = None
+            self.mixer_hamiltonian = None
+            self._rng = np.random.default_rng(seed)
+            return
+
+        if problem_hamiltonian is None:
+            raise ValueError("BasicQAOA 需要 problem_hamiltonian 或 cost")
         ham_c = np.asarray(problem_hamiltonian, dtype=np.complex128)
         if ham_c.ndim != 2 or ham_c.shape[0] != ham_c.shape[1]:
             raise ValueError("problem_hamiltonian must be a square matrix")
@@ -150,9 +170,17 @@ class BasicQAOA:
         return state
 
     def energy(self, params: np.ndarray) -> float:
+        if self.cost is not None:
+            return float(self.cost(np.asarray(params, dtype=float).reshape(-1)))
         state = self.ansatz_state(params)
         value = np.vdot(state, self.problem_hamiltonian @ state)
         return float(np.real(value))
+
+    def _gradient(self, params: np.ndarray) -> np.ndarray:
+        if self.cost is not None:
+            flat = np.asarray(params, dtype=float).reshape(-1)
+            return np.asarray(self.cost.grad(flat), dtype=float).reshape(flat.shape)
+        return self.finite_difference_gradient(params)
 
     def finite_difference_gradient(self, params: np.ndarray, eps: float = 1e-4) -> np.ndarray:
         flat = np.asarray(params, dtype=float).reshape(-1)
@@ -196,10 +224,10 @@ class BasicQAOA:
             if callback is not None:
                 callback(step, current_energy, params)
 
-            grad = self.finite_difference_gradient(params)
+            grad = self._gradient(params)
             params = params - lr * grad
 
-        final_state = self.ansatz_state(best_params)
+        final_state = None if self.cost is not None else self.ansatz_state(best_params)
         gammas, betas = self.split_params(best_params)
         return QAOAResult(
             energy=float(best_energy),

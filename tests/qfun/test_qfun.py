@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from aicir import Circuit, Hamiltonian, ry
+from aicir import BitFlipChannel, Circuit, Hamiltonian, NoiseModel, ry
 from aicir.qml import qfun
 
 H_Z = Hamiltonian([("Z", 1.0)])
@@ -131,3 +131,38 @@ def test_multi_observable_vector_param_jacobian():
     assert J.shape == (2, 2)
     expected = np.array([[-np.sin(0.3), 0.0], [0.0, -np.sin(0.7)]])
     assert np.allclose(J, expected, atol=1e-7)
+
+
+# --- 噪声路径便捷封装（noise_model=）---
+
+def _bitflip_model(p):
+    # ry 之后对 qubit0 施加 bit-flip：<Z> → (1-2p)<Z>
+    return NoiseModel().add_channel(BitFlipChannel(0, p), after_gates=["ry"])
+
+
+def _make_noisy_cost(p, **kw):
+    @qfun(observable=H_Z, noise_model=_bitflip_model(p), **kw)
+    def cost(theta):
+        c = Circuit(n_qubits=1)
+        c.append(ry(theta, 0))
+        return c
+
+    return cost
+
+
+def test_noise_model_scales_expectation():
+    cost = _make_noisy_cost(0.25, differential="psr")
+    assert np.isclose(cost(0.3), 0.5 * np.cos(0.3), atol=1e-7)
+
+
+def test_noise_model_gradient_psr():
+    cost = _make_noisy_cost(0.25, differential="psr")
+    # f(θ)=(1-2p)cosθ 线性于无噪期望，PSR 仍解析精确
+    assert np.isclose(cost.grad(0.3), -0.5 * np.sin(0.3), atol=1e-7)
+
+
+def test_noise_model_auto_differential_runs():
+    cost = _make_noisy_cost(0.25, differential="auto")
+    # auto 在 noisy=True 下选取合适方法，仍给出有限梯度
+    g = cost.grad(0.3)
+    assert np.isfinite(g)
