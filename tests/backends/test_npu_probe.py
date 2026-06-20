@@ -4,7 +4,8 @@ import pytest
 
 pytest.importorskip("torch")
 
-from aicir.backends.npu_probe import NpuCapabilities, _collect_capabilities, cache_path, probe_npu
+from aicir.backends.npu_probe import NpuCapabilities, _collect_capabilities, cache_path, probe_npu, target_from_npu
+from aicir.devices import Target
 
 
 def _sample_caps(**over):
@@ -118,3 +119,24 @@ def test_probe_npu_corrupted_cache_is_a_miss(tmp_path, monkeypatch):
     caps = probe_npu(allow_cpu_fallback=True)  # 损坏缓存视为未命中：不崩溃、重探并覆盖
     assert caps.device == "cpu"
     assert json.loads(cp.read_text())  # 缓存被有效 JSON 覆盖
+
+
+def test_target_from_npu_maps_flags_and_uses_explicit_n_qubits():
+    caps = _sample_caps(max_qubits=10)
+    target = target_from_npu(caps, n_qubits=5)
+    assert isinstance(target, Target)
+    assert target.n_qubits == 5
+    assert target.supports_statevector is True
+    assert target.supports_autodiff is True
+
+
+def test_target_from_npu_defaults_n_qubits_to_max_qubits():
+    caps = _sample_caps(max_qubits=7)
+    target = target_from_npu(caps)
+    assert target.n_qubits == 7
+
+
+def test_target_from_npu_requires_some_n_qubits():
+    caps = _sample_caps(max_qubits=None)
+    with pytest.raises(ValueError):
+        target_from_npu(caps)  # 无显式 n_qubits 且 max_qubits 为 None
