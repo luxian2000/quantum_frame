@@ -975,130 +975,83 @@ cost.grad(0.3)   # 梯度 = -sin(0.3)
 | --------------- | ----------- | -------------------------------------------------------------------------------------------------------------- |
 | `device`      | `"numpy"` | 后端：`numpy`/`cpu` → `NumpyBackend`，`gpu`/`torch` → `GPUBackend`，`npu` → `NPUBackend`    |
 | `differential` | `"psr"`   | 梯度方法名，经 §15 注册表 `resolve_diff` 解析（仅 `fn_gradient`）；`"auto"` 走 `select_diff` 自动择优 |
-| `observable`  | 必填        | 可观测量（如 `Hamiltonian`），经 `observable.to_matrix(backend)` 求矩阵                                    |
+| `observable`  | 必填        | 单个可观测量（如 `Hamiltonian`）或其列表；列表时 `cost(x)` 返回数组、`grad` 返回 Jacobian              |
 | `shots`       | `None`    | `None`/`0` 为精确期望；正整数走 shot 估计                                                                  |
+| `noise_model` | `None`    | 提供 `NoiseModel` 时把噪声附加到线路、经密度矩阵模拟读取期望；`differential="auto"` 据此以 `noisy=True` 择优 |
 
 ### 行为约定
 
 - 函数体必须返回 `Circuit`，否则抛 `TypeError`；返回线路含未绑定参数抛 `ValueError`。
-- 支持单个可训练位置参数（标量或一维数组）；`grad` 返回与输入同形（标量入 → 标量出）。
 - `differential="auto"` 在非 Torch 后端降级为 `psr`，有 shots/噪声时同样回退（见 §15 选择策略）。
 - 观测量声明在装饰器（而非函数体内 `return expval(H)`），故暂不提供 `expval` 帮助器。
 
+### 多参数（单数组参）
+
+单观测量下，`cost`/`cost.grad` 接受标量或一维数组参数，`grad` 返回与输入同形：
+
+```python
+H = Hamiltonian([("ZI", 1.0)])      # <Z on q0> = cos(theta[0])
+
+@qfun(observable=H)
+def cost(theta):                    # theta 为一维数组
+    c = Circuit(n_qubits=2)
+    c.append(ry(theta[0], 0))
+    c.append(ry(theta[1], 1))
+    return c
+
+cost(np.array([0.3, 0.7]))          # cos(0.3)
+cost.grad(np.array([0.3, 0.7]))     # [-sin(0.3), 0.0]，形状 (2,)
+```
+
+### 多测量（observable 列表 → Jacobian）
+
+`observable=[H1, H2, ...]` 时 `cost(x)` 返回 `(n_obs,)` 数组，`cost.grad(x)` 返回 Jacobian（标量参 → `(n_obs,)`；向量参 → `(n_obs, n_param)`）：
+
+```python
+@qfun(observable=[Hamiltonian([("Z", 1.0)]), Hamiltonian([("X", 1.0)])])
+def cost(theta):
+    c = Circuit(n_qubits=1)
+    c.append(ry(theta, 0))
+    return c
+
+cost(0.3)        # [cos(0.3), sin(0.3)]
+cost.grad(0.3)   # [-sin(0.3), cos(0.3)]，形状 (2,)
+```
+
+### 噪声路径
+
+```python
+from aicir import NoiseModel, BitFlipChannel
+
+nm = NoiseModel().add_channel(BitFlipChannel(0, 0.25), after_gates=["ry"])
+
+@qfun(observable=Hamiltonian([("Z", 1.0)]), noise_model=nm)
+def cost(theta):
+    c = Circuit(n_qubits=1)
+    c.append(ry(theta, 0))
+    return c
+
+cost(0.3)   # (1-2*0.25)*cos(0.3) = 0.5*cos(0.3)
+```
+
+### 接入 VQE / QAOA
+
+`BasicVQE`/`BasicQAOA` 可直接以**单观测量** `qfun` 作代价函数（旁路各自的 ansatz/编排，`energy`/梯度委托给 `cost`/`cost.grad`）：
+
+```python
+from aicir.vqc import BasicVQE, BasicQAOA
+
+@qfun(observable=Hamiltonian([("Z", 1.0)]))
+def cost(theta):
+    c = Circuit(n_qubits=1)
+    c.append(ry(theta[0], 0))
+    return c
+
+BasicVQE(cost=cost, n_params=1).run(max_iters=200, lr=0.3, init_params=np.array([0.1]))
+BasicQAOA(cost=cost, p=1).run(max_iters=200, lr=0.3, init_params=np.array([0.1, 0.0]))
+```
+
+> VQC 复用：`BasicVQE`/`BasicSSVQE`/`BasicVQD.parameter_shift_gradient()` 均统一调用 `aicir.qml.deriv.psr`（单一真源）。自定义 QNN/VQC 时也建议复用 §4–§7 的 `psr`/`spsr`/`mpsr`，勿各自重写 parameter-shift。
+
 ---
 
----
-
-# QML 梯度工具教程
-
-`aicir.qml.deriv` 提供面向量子机器学习和变分量子线路的梯度与 gradient-free 工具。常用函数可直接从 `aicir.qml` 导入：
-
-```python
-from aicir.qml import psr, spsr, multipsr
-```
-
-这些函数都假设目标函数 `fn(params)` 返回标量，`params` 可以是标量或任意形状的 NumPy 数组。
-
-## 8.1 标准 parameter-shift rule：`psr`
-
-`psr(fn, params)` 对每个参数计算：
-
-```text
-0.5 * [fn(theta + pi/2) - fn(theta - pi/2)]
-```
-
-默认系数 `0.5` 和位移 `pi/2` 适用于常见 Pauli 旋转生成元。
-
-```python
-import numpy as np
-from aicir.qml import psr
-
-params = np.array([0.3, -0.4])
-
-def loss(theta):
-    return np.cos(theta[0]) + np.sin(theta[1])
-
-grad = psr(loss, params)
-print(grad)  # [-sin(0.3), cos(-0.4)]
-```
-
-结合参数化电路使用：
-
-```python
-import numpy as np
-from aicir import Circuit, NumpyBackend, Parameter, State, ry
-from aicir.qml import psr
-
-theta = Parameter("theta")
-template = Circuit(ry(theta, 0), n_qubits=1)
-backend = NumpyBackend()
-Z = np.diag([1.0, -1.0])
-
-def expectation(values):
-    circuit = template.bind_parameters({"theta": values[0]})
-    state = State.zero_state(1, backend).evolve(circuit.unitary()).to_numpy().reshape(-1)
-    return np.real(np.vdot(state, Z @ state))
-
-grad = psr(expectation, np.array([0.5]))
-```
-
-## 8.2 stochastic parameter-shift rule：`spsr`
-
-`spsr` 随机抽样部分参数坐标，只对抽中的参数做 shift 评估。默认 `unbiased=True`，会按参数总数和采样数缩放，使估计量在期望上等于完整 `psr` 梯度。
-
-```python
-from aicir.qml import spsr
-
-grad_est = spsr(
-    loss,
-    params,
-    n_samples=1,
-    rng=42,
-)
-```
-
-常用参数：
-
-| 参数            | 说明                                  |
-| --------------- | ------------------------------------- |
-| `n_samples`   | 每次估计抽样的参数坐标数量            |
-| `rng`         | 随机种子或 NumPy generator            |
-| `replace`     | 是否允许重复抽样；默认 `False`      |
-| `unbiased`    | 是否缩放为无偏估计；默认 `True`     |
-| `shift`       | 参数位移；默认 `np.pi / 2`          |
-| `coefficient` | shifted difference 系数；默认 `0.5` |
-
-## 8.3 multivariate parameter-shift rule：`multipsr`
-
-`multipsr` 用多参数符号求和公式计算选定参数的混合偏导。例如 `parameter_indices=[0, 1]` 表示计算：
-
-```text
-d² fn / d theta[0] d theta[1]
-```
-
-```python
-from aicir.qml import multipsr
-
-def objective(theta):
-    return np.cos(theta[0]) * np.sin(theta[1])
-
-mixed = multipsr(objective, np.array([0.4, -0.2]), parameter_indices=[0, 1])
-print(mixed)  # -sin(theta[0]) * cos(theta[1])
-```
-
-对于多维参数数组，可使用 tuple index：
-
-```python
-params = np.array([[0.4, 0.1], [-0.2, 0.3]])
-
-def objective_2d(theta):
-    return np.cos(theta[0, 0]) * np.sin(theta[1, 0])
-
-mixed = multipsr(objective_2d, params, parameter_indices=[(0, 0), (1, 0)])
-```
-
-如果省略 `parameter_indices`，`multipsr` 会对所有参数计算一个全参数混合偏导，此时需要 `2 ** params.size` 次函数调用，参数数量较大时成本会很高。
-
-## 8.4 VQC 中的使用
-
-`aicir.vqc` 中已有的 `BasicVQE.parameter_shift_gradient()`、`BasicSSVQE.parameter_shift_gradient()` 和 `BasicVQD.parameter_shift_gradient()` 已统一调用 `aicir.qml.deriv.psr`。因此自定义 QNN/VQC 模型时也建议复用 `psr`、`spsr` 和 `multipsr`，避免各模块重复实现 parameter-shift 逻辑。
