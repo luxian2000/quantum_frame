@@ -62,27 +62,32 @@ def _probe_op_support(device: str):
     return matmul, conj, add, tuple(errors)
 
 
-def _probe_max_ndim(device: str) -> int | None:
-    """用递增轴数的微张量试到抛错；返回成功的最大维数，全失败返回 None。"""
+def _probe_max_ndim(device: str) -> tuple[int | None, str | None]:
+    """用递增轴数的微张量试到抛错；返回 (成功的最大维数, 错误串)。
+    正常到达维度上限不算失败（error 为 None）；连 1 维都失败才记错误。"""
     last_ok: int | None = None
+    first_error: str | None = None
     for ndim in range(1, MAX_PROBE_NDIM + 1):
         try:
             torch.empty((1,) * ndim, dtype=torch.complex64, device=device)
             last_ok = ndim
-        except Exception:  # noqa: BLE001  到达维度上限即停
+        except Exception as exc:  # noqa: BLE001  到达维度上限即停
+            if last_ok is None:
+                first_error = f"max_ndim: {exc!r}"
             break
-    return last_ok
+    return last_ok, first_error
 
 
-def _probe_total_memory(device: str) -> int | None:
-    """查询设备总内存（字节）；CPU 或不可用时返回 None（不做 allocate-until-OOM）。"""
+def _probe_total_memory(device: str) -> tuple[int | None, str | None]:
+    """查询设备总内存（字节）。非 NPU 设备返回 (None, None)（不适用，非失败）；
+    NPU 查询异常返回 (None, 错误串)。不做 allocate-until-OOM。"""
     if not device.startswith("npu"):
-        return None
+        return None, None
     try:
-        free, total = torch.npu.mem_get_info()  # type: ignore[attr-defined]
-        return int(total)
-    except Exception:  # noqa: BLE001
-        return None
+        free, total = torch.npu.mem_get_info(device)  # type: ignore[attr-defined]
+        return int(total), None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"total_memory: {exc!r}"
 
 
 def _collect_capabilities(backend=None, *, allow_cpu_fallback: bool = False) -> NpuCapabilities:
@@ -92,8 +97,8 @@ def _collect_capabilities(backend=None, *, allow_cpu_fallback: bool = False) -> 
 
     matmul, conj, add, op_errors = _probe_op_support(device)
     needs_decomp = not (matmul and conj and add)
-    max_ndim = _probe_max_ndim(device)
-    total_memory = _probe_total_memory(device)
+    max_ndim, ndim_error = _probe_max_ndim(device)
+    total_memory, mem_error = _probe_total_memory(device)
 
     if total_memory is not None:
         max_elements = int(total_memory * MEMORY_SAFETY) // BYTES_COMPLEX64
@@ -106,6 +111,8 @@ def _collect_capabilities(backend=None, *, allow_cpu_fallback: bool = False) -> 
         max_qubits_sharded = max_qubits + int(math.floor(math.log2(ctx.world_size)))
     else:
         max_qubits_sharded = None
+
+    probe_errors = tuple(e for e in (*op_errors, ndim_error, mem_error) if e)
 
     return NpuCapabilities(
         device=device,
@@ -123,7 +130,7 @@ def _collect_capabilities(backend=None, *, allow_cpu_fallback: bool = False) -> 
         max_qubits_sharded=max_qubits_sharded,
         total_memory=total_memory,
         world_size=ctx.world_size,
-        probe_errors=op_errors,
+        probe_errors=probe_errors,
     )
 
 
