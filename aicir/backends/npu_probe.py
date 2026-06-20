@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 
 import torch
 
+from ..devices import Target
 from .npu_backend import is_npu_available, npu_runtime_context_from_env
 
 # 模块常量
@@ -222,3 +223,20 @@ def probe_npu(
     caps = _collect_capabilities(backend, allow_cpu_fallback=allow_cpu_fallback)
     _save_cached(caps)
     return caps
+
+
+def target_from_npu(caps: NpuCapabilities, n_qubits: int | None = None) -> Target:
+    """把 NpuCapabilities 映射为 Target 执行标志。
+
+    ``n_qubits`` 缺省时取 ``caps.max_qubits``；两者皆 None 抛 ValueError。
+    丰富的 dtype/内存细节留在 caps，Target 只消费它能建模的子集。
+    """
+    resolved = n_qubits if n_qubits is not None else caps.max_qubits
+    if resolved is None:
+        raise ValueError("target_from_npu 需要 n_qubits（caps.max_qubits 为 None 时必须显式传入）")
+    return Target(
+        n_qubits=int(resolved),
+        supports_statevector=True,
+        supports_density_matrix=False,
+        supports_autodiff=True,
+    )
