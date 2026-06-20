@@ -59,9 +59,22 @@ print(result.measured_qubits) # (0, 1)
 
 ### ShotSampler 参数说明
 - **`__init__(backend=None, shots=1024)`**: 默认采用 numpy 后端。
-- **`run(circuits, shots=None, measure_qubits=())`**:
+- **`run(circuits, shots=None, measure_qubits=(), parameter_values=None)`**:
   - `shots` 覆盖实例级别的配置。
   - `measure_qubits` 显式指定要在末端测量的比特（当线路无内嵌测量操作时生效）。
+  - `parameter_values` 对模板电路延迟绑定（见 §5.3）。
+
+### StatevectorSampler（精确概率）
+
+返回演化态的解析概率分布，无散粒噪声（`counts` 为空、`shots` 为 `None`），拒绝 `shots=`。
+
+```python
+from aicir.primitives import StatevectorSampler
+
+result = StatevectorSampler().run(bell)
+print(result.probs)   # {'|00>': 0.5, '|11>': 0.5}
+print(result.counts)  # {}（精确路径无采样计数）
+```
 
 ---
 
