@@ -166,7 +166,15 @@ values = estimator.run(circuits, observables, parameter_values=params)
 
 这样 VQE、QAOA、QAS、metrics 都可以依赖 primitives，而不是各自处理测量、Hamiltonian 和 counts。
 
-当前状态：第一片已落地。`aicir.primitives` 提供 `BaseSampler`/`BaseEstimator` 接口、最小统一结果对象 `SampleResult`/`EstimateResult`（第 9 节切片），以及三个实现：`ShotSampler`（包装 `Measure`，支持显式 `measure_qubits` 与内嵌 measure 门）、`StatevectorEstimator`（精确态向量期望，拒绝 `shots=`）、`ShotEstimator`（包装 `PauliEstimator` 的分组/基变换/shot 分配，并暴露 `estimate()` 直通方法，可直接作 `BasicVQE(energy_estimator=...)` 注入）。约定：接收已绑定参数的电路；单入参返回单结果、序列返回列表；单个可观测量可广播。`Noisy*`/`Backend*` 变体、`parameter_values=` 延迟绑定与 `vqc`/`qas`/`metrics` 的切换尚未开始。
+当前状态：本节主体已落地（2026-06-20）。`aicir.primitives` 提供 `BaseSampler`/`BaseEstimator` 接口、统一结果对象 `SampleResult`/`EstimateResult`（第 9 节切片），及全部三类执行变体：
+
+- 采样：`StatevectorSampler`（精确解析概率，拒绝 `shots=`）、`ShotSampler`（包装 `Measure`，支持显式 `measure_qubits` 与内嵌 measure 门）、`NoisySampler`（把 `noise_model` 附加到线路走密度矩阵采样）。
+- 估计：`StatevectorEstimator`（精确态向量期望，拒绝 `shots=`）、`ShotEstimator`（包装 `PauliEstimator` 的分组/基变换/shot 分配）、`NoisyEstimator`（密度矩阵期望，`shots=None` 确定性、`shots>=1` 叠加散粒）。
+- 扩展点：`BackendSampler`/`BackendEstimator` 包装用户注入的 `runner`，面向真实硬件/远端服务（仓内无 QPU，故为注入式扩展点而非内置后端）。
+
+约定：`run(circuits, [observables,] *, shots=None, parameter_values=None)`——`parameter_values=` 对模板电路延迟绑定（单电路 → 一维数组；电路序列 → 数组序列）；单入参返回单结果、序列返回列表；单个可观测量可广播。`ShotEstimator`/`NoisyEstimator` 暴露 `estimate()` 直通方法，可直接作 `BasicVQE(energy_estimator=...)` 注入（加性集成，已端到端测试）。配套 `tests/primitives/test_primitives.py`。
+
+下游 `vqc`/`qas`/`metrics` 采用**加性集成**：算法层可经 `energy_estimator=` 等现有注入点消费 primitives（VQE 已端到端验证 `ShotEstimator`/`NoisyEstimator`），未重写其内部 `Measure`/`PauliEstimator` 调用——全量内部迁移仍属可选后续。
 
 ### 5. 增加 PennyLane 风格 `QNode`
 
