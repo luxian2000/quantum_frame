@@ -22,6 +22,18 @@
   - `@qfun(..., noise_model=NoiseModel)` 把噪声附加到线路、经 `Measure.run` 走密度矩阵模拟读取
     期望值；`differential="auto"` 在有噪声时以 `noisy=True` 走 `select_diff`。
 
+- **`aicir.primitives` 第 4 节主体落地：补齐 Sampler/Estimator 全变体 + 延迟绑定 + 扩展点。**
+  - 采样新增 `StatevectorSampler`（精确解析概率，拒绝 `shots=`）、`NoisySampler`
+    （`noise_model` 附加到线路走密度矩阵采样）。
+  - 估计新增 `NoisyEstimator`（密度矩阵期望，`shots=None` 确定性 / `shots>=1` 叠加散粒），
+    暴露 `estimate()`，可作 `BasicVQE(energy_estimator=...)` 注入。
+  - 扩展点 `BackendSampler`/`BackendEstimator`：包装用户注入的 `runner`（counts / 期望值 /
+    现成结果对象），面向真实硬件或远端服务。
+  - 全部 `run(...)` 新增 `parameter_values=` 延迟绑定（对模板电路；单电路 → 一维数组、
+    序列 → 数组序列）。
+  - 下游加性集成：`BasicVQE` 经 `energy_estimator=` 直接消费 `ShotEstimator`/`NoisyEstimator`，
+    未改 VQE 内部（已端到端测试）。扩充 `tests/primitives/test_primitives.py`。
+
 ### Fixed
 
 - **`qfun` 单元素一维参数梯度。** `QFun.grad` 旧逻辑把任意 `size==1` 数组折叠成标量，导致
