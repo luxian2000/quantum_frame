@@ -23,6 +23,11 @@ MEMORY_SAFETY = 0.9
 MAX_PROBE_NDIM = 64
 
 
+def _make_cache_key(device: str, torch_version: str, torch_npu_version: str | None) -> str:
+    """缓存失效键的唯一格式来源：设备 + torch / torch_npu 版本。"""
+    return f"{device}|{torch_version}|{torch_npu_version}"
+
+
 def _torch_npu_version() -> str | None:
     """获取 torch_npu 版本字符串，失败返回 None。"""
     try:
@@ -174,7 +179,7 @@ class NpuCapabilities:
 
     def cache_key(self) -> str:
         """缓存失效键：设备 + torch / torch_npu 版本。"""
-        return f"{self.device}|{self.torch_version}|{self.torch_npu_version}"
+        return _make_cache_key(self.device, self.torch_version, self.torch_npu_version)
 
 
 def cache_path() -> pathlib.Path:
@@ -203,6 +208,17 @@ def _save_cached(caps: NpuCapabilities) -> None:
     path.write_text(json.dumps(caps.to_dict(), ensure_ascii=False, indent=2))
 
 
+def free_memory(device: str = "npu:0") -> int | None:
+    """实时查询设备空闲内存（字节）。非 NPU 设备或查询失败返回 None；不缓存（内存随分配变化）。"""
+    if not device.startswith("npu"):
+        return None
+    try:
+        free, total = torch.npu.mem_get_info(device)  # type: ignore[attr-defined]
+        return int(free)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def probe_npu(
     backend=None, *, allow_cpu_fallback: bool = False, refresh: bool = False
 ) -> NpuCapabilities:
@@ -210,9 +226,10 @@ def probe_npu(
 
     缓存仅持久化静态字段；实时空闲内存请另行查询（本探测不缓存空闲内存）。
     """
-    probe_key = (
-        f"{_resolve_probe_device(backend, allow_cpu_fallback)}"
-        f"|{torch.__version__}|{_torch_npu_version()}"
+    probe_key = _make_cache_key(
+        _resolve_probe_device(backend, allow_cpu_fallback),
+        str(torch.__version__),
+        _torch_npu_version(),
     )
 
     if not refresh:
