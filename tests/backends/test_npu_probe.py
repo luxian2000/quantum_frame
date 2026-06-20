@@ -142,6 +142,18 @@ def test_target_from_npu_requires_some_n_qubits():
         target_from_npu(caps)  # 无显式 n_qubits 且 max_qubits 为 None
 
 
+from aicir.backends.npu_probe import _make_cache_key, free_memory
+
+
+def test_make_cache_key_matches_capabilities_method():
+    caps = _sample_caps()
+    assert _make_cache_key(caps.device, caps.torch_version, caps.torch_npu_version) == caps.cache_key()
+
+
+def test_free_memory_none_on_non_npu():
+    assert free_memory("cpu") is None
+
+
 def test_demo_main_cpu_fallback_returns_zero(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("AICIR_CACHE_DIR", str(tmp_path))
     from demos.demo_npu_probe import main
