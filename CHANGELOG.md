@@ -34,6 +34,16 @@
   - 下游加性集成：`BasicVQE` 经 `energy_estimator=` 直接消费 `ShotEstimator`/`NoisyEstimator`，
     未改 VQE 内部（已端到端测试）。扩充 `tests/primitives/test_primitives.py`。
 
+- **`aicir.backends.npu_probe` 模块：Ascend NPU 硬件能力探测与缓存。**
+  - 公开 API：`probe_npu(backend=None, *, allow_cpu_fallback=False, refresh=False)` 探测 NPU
+    dtype / 算子 / 张量维度 / 内存能力，缓存到磁盘（`~/.cache/aicir/`，支持 `AICIR_CACHE_DIR` 覆盖），
+    缓存键为 `device | torch_version | torch_npu_version`。
+  - `NpuCapabilities` 不可变数据类：探测结果容器，含 `supports_complex_*`、`max_ndim`、`max_qubits`
+    （单卡/分片）、`total_memory`，可序列化/反序列化（`to_dict` / `from_dict`）。
+  - `target_from_npu(caps, n_qubits=None) -> Target`：把能力映射为电路 Target 标志。
+  - 脚本 `demos/demo_npu_probe.py`：命令行工具，支持 `--allow-cpu-fallback` / `--refresh` 旗标，
+    打印能力表并构建 Target（若可能）。配套 `tests/backends/test_npu_probe.py`（单元测试 + 集成测试）。
+
 ### Fixed
 
 - **`qfun` 单元素一维参数梯度。** `QFun.grad` 旧逻辑把任意 `size==1` 数组折叠成标量，导致
