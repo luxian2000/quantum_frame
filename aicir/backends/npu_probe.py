@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import json
 import math
+import os
+import pathlib
 from dataclasses import asdict, dataclass
 
 import torch
@@ -171,3 +174,65 @@ class NpuCapabilities:
     def cache_key(self) -> str:
         """缓存失效键：设备 + torch / torch_npu 版本。"""
         return f"{self.device}|{self.torch_version}|{self.torch_npu_version}"
+
+
+def cache_path() -> pathlib.Path:
+    """能力缓存文件路径；可经 AICIR_CACHE_DIR 覆盖，默认 ~/.cache/aicir/。"""
+    base = os.environ.get("AICIR_CACHE_DIR")
+    root = pathlib.Path(base) if base else pathlib.Path.home() / ".cache" / "aicir"
+    return root / "npu_caps.json"
+
+
+def _load_cached(key: str) -> NpuCapabilities | None:
+    """读缓存；文件缺失/损坏/键不匹配返回 None。"""
+    path = cache_path()
+    if not path.exists():
+        return None
+    try:
+        caps = NpuCapabilities.from_dict(json.loads(path.read_text()))
+    except Exception:  # noqa: BLE001  损坏缓存视为未命中
+        return None
+    return caps if caps.cache_key() == key else None
+
+
+def _save_cached(caps: NpuCapabilities) -> None:
+    """写缓存（静态字段）。"""
+    path = cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(caps.to_dict(), ensure_ascii=False, indent=2))
+
+
+def probe_npu(
+    backend=None, *, allow_cpu_fallback: bool = False, refresh: bool = False
+) -> NpuCapabilities:
+    """探测 NPU 能力。``refresh=False`` 且缓存键匹配时读缓存，否则探测并写回。
+
+    缓存仅持久化静态字段；实时空闲内存请另行查询（本探测不缓存空闲内存）。
+    """
+    probe_key = NpuCapabilities(
+        device=_resolve_probe_device(backend, allow_cpu_fallback),
+        available=is_npu_available(),
+        torch_version=str(torch.__version__),
+        torch_npu_version=_torch_npu_version(),
+        complex_dtype="complex64",
+        supports_complex_matmul=False,
+        supports_complex_conj=False,
+        supports_complex_add=False,
+        needs_real_imag_decomp=True,
+        max_ndim=None,
+        max_elements=None,
+        max_qubits=None,
+        max_qubits_sharded=None,
+        total_memory=None,
+        world_size=1,
+        probe_errors=(),
+    ).cache_key()
+
+    if not refresh:
+        cached = _load_cached(probe_key)
+        if cached is not None:
+            return cached
+
+    caps = _collect_capabilities(backend, allow_cpu_fallback=allow_cpu_fallback)
+    _save_cached(caps)
+    return caps

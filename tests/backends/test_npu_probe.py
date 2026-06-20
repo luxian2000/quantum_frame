@@ -1,8 +1,10 @@
+import json
+
 import pytest
 
 pytest.importorskip("torch")
 
-from aicir.backends.npu_probe import NpuCapabilities, _collect_capabilities
+from aicir.backends.npu_probe import NpuCapabilities, _collect_capabilities, cache_path, probe_npu
 
 
 def _sample_caps(**over):
@@ -68,3 +70,41 @@ def test_collect_capabilities_records_probe_failures(monkeypatch):
     monkeypatch.setattr(mod, "_probe_total_memory", lambda device: (None, "total_memory: boom"))
     caps = mod._collect_capabilities(allow_cpu_fallback=True)
     assert "total_memory: boom" in caps.probe_errors
+
+
+def test_probe_npu_writes_then_loads_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("AICIR_CACHE_DIR", str(tmp_path))
+    first = probe_npu(allow_cpu_fallback=True)
+    assert cache_path().exists()
+
+    # 篡改缓存内容；refresh=False 且键匹配 → 应读到被篡改值，证明走了缓存
+    data = json.loads(cache_path().read_text())
+    data["max_ndim"] = 999
+    cache_path().write_text(json.dumps(data))
+
+    cached = probe_npu(allow_cpu_fallback=True)
+    assert cached.max_ndim == 999
+    assert cached.cache_key() == first.cache_key()
+
+
+def test_probe_npu_refresh_ignores_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("AICIR_CACHE_DIR", str(tmp_path))
+    probe_npu(allow_cpu_fallback=True)
+    data = json.loads(cache_path().read_text())
+    data["max_ndim"] = 999
+    cache_path().write_text(json.dumps(data))
+
+    fresh = probe_npu(allow_cpu_fallback=True, refresh=True)
+    assert fresh.max_ndim != 999  # 重新探测，覆盖篡改值
+
+
+def test_probe_npu_stale_key_reprobes(tmp_path, monkeypatch):
+    monkeypatch.setenv("AICIR_CACHE_DIR", str(tmp_path))
+    probe_npu(allow_cpu_fallback=True)
+    data = json.loads(cache_path().read_text())
+    data["torch_version"] = "0.0.0-stale"
+    data["max_ndim"] = 999
+    cache_path().write_text(json.dumps(data))
+
+    result = probe_npu(allow_cpu_fallback=True)
+    assert result.max_ndim != 999  # 键不匹配 → 忽略缓存重探
