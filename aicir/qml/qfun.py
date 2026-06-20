@@ -68,10 +68,15 @@ class QFun:
     ) -> None:
         if observable is None:
             raise ValueError("qfun 需要 observable=（如 Hamiltonian）")
+        self._multi = isinstance(observable, (list, tuple))
+        observables = list(observable) if self._multi else [observable]
+        if not observables or any(o is None for o in observables):
+            raise ValueError("qfun 需要 observable=（如 Hamiltonian 或其列表）")
         self._fn = fn
         self.device = device
         self.differential = differential
         self.observable = observable
+        self._observables = observables
         self.shots = shots
         self._backend = _make_backend(device)
         functools.update_wrapper(self, fn)
@@ -89,17 +94,22 @@ class QFun:
             )
         return circuit
 
-    def _energy(self, param: Any) -> float:
+    def _energies(self, param: Any) -> np.ndarray:
+        """对所有观测量求期望值，返回形如 ``(n_obs,)`` 的数组。"""
         circuit = self._circuit(param)
         backend = circuit.backend
-        observable = self.observable.to_matrix(backend)
+        observables = {f"H{i}": o.to_matrix(backend) for i, o in enumerate(self._observables)}
         measurement = Measure(backend).run(
-            circuit, shots=self.shots, observables={"H": observable}, return_state=False
+            circuit, shots=self.shots, observables=observables, return_state=False
         )
-        return float(measurement.expectation_values["H"])
+        return np.array(
+            [float(measurement.expectation_values[f"H{i}"]) for i in range(len(self._observables))],
+            dtype=float,
+        )
 
-    def __call__(self, param: Any) -> float:
-        return self._energy(param)
+    def __call__(self, param: Any) -> Any:
+        values = self._energies(param)
+        return values if self._multi else float(values[0])
 
     def _gradient_fn(self) -> Callable[..., Any]:
         name = str(self.differential).lower()
@@ -112,12 +122,22 @@ class QFun:
         scalar = x.ndim == 0
         grad_fn = self._gradient_fn()
 
-        def energy(p: np.ndarray) -> float:
-            arg = float(p) if (p.ndim == 0 or p.size == 1) else p
-            return self._energy(arg)
+        def energy_of(index: int) -> Callable[[np.ndarray], float]:
+            def energy(p: np.ndarray) -> float:
+                # 0 维（标量参）喂标量给用户函数；1 维数组按原样传，保留下标语义。
+                arg = float(p) if p.ndim == 0 else p
+                return float(self._energies(arg)[index])
 
-        g = np.asarray(grad_fn(energy, x), dtype=float)
-        return float(g) if scalar else g
+            return energy
+
+        if not self._multi:
+            g = np.asarray(grad_fn(energy_of(0), x), dtype=float)
+            return float(g) if scalar else g
+
+        # 多观测量：逐观测量求梯度，按 n_obs 堆叠成 Jacobian。
+        # 标量参 → (n_obs,)；向量参 → (n_obs, n_param)。
+        rows = [np.asarray(grad_fn(energy_of(i), x), dtype=float) for i in range(len(self._observables))]
+        return np.stack(rows, axis=0)
 
 
 def qfun(
