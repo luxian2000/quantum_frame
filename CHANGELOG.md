@@ -15,6 +15,12 @@
     `energy`/`parameter_shift_gradient` 直接委托 `cost`/`cost.grad`，`metadata["mode"]="qfun"`；
     `hamiltonian` 改为可选位置参（cost 模式下不需要）。配套 `tests/vqc/test_vqe_qfun.py`、
     扩充 `tests/qfun/test_qfun.py`。
+- **`qfun` 第三片（NEXT.md §5）：`BasicQAOA` 接入 + 噪声路径封装。**
+  - `BasicQAOA(cost=<qfun>, p=...)`（须单观测量 qfun）旁路稠密矩阵 ansatz，`energy`/梯度委托
+    `cost`/`cost.grad`，`n_params=2p`；`problem_hamiltonian` 改为可选，`QAOAResult.statevector`
+    允许 `None`（cost 模式）。配套 `tests/vqc/test_qaoa_qfun.py`。
+  - `@qfun(..., noise_model=NoiseModel)` 把噪声附加到线路、经 `Measure.run` 走密度矩阵模拟读取
+    期望值；`differential="auto"` 在有噪声时以 `noisy=True` 走 `select_diff`。
 
 ### Fixed
 

@@ -65,6 +65,7 @@ class QFun:
         differential: str = "psr",
         observable: Any = None,
         shots: Any = None,
+        noise_model: Any = None,
     ) -> None:
         if observable is None:
             raise ValueError("qfun 需要 observable=（如 Hamiltonian）")
@@ -78,6 +79,7 @@ class QFun:
         self.observable = observable
         self._observables = observables
         self.shots = shots
+        self.noise_model = noise_model
         self._backend = _make_backend(device)
         functools.update_wrapper(self, fn)
 
@@ -98,6 +100,9 @@ class QFun:
         """对所有观测量求期望值，返回形如 ``(n_obs,)`` 的数组。"""
         circuit = self._circuit(param)
         backend = circuit.backend
+        if self.noise_model is not None:
+            # 噪声路径：附加到线路，由 Measure.run 走密度矩阵模拟读取
+            circuit.noise_model = self.noise_model
         observables = {f"H{i}": o.to_matrix(backend) for i, o in enumerate(self._observables)}
         measurement = Measure(backend).run(
             circuit, shots=self.shots, observables=observables, return_state=False
@@ -114,7 +119,8 @@ class QFun:
     def _gradient_fn(self) -> Callable[..., Any]:
         name = str(self.differential).lower()
         if name == "auto":
-            name = select_diff(backend=self._backend, shots=self.shots, noisy=False)
+            noisy = self.noise_model is not None
+            name = select_diff(backend=self._backend, shots=self.shots, noisy=noisy)
         return resolve_diff(name)
 
     def grad(self, param: Any) -> Any:
@@ -146,10 +152,18 @@ def qfun(
     differential: str = "psr",
     observable: Any = None,
     shots: Any = None,
+    noise_model: Any = None,
 ) -> Callable[[Callable[[Any], Circuit]], QFun]:
     """装饰器：把"返回 Circuit 的量子函数"包成带 ``.grad`` 的 :class:`QFun`。"""
 
     def deco(fn: Callable[[Any], Circuit]) -> QFun:
-        return QFun(fn, device=device, differential=differential, observable=observable, shots=shots)
+        return QFun(
+            fn,
+            device=device,
+            differential=differential,
+            observable=observable,
+            shots=shots,
+            noise_model=noise_model,
+        )
 
     return deco

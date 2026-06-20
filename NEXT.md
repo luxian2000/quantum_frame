@@ -197,7 +197,13 @@ grad = cost.grad(0.1)
 - 多测量：`observable=[H1, H2, ...]` → `cost(x)` 返回 `(n_obs,)` 数组，`cost.grad(x)` 返回 Jacobian（标量参→`(n_obs,)`；向量参→`(n_obs, n_param)`）；逐观测量经同一 §6 `psr` 求梯度。
 - VQE 接入：`BasicVQE(cost=<qfun>, n_params=...)`（须单观测量 qfun）旁路 ansatz/hamiltonian 编排，`energy`/`parameter_shift_gradient` 直接委托 `cost`/`cost.grad`，`metadata["mode"]="qfun"`。配套 `tests/qfun/test_qfun.py`、`tests/vqc/test_vqe_qfun.py`。
 
-与 §5 原草图的有意差异：观测量声明在装饰器（`observable=`）而非函数体内 `return expval(H)`；函数体显式 `return Circuit`。因此暂未提供 `expval` 测量帮助器。尚未做：`BasicQAOA` 接入 `qfun`、shot 估计与噪声路径的便捷封装。
+第三片已落地（2026-06-20）：**`BasicQAOA` 接入 + 噪声/shot 便捷封装**。
+
+- QAOA 接入：`BasicQAOA(cost=<qfun>, p=...)`（须单观测量 qfun）旁路稠密矩阵 ansatz，`energy`/梯度委托 `cost`/`cost.grad`；`n_params=2p`，`problem_hamiltonian` 变可选，`QAOAResult.statevector` 在 cost 模式为 `None`。配套 `tests/vqc/test_qaoa_qfun.py`。
+- 噪声封装：`@qfun(..., noise_model=NoiseModel)` 把噪声附加到线路，经 `Measure.run` 走密度矩阵模拟读取期望值；`differential="auto"` 在 `noise_model` 非空时以 `noisy=True` 走 `select_diff`。
+- shot 封装：`shots=` 自首片即透传至 `Measure.run`（无新接口）。
+
+与 §5 原草图的有意差异：观测量声明在装饰器（`observable=`）而非函数体内 `return expval(H)`；函数体显式 `return Circuit`。因此暂未提供 `expval` 测量帮助器（设计取舍，非待办）。§5 主体收尾，剩 `expval` 帮助器一项有意保留。
 
 ### 6. 把梯度方法做成策略注册表
 
