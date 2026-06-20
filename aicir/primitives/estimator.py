@@ -31,13 +31,69 @@ class StatevectorEstimator(BaseEstimator):
         raw = self.backend.expectation_sv(state, matrix)
         return float(np.real(complex(raw)))
 
-    def run(self, circuits, observables, *, shots: int | None = None):
+    def run(self, circuits, observables, *, shots: int | None = None, parameter_values=None):
         if shots is not None:
             raise ValueError("StatevectorEstimator 为精确路径，不接受 shots；请用 ShotEstimator")
-        items, single = normalize_run_inputs(circuits)
+        items, single = normalize_run_inputs(circuits, parameter_values)
         paired = pair_observables(items, observables)
         results = [
             EstimateResult(value=self._expectation(circuit, observable), metadata={"method": "statevector"})
+            for circuit, observable in zip(items, paired)
+        ]
+        return results[0] if single else results
+
+
+class _EnergyResult:
+    """``BasicVQE(energy_estimator=...)`` 契约的最小载体：仅暴露 ``energy``。"""
+
+    __slots__ = ("energy",)
+
+    def __init__(self, energy: float) -> None:
+        self.energy = float(energy)
+
+
+class NoisyEstimator(BaseEstimator):
+    """带噪声期望：把 ``noise_model`` 附加到线路，经密度矩阵模拟读取期望值。
+
+    ``shots=None`` 给出确定性密度矩阵期望（仅退相干、无采样噪声）；``shots>=1``
+    则叠加散粒统计。同样暴露 :meth:`estimate`，可作 ``BasicVQE`` 的
+    ``energy_estimator`` 注入。
+    """
+
+    def __init__(self, noise_model, backend=None, *, shots: int | None = None) -> None:
+        if noise_model is None:
+            raise ValueError("NoisyEstimator 需要 noise_model=")
+        self.noise_model = noise_model
+        self.backend = backend if backend is not None else NumpyBackend()
+        self.shots = shots
+
+    def _expectation(self, circuit, observable, shots) -> float:
+        circuit.noise_model = self.noise_model
+        if hasattr(observable, "to_matrix"):
+            matrix = observable.to_matrix(self.backend)
+        else:
+            matrix = self.backend.cast(np.asarray(observable))
+        result = Measure(self.backend).run(
+            circuit, shots=shots, observables={"H": matrix}, return_state=False
+        )
+        return float(np.real(complex(result.expectation_values["H"])))
+
+    def estimate(self, circuit, hamiltonian, *, shots: int | None = None, **_ignored):
+        """直通期望（BasicVQE energy_estimator 契约）。"""
+
+        use_shots = self.shots if shots is None else shots
+        return _EnergyResult(self._expectation(circuit, hamiltonian, use_shots))
+
+    def run(self, circuits, observables, *, shots: int | None = None, parameter_values=None):
+        use_shots = self.shots if shots is None else shots
+        items, single = normalize_run_inputs(circuits, parameter_values)
+        paired = pair_observables(items, observables)
+        results = [
+            EstimateResult(
+                value=self._expectation(circuit, observable, use_shots),
+                shots=use_shots,
+                metadata={"method": "noisy_dm"},
+            )
             for circuit, observable in zip(items, paired)
         ]
         return results[0] if single else results
@@ -67,8 +123,8 @@ class ShotEstimator(BaseEstimator):
 
         return self._inner.estimate(circuit, hamiltonian, **kwargs)
 
-    def run(self, circuits, observables, *, shots: int | None = None):
-        items, single = normalize_run_inputs(circuits)
+    def run(self, circuits, observables, *, shots: int | None = None, parameter_values=None):
+        items, single = normalize_run_inputs(circuits, parameter_values)
         paired = pair_observables(items, observables)
         results = []
         for circuit, observable in zip(items, paired):

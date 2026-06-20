@@ -166,7 +166,15 @@ values = estimator.run(circuits, observables, parameter_values=params)
 
 这样 VQE、QAOA、QAS、metrics 都可以依赖 primitives，而不是各自处理测量、Hamiltonian 和 counts。
 
-当前状态：第一片已落地。`aicir.primitives` 提供 `BaseSampler`/`BaseEstimator` 接口、最小统一结果对象 `SampleResult`/`EstimateResult`（第 9 节切片），以及三个实现：`ShotSampler`（包装 `Measure`，支持显式 `measure_qubits` 与内嵌 measure 门）、`StatevectorEstimator`（精确态向量期望，拒绝 `shots=`）、`ShotEstimator`（包装 `PauliEstimator` 的分组/基变换/shot 分配，并暴露 `estimate()` 直通方法，可直接作 `BasicVQE(energy_estimator=...)` 注入）。约定：接收已绑定参数的电路；单入参返回单结果、序列返回列表；单个可观测量可广播。`Noisy*`/`Backend*` 变体、`parameter_values=` 延迟绑定与 `vqc`/`qas`/`metrics` 的切换尚未开始。
+当前状态：本节主体已落地（2026-06-20）。`aicir.primitives` 提供 `BaseSampler`/`BaseEstimator` 接口、统一结果对象 `SampleResult`/`EstimateResult`（第 9 节切片），及全部三类执行变体：
+
+- 采样：`StatevectorSampler`（精确解析概率，拒绝 `shots=`）、`ShotSampler`（包装 `Measure`，支持显式 `measure_qubits` 与内嵌 measure 门）、`NoisySampler`（把 `noise_model` 附加到线路走密度矩阵采样）。
+- 估计：`StatevectorEstimator`（精确态向量期望，拒绝 `shots=`）、`ShotEstimator`（包装 `PauliEstimator` 的分组/基变换/shot 分配）、`NoisyEstimator`（密度矩阵期望，`shots=None` 确定性、`shots>=1` 叠加散粒）。
+- 扩展点：`BackendSampler`/`BackendEstimator` 包装用户注入的 `runner`，面向真实硬件/远端服务（仓内无 QPU，故为注入式扩展点而非内置后端）。
+
+约定：`run(circuits, [observables,] *, shots=None, parameter_values=None)`——`parameter_values=` 对模板电路延迟绑定（单电路 → 一维数组；电路序列 → 数组序列）；单入参返回单结果、序列返回列表；单个可观测量可广播。`ShotEstimator`/`NoisyEstimator` 暴露 `estimate()` 直通方法，可直接作 `BasicVQE(energy_estimator=...)` 注入（加性集成，已端到端测试）。配套 `tests/primitives/test_primitives.py`。
+
+下游 `vqc`/`qas`/`metrics` 采用**加性集成**：算法层可经 `energy_estimator=` 等现有注入点消费 primitives（VQE 已端到端验证 `ShotEstimator`/`NoisyEstimator`），未重写其内部 `Measure`/`PauliEstimator` 调用——全量内部迁移仍属可选后续。
 
 ### 5. 增加 PennyLane 风格 `QNode`
 
@@ -191,7 +199,19 @@ grad = cost.grad(0.1)
 
 当前状态：第一片已落地，命名为 `qfun`（`aicir/qml/qfun.py`，从 `aicir.qml` 导出 `qfun` 装饰器与 `QFun` 类）。统一"量子函数 + 设备 + 测量 + 梯度"为一个可调用对象：`@qfun(device=..., differential=..., observable=..., shots=None)` 包装一个**返回 `Circuit`** 的函数（不依赖全局 tape，规避门工厂队列化的侵入式改动与误捕获风险——见设计取舍）；调用得期望值 `cost(x)`，`cost.grad(x)` 得梯度。`device` 映射 `numpy`/`cpu`→`NumpyBackend`、`gpu`/`torch`→`GPUBackend`、`npu`→`NPUBackend`；`differential` 经 §6 的 `aicir.qml.diff` 注册表分发，`"auto"` 走 `select_diff(backend, shots, noisy)` 自动优选，其余经 `resolve_diff`（仅 `fn_gradient`）。观测量经 `observable.to_matrix(backend)`，测量走 `Measure.run(..., observables=..., shots=None)` 精确路径。支持单个可训练位置参数（标量或一维数组）。配套 `tests/qfun/test_qfun.py`（`<Z>=cosθ`、`grad=-sinθ` 解析校验、`auto` 选择、契约守卫）。
 
-与 §5 原草图的有意差异：观测量声明在装饰器（`observable=`）而非函数体内 `return expval(H)`；函数体显式 `return Circuit`。因此暂未提供 `expval` 测量帮助器。尚未做：多参数/多测量、`BasicVQE`/`BasicQAOA` 接入 `qfun`、shot 估计与噪声路径的便捷封装。
+第二片已落地（2026-06-20）：**多参数 + 多测量 + `BasicVQE` 接入**。
+
+- 多参数：`observable=` 单个时 `cost(x)`/`cost.grad(x)` 接受单数组参（vector），grad 返回同形数组（修正了 size-1 一维数组被误折叠成标量的旧 bug）。
+- 多测量：`observable=[H1, H2, ...]` → `cost(x)` 返回 `(n_obs,)` 数组，`cost.grad(x)` 返回 Jacobian（标量参→`(n_obs,)`；向量参→`(n_obs, n_param)`）；逐观测量经同一 §6 `psr` 求梯度。
+- VQE 接入：`BasicVQE(cost=<qfun>, n_params=...)`（须单观测量 qfun）旁路 ansatz/hamiltonian 编排，`energy`/`parameter_shift_gradient` 直接委托 `cost`/`cost.grad`，`metadata["mode"]="qfun"`。配套 `tests/qfun/test_qfun.py`、`tests/vqc/test_vqe_qfun.py`。
+
+第三片已落地（2026-06-20）：**`BasicQAOA` 接入 + 噪声/shot 便捷封装**。
+
+- QAOA 接入：`BasicQAOA(cost=<qfun>, p=...)`（须单观测量 qfun）旁路稠密矩阵 ansatz，`energy`/梯度委托 `cost`/`cost.grad`；`n_params=2p`，`problem_hamiltonian` 变可选，`QAOAResult.statevector` 在 cost 模式为 `None`。配套 `tests/vqc/test_qaoa_qfun.py`。
+- 噪声封装：`@qfun(..., noise_model=NoiseModel)` 把噪声附加到线路，经 `Measure.run` 走密度矩阵模拟读取期望值；`differential="auto"` 在 `noise_model` 非空时以 `noisy=True` 走 `select_diff`。
+- shot 封装：`shots=` 自首片即透传至 `Measure.run`（无新接口）。
+
+与 §5 原草图的有意差异：观测量声明在装饰器（`observable=`）而非函数体内 `return expval(H)`；函数体显式 `return Circuit`。因此暂未提供 `expval` 测量帮助器（设计取舍，非待办）。§5 主体收尾，剩 `expval` 帮助器一项有意保留。
 
 ### 6. 把梯度方法做成策略注册表
 
