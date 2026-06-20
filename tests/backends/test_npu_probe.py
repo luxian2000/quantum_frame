@@ -108,3 +108,13 @@ def test_probe_npu_stale_key_reprobes(tmp_path, monkeypatch):
 
     result = probe_npu(allow_cpu_fallback=True)
     assert result.max_ndim != 999  # 键不匹配 → 忽略缓存重探
+
+
+def test_probe_npu_corrupted_cache_is_a_miss(tmp_path, monkeypatch):
+    monkeypatch.setenv("AICIR_CACHE_DIR", str(tmp_path))
+    cp = cache_path()
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    cp.write_text("{ not valid json")
+    caps = probe_npu(allow_cpu_fallback=True)  # 损坏缓存视为未命中：不崩溃、重探并覆盖
+    assert caps.device == "cpu"
+    assert json.loads(cp.read_text())  # 缓存被有效 JSON 覆盖

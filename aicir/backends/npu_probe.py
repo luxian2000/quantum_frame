@@ -209,24 +209,10 @@ def probe_npu(
 
     缓存仅持久化静态字段；实时空闲内存请另行查询（本探测不缓存空闲内存）。
     """
-    probe_key = NpuCapabilities(
-        device=_resolve_probe_device(backend, allow_cpu_fallback),
-        available=is_npu_available(),
-        torch_version=str(torch.__version__),
-        torch_npu_version=_torch_npu_version(),
-        complex_dtype="complex64",
-        supports_complex_matmul=False,
-        supports_complex_conj=False,
-        supports_complex_add=False,
-        needs_real_imag_decomp=True,
-        max_ndim=None,
-        max_elements=None,
-        max_qubits=None,
-        max_qubits_sharded=None,
-        total_memory=None,
-        world_size=1,
-        probe_errors=(),
-    ).cache_key()
+    probe_key = (
+        f"{_resolve_probe_device(backend, allow_cpu_fallback)}"
+        f"|{torch.__version__}|{_torch_npu_version()}"
+    )
 
     if not refresh:
         cached = _load_cached(probe_key)
