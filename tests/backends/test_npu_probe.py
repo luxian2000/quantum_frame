@@ -60,3 +60,11 @@ def test_collect_capabilities_requires_npu_without_fallback(monkeypatch):
     monkeypatch.setattr(mod, "is_npu_available", lambda: False)
     with pytest.raises(RuntimeError):
         _collect_capabilities(allow_cpu_fallback=False)
+
+
+def test_collect_capabilities_records_probe_failures(monkeypatch):
+    import aicir.backends.npu_probe as mod
+
+    monkeypatch.setattr(mod, "_probe_total_memory", lambda device: (None, "total_memory: boom"))
+    caps = mod._collect_capabilities(allow_cpu_fallback=True)
+    assert "total_memory: boom" in caps.probe_errors
