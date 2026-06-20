@@ -140,3 +140,13 @@ def test_target_from_npu_requires_some_n_qubits():
     caps = _sample_caps(max_qubits=None)
     with pytest.raises(ValueError):
         target_from_npu(caps)  # 无显式 n_qubits 且 max_qubits 为 None
+
+
+def test_demo_main_cpu_fallback_returns_zero(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("AICIR_CACHE_DIR", str(tmp_path))
+    from demos.demo_npu_probe import main
+
+    rc = main(["--allow-cpu-fallback"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "NpuCapabilities" in out or "device" in out
