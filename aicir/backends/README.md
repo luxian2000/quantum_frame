@@ -17,6 +17,7 @@ aicir 提供三种可互换的计算后端，都实现统一的 `Backend` 抽象
 9. [BatchSV — 批量态矢量路径](#9--batchsv)
 10. [Backend 抽象接口参考](#10--backend-抽象接口参考)
 11. [NPU complex64 兼容性详解](#11--npu-complex64-兼容性详解)
+12. [硬件能力探测（npu_probe）](#53--硬件能力探测npu_probe)
 
 ---
 
@@ -182,11 +183,79 @@ python demos/demo_npu.py --allow-cpu-fallback
 torchrun --nproc_per_node=4 your_script.py
 ```
 
-### 5.3  QAS supernet 集成
+### 5.3  硬件能力探测（npu_probe）
+
+> **功能：** 探测 Ascend NPU 运行时硬件能力（dtype、算子、张量维度上限、内存），缓存结果以供后续脚本复用，并可映射为 `Target` 执行标志。
+
+#### 模块入口
+
+```python
+from aicir.backends.npu_probe import probe_npu, NpuCapabilities, target_from_npu
+
+# 探测能力（默认无缓存刷新）
+caps = probe_npu(allow_cpu_fallback=False)  # NPU 不可用时报错
+# caps = probe_npu(allow_cpu_fallback=True)  # 允许回退到 CPU 探测
+# caps = probe_npu(refresh=True)  # 忽略缓存，强制重探
+
+# 能力查询
+print(f"device:               {caps.device}")
+print(f"available:            {caps.available}")
+print(f"torch / torch_npu:    {caps.torch_version} / {caps.torch_npu_version}")
+print(f"complex64 support:    matmul={caps.supports_complex_matmul}, conj={caps.supports_complex_conj}, add={caps.supports_complex_add}")
+print(f"max_ndim:             {caps.max_ndim}")
+print(f"max_qubits (单卡):    {caps.max_qubits}")
+print(f"max_qubits (分片):    {caps.max_qubits_sharded}  (world_size={caps.world_size})")
+print(f"total_memory:         {caps.total_memory} bytes")
+
+# 探测结果序列化
+caps.to_dict()          # → 可 JSON 化字典
+NpuCapabilities.from_dict(...)  # ← 反序列化
+
+# 映射为 Target（电路标志）
+target = target_from_npu(caps)                       # n_qubits 缺省用 caps.max_qubits
+target = target_from_npu(caps, n_qubits=10)          # 显式指定 n_qubits
+print(f"Target: {target}")
+```
+
+#### 缓存管理
+
+缓存位置可通过 `AICIR_CACHE_DIR` 环境变量覆盖（默认 `~/.cache/aicir/`）：
+
+```bash
+# 使用 ~/.cache/aicir/npu_caps.json（默认）
+python demos/demo_npu_probe.py
+
+# 使用 /tmp/my_cache/npu_caps.json
+AICIR_CACHE_DIR=/tmp/my_cache python demos/demo_npu_probe.py
+
+# 忽略缓存，强制重探
+python demos/demo_npu_probe.py --refresh
+```
+
+缓存失效键为 `device | torch_version | torch_npu_version`；不同版本或设备自动独立缓存。
+
+#### 探测脚本
+
+```bash
+# 严格 NPU（不可用则报错）
+python demos/demo_npu_probe.py
+
+# 允许 CPU 回退
+python demos/demo_npu_probe.py --allow-cpu-fallback
+
+# 忽略缓存重探
+python demos/demo_npu_probe.py --refresh
+```
+
+脚本输出能力表与派生的 `Target` 对象。
+
+---
+
+### 5.4  QAS supernet 集成
 
 在 QAS supernet（`aicir/qas`）中无需手动构造后端：把 `device="npu:0"` 传入配置，框架会自动选用 `NPUBackend`；CPU / CUDA 设备则用 `GPUBackend`。
 
-### 5.4  完整端到端示例
+### 5.5  完整端到端示例
 
 ```python
 import math
