@@ -2,6 +2,44 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-20
+
+### Added
+
+- **`qfun` 第二片（NEXT.md §5）：多参数 + 多测量 + `BasicVQE` 接入。**
+  - 多参数：单观测量时 `cost(x)`/`cost.grad(x)` 接受单数组参（vector），梯度返回同形数组。
+  - 多测量：`observable=[H1, H2, ...]` → `cost(x)` 返回 `(n_obs,)` 数组，`cost.grad(x)`
+    返回 Jacobian（标量参→`(n_obs,)`，向量参→`(n_obs, n_param)`），逐观测量经同一
+    `aicir.qml.deriv.psr` 求梯度（单一真源）。
+  - `BasicVQE(cost=<qfun>, n_params=...)`（须单观测量 qfun）旁路 ansatz/hamiltonian 编排，
+    `energy`/`parameter_shift_gradient` 直接委托 `cost`/`cost.grad`，`metadata["mode"]="qfun"`；
+    `hamiltonian` 改为可选位置参（cost 模式下不需要）。配套 `tests/vqc/test_vqe_qfun.py`、
+    扩充 `tests/qfun/test_qfun.py`。
+- **`qfun` 第三片（NEXT.md §5）：`BasicQAOA` 接入 + 噪声路径封装。**
+  - `BasicQAOA(cost=<qfun>, p=...)`（须单观测量 qfun）旁路稠密矩阵 ansatz，`energy`/梯度委托
+    `cost`/`cost.grad`，`n_params=2p`；`problem_hamiltonian` 改为可选，`QAOAResult.statevector`
+    允许 `None`（cost 模式）。配套 `tests/vqc/test_qaoa_qfun.py`。
+  - `@qfun(..., noise_model=NoiseModel)` 把噪声附加到线路、经 `Measure.run` 走密度矩阵模拟读取
+    期望值；`differential="auto"` 在有噪声时以 `noisy=True` 走 `select_diff`。
+
+- **`aicir.primitives` 第 4 节主体落地：补齐 Sampler/Estimator 全变体 + 延迟绑定 + 扩展点。**
+  - 采样新增 `StatevectorSampler`（精确解析概率，拒绝 `shots=`）、`NoisySampler`
+    （`noise_model` 附加到线路走密度矩阵采样）。
+  - 估计新增 `NoisyEstimator`（密度矩阵期望，`shots=None` 确定性 / `shots>=1` 叠加散粒），
+    暴露 `estimate()`，可作 `BasicVQE(energy_estimator=...)` 注入。
+  - 扩展点 `BackendSampler`/`BackendEstimator`：包装用户注入的 `runner`（counts / 期望值 /
+    现成结果对象），面向真实硬件或远端服务。
+  - 全部 `run(...)` 新增 `parameter_values=` 延迟绑定（对模板电路；单电路 → 一维数组、
+    序列 → 数组序列）。
+  - 下游加性集成：`BasicVQE` 经 `energy_estimator=` 直接消费 `ShotEstimator`/`NoisyEstimator`，
+    未改 VQE 内部（已端到端测试）。扩充 `tests/primitives/test_primitives.py`。
+
+### Fixed
+
+- **`qfun` 单元素一维参数梯度。** `QFun.grad` 旧逻辑把任意 `size==1` 数组折叠成标量，导致
+  `theta[0]` 索引的单参向量函数报错并触发 NumPy `ndim>0 → scalar` 弃用告警；现仅对 0 维
+  （真标量）折叠，一维数组按原样保形传入。
+
 ## 2026-06-19
 
 ### Added

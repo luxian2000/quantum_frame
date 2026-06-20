@@ -8,9 +8,13 @@ Primitives 是算法层的统一执行入口，为不同后端的采样与期望
 
 | 文件 / 类 | 描述 |
 | --- | --- |
+| `StatevectorSampler` | 精确解析概率采样器（无散粒噪声，拒绝 `shots=`） |
 | `ShotSampler` | 有限 shots 采样器（基类：`BaseSampler`） |
+| `NoisySampler` | 带噪声采样器（`noise_model` → 密度矩阵路径） |
 | `StatevectorEstimator` | 精确态向量期望值估计器（无散粒噪声） |
 | `ShotEstimator` | 有限 shots 能量估计器（自带 Pauli 分组，基类：`BaseEstimator`） |
+| `NoisyEstimator` | 带噪声期望值估计器（密度矩阵；`shots=None` 确定性） |
+| `BackendSampler` / `BackendEstimator` | 注入式 `runner` 扩展点（真实硬件/远端服务） |
 | `SampleResult` | `counts` 与 `probs` 采样结果载体 |
 | `EstimateResult` | 期望值与方差结果载体 |
 
@@ -20,7 +24,7 @@ Primitives 是算法层的统一执行入口，为不同后端的采样与期望
 
 Primitives 遵循以下入参归一化约定：
 
-1. **已绑定参数**：接收的 `circuit` 必须是参数已绑定的具体电路（`parameter_values=` 延迟绑定接口尚未实现）。
+1. **参数绑定**：默认接收已绑定参数的具体电路；也可传模板电路并经 `run(..., parameter_values=...)` 延迟绑定（单电路 → 一维数组；电路序列 → 数组序列）。
 2. **标量 / 列表行为**：
    - 传入单个电路，返回单个结果。
    - 传入序列（如 `list`），返回结果列表。
@@ -137,11 +141,40 @@ print(result.metadata["groups"])
 
 ---
 
-## 5 后续方向 (Roadmap)
+## 5 噪声与扩展点
 
-当前 primitives 是在 `aicir.measure` 上的一层薄包装。计划的演进方向包括：
+primitives 是在 `aicir.measure` 上的统一封装。除精确/采样路径外还提供：
 
-1. **噪声模拟支持**：未来的 `NoisySampler`/`NoisyEstimator`。目前可通过 `ShotEstimator(use_density_matrix=True, noise_model=...)` 透传到底层 `PauliEstimator`。
-2. **硬件/远端代理**：`BackendSampler`/`BackendEstimator` 作为向 QPU 真实硬件发送任务的远端扩展点。
-3. **参数延迟绑定**：实现 `run(circuit, parameter_values=...)`，避免频繁的电路副本生成。
-4. **子模块迁移**：未来将 `vqc`, `qas`, `metrics` 底层替换为 Primitives 统一调用接口。
+### 5.1 噪声路径
+
+`NoisySampler` / `NoisyEstimator` 把 `noise_model` 附加到线路、经密度矩阵模拟执行。`NoisyEstimator` 在 `shots=None` 时给出确定性密度矩阵期望（仅退相干、无采样噪声），`shots>=1` 叠加散粒统计。
+
+```python
+from aicir.primitives import NoisyEstimator
+
+est = NoisyEstimator(noise_model=my_noise)          # shots=None → 确定性
+result = est.run(circuit, ham)
+# 也可作 VQE 的 energy_estimator 注入（暴露 estimate()）
+vqe = BasicVQE(ham, ansatz=ansatz, energy_estimator=est)
+```
+
+### 5.2 注入式硬件/远端扩展点
+
+仓内不内置 QPU 或远端后端，`BackendSampler`/`BackendEstimator` 包装用户传入的 `runner`，由 runner 负责真正执行：
+
+```python
+from aicir.primitives import BackendEstimator
+
+def runner(circuit, observable, *, shots):      # 也可返回现成 EstimateResult
+    return my_qpu.expectation(circuit, observable, shots=shots)
+
+result = BackendEstimator(runner, shots=1024).run(circuit, ham)
+```
+
+### 5.3 延迟绑定
+
+所有 `run(...)` 支持 `parameter_values=`，对模板电路延迟绑定，避免上层频繁手动生成电路副本。
+
+### 5.4 子模块采用
+
+`vqc`/`qas`/`metrics` 采用加性集成：可经现有注入点（如 `BasicVQE(energy_estimator=...)`）消费 primitives，未重写其内部 `Measure`/`PauliEstimator` 调用；全量内部迁移属可选后续。
