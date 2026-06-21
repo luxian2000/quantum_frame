@@ -164,6 +164,9 @@ class NPUBackend(GPUBackend):
         self._fallback_to_cpu = bool(fallback_to_cpu)
         self._runtime_context = None
         self._local_matrix_cache = {}
+        # 能力 sheet 派生的执行参数；裸构造保持现状安全默认（见 NPUBackend.caps）。
+        self._max_qubits: int | None = None
+        self._needs_real_imag: bool = True
 
     @classmethod
     def from_distributed_env(
@@ -212,6 +215,35 @@ class NPUBackend(GPUBackend):
             process_group_backend=pg_backend,
         )
         return backend
+
+    @classmethod
+    def caps(cls, capabilities, *, device=None, dtype=None, fallback_to_cpu: bool = True):
+        """从 ``npu_probe`` 的能力 sheet 构造后端。
+
+        显式注入：读 ``capabilities``（``NpuCapabilities``）填充执行参数
+        （``max_qubits`` 用于 sizing guard，``needs_real_imag_decomp`` 备用），
+        本身不探测。``device`` 缺省取 ``capabilities.device``。
+        """
+        backend = cls(
+            dtype=dtype,
+            device=device if device is not None else capabilities.device,
+            fallback_to_cpu=fallback_to_cpu,
+        )
+        backend._max_qubits = capabilities.max_qubits
+        backend._needs_real_imag = bool(capabilities.needs_real_imag_decomp)
+        return backend
+
+    def ensure_capacity(self, n_qubits: int) -> None:
+        """单设备容量预检：``n_qubits`` 超过能力 sheet 的 ``max_qubits`` 时抛错。
+
+        ``max_qubits`` 为 ``None``（裸构造或无内存数据）时不守卫。防止超容分配
+        触发 OOM/SIGKILL。
+        """
+        if self._max_qubits is not None and int(n_qubits) > self._max_qubits:
+            raise ValueError(
+                f"n_qubits={n_qubits} 超过该 NPU 单设备容量 max_qubits={self._max_qubits}"
+                f"（2^n complex64 态向量放不下）"
+            )
 
     @property
     def distributed_initialized(self) -> bool:
@@ -434,6 +466,7 @@ class NPUBackend(GPUBackend):
 
     def zeros_state(self, n_qubits: int):
         """NPU workaround: avoid complex in-place write path when initializing |0...0>."""
+        self.ensure_capacity(n_qubits)
         if getattr(self._device, "type", None) == "npu" and self._dtype in (torch.complex64, torch.complex128):
             dim = 1 << n_qubits
             real_dtype = torch.float32 if self._dtype == torch.complex64 else torch.float64
