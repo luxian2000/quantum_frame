@@ -49,6 +49,11 @@
 - **`qfun` 单元素一维参数梯度。** `QFun.grad` 旧逻辑把任意 `size==1` 数组折叠成标量，导致
   `theta[0]` 索引的单参向量函数报错并触发 NumPy `ndim>0 → scalar` 弃用告警；现仅对 0 维
   （真标量）折叠，一维数组按原样保形传入。
+- **`npu_probe` 算子探测在 Ascend 上无法逐个测量。** `_probe_op_support` 旧逻辑用
+  `torch.ones(complex64)` 构造测试张量，而 Ascend 的填充算子 `aclnnInplaceOne` 不支持
+  complex64，构造即抛错，使 `supports_complex_matmul/conj/add` 三标志全退化为 `False`
+  （非逐个测量）。改用 `torch.complex(实数, 实数)` 构造，绕开填充算子，使 matmul/conj/add
+  各自独立测量；构造本身失败才三者皆 `False` 并记 `construct complex64`。
 
 ## 2026-06-19
 
