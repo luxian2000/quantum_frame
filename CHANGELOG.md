@@ -2,6 +2,21 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-21
+
+### Added
+
+- **`NPUBackend.caps(capabilities)`：消费 `npu_probe` 能力 sheet + 单设备 sizing guard。**
+  - 新增 classmethod `NPUBackend.caps(caps, *, device=None, dtype=None, fallback_to_cpu=True)`，
+    显式注入 `NpuCapabilities`（`device` 缺省取 `caps.device`），读 `max_qubits` 与
+    `needs_real_imag_decomp` 填执行参数；本身不探测（探测仍由 `probe_npu` 负责）。
+  - 新增 `ensure_capacity(n_qubits)`：`n_qubits` 超过 `max_qubits` 时抛 `ValueError`，
+    `zeros_state` 分配 `2^n` 态向量前调用，防超容 OOM/SIGKILL；`max_qubits=None`（裸构造）不守卫。
+  - 裸 `NPUBackend()` 保持现状默认（`_max_qubits=None` / `_needs_real_imag=True`），零行为变化。
+  - dtype 路径分支（按 `needs_real_imag_decomp` 切换 real/imag 与原生复数）有意推迟：
+    Ascend 恒需 real/imag，分支为现存硬件上的死代码，待复数能力 NPU 出现再按
+    「原生支持时改用 GPUBackend」重设计。配套 `tests/backends/test_npu_backend_caps.py`。
+
 ## 2026-06-20
 
 ### Added
