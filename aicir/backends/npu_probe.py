@@ -49,7 +49,12 @@ def _resolve_probe_device(backend, allow_cpu_fallback: bool) -> str:
 
 
 def _probe_op_support(device: str):
-    """在设备上跑微 complex64 算子，返回 (matmul, conj, add, errors)。任何失败记入 errors。"""
+    """在设备上跑微 complex64 算子，返回 (matmul, conj, add, errors)。
+
+    用 ``torch.complex`` 从实数张量构造测试张量（绕开 Ascend 不支持的 complex64 填充算子
+    ``aclnnInplaceOne``），使 matmul/conj/add 各自独立测量；构造本身失败则三者皆 False
+    并记 ``construct complex64`` 错误。
+    """
     errors: list[str] = []
 
     def _ok(label: str, fn) -> bool:
@@ -61,9 +66,9 @@ def _probe_op_support(device: str):
             return False
 
     try:
-        a = torch.ones((2, 2), dtype=torch.complex64, device=device)
-    except Exception as exc:  # noqa: BLE001  连分配都失败 → 全部不支持
-        return False, False, False, (f"alloc complex64: {exc!r}",)
+        a = torch.complex(torch.ones((2, 2), device=device), torch.zeros((2, 2), device=device))
+    except Exception as exc:  # noqa: BLE001  连构造 complex64 都失败 → 全部不支持
+        return False, False, False, (f"construct complex64: {exc!r}",)
 
     matmul = _ok("matmul", lambda: torch.matmul(a, a))
     conj = _ok("conj", lambda: torch.conj(a))

@@ -162,3 +162,38 @@ def test_demo_main_cpu_fallback_returns_zero(tmp_path, monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "NpuCapabilities" in out or "device" in out
+
+
+def test_op_support_measures_each_op_when_complex_fill_unsupported(monkeypatch):
+    # 模拟 Ascend：torch.ones 对 complex64 抛错（aclnnInplaceOne 不支持），
+    # 但实数 torch.ones + torch.complex 可用 → 各算子应被独立测量为 True（CPU 支持复数）。
+    import torch
+
+    import aicir.backends.npu_probe as mod
+
+    real_ones = torch.ones
+
+    def fake_ones(*args, **kwargs):
+        if kwargs.get("dtype") == torch.complex64:
+            raise RuntimeError("aclnnInplaceOne not implemented for DT_COMPLEX64")
+        return real_ones(*args, **kwargs)
+
+    monkeypatch.setattr(torch, "ones", fake_ones)
+    matmul, conj, add, errors = mod._probe_op_support("cpu")
+    assert (matmul, conj, add) == (True, True, True)
+    assert errors == ()
+
+
+def test_op_support_records_construction_failure(monkeypatch):
+    # 构造 complex64 测试张量本身失败 → 三者皆 False + 记 "construct complex64" 错误。
+    import torch
+
+    import aicir.backends.npu_probe as mod
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("DT_COMPLEX64 unsupported")
+
+    monkeypatch.setattr(torch, "complex", boom)
+    matmul, conj, add, errors = mod._probe_op_support("cpu")
+    assert (matmul, conj, add) == (False, False, False)
+    assert any("construct complex64" in e for e in errors)
