@@ -19,6 +19,9 @@
   - `NPUBackend.apply_flat_gate(flat, local_matrix, indices)` 新方法；
     `_apply_local_matrix_to_state_flat`（`aicir/core/gates.py`）在 `npu_complex` 且
     `hasattr(backend, "apply_flat_gate")` 时优先调用，原有路径保留作为 fallback。
+  - 实数门兼容：NPU 上 RY/H/X 等实数门的 `local_matrix` 是 float32（非 complex64，
+    `torch.imag` 会报错），`_NpuLocalGateApplyFn` 经 `_mat_re_im` 判别 dtype，
+    实数分支跳过虚部 matmul 并返回实数 `grad_local`，复数门走完整四实数 matmul。
   - 配套测试：`tests/backends/test_npu_hamiltonian_grad.py` 新增 2 项
     （前向等价性、autodiff vs 有限差分梯度一致性 < 1e-3）；套件合计 6/6 pass，
     全量 847 passed（含原有预期失败不变）。

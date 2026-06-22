@@ -283,3 +283,62 @@ def test_npu_local_gate_apply_fn_grad_vs_fd():
     assert abs(grad_ad - grad_fd) < 1e-3, (
         f"dL/dθ: ad={grad_ad:.6f} fd={grad_fd:.6f} diff={abs(grad_ad-grad_fd):.2e}"
     )
+
+
+def _make_ry_matrix_real(theta: torch.Tensor) -> torch.Tensor:
+    """RY(θ) 2×2 实数 float32 矩阵——与 NPU 上实数门的实际 dtype 一致。"""
+    c = torch.cos(theta / 2)
+    s = torch.sin(theta / 2)
+    row0 = torch.stack([c, -s])
+    row1 = torch.stack([s, c])
+    return torch.stack([row0, row1])
+
+
+def test_npu_local_gate_apply_fn_real_matrix():
+    """实数门矩阵（float32，非 complex）路径：前向 + 梯度均正确。
+
+    NPU 上 RY/H/X 等实数门的 local_matrix 是 float32 而非 complex64
+    （`torch.imag` 会报错），_NpuLocalGateApplyFn 必须走实数分支。
+    """
+    n_qubits = 4
+    dim = 1 << n_qubits
+
+    torch.manual_seed(11)
+    re = torch.randn(dim)
+    im = torch.randn(dim)
+    norm = (re ** 2 + im ** 2).sum().sqrt()
+    flat = torch.complex(re / norm, im / norm)
+
+    axes = [2]
+    idx_np = _flat_local_state_indices(axes, n_qubits)
+    indices = torch.as_tensor(idx_np, dtype=torch.long)
+
+    # 前向：实数矩阵结果应等于其 complex64 版本
+    theta = torch.tensor(0.5)
+    out_real = _NpuLocalGateApplyFn.apply(flat, _make_ry_matrix_real(theta), indices)
+    out_cplx = _NpuLocalGateApplyFn.apply(flat, _make_ry_matrix(theta), indices)
+    assert torch.allclose(out_real, out_cplx, atol=1e-6)
+
+    # 梯度：dL/dθ（实数矩阵路径）与有限差分吻合
+    z0_sign = torch.tensor(
+        [1.0 if (k >> (n_qubits - 1)) & 1 == 0 else -1.0 for k in range(dim)]
+    )
+
+    def loss_fn(theta_val):
+        mat = _make_ry_matrix_real(torch.tensor(theta_val))
+        out = _NpuLocalGateApplyFn.apply(flat, mat, indices)
+        return float((z0_sign * (out.real ** 2 + out.imag ** 2)).sum())
+
+    theta_val = 0.5
+    eps = 1e-4
+    grad_fd = (loss_fn(theta_val + eps) - loss_fn(theta_val - eps)) / (2 * eps)
+
+    theta_ad = torch.tensor(theta_val, requires_grad=True)
+    out_ad = _NpuLocalGateApplyFn.apply(flat, _make_ry_matrix_real(theta_ad), indices)
+    loss_ad = (z0_sign * (out_ad.real ** 2 + out_ad.imag ** 2)).sum()
+    loss_ad.backward()
+    grad_ad = float(theta_ad.grad)
+
+    assert abs(grad_ad - grad_fd) < 1e-3, (
+        f"real-matrix dL/dθ: ad={grad_ad:.6f} fd={grad_fd:.6f}"
+    )
