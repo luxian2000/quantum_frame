@@ -248,6 +248,91 @@ class _NpuHamiltonianExpectationFn(torch.autograd.Function):
         return torch.complex(g_re, g_im).reshape(state.shape), None, None
 
 
+class _NpuLocalGateApplyFn(torch.autograd.Function):
+    """局部量子门（gather→matmul→scatter）的 NPU 自动微分安全包装。
+
+    ``_apply_local_matrix_to_state_flat`` 对 NPU 复数态做：
+        gathered = complex(real(flat)[idx], imag(flat)[idx])  # flat 用两次
+        updated  = matmul(local_matrix, gathered)
+        out_re[idx] = real(updated)                          # updated 用两次
+        out_im[idx] = imag(updated)
+
+    flat 和 updated 各在图中出现两次（.real + .imag），backward 需对 complex64
+    张量累加两次梯度 → aclnnAdd(DT_COMPLEX64) 报错。
+
+    本 Function 将整个流程包成一次原子操作：flat 和 local_matrix 各只出现一次，
+    所有 gather/matmul/scatter 全程以 float32 实/虚部拆解完成，backward 最后
+    一次性组装 complex64 梯度——无跨节点的 complex64 累加。
+    """
+
+    @staticmethod
+    def forward(ctx, flat, local_matrix, indices):
+        # flat: (dim,) complex64; local_matrix: (k,k) complex64; indices: (k, base) long
+        ctx.save_for_backward(flat, local_matrix, indices)
+        idx = indices.reshape(-1)
+
+        s_re = torch.real(flat)
+        s_im = torch.imag(flat)
+        g_re = s_re[idx].reshape(indices.shape)
+        g_im = s_im[idx].reshape(indices.shape)
+
+        m_re = torch.real(local_matrix)
+        m_im = torch.imag(local_matrix)
+        upd_re = torch.matmul(m_re, g_re) - torch.matmul(m_im, g_im)
+        upd_im = torch.matmul(m_re, g_im) + torch.matmul(m_im, g_re)
+
+        dim = flat.shape[0]
+        out_re = torch.empty(dim, dtype=torch.float32, device=flat.device)
+        out_im = torch.empty(dim, dtype=torch.float32, device=flat.device)
+        out_re[idx] = upd_re.reshape(-1)
+        out_im[idx] = upd_im.reshape(-1)
+        return torch.complex(out_re, out_im)
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        flat, local_matrix, indices = ctx.saved_tensors
+        idx = indices.reshape(-1)
+
+        # grad_out 是 complex64，但 .real/.imag 是 float32 提取（在 backward 内，无追踪）
+        grad_upd_re = torch.real(grad_out)[idx].reshape(indices.shape)
+        grad_upd_im = torch.imag(grad_out)[idx].reshape(indices.shape)
+
+        # 重新 gather 用于 grad_local 计算（saved flat，不追踪）
+        s_re = torch.real(flat)
+        s_im = torch.imag(flat)
+        g_re = s_re[idx].reshape(indices.shape)
+        g_im = s_im[idx].reshape(indices.shape)
+
+        # ∂L/∂m_re = grad_upd_re @ g_re^T + grad_upd_im @ g_im^T
+        # ∂L/∂m_im = −grad_upd_re @ g_im^T + grad_upd_im @ g_re^T
+        grad_m_re = (
+            torch.matmul(grad_upd_re, g_re.t()) + torch.matmul(grad_upd_im, g_im.t())
+        )
+        grad_m_im = (
+            -torch.matmul(grad_upd_re, g_im.t()) + torch.matmul(grad_upd_im, g_re.t())
+        )
+        grad_local = torch.complex(grad_m_re, grad_m_im)  # 一次构造，非累加
+
+        # ∂L/∂g_re = m_re^T @ grad_upd_re + m_im^T @ grad_upd_im
+        # ∂L/∂g_im = −m_im^T @ grad_upd_re + m_re^T @ grad_upd_im
+        m_re = torch.real(local_matrix)
+        m_im = torch.imag(local_matrix)
+        grad_g_re = torch.matmul(m_re.t(), grad_upd_re) + torch.matmul(m_im.t(), grad_upd_im)
+        grad_g_im = (
+            torch.matmul(-m_im.t(), grad_upd_re) + torch.matmul(m_re.t(), grad_upd_im)
+        )
+
+        # scatter 回 flat 空间（float32 scatter_add，无 complex64 add）
+        dim = flat.shape[0]
+        grad_flat_re = torch.zeros(dim, dtype=torch.float32, device=flat.device)
+        grad_flat_im = torch.zeros(dim, dtype=torch.float32, device=flat.device)
+        grad_flat_re.scatter_add_(0, idx, grad_g_re.reshape(-1))
+        grad_flat_im.scatter_add_(0, idx, grad_g_im.reshape(-1))
+
+        grad_flat = torch.complex(grad_flat_re, grad_flat_im)  # 一次构造，非累加
+        return grad_flat, grad_local, None  # indices 无梯度
+
+
 class NPUBackend(GPUBackend):
     """NPU-first backend for Ascend devices, compatible with GPUBackend API."""
 
@@ -559,6 +644,20 @@ class NPUBackend(GPUBackend):
         four-real-matmul decomposition on NPU.
         """
         return self.matmul(local_matrix, state_block)
+
+    def apply_flat_gate(
+        self,
+        flat: "torch.Tensor",
+        local_matrix: "torch.Tensor",
+        indices: "torch.Tensor",
+    ) -> "torch.Tensor":
+        """局部量子门 gather→matmul→scatter 的 NPU autograd 安全路径。
+
+        替代 _apply_local_matrix_to_state_flat 中的 npu_complex 分支：
+        flat 和 local_matrix 各只作为图的一条输入边，backward 全程 float32，
+        消除 aclnnAdd(DT_COMPLEX64) 错误。
+        """
+        return _NpuLocalGateApplyFn.apply(flat, local_matrix, indices)
 
     def eye(self, dim: int):
         """NPU workaround: build complex identity from real eye when complex eye kernel is unsupported."""
