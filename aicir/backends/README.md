@@ -282,7 +282,9 @@ print(f"counts  : {result.counts}")
 print(f"summary : {result.summary()}")
 ```
 
-### 5.5  BeH2 16 比特 supernet QAS 的 OOM/SIGKILL 排查与修复
+### 5.5  BeH2 16 比特 supernet QAS 排查记录（内存 / 梯度 / HCCL）
+
+#### OOM/SIGKILL：构造期布局枚举
 
 `torchrun --nproc_per_node=4 demos/BeH2/BeH2_npu.py`（16 比特、1313 Pauli 项）曾在进入
 `start sharded supernet search` 后约 12 分钟被 `SIGKILL`（`exitcode -9`）终止；Ascend TBE 后台线程
@@ -309,6 +311,40 @@ print(f"summary : {result.summary()}")
 
 > 注：该修复只解决 supernet 的内存爆炸（任务/数据并行，整态仍驻单卡）。把单条电路的态向量跨 NPU
 > 拆分以突破单卡比特上限是另一项工作，见 §5.6。
+
+#### 梯度方法：为何用 psr 而非 autodiff
+
+NPU 版默认 `--gradient psr`（参数移位），**有意不用 autodiff（`ad`）**：
+
+- **内存**：autodiff 对 1313 个 Pauli 项 × 多次前向构建反向图，内存放大显著，是早期 16 比特 OOM/SIGKILL 的因素之一；psr 把目标当黑盒、在 `torch.no_grad()` 下求值，不建反向图，内存友好。
+- **Ascend 算子缺口**：complex64 在 Ascend 上无原生 `add`，复数张量的 autograd 梯度累加（`aclnnAdd`）也不支持；psr 只做前向期望值评估，回避这条路径。
+- **取舍**：autodiff 更快但 16 比特 BeH2 易 OOM/SIGKILL；如需对比可显式传 `--gradient ad`。
+
+换言之，psr 是规避内存与 Ascend 复数算子两个问题的稳妥选择，并非「autodiff 能修分布式问题」——见下。
+
+#### HCCL broadcast 屏障超时
+
+**现象**：内存修复后，进入搜索某次 `broadcast_parameters`（`aicir/qas/core/sharding.py`）报
+`HcclBroadcast, error code is 6` / `EI0006: Getting socket times out, Remote Rank did not send the data in time` /
+`Transport init error ... dst_rank[0]`；从启动到报错约 148 s，刚好超过默认 `HCCL_CONNECT_TIMEOUT=120 s`。
+（`ASCEND_LAUNCH_BLOCKING=1` 可让该异步错误同步停在真正失败的 collective 调用。）
+
+**根因**：`safe` 分片下**仅 rank 0 计算 psr 梯度**（2·P 次移位评估 × 1313 项 × 首次 TBE 算子编译，常达数分钟），
+rank 1/2/3 跳过梯度直接到 `broadcast_parameters` 屏障空等，超过 120 s 即超时。`--supernet-num 1` 时完全退化：
+1/2/3 连选择评估都没有，纯空等必然超时。这是 `safe` 分片**只分了候选选择、没分梯度计算**的固有负载不均衡，
+被前述内存修复「解锁」后才首次暴露（此前在到达 broadcast 前就已 OOM）。
+
+**临时缓解**：抬高屏障超时，让 rank 0 慢的首步在超时前完成：
+
+```bash
+HCCL_CONNECT_TIMEOUT=1800 torchrun --nproc_per_node=4 demos/BeH2/BeH2_npu.py --supernet-num 4 ...
+```
+
+已验证全链路跑通（4 卡 340 s，各 rank 能量一致，证明 `safe` 权重同步确定性正确）。注意这是创可贴：3 张卡仍在每步空等 rank 0。
+
+**正解（待办）**：把 psr 的 2·P 次移位评估分片到各 rank（各自本地算、一次 `all_reduce`/`all_gather` 汇总完整梯度、
+各 rank 施加相同确定性优化步），消除 rank 0 瓶颈与 per-step `broadcast_parameters`——负载均衡、真正用满多卡、
+不再依赖 `HCCL_CONNECT_TIMEOUT`。
 
 ---
 
