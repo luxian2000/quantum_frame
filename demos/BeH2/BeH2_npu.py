@@ -101,7 +101,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--gradient",
         choices=("psr", "ad"),
         default="psr",
-        help="梯度方式：psr=参数移位（默认，内存友好）；ad=autograd（更快但 16 比特 BeH2 易 OOM/SIGKILL）。",
+        help="梯度方式：psr=参数移位（默认）；ad=autograd（每步 1 次前向+1 次 backward，比 psr 快约 2P 倍；"
+             "需 Ascend float32 autograd 可用，已通过 _NpuHamiltonianExpectationFn 消除 complex64 瓶颈）。",
     )
     parser.add_argument(
         "--output",
