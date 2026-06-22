@@ -56,6 +56,21 @@ from demos.BeH2.BeH2 import (
     save_circuit_python,
 )
 
+import os, threading, time, tracemalloc
+def _mem_watch():
+    tracemalloc.start(5)
+    p = os.getpid()
+    while True:
+        rss = int(open(f"/proc/{p}/status").read().split("VmRSS:")[1].split()[0]) // 1024
+        cur, peak = tracemalloc.get_traced_memory()
+        top = tracemalloc.take_snapshot().statistics("lineno")[:5]
+        print(f"[memwatch pid={p}] RSS={rss}MB  pytracemalloc cur={cur//2**20}MB", flush=True)
+        for s in top:
+            print(f"   {s.traceback[0]}  {s.size//1024}KB x{s.count}", flush=True)
+        time.sleep(30)
+if os.environ.get("RANK", "0") == "0" and os.environ.get("MEM_WATCH"):
+    threading.Thread(target=_mem_watch, daemon=True).start()
+
 
 def _log(message: str, rank: int) -> None:
     print(f"[rank {rank}] {message}", flush=True)
