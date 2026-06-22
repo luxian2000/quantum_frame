@@ -255,7 +255,7 @@ python demos/demo_npu_probe.py --refresh
 
 在 QAS supernet（`aicir/qas`）中无需手动构造后端：把 `device="npu:0"` 传入配置，框架会自动选用 `NPUBackend`；CPU / CUDA 设备则用 `GPUBackend`。
 
-### 5.5  完整端到端示例
+完整端到端示例：
 
 ```python
 import math
@@ -281,6 +281,34 @@ print(f"probs   : {result.probabilities}")
 print(f"counts  : {result.counts}")
 print(f"summary : {result.summary()}")
 ```
+
+### 5.5  BeH2 16 比特 supernet QAS 的 OOM/SIGKILL 排查与修复
+
+`torchrun --nproc_per_node=4 demos/BeH2/BeH2_npu.py`（16 比特、1313 Pauli 项）曾在进入
+`start sharded supernet search` 后约 12 分钟被 `SIGKILL`（`exitcode -9`）终止；Ascend TBE 后台线程
+随后输出的 `EOFError`/`ConnectionResetError` 是子进程被杀后的连带现象，非首要异常。
+
+**定位**：`dmesg` 显示 **cgroup（容器）内存超限**而非主机 OOM（主机 2 TB、空闲 1.9 TB）；
+单个 rank 的主进程涨到 **~238 GB RSS**——对 16 比特（态向量仅 1 MB）是病态的内存爆炸，必为泄漏/枚举。
+`tracemalloc` 指向 `supernet.py` 的布局枚举/参数预建行（数千万次分配且持续增长）。
+
+**根因**：`Supernet` 构造时枚举整个单比特布局空间
+`product(single_qubit_gates, repeat=n_qubits)` = `gates ** n_qubits`（BeH2 即 `5 ** 16 ≈ 1.5e11`），
+并为每个布局预建共享参数。只在测试用的极小 `n_qubits` 下可行，16 比特撑爆内存。
+
+**修复**（懒采样 + 懒共享参数，见 `aicir/qas/algorithms/supernet.py` 顶部内存说明）：
+
+- `sample_architecture` 改为**采样下标 + 解码**，与旧 `choice(枚举列表)` **字节等价**（rng 序列不变，
+  golden 测试不受影响），但不物化布局空间。
+- 共享参数**首次访问懒建**；每 supernet 优化器懒建并经 `add_param_group` 增长。
+- 每个被访问架构的参数在**所有** supernet 上创建（仅评估分片、参数创建不分片），保持 `safe`/
+  `aggressive` 分片下各 rank 的共享参数键集一致（梯度 all-reduce / `broadcast_parameters` 依赖此不变量）。
+
+共享参数内存降为 `O(supernet_steps × layers × n_qubits)`。配套 `tests/test_supernet_lazy_layouts.py`
+（含 16 比特秒级构造回归）。
+
+> 注：该修复只解决 supernet 的内存爆炸（任务/数据并行，整态仍驻单卡）。把单条电路的态向量跨 NPU
+> 拆分以突破单卡比特上限是另一项工作，见 §5.6。
 
 ---
 
