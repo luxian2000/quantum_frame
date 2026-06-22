@@ -12,12 +12,24 @@ Information 2022, in an aicir-native form:
 The differentiable path intentionally uses aicir ``Circuit`` objects,
 ``GPUBackend`` (or ``NPUBackend`` on Ascend), and aicir gate matrix/state
 evolution helpers. No external quantum SDK is used.
+
+Memory note — root cause of the BeH2 16-qubit ``SIGKILL`` (cgroup OOM, ~238 GB/rank):
+an earlier implementation eagerly materialized the entire single-qubit layout space
+``product(single_qubit_gates, repeat=n_qubits)`` (= ``gates ** n_qubits``; for BeH2
+that is ``5 ** 16 ≈ 1.5e11`` tuples) at construction and pre-created one shared
+parameter set per distinct layout. Feasible only at the tiny ``n_qubits`` the tests
+use; at 16 qubits it exhausts host RAM long before training. Architectures are now
+sampled **per slot** and shared parameters created **lazily on first visit**, bounding
+shared-parameter memory to ``O(supernet_steps × layers × n_qubits)``. Each visited
+architecture's parameters are created for *all* supernets on *every* rank so the
+``safe`` sharded grad all-reduce keeps an identical key set across ranks (only the
+expensive evaluation is sharded, not parameter creation). Do not reintroduce
+full-product layout enumeration.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from itertools import product
 import inspect
 import io
 import math
@@ -268,23 +280,19 @@ class Supernet:
         # Index alphabet for the per-pair two-qubit choice: "none" first so the
         # absent option keeps index 0, then the configured two-qubit gates.
         self._two_qubit_choice_alphabet: tuple[str, ...] = (_NO_TWO_QUBIT,) + tuple(config.two_qubit_gates)
-        self._single_layouts = self._build_single_layouts()
-        self._two_qubit_layouts = self._build_two_qubit_layouts()
         self._readout_index_cache: dict[int, torch.Tensor] = {}
         self._hamiltonian_cache: dict[int, torch.Tensor] = {}
         self._basis_index_cache: dict[int, torch.Tensor] = {}
         self._pauli_expectation_cache: dict[int, list[tuple[int, int, int, float, float]]] = {}
 
+        # 共享参数与每 supernet 优化器都按需懒建（见模块顶部内存说明）：构造时不枚举
+        # gates**n_qubits 的布局空间。优化器初始为 None，首个参数出现时建立、之后
+        # 经 add_param_group 增长（Adam 不接受空参数列表）。
         self.shared_parameters: dict[ParameterKey, torch.nn.Parameter] = {}
-        self._supernet_parameter_lists: list[list[torch.nn.Parameter]] = []
         self._best_shared_parameter_values: dict[ParameterKey, torch.Tensor] | None = None
         self._best_validation_accuracy = -math.inf
         self._best_validation_loss = math.inf
-        self._initialize_shared_parameters()
-        self._optimizers = [
-            torch.optim.Adam(parameters, lr=config.learning_rate)
-            for parameters in self._supernet_parameter_lists
-        ]
+        self._optimizers: list[torch.optim.Adam | None] = [None] * config.supernet_num
 
     def _validate_config(self) -> None:
         cfg = self.config
@@ -320,63 +328,57 @@ class Supernet:
             if int(control) == int(target):
                 raise ValueError("CNOT control and target must be different")
 
-    def _build_single_layouts(self) -> list[tuple[str, ...]]:
-        cfg = self.config
-        if not cfg.search_single_qubit_gates:
-            return [tuple(cfg.single_qubit_gates[0] for _ in range(cfg.n_qubits))]
-        return [tuple(layout) for layout in product(cfg.single_qubit_gates, repeat=cfg.n_qubits)]
-
-    def _build_two_qubit_layouts(self) -> list[tuple[str, ...]]:
-        width = len(self.config.two_qubit_pairs)
-        if width == 0:
-            return [()]
-        if not self.config.search_two_qubit_gates:
-            fixed = self.config.two_qubit_gates[0] if self.config.two_qubit_gates else _NO_TWO_QUBIT
-            return [tuple(fixed for _ in range(width))]
-        return [tuple(choice) for choice in product(self._two_qubit_choice_alphabet, repeat=width)]
-
     def _new_shared_parameter(self) -> torch.nn.Parameter:
         value = float(self._np_rng.uniform(-0.05, 0.05))
         return torch.nn.Parameter(torch.tensor(value, dtype=torch.float32, device=self.device))
 
-    def _initialize_shared_parameters(self) -> None:
-        cfg = self.config
-        for supernet_id in range(cfg.supernet_num):
-            parameters: list[torch.nn.Parameter] = []
-            for layer_id in range(cfg.layers):
-                # Single-qubit angles: shared across ansatze whose single-qubit
-                # layout of this layer is identical (the paper's rule). Fixed
-                # gates (the identity placeholder) own zero parameters.
-                for layout in self._single_layouts:
-                    for qubit_id, gate_type in enumerate(layout):
-                        spec = _SINGLE_QUBIT_GATES[gate_type]
-                        for param_index in range(spec.n_params):
-                            key = self.single_parameter_key(
-                                supernet_id, layer_id, layout, qubit_id, gate_type, param_index
-                            )
-                            if key in self.shared_parameters:
-                                continue
-                            tensor = self._new_shared_parameter()
-                            self.shared_parameters[key] = tensor
-                            parameters.append(tensor)
-                # Two-qubit angles (e.g. rzz): the same indexing principle applied
-                # to the second category — shared across ansatze whose two-qubit
-                # layout of this layer is identical. cx owns zero parameters.
-                for layout in self._two_qubit_layouts:
-                    for pair_index, choice in enumerate(layout):
-                        if choice == _NO_TWO_QUBIT:
-                            continue
-                        spec = _TWO_QUBIT_GATES[choice]
-                        for param_index in range(spec.n_params):
-                            key = self.two_qubit_parameter_key(
-                                supernet_id, layer_id, layout, pair_index, choice, param_index
-                            )
-                            if key in self.shared_parameters:
-                                continue
-                            tensor = self._new_shared_parameter()
-                            self.shared_parameters[key] = tensor
-                            parameters.append(tensor)
-            self._supernet_parameter_lists.append(parameters)
+    def _register_optimizer_param(self, supernet_id: int, tensor: torch.nn.Parameter) -> None:
+        """把新建的共享参数注册到该 supernet 的优化器；首参数时建立优化器
+        （Adam 不接受空参数列表），其后经 add_param_group 增长。"""
+        optimizer = self._optimizers[supernet_id]
+        if optimizer is None:
+            self._optimizers[supernet_id] = torch.optim.Adam(
+                [tensor], lr=self.config.learning_rate
+            )
+        else:
+            optimizer.add_param_group({"params": [tensor]})
+
+    def _shared_param(self, key: ParameterKey, supernet_id: int) -> torch.nn.Parameter:
+        """按需取/建一个共享参数（按 layer 单/双比特布局共享，符合论文规则）。"""
+        tensor = self.shared_parameters.get(key)
+        if tensor is None:
+            tensor = self._new_shared_parameter()
+            self.shared_parameters[key] = tensor
+            self._register_optimizer_param(supernet_id, tensor)
+        return tensor
+
+    def _ensure_architecture_params(self, architecture: "Architecture") -> None:
+        """为该架构在**所有** supernet 上懒建共享参数，使各 rank 的共享参数键集一致。
+
+        ``safe`` 分片的梯度 all-reduce 按 ``sorted(shared_parameters.keys())`` 对齐，
+        要求每个 rank 持有相同键集；评估分片到各 rank（只跑自己拥有的 supernet），但
+        参数创建对所有 supernet 进行，故不破坏该不变量。零参数门（i/h/cx）不建参数。
+        """
+        for supernet_id in range(self.config.supernet_num):
+            for layer_id, layer in enumerate(architecture.layers):
+                single_layout = tuple(_normalize_single_gate(g) for g in layer.single_qubit_gates)
+                for qubit_id, gate_type in enumerate(single_layout):
+                    spec = _SINGLE_QUBIT_GATES[gate_type]
+                    for param_index in range(spec.n_params):
+                        key = self.single_parameter_key(
+                            supernet_id, layer_id, single_layout, qubit_id, gate_type, param_index
+                        )
+                        self._shared_param(key, supernet_id)
+                two_layout = tuple(_normalize_two_qubit_choice(c) for c in layer.two_qubit_choices)
+                for pair_index, choice in enumerate(two_layout):
+                    if choice == _NO_TWO_QUBIT:
+                        continue
+                    spec = _TWO_QUBIT_GATES[choice]
+                    for param_index in range(spec.n_params):
+                        key = self.two_qubit_parameter_key(
+                            supernet_id, layer_id, two_layout, pair_index, choice, param_index
+                        )
+                        self._shared_param(key, supernet_id)
 
     def single_parameter_key(
         self,
@@ -417,16 +419,54 @@ class Supernet:
         )
 
     def layer_search_space_size(self) -> int:
-        return len(self._single_layouts) * len(self._two_qubit_layouts)
+        cfg = self.config
+        single = len(cfg.single_qubit_gates) ** cfg.n_qubits if cfg.search_single_qubit_gates else 1
+        width = len(cfg.two_qubit_pairs)
+        if width == 0:
+            two = 1
+        elif cfg.search_two_qubit_gates:
+            two = len(self._two_qubit_choice_alphabet) ** width
+        else:
+            two = 1
+        return single * two
 
     def logical_search_space_size(self) -> int:
         return self.layer_search_space_size() ** self.config.layers
 
+    @staticmethod
+    def _decode_layout(idx: int, alphabet: tuple[str, ...], length: int) -> tuple[str, ...]:
+        # 复现 product(alphabet, repeat=length) 的第 idx 个元组（首元素变化最慢），
+        # 不物化布局列表。与旧实现 self._rng.choice(枚举列表) 字节等价（见模块顶部内存说明）。
+        base = len(alphabet)
+        return tuple(alphabet[(idx // (base ** (length - 1 - pos))) % base] for pos in range(length))
+
     def sample_architecture(self) -> Architecture:
+        # 采样下标再解码，等价于旧实现对 product 枚举列表的 choice（相同 rng 消耗与结果），
+        # 但不枚举/物化 gates**n_qubits 的布局空间（见模块顶部内存说明）。
+        cfg = self.config
         layers: list[LayerArchitecture] = []
-        for _ in range(self.config.layers):
-            single_layout = self._rng.choice(self._single_layouts)
-            two_layout = self._rng.choice(self._two_qubit_layouts)
+        width = len(cfg.two_qubit_pairs)
+        n_single = len(cfg.single_qubit_gates) ** cfg.n_qubits
+        n_two = len(self._two_qubit_choice_alphabet) ** width if width else 1
+        for _ in range(cfg.layers):
+            if cfg.search_single_qubit_gates:
+                single_layout = self._decode_layout(
+                    self._rng.randrange(n_single), cfg.single_qubit_gates, cfg.n_qubits
+                )
+            else:
+                self._rng.randrange(1)  # 匹配旧 choice([fixed]) 的 rng 消耗
+                single_layout = tuple(cfg.single_qubit_gates[0] for _ in range(cfg.n_qubits))
+            if width == 0:
+                self._rng.randrange(1)  # 匹配旧 choice([()]) 的 rng 消耗
+                two_layout: tuple[str, ...] = ()
+            elif cfg.search_two_qubit_gates:
+                two_layout = self._decode_layout(
+                    self._rng.randrange(n_two), self._two_qubit_choice_alphabet, width
+                )
+            else:
+                self._rng.randrange(1)  # 匹配旧 choice([fixed]) 的 rng 消耗
+                fixed = cfg.two_qubit_gates[0] if cfg.two_qubit_gates else _NO_TWO_QUBIT
+                two_layout = tuple(fixed for _ in range(width))
             layers.append(LayerArchitecture(single_layout, two_layout))
         return Architecture(tuple(layers))
 
@@ -484,7 +524,6 @@ class Supernet:
         if len(architecture.layers) != self.config.layers:
             raise ValueError("architecture layer count does not match config.layers")
 
-        parameter_source = self.shared_parameters if parameters is None else parameters
         gates: list[dict[str, Any]] = []
         active_keys: list[ParameterKey] = []
         active_tensors: list[torch.Tensor] = []
@@ -503,7 +542,7 @@ class Supernet:
                     key = self.single_parameter_key(
                         supernet_id, layer_id, single_layout, qubit_id, gate_type, param_index
                     )
-                    theta = parameter_source[key]
+                    theta = self._shared_param(key, supernet_id) if parameters is None else parameters[key]
                     params.append(theta)
                     active_keys.append(key)
                     if isinstance(theta, torch.Tensor):
@@ -523,7 +562,7 @@ class Supernet:
                     key = self.two_qubit_parameter_key(
                         supernet_id, layer_id, two_layout, pair_index, choice, param_index
                     )
-                    theta = parameter_source[key]
+                    theta = self._shared_param(key, supernet_id) if parameters is None else parameters[key]
                     params.append(theta)
                     active_keys.append(key)
                     if isinstance(theta, torch.Tensor):
@@ -936,6 +975,10 @@ class Supernet:
     def _aggressive_step(self, objective, dataset, hamiltonian, ctx):
         # 所有 rank 以相同顺序采样 world_size 个架构；本 rank 负责 arch[rank]。
         archs = [self.sample_architecture() for _ in range(ctx.world_size)]
+        # 各 rank 处理不同架构（arch[rank]），但下面对 sorted(shared_parameters) 做
+        # all_reduce 要求各 rank 键集一致：故所有 rank 为**全部** archs 懒建参数。
+        for arch in archs:
+            self._ensure_architecture_params(arch)
         architecture = archs[ctx.rank]
         selected_id, candidate_losses = self.select_supernet(
             architecture, objective, dataset, hamiltonian, split="train",
@@ -963,7 +1006,9 @@ class Supernet:
         for ids in all_gather([selected_id]):
             selected_ids.update(ids)
         for supernet_id in sorted(selected_ids):
-            self._optimizers[supernet_id].step()
+            optimizer = self._optimizers[supernet_id]
+            if optimizer is not None:  # 全零参数架构（仅 i/h/cx）无参数、无优化器
+                optimizer.step()
         return architecture, selected_id, candidate_losses, _float_value(loss), active_keys
 
     def optimize_supernet(
@@ -994,6 +1039,9 @@ class Supernet:
                 })
                 continue
             architecture = self.sample_architecture()
+            # 为该架构在所有 supernet 上懒建参数：保证 safe 分片 broadcast_parameters
+            # 各 rank 键集一致，并确保被选中 supernet 的优化器已建立。
+            self._ensure_architecture_params(architecture)
             if safe_sharded:
                 selected_id, candidate_losses = self._sharded_select(
                     architecture, objective, dataset, hamiltonian, "train", ctx
@@ -1028,8 +1076,9 @@ class Supernet:
                 split="train",
             )
             active_tensors = _unique_tensors(active_tensors)
-            # safe_sharded 模式下仅 rank 0 执行梯度步，其余 rank 跳过优化器更新
-            if safe_sharded and ctx.rank != 0:
+            # safe_sharded 模式下仅 rank 0 执行梯度步，其余 rank 跳过优化器更新；
+            # 全零参数架构（仅 i/h/cx）无参数、无优化器，同样跳过。
+            if optimizer is None or (safe_sharded and ctx.rank != 0):
                 grad_norm = 0.0
             elif self.config.use_parameter_shift:
                 grad_norm = self._parameter_shift_update(active_tensors, optimizer, loss_closure)
