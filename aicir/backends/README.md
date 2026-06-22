@@ -318,9 +318,13 @@ NPU 版默认 `--gradient psr`（参数移位），**有意不用 autodiff（`ad
 
 - **内存**：autodiff 对 1313 个 Pauli 项 × 多次前向构建反向图，内存放大显著，是早期 16 比特 OOM/SIGKILL 的因素之一；psr 把目标当黑盒、在 `torch.no_grad()` 下求值，不建反向图，内存友好。
 - **Ascend 算子缺口**：complex64 在 Ascend 上无原生 `add`，复数张量的 autograd 梯度累加（`aclnnAdd`）也不支持；psr 只做前向期望值评估，回避这条路径。
-- **取舍**：autodiff 更快但 16 比特 BeH2 易 OOM/SIGKILL；如需对比可显式传 `--gradient ad`。
+- **已在 Ascend 上实测确认 autodiff 不可用**：`--gradient ad` 在 `loss.backward()` 处报
+  `RuntimeError: call aclnnAdd failed ... self not implemented for DT_COMPLEX64`。NPUBackend 的自定义
+  `RealImagMatmul`/`RealImagExpectation` 覆盖了前向/矩阵乘，但 autograd 的**梯度累加**仍会触发 complex64
+  `add`（Ascend 无该算子）→ 硬失败，非内存可调问题。故 **autodiff 在 Ascend 上是死路，psr 是唯一可行路径**。
 
-换言之，psr 是规避内存与 Ascend 复数算子两个问题的稳妥选择，并非「autodiff 能修分布式问题」——见下。
+换言之，psr 不是「更省内存的选择」而是 Ascend 上的**必选项**；提速只能靠把 psr 的 2·P 次评估分片到多卡
+（见 §5.5 HCCL 小节的「正解」），而非换 autodiff。
 
 #### HCCL broadcast 屏障超时
 
