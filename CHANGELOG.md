@@ -6,6 +6,23 @@
 
 ### Added
 
+- **NPU 局部量子门 autograd 安全路径：`_NpuLocalGateApplyFn` + `NPUBackend.apply_flat_gate`。**
+  - 根因：`_apply_local_matrix_to_state_flat`（n_qubits > 8 时 NPU 路径）在 npu_complex 分支中：
+    `flat`（complex64）被 `.real` 和 `.imag` 各读一次（2 条 backward 路径），
+    `updated = matmul(M, gathered)` 同样被 `.real`/`.imag` 各读一次（再 2 条）。
+    backward 累加 complex64 梯度 → `aclnnAdd(DT_COMPLEX64)` → Ascend 崩溃。
+    BeH2 用 16 比特 > 8，走 flat 路径，故 `--gradient ad` 经过 `_NpuHamiltonianExpectationFn`
+    修复后仍在 `loss.backward()` 崩溃（第二处 fan-out）。
+  - 修复：`_NpuLocalGateApplyFn`（`aicir/backends/npu_backend.py`）把 gather→matmul→scatter
+    包成单一 `torch.autograd.Function`；`flat` 和 `local_matrix` 各只出现一次；
+    backward 全程 float32 实/虚部运算，最后 `torch.complex(...)` 一次性构造——无 complex64 add。
+  - `NPUBackend.apply_flat_gate(flat, local_matrix, indices)` 新方法；
+    `_apply_local_matrix_to_state_flat`（`aicir/core/gates.py`）在 `npu_complex` 且
+    `hasattr(backend, "apply_flat_gate")` 时优先调用，原有路径保留作为 fallback。
+  - 配套测试：`tests/backends/test_npu_hamiltonian_grad.py` 新增 2 项
+    （前向等价性、autodiff vs 有限差分梯度一致性 < 1e-3）；套件合计 6/6 pass，
+    全量 847 passed（含原有预期失败不变）。
+
 - **NPU complex64-free autodiff：`_NpuHamiltonianExpectationFn` + `NPUBackend.hamiltonian_expectation_pauli`。**
   - 根因：`Supernet._hamiltonian_expectation` Pauli 循环中 `state`（complex64）被 1313 次用作期望
     值的 bra/ket，backward 需 1313 次累加 `state.grad`（complex64 add → `aclnnAdd(DT_COMPLEX64)`
