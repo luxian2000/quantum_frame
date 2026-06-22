@@ -266,8 +266,15 @@ class _NpuLocalGateApplyFn(torch.autograd.Function):
     """
 
     @staticmethod
+    def _mat_re_im(local_matrix):
+        """拆分门矩阵实/虚部；实数门（如 RY/H/X）矩阵本身是 float32，虚部为 0。"""
+        if torch.is_complex(local_matrix):
+            return torch.real(local_matrix), torch.imag(local_matrix)
+        return local_matrix, None
+
+    @staticmethod
     def forward(ctx, flat, local_matrix, indices):
-        # flat: (dim,) complex64; local_matrix: (k,k) complex64; indices: (k, base) long
+        # flat: (dim,) complex64; local_matrix: (k,k) complex64 或实数 float32; indices: (k, base) long
         ctx.save_for_backward(flat, local_matrix, indices)
         idx = indices.reshape(-1)
 
@@ -276,10 +283,13 @@ class _NpuLocalGateApplyFn(torch.autograd.Function):
         g_re = s_re[idx].reshape(indices.shape)
         g_im = s_im[idx].reshape(indices.shape)
 
-        m_re = torch.real(local_matrix)
-        m_im = torch.imag(local_matrix)
-        upd_re = torch.matmul(m_re, g_re) - torch.matmul(m_im, g_im)
-        upd_im = torch.matmul(m_re, g_im) + torch.matmul(m_im, g_re)
+        m_re, m_im = _NpuLocalGateApplyFn._mat_re_im(local_matrix)
+        if m_im is None:
+            upd_re = torch.matmul(m_re, g_re)
+            upd_im = torch.matmul(m_re, g_im)
+        else:
+            upd_re = torch.matmul(m_re, g_re) - torch.matmul(m_im, g_im)
+            upd_im = torch.matmul(m_re, g_im) + torch.matmul(m_im, g_re)
 
         dim = flat.shape[0]
         out_re = torch.empty(dim, dtype=torch.float32, device=flat.device)
@@ -303,24 +313,30 @@ class _NpuLocalGateApplyFn(torch.autograd.Function):
         g_re = s_re[idx].reshape(indices.shape)
         g_im = s_im[idx].reshape(indices.shape)
 
+        m_re, m_im = _NpuLocalGateApplyFn._mat_re_im(local_matrix)
+
         # ∂L/∂m_re = grad_upd_re @ g_re^T + grad_upd_im @ g_im^T
         # ∂L/∂m_im = −grad_upd_re @ g_im^T + grad_upd_im @ g_re^T
         grad_m_re = (
             torch.matmul(grad_upd_re, g_re.t()) + torch.matmul(grad_upd_im, g_im.t())
         )
-        grad_m_im = (
-            -torch.matmul(grad_upd_re, g_im.t()) + torch.matmul(grad_upd_im, g_re.t())
-        )
-        grad_local = torch.complex(grad_m_re, grad_m_im)  # 一次构造，非累加
+        if m_im is None:
+            # 实数门：梯度也为实数（虚部分量不存在）
+            grad_local = grad_m_re
+            grad_g_re = torch.matmul(m_re.t(), grad_upd_re)
+            grad_g_im = torch.matmul(m_re.t(), grad_upd_im)
+        else:
+            grad_m_im = (
+                -torch.matmul(grad_upd_re, g_im.t()) + torch.matmul(grad_upd_im, g_re.t())
+            )
+            grad_local = torch.complex(grad_m_re, grad_m_im)  # 一次构造，非累加
 
-        # ∂L/∂g_re = m_re^T @ grad_upd_re + m_im^T @ grad_upd_im
-        # ∂L/∂g_im = −m_im^T @ grad_upd_re + m_re^T @ grad_upd_im
-        m_re = torch.real(local_matrix)
-        m_im = torch.imag(local_matrix)
-        grad_g_re = torch.matmul(m_re.t(), grad_upd_re) + torch.matmul(m_im.t(), grad_upd_im)
-        grad_g_im = (
-            torch.matmul(-m_im.t(), grad_upd_re) + torch.matmul(m_re.t(), grad_upd_im)
-        )
+            # ∂L/∂g_re = m_re^T @ grad_upd_re + m_im^T @ grad_upd_im
+            # ∂L/∂g_im = −m_im^T @ grad_upd_re + m_re^T @ grad_upd_im
+            grad_g_re = torch.matmul(m_re.t(), grad_upd_re) + torch.matmul(m_im.t(), grad_upd_im)
+            grad_g_im = (
+                torch.matmul(-m_im.t(), grad_upd_re) + torch.matmul(m_re.t(), grad_upd_im)
+            )
 
         # scatter 回 flat 空间（float32 scatter_add，无 complex64 add）
         dim = flat.shape[0]
