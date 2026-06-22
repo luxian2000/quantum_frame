@@ -17,6 +17,18 @@
     Ascend 恒需 real/imag，分支为现存硬件上的死代码，待复数能力 NPU 出现再按
     「原生支持时改用 GPUBackend」重设计。配套 `tests/backends/test_npu_backend_caps.py`。
 
+### Fixed
+
+- **Supernet QAS 在 16 比特（BeH2）被 `SIGKILL`（cgroup OOM，~238 GB/rank）的根因修复。**
+  `Supernet` 构造时枚举整个单比特布局空间 `product(single_qubit_gates, repeat=n_qubits)`
+  = `gates ** n_qubits`（BeH2 即 `5 ** 16 ≈ 1.5e11`），并为每个布局预建共享参数——只在测试用的
+  极小 `n_qubits` 下可行，16 比特撑爆主机内存。现改为：布局按下标采样+解码（与旧 `choice(枚举列表)`
+  **字节等价**，rng 序列不变，golden 测试不受影响），共享参数**首次访问懒建**，每 supernet 优化器
+  懒建并经 `add_param_group` 增长；共享参数内存降为 `O(supernet_steps × layers × n_qubits)`。
+  每个被访问架构的参数在**所有** supernet 上创建（仅评估分片，参数创建不分片），保持 `safe`/
+  `aggressive` 分片下各 rank 的共享参数键集一致（梯度 all-reduce / `broadcast_parameters` 依赖此不变量）。
+  配套 `tests/test_supernet_lazy_layouts.py`（含 16 比特秒级构造回归）。
+
 ## 2026-06-20
 
 ### Added
