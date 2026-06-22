@@ -706,11 +706,16 @@ class Supernet:
             # 态向量可能是 (2^n, 1) 列向量；展平成一维，避免与一维 phase/index
             # 向量做广播（(2^n,1)*(2^n,) -> (2^n,2^n)）导致能量被放大 2^n 倍。
             state = state.reshape(-1)
+            basis_indices = self._basis_indices(state.numel())
+            pauli_cache = self._pauli_term_cache(hamiltonian)
+            # NPU autodiff 安全路径：state 在图中只出现一次，梯度累加全程 float32，
+            # 避免 1313 次 complex64 grad add（Ascend 缺 aclnnAdd(DT_COMPLEX64)）。
+            if hasattr(self.backend, "hamiltonian_expectation_pauli"):
+                return self.backend.hamiltonian_expectation_pauli(state, basis_indices, pauli_cache)
             state_real = torch.real(state)
             state_imag = torch.imag(state)
             energy = torch.zeros((), dtype=torch.float32, device=self.device)
-            basis_indices = self._basis_indices(state.numel())
-            for flip_mask, sign_mask, y_phase, coefficient_real, coefficient_imag in self._pauli_term_cache(hamiltonian):
+            for flip_mask, sign_mask, y_phase, coefficient_real, coefficient_imag in pauli_cache:
                 if flip_mask:
                     mapped_indices = torch.bitwise_xor(basis_indices, flip_mask)
                     mapped_real = state_real.index_select(0, mapped_indices)

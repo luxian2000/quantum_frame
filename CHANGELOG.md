@@ -2,6 +2,26 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-22
+
+### Added
+
+- **NPU complex64-free autodiff：`_NpuHamiltonianExpectationFn` + `NPUBackend.hamiltonian_expectation_pauli`。**
+  - 根因：`Supernet._hamiltonian_expectation` Pauli 循环中 `state`（complex64）被 1313 次用作期望
+    值的 bra/ket，backward 需 1313 次累加 `state.grad`（complex64 add → `aclnnAdd(DT_COMPLEX64)`
+    → Ascend 缺失该算子，`--gradient ad` 必然崩溃）。
+  - 修复：`_NpuHamiltonianExpectationFn`（新 `aicir/backends/npu_backend.py`）把整个 Pauli 循环
+    包进 `torch.autograd.Function`；state 在图中只出现一次；1313 次梯度累加在 backward 内以
+    float32 完成（`grad_re += ...` / `grad_im += ...`），最后 `torch.complex(grad_re, grad_im)`
+    一次性构造返回——全程无 complex64 add。
+  - `NPUBackend.hamiltonian_expectation_pauli(state, basis_indices, pauli_cache)` 新方法；
+    `Supernet._hamiltonian_expectation` Pauli 路径优先调用（`hasattr` duck-typing，
+    CPU/GPU backend 不受影响，仍走原循环路径）。
+  - 实测验证：`demos/check_npu_autograd.py` 已确认 float32 autograd 在 Ascend 全量可用；
+    梯度公式 `grad_state = 2·go·(H|ψ⟩)` 与 psr 梯度误差 < 1e-4（见新测试）。
+  - 配套测试：`tests/backends/test_npu_hamiltonian_grad.py`（4 项：符号正确性、前向等价、
+    autodiff vs psr 梯度一致性）。
+
 ## 2026-06-21
 
 ### Added

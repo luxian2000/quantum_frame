@@ -312,19 +312,34 @@ print(f"summary : {result.summary()}")
 > 注：该修复只解决 supernet 的内存爆炸（任务/数据并行，整态仍驻单卡）。把单条电路的态向量跨 NPU
 > 拆分以突破单卡比特上限是另一项工作，见 §5.6。
 
-#### 梯度方法：为何用 psr 而非 autodiff
+#### 梯度方法：psr 现状 vs complex64-free autodiff 前景
 
-NPU 版默认 `--gradient psr`（参数移位），**有意不用 autodiff（`ad`）**：
+NPU 版目前默认 `--gradient psr`（参数移位）：
 
-- **内存**：autodiff 对 1313 个 Pauli 项 × 多次前向构建反向图，内存放大显著，是早期 16 比特 OOM/SIGKILL 的因素之一；psr 把目标当黑盒、在 `torch.no_grad()` 下求值，不建反向图，内存友好。
-- **Ascend 算子缺口**：complex64 在 Ascend 上无原生 `add`，复数张量的 autograd 梯度累加（`aclnnAdd`）也不支持；psr 只做前向期望值评估，回避这条路径。
-- **已在 Ascend 上实测确认 autodiff 不可用**：`--gradient ad` 在 `loss.backward()` 处报
-  `RuntimeError: call aclnnAdd failed ... self not implemented for DT_COMPLEX64`。NPUBackend 的自定义
-  `RealImagMatmul`/`RealImagExpectation` 覆盖了前向/矩阵乘，但 autograd 的**梯度累加**仍会触发 complex64
-  `add`（Ascend 无该算子）→ 硬失败，非内存可调问题。故 **autodiff 在 Ascend 上是死路，psr 是唯一可行路径**。
+- **内存**：psr 把目标当黑盒、在 `torch.no_grad()` 下求值，不建反向图，内存友好。
+- **complex64 autodiff 已死**：`--gradient ad` 在 `loss.backward()` 处报
+  `RuntimeError: call aclnnAdd failed ... self not implemented for DT_COMPLEX64`。
+  autograd 的**梯度累加**触发 complex64 `add`（Ascend 无此算子）→ 硬失败，非内存可调问题。
 
-换言之，psr 不是「更省内存的选择」而是 Ascend 上的**必选项**；提速只能靠把 psr 的 2·P 次评估分片到多卡
-（见 §5.5 HCCL 小节的「正解」），而非换 autodiff。
+**2026-06-22 新结论：complex64-free autodiff 在 NPU 上原则可行。**
+
+在纯实数（float32）路径下，Ascend autograd 全部算子均可用（`demos/check_npu_autograd.py` 实测）：
+
+```text
+[OK]   forward float32 add (a+a): 4.0
+[OK]   forward float32 matmul: 2.0
+[OK]   autograd backward (single use)
+[OK]   autograd backward (grad accumulation = float32 add)
+[OK]   autograd real/imag expectation <Z> + grad: val=cos(0.3)≈0.9553，grad=-sin(0.3)≈-0.2955
+```
+
+`NPUBackend` 的 `RealImagMatmul`/`RealImagExpectation` 已把前向从 complex64 改为 real/imag float32 分解；
+**只需把期望值计算的返回值也保持 float32 scalar（而非复数），backward 即可全部在 float32 图上完成，绕开 `aclnnAdd` 缺口。**
+
+这意味着 `--gradient ad` 理论上可在 Ascend 上工作，只需确保整个前向链路无 complex64 节点残留。
+这是比 psr 梯度分片更高优的探索方向：autodiff 每步只需一次前向 + 一次 backward，而 psr 需 2·P 次前向。
+
+**当前选择**：维持 psr 作为可靠基线；complex64-free autodiff 路径作为 §5.6 候选优化项待实现和验证。
 
 #### HCCL broadcast 屏障超时
 
