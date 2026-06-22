@@ -255,7 +255,7 @@ python demos/demo_npu_probe.py --refresh
 
 在 QAS supernet（`aicir/qas`）中无需手动构造后端：把 `device="npu:0"` 传入配置，框架会自动选用 `NPUBackend`；CPU / CUDA 设备则用 `GPUBackend`。
 
-### 5.5  完整端到端示例
+完整端到端示例：
 
 ```python
 import math
@@ -281,6 +281,89 @@ print(f"probs   : {result.probabilities}")
 print(f"counts  : {result.counts}")
 print(f"summary : {result.summary()}")
 ```
+
+### 5.5  BeH2 16 比特 supernet QAS 排查记录（内存 / 梯度 / HCCL）
+
+#### OOM/SIGKILL：构造期布局枚举
+
+`torchrun --nproc_per_node=4 demos/BeH2/BeH2_npu.py`（16 比特、1313 Pauli 项）曾在进入
+`start sharded supernet search` 后约 12 分钟被 `SIGKILL`（`exitcode -9`）终止；Ascend TBE 后台线程
+随后输出的 `EOFError`/`ConnectionResetError` 是子进程被杀后的连带现象，非首要异常。
+
+**定位**：`dmesg` 显示 **cgroup（容器）内存超限**而非主机 OOM（主机 2 TB、空闲 1.9 TB）；
+单个 rank 的主进程涨到 **~238 GB RSS**——对 16 比特（态向量仅 1 MB）是病态的内存爆炸，必为泄漏/枚举。
+`tracemalloc` 指向 `supernet.py` 的布局枚举/参数预建行（数千万次分配且持续增长）。
+
+**根因**：`Supernet` 构造时枚举整个单比特布局空间
+`product(single_qubit_gates, repeat=n_qubits)` = `gates ** n_qubits`（BeH2 即 `5 ** 16 ≈ 1.5e11`），
+并为每个布局预建共享参数。只在测试用的极小 `n_qubits` 下可行，16 比特撑爆内存。
+
+**修复**（懒采样 + 懒共享参数，见 `aicir/qas/algorithms/supernet.py` 顶部内存说明）：
+
+- `sample_architecture` 改为**采样下标 + 解码**，与旧 `choice(枚举列表)` **字节等价**（rng 序列不变，
+  golden 测试不受影响），但不物化布局空间。
+- 共享参数**首次访问懒建**；每 supernet 优化器懒建并经 `add_param_group` 增长。
+- 每个被访问架构的参数在**所有** supernet 上创建（仅评估分片、参数创建不分片），保持 `safe`/
+  `aggressive` 分片下各 rank 的共享参数键集一致（梯度 all-reduce / `broadcast_parameters` 依赖此不变量）。
+
+共享参数内存降为 `O(supernet_steps × layers × n_qubits)`。配套 `tests/test_supernet_lazy_layouts.py`
+（含 16 比特秒级构造回归）。
+
+> 注：该修复只解决 supernet 的内存爆炸（任务/数据并行，整态仍驻单卡）。把单条电路的态向量跨 NPU
+> 拆分以突破单卡比特上限是另一项工作，见 §5.6。
+
+#### 梯度方法：psr 现状 vs complex64-free autodiff 前景
+
+NPU 版目前默认 `--gradient psr`（参数移位）：
+
+- **内存**：psr 把目标当黑盒、在 `torch.no_grad()` 下求值，不建反向图，内存友好。
+- **complex64 autodiff 已死**：`--gradient ad` 在 `loss.backward()` 处报
+  `RuntimeError: call aclnnAdd failed ... self not implemented for DT_COMPLEX64`。
+  autograd 的**梯度累加**触发 complex64 `add`（Ascend 无此算子）→ 硬失败，非内存可调问题。
+
+**2026-06-22 新结论：complex64-free autodiff 在 NPU 上原则可行。**
+
+在纯实数（float32）路径下，Ascend autograd 全部算子均可用（`demos/check_npu_autograd.py` 实测）：
+
+```text
+[OK]   forward float32 add (a+a): 4.0
+[OK]   forward float32 matmul: 2.0
+[OK]   autograd backward (single use)
+[OK]   autograd backward (grad accumulation = float32 add)
+[OK]   autograd real/imag expectation <Z> + grad: val=cos(0.3)≈0.9553，grad=-sin(0.3)≈-0.2955
+```
+
+`NPUBackend` 的 `RealImagMatmul`/`RealImagExpectation` 已把前向从 complex64 改为 real/imag float32 分解；
+**只需把期望值计算的返回值也保持 float32 scalar（而非复数），backward 即可全部在 float32 图上完成，绕开 `aclnnAdd` 缺口。**
+
+这意味着 `--gradient ad` 理论上可在 Ascend 上工作，只需确保整个前向链路无 complex64 节点残留。
+这是比 psr 梯度分片更高优的探索方向：autodiff 每步只需一次前向 + 一次 backward，而 psr 需 2·P 次前向。
+
+**当前选择**：维持 psr 作为可靠基线；complex64-free autodiff 路径作为 §5.6 候选优化项待实现和验证。
+
+#### HCCL broadcast 屏障超时
+
+**现象**：内存修复后，进入搜索某次 `broadcast_parameters`（`aicir/qas/core/sharding.py`）报
+`HcclBroadcast, error code is 6` / `EI0006: Getting socket times out, Remote Rank did not send the data in time` /
+`Transport init error ... dst_rank[0]`；从启动到报错约 148 s，刚好超过默认 `HCCL_CONNECT_TIMEOUT=120 s`。
+（`ASCEND_LAUNCH_BLOCKING=1` 可让该异步错误同步停在真正失败的 collective 调用。）
+
+**根因**：`safe` 分片下**仅 rank 0 计算 psr 梯度**（2·P 次移位评估 × 1313 项 × 首次 TBE 算子编译，常达数分钟），
+rank 1/2/3 跳过梯度直接到 `broadcast_parameters` 屏障空等，超过 120 s 即超时。`--supernet-num 1` 时完全退化：
+1/2/3 连选择评估都没有，纯空等必然超时。这是 `safe` 分片**只分了候选选择、没分梯度计算**的固有负载不均衡，
+被前述内存修复「解锁」后才首次暴露（此前在到达 broadcast 前就已 OOM）。
+
+**临时缓解**：抬高屏障超时，让 rank 0 慢的首步在超时前完成：
+
+```bash
+HCCL_CONNECT_TIMEOUT=1800 torchrun --nproc_per_node=4 demos/BeH2/BeH2_npu.py --supernet-num 4 ...
+```
+
+已验证全链路跑通（4 卡 340 s，各 rank 能量一致，证明 `safe` 权重同步确定性正确）。注意这是创可贴：3 张卡仍在每步空等 rank 0。
+
+**正解（待办）**：把 psr 的 2·P 次移位评估分片到各 rank（各自本地算、一次 `all_reduce`/`all_gather` 汇总完整梯度、
+各 rank 施加相同确定性优化步），消除 rank 0 瓶颈与 per-step `broadcast_parameters`——负载均衡、真正用满多卡、
+不再依赖 `HCCL_CONNECT_TIMEOUT`。
 
 ---
 
