@@ -143,6 +143,111 @@ class _NpuExpectationFn(torch.autograd.Function):
         return grad_state, None
 
 
+def _pauli_signs_npu(basis_indices: torch.Tensor, sign_mask: int) -> torch.Tensor | None:
+    """(-1)^{popcount(basis_index & sign_mask)}，float32，NPU 安全。"""
+    if not sign_mask:
+        return None
+    parity = torch.zeros_like(basis_indices, dtype=torch.bool)
+    mask, bit = int(sign_mask), 0
+    while mask:
+        if mask & 1:
+            parity = torch.logical_xor(parity, ((basis_indices >> bit) & 1).bool())
+        mask >>= 1
+        bit += 1
+    ones = torch.ones_like(basis_indices, dtype=torch.float32)
+    return torch.where(parity, -ones, ones)
+
+
+def _pauli_apply_npu(
+    state_re: torch.Tensor,
+    state_im: torch.Tensor,
+    basis_indices: torch.Tensor,
+    flip_mask: int,
+    sign_mask: int,
+    y_phase: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """计算 (P_k |ψ⟩) 的实/虚部（全程 float32，无 complex64 节点）。"""
+    if flip_mask:
+        idx = torch.bitwise_xor(basis_indices, flip_mask)
+        mr, mi = state_re.index_select(0, idx), state_im.index_select(0, idx)
+    else:
+        mr, mi = state_re, state_im
+    if sign_mask:
+        s = _pauli_signs_npu(basis_indices, sign_mask)
+        mr, mi = mr * s, mi * s
+    # 乘以 i^y_phase
+    if y_phase == 0:
+        return mr, mi
+    if y_phase == 1:   # ×i
+        return -mi, mr
+    if y_phase == 2:   # ×(−1)
+        return -mr, -mi
+    return mi, -mr     # ×(−i)
+
+
+class _NpuHamiltonianExpectationFn(torch.autograd.Function):
+    """Re⟨ψ|H|ψ⟩（Pauli 字符串求和 Hamiltonian）的 NPU 安全自动微分包装。
+
+    核心思路：state 在自动微分图中只出现一次（作为本 Function 的输入），
+    1313 次 Pauli 项的梯度累加全部在本 Function 的 backward 内以 float32 完成，
+    最终一次性组装成 complex64 梯度返回——没有跨 autograd 节点的 complex64 add，
+    彻底绕开 Ascend 缺失的 aclnnAdd(DT_COMPLEX64)。
+
+    backward 公式：grad_state = 2 · go · (H |ψ⟩)，其中
+        (H|ψ⟩)[m] = Σ_k c_k (P_k|ψ⟩)[m]
+    实/虚部分别在 float32 累加。
+    """
+
+    @staticmethod
+    def forward(ctx, state, basis_indices, pauli_cache):
+        ctx.save_for_backward(state, basis_indices)
+        ctx.pauli_cache = pauli_cache
+        s_re = torch.real(state)
+        s_im = torch.imag(state)
+        energy = torch.zeros((), dtype=torch.float32, device=state.device)
+        for flip_mask, sign_mask, y_phase, c_re, c_im in pauli_cache:
+            if flip_mask:
+                idx = torch.bitwise_xor(basis_indices, flip_mask)
+                m_re = s_re.index_select(0, idx)
+                m_im = s_im.index_select(0, idx)
+            else:
+                m_re, m_im = s_re, s_im
+            ov_re = m_re * s_re + m_im * s_im
+            ov_im = m_re * s_im - m_im * s_re
+            if sign_mask:
+                sg = _pauli_signs_npu(basis_indices, sign_mask)
+                ov_re, ov_im = ov_re * sg, ov_im * sg
+            if y_phase == 0:
+                t_re, t_im = ov_re.sum(), ov_im.sum()
+            elif y_phase == 1:
+                t_re, t_im = -ov_im.sum(), ov_re.sum()
+            elif y_phase == 2:
+                t_re, t_im = -ov_re.sum(), -ov_im.sum()
+            else:
+                t_re, t_im = ov_im.sum(), -ov_re.sum()
+            energy = energy + c_re * t_re - c_im * t_im
+        return energy
+
+    @staticmethod
+    def backward(ctx, go):
+        state, basis_indices = ctx.saved_tensors
+        s_re = torch.real(state)
+        s_im = torch.imag(state)
+        dim = state.numel()
+        dev = state.device
+        g_re = torch.zeros(dim, dtype=torch.float32, device=dev)
+        g_im = torch.zeros(dim, dtype=torch.float32, device=dev)
+        go2 = go * 2.0  # d(Re⟨ψ|H|ψ⟩)/dψ = 2·Re(H|ψ⟩), PyTorch 复数梯度惯例
+        for flip_mask, sign_mask, y_phase, c_re, c_im in ctx.pauli_cache:
+            pk_re, pk_im = _pauli_apply_npu(s_re, s_im, basis_indices, flip_mask, sign_mask, y_phase)
+            ck_pk_re = c_re * pk_re - c_im * pk_im
+            ck_pk_im = c_re * pk_im + c_im * pk_re
+            g_re = g_re + go2 * ck_pk_re   # float32 累加，无 complex64 add
+            g_im = g_im + go2 * ck_pk_im
+        # 一次性组装 complex64——不是累加，是赋值
+        return torch.complex(g_re, g_im).reshape(state.shape), None, None
+
+
 class NPUBackend(GPUBackend):
     """NPU-first backend for Ascend devices, compatible with GPUBackend API."""
 
@@ -585,6 +690,19 @@ class NPUBackend(GPUBackend):
                 probs = probs / total
             return probs
         return super().measure_probs(state)
+
+    def hamiltonian_expectation_pauli(
+        self,
+        state: torch.Tensor,
+        basis_indices: torch.Tensor,
+        pauli_cache: list,
+    ) -> torch.Tensor:
+        """Re⟨ψ|H|ψ⟩（Pauli 项列表形式 Hamiltonian），NPU autodiff 安全。
+
+        用 _NpuHamiltonianExpectationFn 包装，使 state 在图中只出现一次，
+        避免 1313 次 complex64 梯度累加（aclnnAdd 缺失）。
+        """
+        return _NpuHamiltonianExpectationFn.apply(state.reshape(-1), basis_indices, pauli_cache)
 
     @property
     def runtime_context(self):
