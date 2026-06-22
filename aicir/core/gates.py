@@ -776,6 +776,12 @@ def _apply_local_matrix_to_state_flat(state, local_matrix, axes, n_qubits, backe
     flat = state.reshape(-1)
     indices = _backend_index_tensor(_flat_local_state_indices(axes, n_qubits), flat)
     npu_complex = _is_npu_complex_tensor(flat, backend)
+
+    # NPU autograd 安全路径：flat 和 local_matrix 各只在图中出现一次，
+    # backward 全程 float32，避免 aclnnAdd(DT_COMPLEX64)。
+    if npu_complex and hasattr(backend, "apply_flat_gate"):
+        return backend.apply_flat_gate(flat, local_matrix, indices).reshape(1 << n_qubits, 1)
+
     if npu_complex:
         gathered = torch.complex(torch.real(flat)[indices], torch.imag(flat)[indices])
     else:

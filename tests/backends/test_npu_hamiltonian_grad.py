@@ -19,8 +19,10 @@ pytest.importorskip("torch")
 from aicir.backends.npu_backend import (
     NPUBackend,
     _NpuHamiltonianExpectationFn,
+    _NpuLocalGateApplyFn,
     _pauli_signs_npu,
 )
+from aicir.core.gates import _flat_local_state_indices
 from aicir.qas.algorithms.supernet import Supernet, SupernetConfig, h2_hamiltonian
 
 
@@ -178,4 +180,106 @@ def test_autodiff_vs_psr_gradient():
     )
     assert abs(grad_t1_ad - grad_t1_psr) < 1e-4, (
         f"dE/dt1: ad={grad_t1_ad:.6f} psr={grad_t1_psr:.6f}"
+    )
+
+
+# ─────────────── _NpuLocalGateApplyFn 测试 ──────────────────────────────────
+
+def _make_ry_matrix(theta: torch.Tensor) -> torch.Tensor:
+    """RY(θ) 2×2 矩阵（complex64），携带梯度图。"""
+    c = torch.cos(theta / 2)
+    s = torch.sin(theta / 2)
+    # [[cos, -sin], [sin, cos]] 转 complex64
+    row0 = torch.stack([torch.complex(c, torch.zeros_like(c)),
+                        torch.complex(-s, torch.zeros_like(s))])
+    row1 = torch.stack([torch.complex(s, torch.zeros_like(s)),
+                        torch.complex(c, torch.zeros_like(c))])
+    return torch.stack([row0, row1])
+
+
+def test_npu_local_gate_apply_fn_forward_matches_reference():
+    """_NpuLocalGateApplyFn 前向与直接 gather→matmul→scatter 结果相同（4 比特，单比特门）。"""
+    n_qubits = 4
+    dim = 1 << n_qubits  # 16
+
+    torch.manual_seed(42)
+    re = torch.randn(dim)
+    im = torch.randn(dim)
+    norm = (re ** 2 + im ** 2).sum().sqrt()
+    flat = torch.complex(re / norm, im / norm)
+
+    theta = torch.tensor(0.8)
+    local_matrix = _make_ry_matrix(theta)
+
+    axes = [1]  # 作用在 qubit 1
+    idx_np = _flat_local_state_indices(axes, n_qubits)
+    indices = torch.as_tensor(idx_np, dtype=torch.long)
+
+    # 使用 _NpuLocalGateApplyFn
+    out_fn = _NpuLocalGateApplyFn.apply(flat, local_matrix, indices)
+
+    # 参考：直接 gather→matmul→scatter（无 autograd 追踪）
+    with torch.no_grad():
+        idx = indices.reshape(-1)
+        g_re = torch.real(flat)[idx].reshape(indices.shape)
+        g_im = torch.imag(flat)[idx].reshape(indices.shape)
+        m_re = torch.real(local_matrix)
+        m_im = torch.imag(local_matrix)
+        upd_re = torch.matmul(m_re, g_re) - torch.matmul(m_im, g_im)
+        upd_im = torch.matmul(m_re, g_im) + torch.matmul(m_im, g_re)
+        ref_re = torch.empty(dim, dtype=torch.float32)
+        ref_im = torch.empty(dim, dtype=torch.float32)
+        ref_re[idx] = upd_re.reshape(-1)
+        ref_im[idx] = upd_im.reshape(-1)
+        ref = torch.complex(ref_re, ref_im)
+
+    assert torch.allclose(out_fn, ref, atol=1e-6), (
+        f"max diff: {(out_fn - ref).abs().max().item():.2e}"
+    )
+
+
+def test_npu_local_gate_apply_fn_grad_vs_fd():
+    """_NpuLocalGateApplyFn 的 autodiff 梯度与有限差分吻合（4 比特，2 比特门 CRZ 等效结构）。
+
+    用 ⟨ψ'|σ_z⊗I⊗I⊗I|ψ'⟩ 作为标量损失，其中 ψ' = gate(θ)|ψ⟩。
+    dL/dθ 由 backward 计算，与两点有限差分比较。
+    """
+    n_qubits = 4
+    dim = 1 << n_qubits
+
+    torch.manual_seed(7)
+    re_init = torch.randn(dim)
+    im_init = torch.randn(dim)
+    norm = (re_init ** 2 + im_init ** 2).sum().sqrt()
+    flat0 = torch.complex(re_init / norm, im_init / norm)  # 无梯度的初态
+
+    # 损失：⟨Z_0⟩ = sum_k sign(k>>3 & 1) * |psi_k|^2（最高位为 qubit 0）
+    z0_sign = torch.tensor(
+        [1.0 if (k >> (n_qubits - 1)) & 1 == 0 else -1.0 for k in range(dim)]
+    )
+
+    axes = [0]  # RY 作用在 qubit 0
+    idx_np = _flat_local_state_indices(axes, n_qubits)
+    indices = torch.as_tensor(idx_np, dtype=torch.long)
+
+    def loss_fn(theta_val):
+        theta = torch.tensor(theta_val, requires_grad=False)
+        mat = _make_ry_matrix(theta)
+        out = _NpuLocalGateApplyFn.apply(flat0, mat, indices)
+        return float((z0_sign * (out.real ** 2 + out.imag ** 2)).sum())
+
+    theta_val = 0.6
+    eps = 1e-4
+    grad_fd = (loss_fn(theta_val + eps) - loss_fn(theta_val - eps)) / (2 * eps)
+
+    # autodiff 路径
+    theta_ad = torch.tensor(theta_val, requires_grad=True)
+    mat_ad = _make_ry_matrix(theta_ad)
+    out_ad = _NpuLocalGateApplyFn.apply(flat0, mat_ad, indices)
+    loss_ad = (z0_sign * (out_ad.real ** 2 + out_ad.imag ** 2)).sum()
+    loss_ad.backward()
+    grad_ad = float(theta_ad.grad)
+
+    assert abs(grad_ad - grad_fd) < 1e-3, (
+        f"dL/dθ: ad={grad_ad:.6f} fd={grad_fd:.6f} diff={abs(grad_ad-grad_fd):.2e}"
     )
