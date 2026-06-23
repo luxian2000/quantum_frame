@@ -73,6 +73,13 @@ def test_supernet_native_rows_use_supernet_sampled_ranked_architectures(tmp_path
         assert payload["kind"] == "supernet_native"
 
 
+def test_supernet_native_defaults_are_local_for_nine_qubits():
+    from aicir.qas.vqe_loop.supernet_native import _default_single_qubit_gates, _default_two_qubit_pairs
+
+    assert _default_single_qubit_gates(9) == ("ry", "rz")
+    assert _default_two_qubit_pairs(9) == tuple((index, index + 1) for index in range(8))
+
+
 def test_next_batch_writes_supernet_native_warm_start_refs(tmp_path, monkeypatch):
     from aicir.qas.vqe_loop import next_batch
 
