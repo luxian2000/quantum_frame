@@ -284,6 +284,16 @@ print(f"summary : {result.summary()}")
 
 ### 5.5  BeH2 16 比特 supernet QAS 排查记录（内存 / 梯度 / HCCL）
 
+`torchrun --nproc_per_node=4 demos/BeH2/BeH2_npu.py`（16 比特、1313 Pauli 项、4 卡 `safe` 分片）落地过程中依次暴露并修复了三类问题，按出现顺序排查——后一个问题被前一个修复「解锁」后才首次显形。
+
+| # | 现象 | 根因 | 修复 | 代码位置 |
+| --- | --- | --- | --- | --- |
+| 1 | 进入搜索约 12 min 被 `SIGKILL`（cgroup OOM，单 rank ~238 GB RSS） | `Supernet` 构造期枚举整个单比特布局空间 `product(gates, repeat=n_qubits)` = `5**16 ≈ 1.5e11` 并为每布局预建参数 | 布局**懒采样**（采下标再解码，与旧 `choice` 字节等价）+ 共享参数**首次访问懒建**；内存降为 `O(supernet_steps×layers×n_qubits)` | `aicir/qas/algorithms/supernet.py`（顶部内存说明、`sample_architecture`、`_shared_param`） |
+| 2 | `--gradient ad` 在 `loss.backward()` 报 `aclnnAdd ... DT_COMPLEX64 not implemented` | autograd 梯度累加触发 complex64 `add`，Ascend 无此算子 | 默认 `--gradient psr`（参数移位，`no_grad` 黑盒求值，不建反向图）；complex64-free autodiff 为待验证候选（§5.6） | `supernet.py:712`、`_parameter_shift_update` |
+| 3 | 内存修复后进入搜索约 148 s 报 `HcclBroadcast error code 6 / EI0006 socket timeout`（>默认 `HCCL_CONNECT_TIMEOUT=120 s`） | `safe` 分片下**仅 rank 0 算 psr 梯度**（2·P 次移位×1313 项×首次 TBE 编译，常数分钟），rank 1/2/3 在 `broadcast_parameters` 屏障空等超时 | 临时：`HCCL_CONNECT_TIMEOUT=1800`；正解（待办）：psr 移位评估分片到各 rank + 一次 `all_reduce` 汇总 | `supernet.py:1085`（仅 rank 0 梯度步）、`aicir/qas/core/sharding.py`（`broadcast_parameters`） |
+
+三项修复组合后全链路跑通（详见本节末「全链路验证结果」）。各问题的完整排查过程见下。
+
 #### OOM/SIGKILL：构造期布局枚举
 
 `torchrun --nproc_per_node=4 demos/BeH2/BeH2_npu.py`（16 比特、1313 Pauli 项）曾在进入
@@ -364,6 +374,30 @@ HCCL_CONNECT_TIMEOUT=1800 torchrun --nproc_per_node=4 demos/BeH2/BeH2_npu.py --s
 **正解（待办）**：把 psr 的 2·P 次移位评估分片到各 rank（各自本地算、一次 `all_reduce`/`all_gather` 汇总完整梯度、
 各 rank 施加相同确定性优化步），消除 rank 0 瓶颈与 per-step `broadcast_parameters`——负载均衡、真正用满多卡、
 不再依赖 `HCCL_CONNECT_TIMEOUT`。
+
+#### 全链路验证结果（2026-06-22）
+
+上述三项修复（懒采样 + HCCL 超时调高 + psr 梯度）组合后，`torchrun --nproc_per_node=4 demos/BeH2/BeH2_npu.py` 完整跑通：
+
+```text
+started at            : 2026-06-22T15:11:15
+finished at           : 2026-06-22T18:08:52
+platform              : Linux-4.19.90-2107.6.0.0251.71.oe1.bclinux.aarch64-aarch64-with-glibc2.35
+mode                  : safe
+NPUs (world_size)     : 4
+seed                  : 7
+device                : npu:0
+qubits / terms        : 16 / 1313
+basis/charge/spin/map : 3-21g/0/0/JordanWignerMapper
+total wall-clock time : 10656.6 s
+
+global-best result (identical on all ranks):
+  fine-tuned energy  : -18.5680789948 Ha
+  baseline VQE       : -19.0915603638 Ha
+  CNOT / 2-qubit     : 22 / 38
+```
+
+壁钟约 3 小时，4 张卡能量一致，`safe` 权重同步确定性正确。当前主要待办仍是 psr 梯度分片（正解），以消除 rank 0 瓶颈和对 `HCCL_CONNECT_TIMEOUT=1800` 的依赖。
 
 ---
 
