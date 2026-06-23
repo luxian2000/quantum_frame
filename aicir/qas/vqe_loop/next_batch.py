@@ -256,6 +256,54 @@ def _take_unique(
             selected_ids.add(row["architecture_id"])
 
 
+def _priority_boundary_anchors(
+    completed: list[tuple[CandidateRecord, float]],
+    *,
+    limit: int = 8,
+) -> list[CandidateRecord]:
+    preferred_sources = {LabelSource.TRACKB_SPARSE.value, LabelSource.INITIAL_TRAIN.value}
+    preferred = [
+        (record, energy)
+        for record, energy in completed
+        if str(record.metadata.get("source", "")) in preferred_sources
+    ]
+    pool = preferred or completed
+    return [
+        record
+        for record, _energy in sorted(pool, key=lambda item: (item[1], item[0].architecture_id))[: max(1, int(limit))]
+    ]
+
+
+def _rank_boundary_records(
+    boundary_pool: list[CandidateRecord],
+    *,
+    completed: list[tuple[CandidateRecord, float]],
+    scales,
+    rows_by_id: dict[str, dict[str, Any]],
+    count: int,
+) -> list[CandidateRecord]:
+    if int(count) <= 0 or not boundary_pool:
+        return []
+    anchors = _priority_boundary_anchors(completed)
+    if not anchors:
+        return sorted(
+            boundary_pool,
+            key=lambda record: (_supernet_priority(rows_by_id.get(record.architecture_id, {})), record.architecture_id),
+        )[: int(count)]
+
+    def nearest_priority_distance(record: CandidateRecord) -> float:
+        return min(task_aware_composite_distance(record, anchor, scales) for anchor in anchors)
+
+    return sorted(
+        boundary_pool,
+        key=lambda record: (
+            nearest_priority_distance(record),
+            _supernet_priority(rows_by_id.get(record.architecture_id, {})),
+            record.architecture_id,
+        ),
+    )[: int(count)]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plan the next trust-region VQE-QAS label batch")
     parser.add_argument("--candidates", required=True)
@@ -398,10 +446,13 @@ def main() -> None:
     else:
         boundary_limit = max(int(args.boundary), len(boundary_pool))
         boundary_ranked = select_farthest_first(boundary_pool, labeled_records, scales, count=boundary_limit)
-        boundary_records = sorted(
+        boundary_records = _rank_boundary_records(
             boundary_ranked,
-            key=lambda record: (_supernet_priority(row_by_id.get(record.architecture_id, {})), record.architecture_id),
-        )[: int(args.boundary)]
+            completed=completed_index,
+            scales=scales,
+            rows_by_id=row_by_id,
+            count=int(args.boundary),
+        )
         sparse_limit = max(int(args.sparse), len(sparse_pool or ood_records))
         sparse_ranked = select_farthest_first(sparse_pool or ood_records, labeled_records + boundary_records, scales, count=sparse_limit)
         sparse_records = sorted(

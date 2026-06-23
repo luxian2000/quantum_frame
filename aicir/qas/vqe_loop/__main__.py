@@ -10,37 +10,25 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Iterable
+import re
+from typing import Any
 
+from aicir.chemistry.spec import GeneratedHamiltonian, load_hamiltonian_input
 from .vqe_qas_loop import ClosedLoopConfig, run_vqe_qas_closed_loop
 
 
-def _load_hamiltonian_terms(path: str | None) -> tuple[tuple[float, str], ...] | None:
+def _load_generated_hamiltonian(path: str | None) -> GeneratedHamiltonian | None:
     if not path:
         return None
-    raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-    if not isinstance(raw, Iterable) or isinstance(raw, (str, bytes, dict)):
-        raise ValueError("Hamiltonian JSON must be a list of [coefficient, pauli] terms")
-    terms: list[tuple[float, str]] = []
-    for item in raw:
-        if not isinstance(item, (list, tuple)) or len(item) != 2:
-            raise ValueError(f"Invalid Hamiltonian term: {item!r}")
-        coeff, pauli = item
-        terms.append((float(coeff), str(pauli)))
-    if not terms:
-        raise ValueError("Hamiltonian JSON must contain at least one Pauli term")
-    return tuple(terms)
+    return load_hamiltonian_input(path)
 
 
-def _infer_n_qubits(terms: tuple[tuple[float, str], ...] | None, explicit: int | None) -> int:
+def _infer_n_qubits(generated: GeneratedHamiltonian | None, explicit: int | None) -> int:
     if explicit is not None:
         return int(explicit)
-    if not terms:
+    if generated is None:
         raise ValueError("--n-qubits is required when --hamiltonian is not provided")
-    widths = {len(pauli) for _coeff, pauli in terms}
-    if len(widths) != 1:
-        raise ValueError(f"Hamiltonian Pauli strings must have one width, found {sorted(widths)}")
-    return int(next(iter(widths)))
+    return int(generated.n_qubits)
 
 
 def _auto_int(value: str | None) -> int | None:
@@ -52,13 +40,28 @@ def _auto_int(value: str | None) -> int | None:
     return int(text)
 
 
+def _default_output_dir(hamiltonian_path: str | None, n_qubits: int | None = None) -> str:
+    if hamiltonian_path:
+        stem = Path(str(hamiltonian_path)).stem
+        slug = re.sub(r"[^A-Za-z0-9_]+", "_", stem).strip("_").lower() or "hamiltonian"
+        return str(Path("outputs") / f"qas_{slug}_loop")
+    if n_qubits is not None:
+        return str(Path("outputs") / f"qas_{int(n_qubits)}q_loop")
+    return str(Path("outputs") / "qas_loop")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the VQE-QAS closed loop")
-    parser.add_argument("--hamiltonian", default=None, help="JSON file containing [[coeff, pauli], ...] terms")
-    parser.add_argument("--hamiltonian-id", default="literal_hamiltonian")
-    parser.add_argument("--hamiltonian-class", default="literal")
+    parser.add_argument("hamiltonian_input", nargs="?", help="Optional positional Hamiltonian JSON path")
+    parser.add_argument(
+        "--hamiltonian",
+        default=None,
+        help="JSON Hamiltonian input: legacy [[coeff, pauli], ...], pauli_terms spec, or molecular spec",
+    )
+    parser.add_argument("--hamiltonian-id", default=None, help="Optional override for the auto-generated Hamiltonian id")
+    parser.add_argument("--hamiltonian-class", default=None, help="Optional override for the Hamiltonian class")
     parser.add_argument("--n-qubits", type=int, default=None)
-    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--output-dir", default=None)
     parser.add_argument("--rounds", default="auto")
     parser.add_argument("--initial-labels", default="auto")
     parser.add_argument("--batch-size", default="auto")
@@ -78,8 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--label-seed", type=int, default=5200)
     parser.add_argument("--n-seeds", type=int, default=1)
     parser.add_argument("--max-evals", type=int, default=100)
-    parser.add_argument("--backend", default="numpy")
-    parser.add_argument("--dtype", default="complex128")
+    parser.add_argument("--backend", default="npu")
+    parser.add_argument("--dtype", default="complex64")
     parser.add_argument("--protocol", default="aicir/qas/vqe_loop/fair_label_protocol.json")
     parser.add_argument("--no-layerwise", action="store_true")
     parser.add_argument("--layerwise-count", default="auto")
@@ -89,14 +92,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    terms = _load_hamiltonian_terms(args.hamiltonian)
-    n_qubits = _infer_n_qubits(terms, args.n_qubits)
+    hamiltonian_path = args.hamiltonian or args.hamiltonian_input
+    generated = _load_generated_hamiltonian(hamiltonian_path)
+    n_qubits = _infer_n_qubits(generated, args.n_qubits)
     config = ClosedLoopConfig(
-        output_dir=Path(args.output_dir),
+        output_dir=Path(args.output_dir or _default_output_dir(hamiltonian_path, n_qubits)),
         n_qubits=n_qubits,
-        hamiltonian_terms=terms,
-        hamiltonian_id=str(args.hamiltonian_id),
-        hamiltonian_class=str(args.hamiltonian_class),
+        hamiltonian_terms=generated.terms if generated is not None else None,
+        hamiltonian_id=str(args.hamiltonian_id or (generated.hamiltonian_id if generated is not None else "literal_hamiltonian")),
+        hamiltonian_class=str(args.hamiltonian_class or (generated.hamiltonian_class if generated is not None else "literal")),
         rounds=_auto_int(args.rounds),
         initial_labels=_auto_int(args.initial_labels),
         batch_size=_auto_int(args.batch_size),

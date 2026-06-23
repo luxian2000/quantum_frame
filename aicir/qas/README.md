@@ -10,14 +10,30 @@
 - `algorithms/PPR_DQL.py`：基于 aicir 状态演化实现的 PPR-DQL（Probabilistic Policy Reuse with Deep Q-Learning）
 - `algorithms/PPO_RB.py`：Trust Region-based PPO with Rollback 版本的量子架构搜索
 
+当前重点主线是 `vqe_loop/`：面向 VQE/QAS 的“局域 oracle + EA 闭环搜索”。流程从候选 ansatz 空间生成开始，经过 hard filter 和 zero-cost soft flag，用少量 fair VQE 标签建立 benchmark table，再通过 trust-region oracle 判断新候选是否位于可信邻域内；可信候选进入排序，不可信候选 abstain，并将 boundary、sparse、control 候选送回 VQE 扩表。对于 LiH 这类 12 qubits、复杂 Pauli 项 Hamiltonian，当前策略默认降低 `trackA_local` 比例，把 `trackB_sparse` 作为主探索方向，并保留少量 `boundary` 与 `control_random` 防止 oracle 或 zero-cost 偏置。
+
+Hamiltonian 输入已经从手写 `--hamiltonian-id` 迁移到规范化输入：`--hamiltonian` 可接收 legacy `[[coeff, pauli], ...]` 加权 Pauli 项，也可接收 `kind=molecular` 的分子构型、基组、active space 和 mapping 规格。分子输入由 `aicir.chemistry.spec` 通过可选 PySCF/Qiskit Nature 依赖一次性生成 qubit Hamiltonian；后续 fair VQE 标签仍走 aicir 后端，Ascend NPU 只用于 VQE 执行，不要求 PySCF 或 Qiskit 支持 NPU。
+
+### QAS 子项目 README 索引
+
+| 子项目 README | 说明 |
+| --- | --- |
+| `vqe_loop/README.md` | VQE-QAS 闭环入口、fair-label 协议、trust-region geometry、Stage-2 next-batch、oracle calibration、多 NPU 分片和 Hamiltonian 输入格式。 |
+
+目前 `qas/` 下只有 `vqe_loop/` 维护独立子 README；其他子目录的使用说明集中在本文件中。
+
 当前代码分层：
 
-- `core/`：传统 QAS 的类型、评估器、reward、search env、统一 runner/config。
-- `primitives/`：可复用 ansatz 构造和 backend 解析工具。
-- `algorithms/`：MoG-VQE、PPO-RB、PPR-DQL、CRLQAS、supernet 等具体算法实现。
-- `library/`：可复用候选架构库。
-- `problems/`：VQE/QAS 问题和 Hamiltonian 构造。
-- `vqe_loop/`：VQE-QAS 闭环，包括一键入口、fair-label 协议、trust-region geometry、Stage-2 selection/search、fair VQE、oracle calibration 和多 NPU 分片。
+| 子目录 | 独立 README | 说明 |
+| --- | --- | --- |
+| `core/` | 无 | 传统 QAS 的类型、评估器、reward、search env、统一 runner/config。 |
+| `primitives/` | 无 | 可复用 ansatz 构造和 backend 解析工具。 |
+| `algorithms/` | 无 | MoG-VQE、PPO-RB、PPR-DQL、CRLQAS、supernet 等具体算法实现。 |
+| `library/` | 无 | 可复用候选架构库。 |
+| `problems/` | 无 | VQE/QAS 问题和 Hamiltonian 构造。 |
+| `demos/` | 无 | 旧版或研究型演示脚本；新闭环优先使用 `vqe_loop/` 包入口。 |
+| `tests/` | 无 | QAS 相关测试和 smoke checks。 |
+| `vqe_loop/` | `vqe_loop/README.md` | VQE-QAS 闭环，包括一键入口、fair-label 协议、trust-region geometry、Stage-2 selection/search、fair VQE、oracle calibration 和多 NPU 分片。 |
 
 ## 1. 已提供能力
 
@@ -290,41 +306,49 @@ result = supernet_qas(ham, layers=6, supernet_num=5,
 VQE-QAS 的闭环代码放在 `aicir.qas.vqe_loop`，和 `algorithms/` 下的 MoG-VQE、PPO-RB 等算法实现并列但隔离。常规使用优先调用包级入口：
 
 ```bash
-python -m aicir.qas.vqe_loop \
-  --hamiltonian h2_terms.json \
-  --output-dir outputs/qas_h2_loop \
-  --rounds 2 \
-  --backend numpy \
-  --dtype complex128
+python -m aicir.qas.vqe_loop --hamiltonian lih_molecular_spec.json
 ```
+
+也可以把 Hamiltonian JSON 作为位置参数：
+
+```bash
+python -m aicir.qas.vqe_loop lih_molecular_spec.json
+```
+
+默认运行参数为 `--rounds auto --batch-size auto --backend npu --dtype complex64`，输出目录会从文件名自动生成，例如 `lih_molecular_spec.json` 对应 `outputs/qas_lih_molecular_spec_loop`。这些参数仍可显式覆盖。
+
+`--hamiltonian` 支持两类输入：
+
+- 加权 Pauli 项：`[[coeff, pauli], ...]`，适合已有 qubit Hamiltonian 的场景。
+- 分子规格：`{"kind": "molecular", "geometry": ..., "basis": ..., "active_space": ..., "mapping": ...}`，由 `aicir.chemistry.spec` 通过 PySCF/Qiskit Nature 一次性生成 Pauli Hamiltonian。`kind`、`basis`、`charge`、`spin`、`unit`、`driver` 和 `mapping` 都有默认值；LiH 这类双原子分子可只写 `{"molecule": "LiH", "distance": 0.1}`。
+
+`hamiltonian_id` 默认由规范化 Hamiltonian 内容自动派生；只有需要兼容旧实验目录或人工指定 benchmark 标识时，才传 `--hamiltonian-id` 覆盖。
 
 Python API 入口仍然保留：
 
 ```python
 from pathlib import Path
+from aicir.chemistry.spec import load_hamiltonian_input
 from aicir.qas.vqe_loop import ClosedLoopConfig, run_vqe_qas_closed_loop
 
-h2_terms = [
-    (-0.09706626816762543, "IIII"),
-    (0.17141282644776914, "ZIII"),
-    (0.12039548242542646, "XXXX"),
-]
+generated = load_hamiltonian_input("lih_molecular_spec.json")
 
 result = run_vqe_qas_closed_loop(
     ClosedLoopConfig(
-        output_dir=Path("outputs/qas_h2_loop"),
-        n_qubits=4,
-        hamiltonian_terms=h2_terms,
-        hamiltonian_id="h2_sto3g_jw_0735",
-        rounds=2,
-        backend="numpy",
-        dtype="complex128",
+        output_dir=Path("outputs/qas_lih_loop"),
+        n_qubits=generated.n_qubits,
+        hamiltonian_terms=generated.terms,
+        hamiltonian_id=generated.hamiltonian_id,
+        hamiltonian_class=generated.hamiltonian_class,
+        rounds=None,
+        backend="npu",
+        dtype="complex64",
     )
 )
 print(result.final_benchmark_table)
 ```
 
-详细模块职责、调用顺序、协议边界和辅助命令见 `aicir/qas/vqe_loop/README.md`。闭环逻辑不再放在 demos 或 cli 包里；服务模块可直接通过 `python -m aicir.qas.vqe_loop.<module>` 作为命令入口使用。
+详细模块职责、调用顺序、协议边界、Hamiltonian 输入格式和辅助命令见 `aicir/qas/vqe_loop/README.md`。闭环逻辑不再放在 demos 或 cli 包里；服务模块可直接通过 `python -m aicir.qas.vqe_loop.<module>` 作为命令入口使用。
 
 ### 3.7 QAS fair-label 队列的多 NPU 分片
 
