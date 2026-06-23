@@ -114,7 +114,6 @@ def build_beh2_npu_qas_circuit():
 
 
 circuit = build_beh2_npu_qas_circuit()
-circuit.plot()
 
 if __name__ == "__main__":
     figure_path = Path(__file__).with_name("BeH2_cir.png")
