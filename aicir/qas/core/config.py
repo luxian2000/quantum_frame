@@ -2,58 +2,22 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Callable
 
 QASMethod = str
 
-
-@dataclass
-class QDRATSConfig:
-    n_qubits: int | None = None
-    layers: int = 3
-    hidden_dim: int = 8
-
-    search_epochs: int = 100
-    theta_steps: int = 2
-    finetune_steps: int = 20
-
-    architecture_learning_rate: float = 0.05
-    theta_learning_rate: float = 0.05
-    finetune_learning_rate: float = 0.03
-
-    temperature: float = 1.0
-    temperature_min: float = 0.1
-    temperature_decay: float = 0.98
-    hard_sampling: bool = True
-    use_gumbel_noise: bool = True
-
-    device: str = "cpu"
-    seed: int = 42
-    log_interval: int = 0
-    initial_state: Any = None
-
-_PUBLIC_METHODS = ("supernet", "supernet_classification", "supernet_h2", "ppo_rb", "ppr_dql", "crlqas", "qdrats")
-
-_METHOD_ALIASES = {
-    # supernet (formerly VQA_QAS) — keep the old strings working for run().
-    "supernet": "supernet",
+# 非规范名的等价写法 → 规范方法名。规范名本身（``_FACTORIES`` 的键）无需登记。
+_ALIASES = {
     "vqa": "supernet",
     "vqa_qas": "supernet",
-    "supernet_classification": "supernet_classification",
     "vqa_classification": "supernet_classification",
     "classification": "supernet_classification",
-    "supernet_h2": "supernet_h2",
     "vqa_h2": "supernet_h2",
     "h2": "supernet_h2",
     "h2_vqe": "supernet_h2",
     "ppo": "ppo_rb",
-    "ppo_rb": "ppo_rb",
     "ppr": "ppr_dql",
-    "ppr_dql": "ppr_dql",
     "crl": "crlqas",
-    "crlqas": "crlqas",
-    "qdrats": "qdrats",
     "qdarts": "qdrats",
     "quantumdarts": "qdrats",
     "quantum_darts": "qdrats",
@@ -100,7 +64,7 @@ def supernet_h2(**kwargs: Any) -> Any:
 def ppo_rb(**kwargs: Any) -> Any:
     """Build a ``PPO_RB`` config with optional field overrides."""
 
-    from ..algorithms.PPO_RB import PPORollbackConfig
+    from ..algorithms.pporb import PPORollbackConfig
 
     return _build(PPORollbackConfig, kwargs)
 
@@ -108,7 +72,7 @@ def ppo_rb(**kwargs: Any) -> Any:
 def ppr_dql(**kwargs: Any) -> Any:
     """Build a ``PPR_DQL`` config with optional field overrides."""
 
-    from ..algorithms.PPR_DQL import PPRDQLConfig
+    from ..algorithms.pprdql import PPRDQLConfig
 
     return _build(PPRDQLConfig, kwargs)
 
@@ -116,7 +80,7 @@ def ppr_dql(**kwargs: Any) -> Any:
 def crlqas(**kwargs: Any) -> Any:
     """Build a ``CRLQAS`` config with optional field overrides."""
 
-    from ..algorithms.CRLQAS import CRLQASConfig
+    from ..algorithms.crlqas import CRLQASConfig
 
     values = dict(kwargs)
     if isinstance(values.get("adam_spsa"), dict):
@@ -127,13 +91,15 @@ def crlqas(**kwargs: Any) -> Any:
 def qdrats(**kwargs: Any) -> Any:
     """Build a ``QDRATS`` config with optional field overrides."""
 
+    from ..algorithms.qdrats import QDRATSConfig
+
     return _build(QDRATSConfig, kwargs)
 
 
 def adam_spsa(**kwargs: Any) -> Any:
     """Build the nested Adam-SPSA config used by ``CRLQAS``."""
 
-    from ..algorithms.CRLQAS import AdamSPSAConfig
+    from ..algorithms.crlqas import AdamSPSAConfig
 
     return _build(AdamSPSAConfig, kwargs)
 
@@ -157,16 +123,18 @@ def for_method(method: QASMethod, **kwargs: Any) -> Any:
 def method_names() -> tuple[str, ...]:
     """Return public method names that have config factory functions."""
 
-    return _PUBLIC_METHODS
+    return tuple(_FACTORIES)
 
 
 def canonical_method(method: QASMethod) -> str:
     key = str(method).strip().lower().replace("-", "_")
-    try:
-        return _METHOD_ALIASES[key]
-    except KeyError as exc:
-        methods = ", ".join(method_names())
-        raise ValueError(f"Unsupported QAS method {method!r}. Available methods: {methods}.") from exc
+    if key in _FACTORIES:
+        return key
+    canon = _ALIASES.get(key)
+    if canon is not None:
+        return canon
+    methods = ", ".join(method_names())
+    raise ValueError(f"Unsupported QAS method {method!r}. Available methods: {methods}.")
 
 
 def _build(config_type: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
@@ -180,6 +148,7 @@ ppo = ppo_rb
 ppr = ppr_dql
 crl = crlqas
 
+# 规范方法名 → 配置工厂。方法集合的单一来源（``method_names`` 由此派生）。
 _FACTORIES = {
     "supernet": supernet,
     "supernet_classification": supernet_classification,
@@ -192,7 +161,6 @@ _FACTORIES = {
 
 __all__ = [
     "adam_spsa",
-    "QDRATSConfig",
     "canonical_method",
     "create",
     "crl",

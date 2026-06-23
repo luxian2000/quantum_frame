@@ -13,7 +13,7 @@ from .core._types import (
 from .library.architectures import build_common_architectures, common_architecture_names
 from .core.architecture_search import ArchitectureSearch, NoiseAdaptiveQAS
 from .core.evaluator import ArchitectureEvaluator, evaluate_architectures, metric_catalog
-from .algorithms.MoG_VQE import (
+from .algorithms.mogvqe import (
     MOGVQEBlock,
     MOGVQECandidate,
     MOGVQEConfig,
@@ -90,9 +90,9 @@ from .core import config
 
 _OPTIONAL_RL_EXPORTS: list[str] = []
 try:
-    from .algorithms.CRLQAS import AdamSPSAConfig, CRLQASConfig, CRLQASResult, crlqas, train_crlqas
-    from .algorithms.PPR_DQL import PPRDQLConfig, PPRDQLPolicy, PPRDQLResult, ppr_dql_state_to_circuit, train_ppr_dql
-    from .algorithms.PPO_RB import PPORollbackConfig, ppo_rb_qas
+    from .algorithms.crlqas import AdamSPSAConfig, CRLQASConfig, CRLQASResult, crlqas, train_crlqas
+    from .algorithms.pprdql import PPRDQLConfig, PPRDQLPolicy, PPRDQLResult, ppr_dql_state_to_circuit, train_ppr_dql
+    from .algorithms.pporb import PPORollbackConfig, ppo_rb_qas
     from .algorithms.qdrats import QDRATSConfig, QDRATSResult, QuantumDARTS, qdrats, train_qdrats
     from .core.runner import QASRunConfig, available_qas_methods, default_qas_config, run
     from .algorithms.supernet import (

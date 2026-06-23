@@ -12,7 +12,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 
-from ..algorithms.MoG_VQE import MOGVQEBlock, MOGVQECandidate, MOGVQEIndividual, nsga_ii_select
+from ..algorithms.mogvqe import MOGVQEBlock, MOGVQECandidate, MOGVQEIndividual, nsga_ii_select
 from .geometry import CandidateRecord, DistanceScales, min_distance_to_set
 
 def select_farthest_first(
