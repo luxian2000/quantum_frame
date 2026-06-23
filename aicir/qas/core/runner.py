@@ -3,16 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from . import config as qas_config
-from .registry import get_strategy
-from . import strategies as _strategies  # noqa: F401  注册内置策略（import 副作用）
-from ..algorithms.CRLQAS import train_crlqas
-from ..algorithms.PPO_RB import ppo_rb_qas
-from ..algorithms.PPR_DQL import train_ppr_dql
-from ..algorithms.qdrats import train_qdrats
-from ..algorithms.supernet import classification_supernet, h2_vqe_supernet
 
 QASMethod = str
 
@@ -34,6 +27,45 @@ class QASRunConfig:
     target_density_matrix: Any = None
     epsilon: float | None = None
     policy_library: Any = None
+
+
+@dataclass(frozen=True)
+class _Spec:
+    """单个方法的分发规格：懒加载底层算法 + 需要的请求字段。
+
+    - ``loader``：返回底层 train/搜索函数（懒导入，避免顶层 Torch 依赖）。
+    - ``params``：透传给底层函数的 :class:`QASRunConfig` 字段名（同名映射）。
+    - ``required``：调用前必须非 ``None`` 的字段名。
+    """
+
+    loader: Callable[[], Callable[..., Any]]
+    params: tuple[str, ...]
+    required: tuple[str, ...] = ()
+
+
+def _load(module: str, name: str) -> Callable[[], Callable[..., Any]]:
+    def loader() -> Callable[..., Any]:
+        import importlib
+
+        return getattr(importlib.import_module(f"..algorithms.{module}", __package__), name)
+
+    return loader
+
+
+# 方法名 → 分发规格。``run`` 完全由此表驱动，无 if 链。
+_TABLE: dict[str, _Spec] = {
+    "supernet": _Spec(_load("supernet", "train_supernet"), ("objective", "config", "dataset", "hamiltonian")),
+    "supernet_classification": _Spec(_load("supernet", "classification_supernet"), ("config",)),
+    "supernet_h2": _Spec(_load("supernet", "h2_vqe_supernet"), ("config",)),
+    "ppo_rb": _Spec(
+        _load("pporb", "ppo_rb_qas"),
+        ("target_density_matrix", "epsilon", "config"),
+        ("target_density_matrix", "epsilon"),
+    ),
+    "ppr_dql": _Spec(_load("pprdql", "train_ppr_dql"), ("target_state", "config", "policy_library"), ("target_state",)),
+    "crlqas": _Spec(_load("crlqas", "train_crlqas"), ("hamiltonian", "config"), ("hamiltonian",)),
+    "qdrats": _Spec(_load("qdrats", "train_qdrats"), ("hamiltonian", "config"), ("hamiltonian",)),
+}
 
 
 def available_qas_methods() -> tuple[str, ...]:
@@ -63,38 +95,16 @@ def run(request: QASRunConfig | QASMethod, **kwargs: Any) -> Any:
     run_config = _as_run_config(request, kwargs)
     method = qas_config.canonical_method(run_config.method)
 
-    # 已迁移为 SearchStrategy 的方法走注册表；未注册的回落到下方旧分支。
-    strategy = get_strategy(method)
-    if strategy is not None:
-        return strategy.run(run_config)
+    spec = _TABLE.get(method)
+    if spec is None:
+        raise ValueError(f"Unsupported QAS method: {run_config.method!r}")
 
-    if method == "supernet_classification":
-        return classification_supernet(config=run_config.config)
-    if method == "supernet_h2":
-        return h2_vqe_supernet(config=run_config.config)
-    if method == "ppo_rb":
-        _require(run_config.target_density_matrix is not None, "ppo_rb requires target_density_matrix.")
-        _require(run_config.epsilon is not None, "ppo_rb requires epsilon.")
-        return ppo_rb_qas(
-            target_density_matrix=run_config.target_density_matrix,
-            epsilon=run_config.epsilon,
-            config=run_config.config,
-        )
-    if method == "ppr_dql":
-        _require(run_config.target_state is not None, "ppr_dql requires target_state.")
-        return train_ppr_dql(
-            target_state=run_config.target_state,
-            config=run_config.config,
-            policy_library=run_config.policy_library,
-        )
-    if method == "crlqas":
-        _require(run_config.hamiltonian is not None, "crlqas requires hamiltonian.")
-        return train_crlqas(hamiltonian=run_config.hamiltonian, config=run_config.config)
-    if method == "qdrats":
-        _require(run_config.hamiltonian is not None, "qdrats requires hamiltonian.")
-        return train_qdrats(hamiltonian=run_config.hamiltonian, config=run_config.config)
+    for name in spec.required:
+        if getattr(run_config, name) is None:
+            raise ValueError(f"{method} requires {name}.")
 
-    raise ValueError(f"Unsupported QAS method: {run_config.method!r}")
+    fn = spec.loader()
+    return fn(**{name: getattr(run_config, name) for name in spec.params})
 
 
 def _as_run_config(request: QASRunConfig | QASMethod, kwargs: dict[str, Any]) -> QASRunConfig:
@@ -104,11 +114,6 @@ def _as_run_config(request: QASRunConfig | QASMethod, kwargs: dict[str, Any]) ->
             raise TypeError(f"Do not pass keyword overrides with QASRunConfig: {names}")
         return request
     return QASRunConfig(method=request, **kwargs)
-
-
-def _require(condition: bool, message: str) -> None:
-    if not condition:
-        raise ValueError(message)
 
 
 __all__ = [

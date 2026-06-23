@@ -8,7 +8,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from aicir.qas.algorithms.MoG_VQE import (
+from aicir.qas.algorithms.mogvqe import (
     MOGVQEConfig,
     block_hardware_efficient_ansatz,
     run_mog_vqe,

@@ -25,11 +25,36 @@ import torch.nn.functional as F
 
 from aicir import Circuit, GPUBackend, Hamiltonian, NPUBackend, cx, ry, rz
 from ...core.gates import gate_to_matrix
-from ..core.config import QDRATSConfig
 from ..problems.hamiltonians import hamiltonian_matrix as pauli_hamiltonian_matrix
 
 
 HamiltonianInput = np.ndarray | torch.Tensor | Hamiltonian | Sequence[tuple[float, str]]
+
+
+@dataclass
+class QDRATSConfig:
+    n_qubits: int | None = None
+    layers: int = 3
+    hidden_dim: int = 8
+
+    search_epochs: int = 100
+    theta_steps: int = 2
+    finetune_steps: int = 20
+
+    architecture_learning_rate: float = 0.05
+    theta_learning_rate: float = 0.05
+    finetune_learning_rate: float = 0.03
+
+    temperature: float = 1.0
+    temperature_min: float = 0.1
+    temperature_decay: float = 0.98
+    hard_sampling: bool = True
+    use_gumbel_noise: bool = True
+
+    device: str = "cpu"
+    seed: int = 42
+    log_interval: int = 0
+    initial_state: Any = None
 
 
 @dataclass
