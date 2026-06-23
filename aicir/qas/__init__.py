@@ -93,6 +93,7 @@ try:
     from .algorithms.CRLQAS import AdamSPSAConfig, CRLQASConfig, CRLQASResult, crlqas, train_crlqas
     from .algorithms.PPR_DQL import PPRDQLConfig, PPRDQLPolicy, PPRDQLResult, ppr_dql_state_to_circuit, train_ppr_dql
     from .algorithms.PPO_RB import PPORollbackConfig, ppo_rb_qas
+    from .algorithms.qdrats import QDRATSConfig, QDRATSResult, QuantumDARTS, qdrats, train_qdrats
     from .core.runner import QASRunConfig, available_qas_methods, default_qas_config, run
     from .algorithms.supernet import (
         Architecture,
@@ -120,7 +121,10 @@ else:
             "PPRDQLPolicy",
             "PPRDQLResult",
             "PPORollbackConfig",
+            "QDRATSConfig",
+            "QDRATSResult",
             "QASRunConfig",
+            "QuantumDARTS",
             "Supernet",
             "SupernetConfig",
             "SupernetResult",
@@ -131,10 +135,12 @@ else:
             "h2_vqe_supernet",
             "ppr_dql_state_to_circuit",
             "ppo_rb_qas",
+            "qdrats",
             "run",
             "supernet_qas",
             "train_crlqas",
             "train_ppr_dql",
+            "train_qdrats",
             "train_supernet",
         ]
     )

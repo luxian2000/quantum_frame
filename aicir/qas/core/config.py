@@ -2,11 +2,38 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable
 
 QASMethod = str
 
-_PUBLIC_METHODS = ("supernet", "supernet_classification", "supernet_h2", "ppo_rb", "ppr_dql", "crlqas")
+
+@dataclass
+class QDRATSConfig:
+    n_qubits: int | None = None
+    layers: int = 3
+    hidden_dim: int = 8
+
+    search_epochs: int = 100
+    theta_steps: int = 2
+    finetune_steps: int = 20
+
+    architecture_learning_rate: float = 0.05
+    theta_learning_rate: float = 0.05
+    finetune_learning_rate: float = 0.03
+
+    temperature: float = 1.0
+    temperature_min: float = 0.1
+    temperature_decay: float = 0.98
+    hard_sampling: bool = True
+    use_gumbel_noise: bool = True
+
+    device: str = "cpu"
+    seed: int = 42
+    log_interval: int = 0
+    initial_state: Any = None
+
+_PUBLIC_METHODS = ("supernet", "supernet_classification", "supernet_h2", "ppo_rb", "ppr_dql", "crlqas", "qdrats")
 
 _METHOD_ALIASES = {
     # supernet (formerly VQA_QAS) — keep the old strings working for run().
@@ -26,6 +53,10 @@ _METHOD_ALIASES = {
     "ppr_dql": "ppr_dql",
     "crl": "crlqas",
     "crlqas": "crlqas",
+    "qdrats": "qdrats",
+    "qdarts": "qdrats",
+    "quantumdarts": "qdrats",
+    "quantum_darts": "qdrats",
 }
 
 
@@ -93,6 +124,12 @@ def crlqas(**kwargs: Any) -> Any:
     return _build(CRLQASConfig, values)
 
 
+def qdrats(**kwargs: Any) -> Any:
+    """Build a ``QDRATS`` config with optional field overrides."""
+
+    return _build(QDRATSConfig, kwargs)
+
+
 def adam_spsa(**kwargs: Any) -> Any:
     """Build the nested Adam-SPSA config used by ``CRLQAS``."""
 
@@ -150,10 +187,12 @@ _FACTORIES = {
     "ppo_rb": ppo_rb,
     "ppr_dql": ppr_dql,
     "crlqas": crlqas,
+    "qdrats": qdrats,
 }
 
 __all__ = [
     "adam_spsa",
+    "QDRATSConfig",
     "canonical_method",
     "create",
     "crl",
@@ -164,6 +203,7 @@ __all__ = [
     "ppo_rb",
     "ppr",
     "ppr_dql",
+    "qdrats",
     "supernet",
     "supernet_classification",
     "supernet_h2",
