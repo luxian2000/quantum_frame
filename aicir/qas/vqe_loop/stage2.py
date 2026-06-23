@@ -65,6 +65,14 @@ def main() -> None:
     parser.add_argument("--ea-seed", type=int, default=17)
     parser.add_argument("--ea-gene-key", default="hea_mask")
     parser.add_argument("--supernet-sidecar", default=None)
+    parser.add_argument("--supernet-native-count", type=int, default=0)
+    parser.add_argument("--supernet-native-layers", type=int, default=3)
+    parser.add_argument("--supernet-native-supernet-num", type=int, default=2)
+    parser.add_argument("--supernet-native-steps", type=int, default=20)
+    parser.add_argument("--supernet-native-ranking-num", type=int, default=24)
+    parser.add_argument("--supernet-native-finetune-steps", type=int, default=0)
+    parser.add_argument("--supernet-native-seed", type=int, default=11)
+    parser.add_argument("--supernet-native-device", default="cpu")
     parser.add_argument("--label-seed", type=int, default=3026)
     parser.add_argument("--n-seeds", type=int, default=2)
     parser.add_argument("--max-evals", type=int, default=800)
@@ -122,6 +130,22 @@ def main() -> None:
         str(int(args.ea_seed)),
         "--ea-gene-key",
         str(args.ea_gene_key),
+        "--supernet-native-count",
+        str(int(args.supernet_native_count)),
+        "--supernet-native-layers",
+        str(int(args.supernet_native_layers)),
+        "--supernet-native-supernet-num",
+        str(int(args.supernet_native_supernet_num)),
+        "--supernet-native-steps",
+        str(int(args.supernet_native_steps)),
+        "--supernet-native-ranking-num",
+        str(int(args.supernet_native_ranking_num)),
+        "--supernet-native-finetune-steps",
+        str(int(args.supernet_native_finetune_steps)),
+        "--supernet-native-seed",
+        str(int(args.supernet_native_seed)),
+        "--supernet-native-device",
+        str(args.supernet_native_device),
     ]
     if args.supernet_sidecar:
         plan_command.extend(["--supernet-sidecar", str(Path(args.supernet_sidecar))])

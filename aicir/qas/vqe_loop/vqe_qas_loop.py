@@ -73,6 +73,14 @@ class ClosedLoopConfig:
     ea_generations: int = 8
     ea_seed_count: int = 12
     ea_seed: int = 101
+    supernet_native_count: int = 0
+    supernet_native_layers: int = 3
+    supernet_native_supernet_num: int = 2
+    supernet_native_steps: int = 20
+    supernet_native_ranking_num: int = 24
+    supernet_native_finetune_steps: int = 0
+    supernet_native_seed: int = 11
+    supernet_native_device: str = "cpu"
     label_seed: int = 5200
     n_seeds: int = 1
     max_evals: int = 100
@@ -546,6 +554,22 @@ def run_vqe_qas_closed_loop(config: ClosedLoopConfig) -> ClosedLoopResult:
                 str(config.ea_seed_count),
                 "--ea-seed",
                 str(config.ea_seed + round_index - 1),
+                "--supernet-native-count",
+                str(config.supernet_native_count),
+                "--supernet-native-layers",
+                str(config.supernet_native_layers),
+                "--supernet-native-supernet-num",
+                str(config.supernet_native_supernet_num),
+                "--supernet-native-steps",
+                str(config.supernet_native_steps),
+                "--supernet-native-ranking-num",
+                str(config.supernet_native_ranking_num),
+                "--supernet-native-finetune-steps",
+                str(config.supernet_native_finetune_steps),
+                "--supernet-native-seed",
+                str(config.supernet_native_seed + round_index - 1),
+                "--supernet-native-device",
+                str(config.supernet_native_device),
                 "--label-seed",
                 str(config.label_seed + 1000 * round_index),
                 "--n-seeds",

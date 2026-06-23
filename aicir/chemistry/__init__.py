@@ -5,6 +5,7 @@
 
 from .molecule import (
     H2_STO3G_JW_4Q,
+    H2_STO3G_JW_R0735_4Q,
     H2_STO3G_PARITY_2Q,
     H2_STO3G_TAPERED_1Q,
     MOLECULES,
@@ -19,6 +20,7 @@ from .spec import (
     GeneratedHamiltonian,
     MolecularSpec,
     PauliTermsSpec,
+    PresetSpec,
     generate_hamiltonian,
     load_hamiltonian_input,
     spec_from_mapping,
@@ -28,6 +30,7 @@ __all__ = [
     "MoleculeHamiltonian",
     "H2_STO3G_PARITY_2Q",
     "H2_STO3G_JW_4Q",
+    "H2_STO3G_JW_R0735_4Q",
     "H2_STO3G_TAPERED_1Q",
     "MOLECULES",
     "available_molecules",
@@ -38,6 +41,7 @@ __all__ = [
     "GeneratedHamiltonian",
     "MolecularSpec",
     "PauliTermsSpec",
+    "PresetSpec",
     "generate_hamiltonian",
     "load_hamiltonian_input",
     "spec_from_mapping",

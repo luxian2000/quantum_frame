@@ -45,6 +45,14 @@ class MolecularSpec:
 
 
 @dataclass(frozen=True)
+class PresetSpec:
+    """A fixed Hamiltonian preset from :mod:`aicir.chemistry.molecule`."""
+
+    name: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class GeneratedHamiltonian:
     """Plain Pauli Hamiltonian plus stable provenance metadata."""
 
@@ -282,22 +290,58 @@ def _generated_from_molecular_spec(spec: MolecularSpec) -> GeneratedHamiltonian:
     )
 
 
-def generate_hamiltonian(spec: PauliTermsSpec | MolecularSpec) -> GeneratedHamiltonian:
+def _generated_from_preset(spec: PresetSpec) -> GeneratedHamiltonian:
+    from .molecule import get_molecule
+
+    preset = get_molecule(spec.name)
+    terms = _normalize_terms(preset.terms)
+    metadata = {
+        "input_kind": "preset",
+        "preset": preset.name,
+        "formula": preset.formula,
+        "basis": preset.basis,
+        "mapping": preset.mapping,
+        "geometry": preset.geometry,
+        "source": preset.source,
+        "description": preset.description,
+        **dict(spec.metadata),
+    }
+    return GeneratedHamiltonian(
+        terms=terms,
+        n_qubits=preset.n_qubits,
+        hamiltonian_class="molecular_preset",
+        hamiltonian_id=preset.name,
+        metadata=metadata,
+    )
+
+
+def generate_hamiltonian(spec: PauliTermsSpec | MolecularSpec | PresetSpec | Mapping[str, Any]) -> GeneratedHamiltonian:
     """Resolve a supported Hamiltonian specification into Pauli terms."""
 
+    if isinstance(spec, Mapping):
+        return generate_hamiltonian(spec_from_mapping(spec))
     if isinstance(spec, PauliTermsSpec):
         return _generated_from_pauli_terms(spec)
     if isinstance(spec, MolecularSpec):
         return _generated_from_molecular_spec(spec)
+    if isinstance(spec, PresetSpec):
+        return _generated_from_preset(spec)
     raise TypeError(f"Unsupported Hamiltonian spec {type(spec)!r}")
 
 
-def spec_from_mapping(raw: Mapping[str, Any]) -> PauliTermsSpec | MolecularSpec:
+def spec_from_mapping(raw: Mapping[str, Any]) -> PauliTermsSpec | MolecularSpec | PresetSpec:
     """Build a typed spec from a JSON-like mapping."""
 
     kind = str(raw.get("kind", raw.get("type", ""))).strip().lower()
+    if "preset" in raw and not kind:
+        kind = "preset"
     if not kind and any(key in raw for key in ("molecule", "geometry", "atom", "distance", "bond_length")):
         kind = "molecular"
+    if kind in {"preset", "molecular_preset"}:
+        return PresetSpec(
+            name=str(raw.get("preset", raw.get("name", ""))),
+            metadata=dict(raw.get("metadata", {})),
+        )
     if kind in {"pauli", "pauli_terms", "literal", "terms"}:
         return PauliTermsSpec(
             terms=tuple((item[0], item[1]) for item in raw.get("terms", ())),
@@ -340,6 +384,7 @@ __all__ = [
     "MolecularSpec",
     "PauliTerm",
     "PauliTermsSpec",
+    "PresetSpec",
     "generate_hamiltonian",
     "load_hamiltonian_input",
     "spec_from_mapping",
