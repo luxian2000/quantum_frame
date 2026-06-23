@@ -11,6 +11,7 @@ from ..algorithms import strategies as _strategies  # noqa: F401  注册内置�
 from ..algorithms.CRLQAS import train_crlqas
 from ..algorithms.PPO_RB import ppo_rb_qas
 from ..algorithms.PPR_DQL import train_ppr_dql
+from ..algorithms.qdrats import train_qdrats
 from ..algorithms.supernet import classification_supernet, h2_vqe_supernet
 
 QASMethod = str
@@ -89,6 +90,9 @@ def run(request: QASRunConfig | QASMethod, **kwargs: Any) -> Any:
     if method == "crlqas":
         _require(run_config.hamiltonian is not None, "crlqas requires hamiltonian.")
         return train_crlqas(hamiltonian=run_config.hamiltonian, config=run_config.config)
+    if method == "qdrats":
+        _require(run_config.hamiltonian is not None, "qdrats requires hamiltonian.")
+        return train_qdrats(hamiltonian=run_config.hamiltonian, config=run_config.config)
 
     raise ValueError(f"Unsupported QAS method: {run_config.method!r}")
 

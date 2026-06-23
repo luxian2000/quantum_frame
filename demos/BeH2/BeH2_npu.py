@@ -7,16 +7,16 @@ PPO-RB 面向小规模目标态制备，不适合 16 量子比特分子哈密顿
 所有 rank 使用**相同随机种子**，``supernet_qas`` 在内部将训练/排名/微调阶段切分到
 多 NPU 上并行执行（内搜索分片）。``--mode`` 控制分片策略，两种模式区别如下：
 
-- ``safe``（默认）：**与单卡数值完全等价（确定性可复现）**。每步所有 rank 用相同
-  种子采样**同一架构**，只把 *候选 supernet 的选择评估* 切分到各 rank（``_sharded_select``）；
-  **仅 rank 0 计算梯度并执行优化器步**，随后 ``broadcast_parameters(src=0)`` 把权重广播给
+- ``safe``（默认）：与单卡数值完全等价（确定性可复现）。每步所有 rank 用相同
+  种子采样同一架构，只把候选 supernet 的选择评估 切分到各 rank（``_sharded_select``）；
+  仅 rank 0 计算梯度并执行优化器步，随后 ``broadcast_parameters(src=0)`` 把权重广播给
   全部 rank。优点：与单卡逐位等价、结果可复现；缺点：rank 1..N 在 broadcast 屏障空等
   rank 0，负载不均衡（即因此触发 HCCL 屏障超时，见 ``aicir/backends/README.md`` §5.5）。
 
-- ``aggressive``：**数据并行，约 world_size 倍吞吐**。每步各 rank 采样 world_size 个
-  **不同架构**，rank ``r`` 负责 ``arch[r]``，各自前向 + ``backward``；梯度经 ``all_reduce_mean``
+- ``aggressive``：数据并行，约 world_size 倍吞吐。每步各 rank 采样 world_size 个
+  不同架构，rank ``r`` 负责 ``arch[r]``，各自前向 + ``backward``；梯度经 ``all_reduce_mean``
   汇总，所有被选中 supernet 的优化器一起步进。优点：每步探索约 N 倍架构、吃满多卡；
-  缺点：各 rank 动态步不同，**数值不再与单卡等价**，搜索轨迹随卡数 N 变化。
+  缺点：各 rank 动态步不同，数值不再与单卡等价，搜索轨迹随卡数 N 变化。
 
   | 维度 | safe | aggressive |
   | --- | --- | --- |
