@@ -2,6 +2,34 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-23
+
+### Added
+
+- **QDRATS / QuantumDARTS 宏观量子架构搜索。**
+  - 新增 `aicir/qas/algorithms/qdrats.py`：实现 Wu et al. (ICML 2023) QuantumDARTS
+    宏观搜索流程，使用 Gumbel-Softmax 在每个 qubit-layer 位置采样真实量子门，
+    交替优化架构权重与 `Rz-Ry-Rz` 旋转参数，最终离散化为 `aicir.Circuit` 并微调参数。
+  - 候选门集按论文设定展开为 `RzRyRz`、identity、以及每个目标位对应的
+    `cx(control -> target)` 控制位变体；二比特门按“当前位置 qubit 为 target，
+    subscript/候选项决定 control”的规则生成。
+  - 配置放入 `aicir/qas/core/config.py`：新增 `QDRATSConfig`、`config.qdrats(...)`，
+    并支持 `qdrats` / `qdarts` / `quantumdarts` / `quantum_darts` 方法别名。
+  - 公共入口接入 `aicir.qas.run("qdrats", hamiltonian=..., config=...)`，
+    并导出 `QDRATSConfig`、`QDRATSResult`、`QuantumDARTS`、`qdrats`、`train_qdrats`。
+  - 配套 `tests/algorithms/test_qdrats.py` 与 runner 方法列表测试；已验证
+    `pytest -q tests/algorithms/test_qdrats.py tests/test_qas_runner.py`。
+
+### Changed
+
+- **QAS 内置策略适配迁移到 `aicir.qas.core.strategies`。**
+  - 原 `aicir/qas/algorithms/strategies.py` 只做 `SearchStrategy` 适配与注册，不是具体算法；
+    现移至 `aicir/qas/core/strategies.py`，与 `core/strategy.py`、`core/registry.py`、
+    `core/runner.py` 同层。
+  - `runner.py` 改为导入 `aicir.qas.core.strategies` 触发内置策略注册；`SupernetStrategy`
+    内部懒导入 `train_supernet`，避免 `core` 模块顶层过早加载具体算法。
+  - README 与策略注册表测试同步更新。
+
 ## 2026-06-22
 
 ### Added
@@ -130,7 +158,7 @@
   新增 `aicir.qas.core.strategy.SearchStrategy`（抽象基类，契约 `run(request) -> 结果`）与
   `aicir.qas.core.registry`（`StrategySpec` 冻结数据类 + `register_strategy`/`get_strategy`/
   `get_spec`/`registered_strategies`/`unregister_strategy`，镜像 `DiffMethod`/`GateSpec` 习惯）。
-  内置策略在 `aicir.qas.algorithms.strategies` 适配并注册。`run(method, ...)` 先查注册表、命中
+  内置策略在 `aicir.qas.core.strategies` 适配并注册。`run(method, ...)` 先查注册表、命中
   走 `strategy.run`，未命中回落旧分支。**当前仅 `supernet` 迁移**为 `SupernetStrategy`；其余方法
   （`ppo_rb`/`ppr_dql`/`crlqas`/`supernet_classification`/`supernet_h2`）仍走旧分支，对用户行为
   与返回值不变。配套 `tests/qas/test_strategy_registry.py`。
