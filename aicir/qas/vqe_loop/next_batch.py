@@ -30,6 +30,7 @@ from aicir.qas.vqe_loop.geometry import (
     CandidateRecord,
     fit_distance_scales,
     min_distance_to_set,
+    parse_pauli_hamiltonian_terms,
     parse_hamiltonian_features,
     task_aware_composite_distance,
 )
@@ -92,13 +93,13 @@ def _attach_supernet_sidecar(row: dict[str, str], sidecar: dict[str, dict[str, A
 def _supernet_priority(row: dict[str, Any]) -> float:
     raw = row.get("supernet_rank_score", "")
     if raw in {"", None}:
-        return 0.0
+        return float("inf")
     try:
         # Lower shared-weight energy/loss is better, so use negative score for
         # descending priority tie-breaks.
         return float(raw)
     except (TypeError, ValueError):
-        return 0.0
+        return float("inf")
 
 
 def _row_to_candidate(row: dict[str, str]) -> CandidateRecord:
@@ -204,6 +205,13 @@ def _derive_task_context(benchmark_rows: list[dict[str, str]], protocol_version:
     return {}
 
 
+def _task_hamiltonian_terms(task_context: dict[str, str]) -> tuple[tuple[float, str], ...]:
+    raw = str(task_context.get("hamiltonian_terms", "") or "").strip()
+    if not raw:
+        return ()
+    return parse_pauli_hamiltonian_terms(json.loads(raw))
+
+
 def _derive_d_max(labeled: list[tuple[CandidateRecord, float]], scales, k_min: int) -> float:
     kth_distances: list[float] = []
     for candidate, _energy in labeled:
@@ -261,7 +269,11 @@ def _priority_boundary_anchors(
     *,
     limit: int = 8,
 ) -> list[CandidateRecord]:
-    preferred_sources = {LabelSource.TRACKB_SPARSE.value, LabelSource.INITIAL_TRAIN.value}
+    preferred_sources = {
+        LabelSource.TRACKB_SPARSE.value,
+        LabelSource.TRACKB_SUPERNET.value,
+        LabelSource.INITIAL_TRAIN.value,
+    }
     preferred = [
         (record, energy)
         for record, energy in completed
@@ -328,6 +340,14 @@ def main() -> None:
     parser.add_argument("--ea-proposal-multiplier", type=int, default=4)
     parser.add_argument("--ea-gene-key", default="hea_mask")
     parser.add_argument("--supernet-sidecar", default=None)
+    parser.add_argument("--supernet-native-count", type=int, default=0)
+    parser.add_argument("--supernet-native-layers", type=int, default=3)
+    parser.add_argument("--supernet-native-supernet-num", type=int, default=2)
+    parser.add_argument("--supernet-native-steps", type=int, default=20)
+    parser.add_argument("--supernet-native-ranking-num", type=int, default=24)
+    parser.add_argument("--supernet-native-finetune-steps", type=int, default=0)
+    parser.add_argument("--supernet-native-seed", type=int, default=11)
+    parser.add_argument("--supernet-native-device", default="cpu")
     args = parser.parse_args()
 
     sidecar = _load_supernet_sidecar(Path(args.supernet_sidecar) if args.supernet_sidecar else None)
@@ -336,6 +356,34 @@ def main() -> None:
     completed = _completed_rows(benchmark_rows, args.protocol_version)
     task_context = _derive_task_context(benchmark_rows, args.protocol_version)
     labeled_ids = _labeled_ids(benchmark_rows, args.protocol_version)
+    supernet_native_summary: dict[str, Any] = {"enabled": False, "generated_rows": 0}
+    if int(args.supernet_native_count) > 0:
+        hamiltonian_terms = _task_hamiltonian_terms(task_context)
+        if hamiltonian_terms:
+            from aicir.qas.vqe_loop.supernet_native import build_supernet_native_rows
+
+            generated_rows, supernet_native_summary = build_supernet_native_rows(
+                hamiltonian_terms=hamiltonian_terms,
+                hamiltonian_id=task_context.get("hamiltonian_id", ""),
+                hamiltonian_class=task_context.get("hamiltonian_class", ""),
+                count=int(args.supernet_native_count),
+                layers=int(args.supernet_native_layers),
+                supernet_num=int(args.supernet_native_supernet_num),
+                supernet_steps=int(args.supernet_native_steps),
+                ranking_num=int(args.supernet_native_ranking_num),
+                finetune_steps=int(args.supernet_native_finetune_steps),
+                seed=int(args.supernet_native_seed),
+                device=str(args.supernet_native_device),
+                excluded_ids={row.get("architecture_id", "") for row in candidate_rows} | labeled_ids,
+                params_dir=Path(args.output).parent,
+            )
+            candidate_rows.extend(generated_rows)
+        else:
+            supernet_native_summary = {
+                "enabled": False,
+                "generated_rows": 0,
+                "reason": "missing_hamiltonian_terms",
+            }
     candidate_by_id = {row["architecture_id"]: row for row in candidate_rows}
     candidate_records = [_row_to_candidate(row) for row in candidate_rows]
     scales = fit_distance_scales(candidate_records) if candidate_records else None
@@ -463,7 +511,12 @@ def main() -> None:
     selected: list[tuple[dict[str, str], LabelSource]] = []
     _take_unique(selected, local_rows, LabelSource.TRACKA_LOCAL, int(args.local))
     _take_unique(selected, [row_by_id[item.architecture_id] for item in boundary_records], LabelSource.TRACKB_BOUNDARY, int(args.boundary))
-    _take_unique(selected, [row_by_id[item.architecture_id] for item in sparse_records], LabelSource.TRACKB_SPARSE, int(args.sparse))
+    sparse_rows = [row_by_id[item.architecture_id] for item in sparse_records]
+    supernet_sparse_rows = [row for row in sparse_rows if row.get("family") == "supernet_native"]
+    regular_sparse_rows = [row for row in sparse_rows if row.get("family") != "supernet_native"]
+    _take_unique(selected, supernet_sparse_rows, LabelSource.TRACKB_SUPERNET, int(args.sparse))
+    used_sparse = len([1 for _row, source in selected if source == LabelSource.TRACKB_SUPERNET])
+    _take_unique(selected, regular_sparse_rows, LabelSource.TRACKB_SPARSE, max(0, int(args.sparse) - used_sparse))
     remaining_for_control = sorted(
         [row for row in unlabeled_rows if row["architecture_id"] not in {selected_row["architecture_id"] for selected_row, _source in selected}],
         key=lambda row: (_supernet_priority(row), row.get("canonical_arch_hash", ""), row["architecture_id"]),
@@ -521,6 +574,7 @@ def main() -> None:
             "path": str(args.supernet_sidecar or ""),
             "matched_records": sum(1 for row in candidate_rows if row.get("supernet_rank_score") not in {"", None}),
         },
+        "supernet_native": supernet_native_summary,
         "requested_total": target_total,
         "planned_total": len(queue_rows),
         "source_counts": source_counts,

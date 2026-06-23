@@ -33,6 +33,7 @@ class LabelSource(str, Enum):
     TRACKA_LOCAL = "trackA_local"
     TRACKB_BOUNDARY = "trackB_boundary"
     TRACKB_SPARSE = "trackB_sparse"
+    TRACKB_SUPERNET = "trackB_supernet"
     CONTROL_RANDOM = "control_random"
     BASELINE = "baseline"
 

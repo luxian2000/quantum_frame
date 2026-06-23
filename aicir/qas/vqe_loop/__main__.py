@@ -78,6 +78,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ea-generations", type=int, default=8)
     parser.add_argument("--ea-seed-count", type=int, default=12)
     parser.add_argument("--ea-seed", type=int, default=101)
+    parser.add_argument("--supernet-native-count", type=int, default=0)
+    parser.add_argument("--supernet-native-layers", type=int, default=3)
+    parser.add_argument("--supernet-native-supernet-num", type=int, default=2)
+    parser.add_argument("--supernet-native-steps", type=int, default=20)
+    parser.add_argument("--supernet-native-ranking-num", type=int, default=24)
+    parser.add_argument("--supernet-native-finetune-steps", type=int, default=0)
+    parser.add_argument("--supernet-native-seed", type=int, default=11)
+    parser.add_argument("--supernet-native-device", default="cpu")
     parser.add_argument("--label-seed", type=int, default=5200)
     parser.add_argument("--n-seeds", type=int, default=1)
     parser.add_argument("--max-evals", type=int, default=100)
@@ -117,6 +125,14 @@ def main(argv: list[str] | None = None) -> None:
         ea_generations=int(args.ea_generations),
         ea_seed_count=int(args.ea_seed_count),
         ea_seed=int(args.ea_seed),
+        supernet_native_count=int(args.supernet_native_count),
+        supernet_native_layers=int(args.supernet_native_layers),
+        supernet_native_supernet_num=int(args.supernet_native_supernet_num),
+        supernet_native_steps=int(args.supernet_native_steps),
+        supernet_native_ranking_num=int(args.supernet_native_ranking_num),
+        supernet_native_finetune_steps=int(args.supernet_native_finetune_steps),
+        supernet_native_seed=int(args.supernet_native_seed),
+        supernet_native_device=str(args.supernet_native_device),
         label_seed=int(args.label_seed),
         n_seeds=int(args.n_seeds),
         max_evals=int(args.max_evals),

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import hashlib
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -123,6 +124,79 @@ class LayerwiseAnsatzGene:
         singles = "-".join(self.single_blocks)
         twoq = "-".join("_".join(layer) for layer in self.edge_entanglers)
         return f"layerwise_L{self.layers}_{self.entangle_pattern}_{singles}_{twoq}"
+
+
+@dataclass(frozen=True)
+class SupernetAnsatzGene:
+    """Exact vqe_loop representation of a native :mod:`supernet` architecture."""
+
+    n_qubits: int
+    single_qubit_layers: tuple[tuple[str, ...], ...]
+    two_qubit_layers: tuple[tuple[str, ...], ...]
+    two_qubit_pairs: tuple[tuple[int, int], ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "n_qubits", int(self.n_qubits))
+        single_layers = tuple(tuple(str(gate).lower() for gate in layer) for layer in self.single_qubit_layers)
+        two_layers = tuple(tuple(str(gate).lower() for gate in layer) for layer in self.two_qubit_layers)
+        pairs = tuple((int(left), int(right)) for left, right in self.two_qubit_pairs)
+        object.__setattr__(self, "single_qubit_layers", single_layers)
+        object.__setattr__(self, "two_qubit_layers", two_layers)
+        object.__setattr__(self, "two_qubit_pairs", pairs)
+        if self.n_qubits < 1:
+            raise ValueError("SupernetAnsatzGene requires at least one qubit")
+        if len(single_layers) != len(two_layers):
+            raise ValueError("single_qubit_layers and two_qubit_layers must have the same number of layers")
+        for layer in single_layers:
+            if len(layer) != self.n_qubits:
+                raise ValueError("each single_qubit_layers entry must match n_qubits")
+            for gate in layer:
+                if gate not in {"i", "h", "rx", "ry", "rz"}:
+                    raise ValueError(f"unsupported supernet single-qubit gate: {gate!r}")
+        for layer in two_layers:
+            if len(layer) != len(pairs):
+                raise ValueError("each two_qubit_layers entry must match two_qubit_pairs")
+            for gate in layer:
+                if gate not in {"none", "cx", "rzz"}:
+                    raise ValueError(f"unsupported supernet two-qubit gate: {gate!r}")
+        for left, right in pairs:
+            if not (0 <= left < self.n_qubits and 0 <= right < self.n_qubits):
+                raise ValueError("two_qubit_pairs contain a qubit outside [0, n_qubits)")
+            if left == right:
+                raise ValueError("two_qubit_pairs cannot contain self edges")
+
+    @property
+    def layers(self) -> int:
+        return len(self.single_qubit_layers)
+
+    def to_jsonable(self) -> dict[str, Any]:
+        return {
+            "kind": "supernet_native",
+            "n_qubits": self.n_qubits,
+            "single_qubit_layers": [list(layer) for layer in self.single_qubit_layers],
+            "two_qubit_layers": [list(layer) for layer in self.two_qubit_layers],
+            "two_qubit_pairs": [list(pair) for pair in self.two_qubit_pairs],
+        }
+
+    @classmethod
+    def from_jsonable(cls, raw: Any) -> "SupernetAnsatzGene":
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        if not isinstance(raw, dict):
+            raise ValueError("supernet ansatz gene must be a JSON object")
+        if str(raw.get("kind", "supernet_native")).lower() != "supernet_native":
+            raise ValueError("supernet ansatz gene kind must be 'supernet_native'")
+        return cls(
+            n_qubits=int(raw["n_qubits"]),
+            single_qubit_layers=tuple(tuple(layer) for layer in raw["single_qubit_layers"]),
+            two_qubit_layers=tuple(tuple(layer) for layer in raw["two_qubit_layers"]),
+            two_qubit_pairs=tuple(tuple(pair) for pair in raw["two_qubit_pairs"]),
+        )
+
+    def label(self) -> str:
+        payload = json.dumps(self.to_jsonable(), ensure_ascii=False, sort_keys=True)
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+        return f"supernet_native_L{self.layers}_{digest}"
 
 
 def enumerate_hea_masks(n_qubits: int = 2) -> List[HEAMask]:
@@ -282,6 +356,54 @@ def architecture_from_layerwise_gene(
     )
 
 
+def architecture_from_supernet_gene(
+    gene: SupernetAnsatzGene,
+    backend: Optional[NumpyBackend] = None,
+) -> ArchitectureSpec:
+    gates: List[Dict[str, Any]] = []
+    cursor = [0]
+    for single_layer, two_layer in zip(gene.single_qubit_layers, gene.two_qubit_layers):
+        for qubit, gate_type in enumerate(single_layer):
+            if gate_type == "i":
+                continue
+            if gate_type == "h":
+                gates.append({"type": "h", "target_qubit": qubit})
+                continue
+            cursor[0] += 1
+            gates.append({"type": gate_type, "target_qubit": qubit, "parameter": 0.071 * cursor[0]})
+        for (left, right), gate_type in zip(gene.two_qubit_pairs, two_layer):
+            if gate_type == "none":
+                continue
+            if gate_type == "rzz":
+                cursor[0] += 1
+                gates.append({"type": "rzz", "qubit_1": left, "qubit_2": right, "parameter": 0.071 * cursor[0]})
+            elif gate_type == "cx":
+                gates.append(
+                    {
+                        "type": "cx",
+                        "target_qubit": right,
+                        "control_qubits": [left],
+                        "control_states": [1],
+                    }
+                )
+            else:
+                raise ValueError(f"unsupported supernet two-qubit gate: {gate_type!r}")
+    return ArchitectureSpec.from_gates(
+        name=gene.label(),
+        gates=gates,
+        n_qubits=gene.n_qubits,
+        backend=backend,
+        description="Native supernet-ranked ansatz gene.",
+        tags=["VQE", "supernet-native"],
+        metadata={
+            "ansatz_gene": gene.to_jsonable(),
+            "family": "supernet_native",
+            "layers": gene.layers,
+            "topology": "supernet_pairs",
+        },
+    )
+
+
 def architecture_from_hea_mask(mask: HEAMask, backend: Optional[NumpyBackend] = None) -> ArchitectureSpec:
     gates: List[Dict[str, Any]] = []
     cursor = [0]
@@ -310,9 +432,11 @@ __all__ = [
     "LAYERWISE_TWO_QUBIT_GATES",
     "LAYER_CHOICES",
     "LayerwiseAnsatzGene",
+    "SupernetAnsatzGene",
     "ROTATION_BLOCKS",
     "architecture_from_hea_mask",
     "architecture_from_layerwise_gene",
+    "architecture_from_supernet_gene",
     "enumerate_hea_masks",
     "sample_layerwise_genes",
 ]

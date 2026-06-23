@@ -25,8 +25,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from aicir.qas.primitives.ansatz import (
     HEAMask,
     LayerwiseAnsatzGene,
-    architecture_from_layerwise_gene,
+    SupernetAnsatzGene,
     architecture_from_hea_mask,
+    architecture_from_layerwise_gene,
+    architecture_from_supernet_gene,
 )
 from aicir.qas.primitives.backend_utils import resolve_qas_backend
 from aicir.qas.vqe_loop.fair_vqe import (
@@ -145,7 +147,12 @@ def _mask_from_row(row: dict[str, str]) -> HEAMask:
 def _architecture_from_row(row: dict[str, str]):
     raw_gene = row.get("ansatz_gene", "")
     if raw_gene and str(raw_gene).strip() not in {"", '""', "null"}:
-        return architecture_from_layerwise_gene(LayerwiseAnsatzGene.from_jsonable(raw_gene))
+        parsed = json.loads(raw_gene) if isinstance(raw_gene, str) else raw_gene
+        if isinstance(parsed, str):
+            parsed = json.loads(parsed)
+        if isinstance(parsed, dict) and str(parsed.get("kind", "")).lower() == "supernet_native":
+            return architecture_from_supernet_gene(SupernetAnsatzGene.from_jsonable(parsed))
+        return architecture_from_layerwise_gene(LayerwiseAnsatzGene.from_jsonable(parsed))
     return architecture_from_hea_mask(_mask_from_row(row))
 
 

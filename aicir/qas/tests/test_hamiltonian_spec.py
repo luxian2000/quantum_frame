@@ -122,3 +122,19 @@ def test_molecular_mapping_expands_diatomic_distance_shorthand():
 
     h2 = spec_from_mapping({"molecule": "H2", "distance": 0.735})
     assert h2.geometry == [["H", [0.0, 0.0, 0.0]], ["H", [0.0, 0.0, 0.735]]]
+
+
+def test_preset_mapping_loads_canonical_h2_jw_r0735_library_terms():
+    from aicir.chemistry.spec import generate_hamiltonian, spec_from_mapping
+
+    generated = generate_hamiltonian({"preset": "h2_sto3g_jw_r0735_4q"})
+
+    assert generated.n_qubits == 4
+    assert generated.hamiltonian_class == "molecular_preset"
+    assert generated.hamiltonian_id == "h2_sto3g_jw_r0735_4q"
+    assert len(generated.terms) == 19
+    assert generated.terms[0] == (-0.09706626816762543, "IIII")
+    assert generated.terms[-1] == (-0.17391653067620093, "YYYY")
+
+    spec = spec_from_mapping({"preset": "h2_sto3g_jw_r0735_4q"})
+    assert generate_hamiltonian(spec).terms == generated.terms

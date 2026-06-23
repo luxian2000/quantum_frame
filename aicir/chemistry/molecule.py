@@ -116,6 +116,39 @@ H2_STO3G_JW_4Q = MoleculeHamiltonian(
 )
 
 
+H2_STO3G_JW_R0735_4Q = MoleculeHamiltonian(
+    name="h2_sto3g_jw_r0735_4q",
+    formula="H2",
+    n_qubits=4,
+    basis="STO-3G",
+    mapping="JordanWignerMapper",
+    geometry="H 0 0 0; H 0 0 0.735 Angstrom",
+    source="User-provided canonical H2 STO-3G Jordan-Wigner benchmark.",
+    description="Four-qubit Jordan-Wigner H2 Hamiltonian at bond length 0.735 Angstrom.",
+    terms=(
+        (-0.09706626816762543, "IIII"),
+        (0.17141282644776914, "ZIII"),
+        (0.17141282644776914, "IZII"),
+        (-0.22343153690813447, "ZZII"),
+        (0.17141282644776914, "IIZI"),
+        (0.16592785033785953, "ZIZI"),
+        (0.16592785033785953, "IZZI"),
+        (-0.22343153690813447, "IIZZ"),
+        (0.17141282644776914, "IIIZ"),
+        (0.16592785033785953, "ZIIZ"),
+        (0.16592785033785953, "IZIZ"),
+        (0.12039548242542646, "XIXI"),
+        (0.12039548242542646, "XIXX"),
+        (0.12039548242542646, "XXIX"),
+        (0.12039548242542646, "XXXX"),
+        (0.17391653067620093, "YIYI"),
+        (0.17391653067620093, "YIYY"),
+        (0.17391653067620093, "YYIY"),
+        (-0.17391653067620093, "YYYY"),
+    ),
+)
+
+
 # H2, STO-3G, one-qubit tapered Hamiltonian from the same mapper tutorial.
 H2_STO3G_TAPERED_1Q = MoleculeHamiltonian(
     name="h2_tapered",
@@ -137,6 +170,7 @@ H2_STO3G_TAPERED_1Q = MoleculeHamiltonian(
 MOLECULES: dict[str, MoleculeHamiltonian] = {
     H2_STO3G_PARITY_2Q.name: H2_STO3G_PARITY_2Q,
     H2_STO3G_JW_4Q.name: H2_STO3G_JW_4Q,
+    H2_STO3G_JW_R0735_4Q.name: H2_STO3G_JW_R0735_4Q,
     H2_STO3G_TAPERED_1Q.name: H2_STO3G_TAPERED_1Q,
 }
 
