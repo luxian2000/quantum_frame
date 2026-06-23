@@ -82,7 +82,11 @@ def _hamiltonian_coverage(mask: HEAMask, hamiltonian_class: str) -> float:
     return 0.0
 
 
-def candidate_record_from_mask(mask: HEAMask, hamiltonian_class: str) -> CandidateRecord:
+def _default_hamiltonian_id(hamiltonian_class: str, n_qubits: int) -> str:
+    return f"{hamiltonian_class}_{int(n_qubits)}q" if hamiltonian_class else ""
+
+
+def candidate_record_from_mask(mask: HEAMask, hamiltonian_class: str, hamiltonian_id: str | None = None) -> CandidateRecord:
     architecture = architecture_from_hea_mask(mask)
     architecture_id = f"{mask.n_qubits}q_{architecture.name}"
     return CandidateRecord(
@@ -94,6 +98,7 @@ def candidate_record_from_mask(mask: HEAMask, hamiltonian_class: str) -> Candida
         depth_group=_depth_group(mask),
         n_params=float(parameter_count(architecture.circuit)),
         two_q_count=float(len([gate for gate in architecture.circuit.gates if gate.get("control_qubits") or gate.get("type") == "rzz"])),
+        hamiltonian_id=hamiltonian_id or _default_hamiltonian_id(hamiltonian_class, mask.n_qubits),
         hamiltonian_class=hamiltonian_class,
         hamiltonian_coverage=_hamiltonian_coverage(mask, hamiltonian_class),
         metadata={
@@ -113,7 +118,11 @@ def candidate_record_from_mask(mask: HEAMask, hamiltonian_class: str) -> Candida
     )
 
 
-def candidate_record_from_layerwise_gene(gene: LayerwiseAnsatzGene, hamiltonian_class: str) -> CandidateRecord:
+def candidate_record_from_layerwise_gene(
+    gene: LayerwiseAnsatzGene,
+    hamiltonian_class: str,
+    hamiltonian_id: str | None = None,
+) -> CandidateRecord:
     architecture = architecture_from_layerwise_gene(gene)
     gene_payload = gene.to_jsonable()
     canonical = json.dumps(gene_payload, ensure_ascii=False, sort_keys=True)
@@ -135,6 +144,7 @@ def candidate_record_from_layerwise_gene(gene: LayerwiseAnsatzGene, hamiltonian_
         depth_group=f"L{gene.layers}",
         n_params=float(parameter_count(architecture.circuit)),
         two_q_count=two_q_count,
+        hamiltonian_id=hamiltonian_id or _default_hamiltonian_id(hamiltonian_class, gene.n_qubits),
         hamiltonian_class=hamiltonian_class,
         hamiltonian_coverage=1.0 if hamiltonian_class.lower() in {"h2", "molecular_h2"} else 0.5,
         metadata={
@@ -332,6 +342,7 @@ def _candidate_row(candidate: CandidateRecord) -> dict[str, Any]:
         "architecture_id": candidate.architecture_id,
         "canonical_arch_hash": candidate.canonical_arch_hash,
         "n_qubits": candidate.metadata.get("n_qubits", ""),
+        "hamiltonian_id": candidate.hamiltonian_id,
         "hamiltonian_class": candidate.hamiltonian_class,
         "family": candidate.family,
         "entangler_type": candidate.entangler_type,
@@ -368,7 +379,8 @@ def _label_queue_row(
             "source": source.value,
             "label_status": LabelStatus.PENDING.value,
             "retry_count": 0,
-            "hamiltonian_id": f"{candidate.hamiltonian_class}_{candidate.metadata.get('n_qubits', '')}q",
+            "hamiltonian_id": candidate.hamiltonian_id
+            or f"{candidate.hamiltonian_class}_{candidate.metadata.get('n_qubits', '')}q",
             "hamiltonian_coverage_features": f"{candidate.hamiltonian_coverage:.6f}",
         }
     )
@@ -443,6 +455,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prepare trust-region VQE-QAS oracle inputs")
     parser.add_argument("--scales", default="4,6,8")
     parser.add_argument("--hamiltonian-class", default="tfim")
+    parser.add_argument("--hamiltonian-id", default="")
     parser.add_argument("--protocol-version", default="fair_vqe_protocol_v2")
     parser.add_argument("--oracle-protocol-version", default="vqe_qas_trust_region_oracle")
     parser.add_argument("--batch-id", default="initial")
@@ -472,7 +485,7 @@ def main() -> None:
     all_candidates: list[CandidateRecord] = []
     for n_qubits in _parse_int_list(args.scales):
         for mask in enumerate_hea_masks(n_qubits):
-            all_candidates.append(candidate_record_from_mask(mask, args.hamiltonian_class))
+            all_candidates.append(candidate_record_from_mask(mask, args.hamiltonian_class, args.hamiltonian_id or None))
         if args.include_layerwise or int(args.layerwise_count) > 0:
             for gene in sample_layerwise_genes(
                 n_qubits=n_qubits,
@@ -480,7 +493,7 @@ def main() -> None:
                 count=max(1, int(args.layerwise_count)),
                 seed=int(args.layerwise_seed) + int(n_qubits),
             ):
-                all_candidates.append(candidate_record_from_layerwise_gene(gene, args.hamiltonian_class))
+                all_candidates.append(candidate_record_from_layerwise_gene(gene, args.hamiltonian_class, args.hamiltonian_id or None))
     all_candidates = _apply_zero_cost_stage1b(
         all_candidates,
         n_samples=args.zero_cost_samples,
@@ -524,6 +537,7 @@ def main() -> None:
         "architecture_id",
         "canonical_arch_hash",
         "n_qubits",
+        "hamiltonian_id",
         "hamiltonian_class",
         "family",
         "entangler_type",

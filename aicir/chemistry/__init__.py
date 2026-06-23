@@ -15,6 +15,14 @@ from .molecule import (
     molecule_hamiltonian,
     molecule_matrix,
 )
+from .spec import (
+    GeneratedHamiltonian,
+    MolecularSpec,
+    PauliTermsSpec,
+    generate_hamiltonian,
+    load_hamiltonian_input,
+    spec_from_mapping,
+)
 
 __all__ = [
     "MoleculeHamiltonian",
@@ -27,4 +35,10 @@ __all__ = [
     "iter_molecules",
     "molecule_hamiltonian",
     "molecule_matrix",
+    "GeneratedHamiltonian",
+    "MolecularSpec",
+    "PauliTermsSpec",
+    "generate_hamiltonian",
+    "load_hamiltonian_input",
+    "spec_from_mapping",
 ]

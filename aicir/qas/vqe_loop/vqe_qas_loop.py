@@ -230,8 +230,12 @@ def decide_next_round_quotas(
         weights = (0.55, 0.25, 0.10, 0.10) if int(n_qubits) <= 8 else (0.40, 0.25, 0.20, 0.15)
         reason = "oracle_passed"
     elif weak_signal:
-        mode = "balanced_explore"
-        weights = (0.25, 0.30, 0.30, 0.15) if int(n_qubits) <= 8 else (0.15, 0.25, 0.35, 0.25)
+        if int(n_qubits) >= 12 and local_improved is False:
+            mode = "sparse_explore"
+            weights = (0.10, 0.15, 0.50, 0.25)
+        else:
+            mode = "balanced_explore"
+            weights = (0.25, 0.30, 0.30, 0.15) if int(n_qubits) <= 8 else (0.15, 0.25, 0.35, 0.25)
         reason = "weak_tr_signal"
     else:
         mode = "explore"
@@ -439,6 +443,10 @@ def run_vqe_qas_closed_loop(config: ClosedLoopConfig) -> ClosedLoopResult:
     preparation_args = [
         "--scales",
         str(config.n_qubits),
+        "--hamiltonian-class",
+        str(config.hamiltonian_class),
+        "--hamiltonian-id",
+        str(config.hamiltonian_id),
         "--initial-labels",
         str(resolved.initial_labels),
         "--holdout-fraction",

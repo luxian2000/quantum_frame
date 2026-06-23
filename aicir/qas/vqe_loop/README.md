@@ -13,13 +13,19 @@ Stage 0/1 preparation
 The default user entry point is:
 
 ```bash
-python -m aicir.qas.vqe_loop \
-  --hamiltonian h2_terms.json \
-  --output-dir outputs/qas_h2_loop \
-  --rounds auto \
-  --backend numpy \
-  --dtype complex128
+python -m aicir.qas.vqe_loop --hamiltonian h2_terms.json
 ```
+
+The Hamiltonian JSON can also be passed positionally:
+
+```bash
+python -m aicir.qas.vqe_loop h2_terms.json
+```
+
+Defaults are chosen for the current NPU fair-label workflow:
+`--rounds auto --batch-size auto --backend npu --dtype complex64`.
+If `--output-dir` is omitted, the runner derives one from the Hamiltonian file
+name, for example `h2_terms.json` -> `outputs/qas_h2_terms_loop`.
 
 `h2_terms.json` should contain literal Pauli terms:
 
@@ -139,17 +145,26 @@ The default local proposal path is MoG-EA/NSGA-II. Farthest-first is used for bo
 Run an automatic multi-round loop:
 
 ```bash
-python -m aicir.qas.vqe_loop \
-  --hamiltonian lih_terms.json \
-  --hamiltonian-id lih_sto3g_jw_r15 \
-  --hamiltonian-class molecular_lih \
-  --output-dir outputs/qas_lih_loop \
-  --rounds auto \
-  --batch-size auto \
-  --patience 2 \
-  --backend npu \
-  --dtype complex64
+python -m aicir.qas.vqe_loop --hamiltonian lih_hamiltonian.json
 ```
+
+`--hamiltonian` accepts either a legacy Pauli-term list
+`[[coeff, pauli], ...]` or a structured specification:
+
+```json
+{
+  "molecule": "LiH",
+  "distance": 0.1
+}
+```
+
+That shorthand expands to Li at `(0, 0, 0)` and H at `(0, 0, distance)`.
+The omitted fields default to `kind=molecular`, `basis=sto3g`, `charge=0`,
+`spin=0`, `unit=angstrom`, `driver=pyscf`, and `mapping=jordan_wigner`.
+For non-diatomic molecules or custom layouts, pass explicit `geometry` instead.
+
+Molecular inputs are resolved once through optional PySCF/Qiskit Nature
+dependencies; fair VQE labels still run on the selected aicir backend.
 
 Prepare initial candidates and queue:
 
