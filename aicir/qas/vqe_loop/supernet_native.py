@@ -11,14 +11,16 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from aicir.metrics.circuit_structure import parameter_count
 from aicir.operators import Hamiltonian
-from aicir.qas.algorithms.supernet import Architecture, Supernet, SupernetConfig
 from aicir.qas.primitives.ansatz import SupernetAnsatzGene, architecture_from_supernet_gene
 from aicir.qas.vqe_loop.geometry import parse_pauli_hamiltonian_terms
 from aicir.qas.vqe_loop.protocol import BENCHMARK_TABLE_FIELDS, ZeroCostStatus
+
+if TYPE_CHECKING:
+    from aicir.qas.algorithms.supernet import Architecture
 
 
 PauliTerm = tuple[float, str]
@@ -33,12 +35,21 @@ def _to_hamiltonian(terms: Sequence[PauliTerm]) -> Hamiltonian:
 
 
 def _default_two_qubit_pairs(n_qubits: int) -> tuple[tuple[int, int], ...]:
+    n = int(n_qubits)
+    if n > 4:
+        return tuple((index, index + 1) for index in range(n - 1))
     return tuple(
         (left, right)
-        for left in range(int(n_qubits))
-        for right in range(left + 1, int(n_qubits))
+        for left in range(n)
+        for right in range(left + 1, n)
         if right - left <= 2
     )
+
+
+def _default_single_qubit_gates(n_qubits: int) -> tuple[str, ...]:
+    if int(n_qubits) > 4:
+        return ("ry", "rz")
+    return ("i", "h", "rx", "ry", "rz")
 
 
 def gene_from_supernet_architecture(
@@ -149,12 +160,16 @@ def build_supernet_native_rows(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if int(count) <= 0:
         return [], {"enabled": False, "generated_rows": 0}
+    from aicir.qas.algorithms.supernet import Supernet, SupernetConfig
+
     hamiltonian = _to_hamiltonian(hamiltonian_terms)
     n_qubits = int(hamiltonian.n_qubits)
     two_qubit_pairs = _default_two_qubit_pairs(n_qubits)
+    single_qubit_gates = _default_single_qubit_gates(n_qubits)
     config = SupernetConfig(
         n_qubits=n_qubits,
         layers=int(layers),
+        single_qubit_gates=single_qubit_gates,
         two_qubit_pairs=two_qubit_pairs,
         supernet_num=int(supernet_num),
         supernet_steps=int(supernet_steps),
@@ -230,6 +245,9 @@ def build_supernet_native_rows(
         "supernet_steps": int(supernet_steps),
         "ranking_num": max(int(ranking_num), int(count)),
         "finetune_steps": max(0, int(finetune_steps)),
+        "single_qubit_gates": list(single_qubit_gates),
+        "two_qubit_pair_count": len(two_qubit_pairs),
+        "two_qubit_pairs": [[int(left), int(right)] for left, right in two_qubit_pairs],
         "seed": int(seed),
         "device": str(device),
         "hamiltonian_id": str(hamiltonian_id),
