@@ -23,11 +23,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ...backends.gpu_backend import GPUBackend
-from ...backends.npu_backend import NPUBackend
-from ...core.circuit import Circuit, cx, ry, rz
+from aicir import Circuit, GPUBackend, Hamiltonian, NPUBackend, cx, ry, rz
 from ...core.gates import gate_to_matrix
-from ...core.operators import Hamiltonian
 from ..core.config import QDRATSConfig
 from ..problems.hamiltonians import hamiltonian_matrix as pauli_hamiltonian_matrix
 
