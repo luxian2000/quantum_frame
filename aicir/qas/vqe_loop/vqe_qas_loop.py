@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from aicir.qas.vqe_loop.protocol import BENCHMARK_TABLE_FIELDS, LabelSource, LabelStatus
+
 
 PauliTerm = tuple[float, str]
 
@@ -431,6 +433,105 @@ def stamp_literal_hamiltonian_terms(
     _write_csv(path, fieldnames, rows)
 
 
+def _encoded_hamiltonian_terms(terms: Sequence[PauliTerm]) -> str:
+    return json.dumps([[float(coeff), str(pauli)] for coeff, pauli in terms])
+
+
+def _queue_row_from_supernet_row(
+    candidate_row: dict[str, object],
+    *,
+    protocol_version: str,
+    batch_id: str,
+    hamiltonian_terms: Sequence[PauliTerm],
+    hamiltonian_id: str,
+    hamiltonian_class: str,
+) -> dict[str, object]:
+    row = {field: "" for field in BENCHMARK_TABLE_FIELDS}
+    row.update({field: candidate_row.get(field, "") for field in BENCHMARK_TABLE_FIELDS})
+    row.update(
+        {
+            "protocol_version": protocol_version,
+            "batch_id": batch_id,
+            "source": LabelSource.TRACKB_SUPERNET.value,
+            "label_status": LabelStatus.PENDING.value,
+            "retry_count": 0,
+            "hamiltonian_terms": _encoded_hamiltonian_terms(hamiltonian_terms),
+            "hamiltonian_id": hamiltonian_id,
+            "hamiltonian_class": hamiltonian_class,
+            "hamiltonian_coverage_features": row.get("hamiltonian_coverage_features")
+            or row.get("hamiltonian_coverage", ""),
+        }
+    )
+    return row
+
+
+def write_supernet_bootstrap_queue(
+    config: ClosedLoopConfig,
+    *,
+    output_dir: Path,
+    protocol_version: str = "fair_vqe_protocol_v2",
+) -> tuple[Path, Path, Path]:
+    """Write supernet cheap-ranking top candidates as bootstrap oracle records.
+
+    This path intentionally does not need an initial fair-label benchmark.  It
+    samples/ranks in the native supernet, writes the top rows into the vqe_loop
+    queue schema, and leaves fair VQE as a later verification step for only
+    those selected top candidates.
+    """
+
+    if not config.hamiltonian_terms:
+        raise ValueError("supernet bootstrap requires literal hamiltonian_terms")
+    if int(config.supernet_native_count) <= 0:
+        raise ValueError("supernet bootstrap requires supernet_native_count > 0")
+
+    from aicir.qas.vqe_loop.supernet_native import build_supernet_native_rows
+
+    output_dir = Path(output_dir)
+    queue_path = output_dir / "supernet_bootstrap_queue.csv"
+    oracle_records_path = output_dir / "supernet_bootstrap_oracle_records.csv"
+    summary_path = output_dir / "supernet_bootstrap_plan_summary.json"
+    rows, supernet_summary = build_supernet_native_rows(
+        hamiltonian_terms=list(config.hamiltonian_terms),
+        hamiltonian_id=str(config.hamiltonian_id),
+        hamiltonian_class=str(config.hamiltonian_class),
+        count=int(config.supernet_native_count),
+        layers=int(config.supernet_native_layers),
+        supernet_num=int(config.supernet_native_supernet_num),
+        supernet_steps=int(config.supernet_native_steps),
+        ranking_num=int(config.supernet_native_ranking_num),
+        finetune_steps=int(config.supernet_native_finetune_steps),
+        seed=int(config.supernet_native_seed),
+        device=str(config.supernet_native_device),
+        excluded_ids=set(),
+        params_dir=output_dir,
+    )
+    queue_rows = [
+        _queue_row_from_supernet_row(
+            row,
+            protocol_version=protocol_version,
+            batch_id="supernet_bootstrap",
+            hamiltonian_terms=list(config.hamiltonian_terms),
+            hamiltonian_id=str(config.hamiltonian_id),
+            hamiltonian_class=str(config.hamiltonian_class),
+        )
+        for row in rows
+    ]
+    _write_csv(queue_path, list(BENCHMARK_TABLE_FIELDS), queue_rows)
+    _write_csv(oracle_records_path, list(BENCHMARK_TABLE_FIELDS), queue_rows)
+    summary = {
+        "mode": "supernet_native_bootstrap",
+        "source": LabelSource.TRACKB_SUPERNET.value,
+        "queue": str(queue_path),
+        "oracle_records": str(oracle_records_path),
+        "planned_total": len(queue_rows),
+        "screening_energy_is_final_label": False,
+        "supernet_native": supernet_summary,
+        "note": "Supernet cheap ranking records are oracle-side candidates; fair VQE labels only verify these top candidates.",
+    }
+    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return queue_path, oracle_records_path, summary_path
+
+
 def run_vqe_qas_closed_loop(config: ClosedLoopConfig) -> ClosedLoopResult:
     """Run Stage 0/1.5 plus one or more Stage-2 VQE-QAS rounds."""
 
@@ -487,28 +588,62 @@ def run_vqe_qas_closed_loop(config: ClosedLoopConfig) -> ClosedLoopResult:
         )
 
     initial_benchmark = output_dir / f"benchmark_table_{config.n_qubits}q_v2.csv"
-    _run_module(
-        "aicir.qas.vqe_loop.labeling",
-        [
-            "--queue",
-            str(initial_queue),
-            "--output",
-            str(initial_benchmark),
-            "--protocol",
-            str(config.protocol),
-            "--seed",
-            str(config.label_seed),
-            "--n-seeds",
-            str(config.n_seeds),
-            "--max-evals",
-            str(config.max_evals),
-            "--backend",
-            config.backend,
-            "--dtype",
-            config.dtype,
-        ],
-        cwd=repo_root,
-    )
+    bootstrap_summary: Path | None = None
+    if int(resolved.initial_labels) <= 0 and int(config.supernet_native_count) > 0:
+        initial_queue, _oracle_records, bootstrap_summary = write_supernet_bootstrap_queue(
+            config,
+            output_dir=output_dir,
+            protocol_version="fair_vqe_protocol_v2",
+        )
+    elif int(resolved.initial_labels) <= 0:
+        _write_csv(initial_benchmark, list(BENCHMARK_TABLE_FIELDS), [])
+    else:
+        _run_module(
+            "aicir.qas.vqe_loop.labeling",
+            [
+                "--queue",
+                str(initial_queue),
+                "--output",
+                str(initial_benchmark),
+                "--protocol",
+                str(config.protocol),
+                "--seed",
+                str(config.label_seed),
+                "--n-seeds",
+                str(config.n_seeds),
+                "--max-evals",
+                str(config.max_evals),
+                "--backend",
+                config.backend,
+                "--dtype",
+                config.dtype,
+            ],
+            cwd=repo_root,
+        )
+
+    if int(resolved.initial_labels) <= 0 and int(config.supernet_native_count) > 0:
+        _run_module(
+            "aicir.qas.vqe_loop.labeling",
+            [
+                "--queue",
+                str(initial_queue),
+                "--output",
+                str(initial_benchmark),
+                "--protocol",
+                str(config.protocol),
+                "--seed",
+                str(config.label_seed),
+                "--n-seeds",
+                str(config.n_seeds),
+                "--max-evals",
+                str(config.max_evals),
+                "--backend",
+                config.backend,
+                "--dtype",
+                config.dtype,
+            ],
+            cwd=repo_root,
+        )
 
     benchmark = initial_benchmark
     summaries: list[Path] = []
@@ -644,6 +779,7 @@ def run_vqe_qas_closed_loop(config: ClosedLoopConfig) -> ClosedLoopResult:
         "output_dir": str(output_dir),
         "n_qubits": int(config.n_qubits),
         "initial_labels": resolved.initial_labels,
+        "bootstrap_summary": str(bootstrap_summary) if bootstrap_summary is not None else "",
         "rounds_requested": resolved.rounds,
         "rounds_completed": len(round_records),
         "batch_quotas": {

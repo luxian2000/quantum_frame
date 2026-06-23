@@ -192,6 +192,87 @@ def test_next_batch_writes_supernet_native_warm_start_refs(tmp_path, monkeypatch
     assert summary["supernet_native"]["warm_start_params_written"] == 1
 
 
+def test_supernet_bootstrap_queue_records_top_candidates_for_oracle(tmp_path, monkeypatch):
+    from aicir.qas.vqe_loop.vqe_qas_loop import ClosedLoopConfig, write_supernet_bootstrap_queue
+
+    def fake_build_supernet_native_rows(**kwargs):
+        assert kwargs["hamiltonian_terms"] == [(-1.0, "ZI"), (-0.5, "IZ")]
+        assert kwargs["count"] == 1
+        assert kwargs["finetune_steps"] == 2
+        params_dir = kwargs["params_dir"]
+        (params_dir / "bootstrap_params.json").write_text("[0.25]\n", encoding="utf-8")
+        row = {field: "" for field in BENCHMARK_TABLE_FIELDS}
+        row.update(
+            {
+                "architecture_id": "2q_supernet_native_bootstrap",
+                "canonical_arch_hash": "bootstrap_gene",
+                "n_qubits": "2",
+                "hamiltonian_id": "toy_ising",
+                "hamiltonian_class": "ising",
+                "family": "supernet_native",
+                "depth_group": "L1",
+                "entangler_type": "mixed_supernet",
+                "topology": "supernet_pairs",
+                "n_params": "1",
+                "two_q_count": "1",
+                "hamiltonian_coverage": "1.000000",
+                "hamiltonian_coverage_features": "1.000000",
+                "zero_cost_status": "pass",
+                "ansatz_gene": json.dumps({"kind": "supernet_native"}),
+                "supernet_rank_score": "-1.250000",
+                "supernet_init_params_ref": "bootstrap_params.json",
+                "screening_energy": "-1.300000",
+                "screening_energy_is_final_label": "false",
+                "supernet_warm_start_status": "ready",
+            }
+        )
+        return [row], {"enabled": True, "generated_rows": 1, "warm_start_params_written": 1}
+
+    fake_module = types.ModuleType("aicir.qas.vqe_loop.supernet_native")
+    fake_module.build_supernet_native_rows = fake_build_supernet_native_rows
+    monkeypatch.setitem(sys.modules, "aicir.qas.vqe_loop.supernet_native", fake_module)
+
+    config = ClosedLoopConfig(
+        output_dir=tmp_path,
+        n_qubits=2,
+        hamiltonian_terms=[(-1.0, "ZI"), (-0.5, "IZ")],
+        hamiltonian_id="toy_ising",
+        hamiltonian_class="ising",
+        initial_labels=0,
+        rounds=0,
+        supernet_native_count=1,
+        supernet_native_layers=1,
+        supernet_native_supernet_num=1,
+        supernet_native_steps=2,
+        supernet_native_ranking_num=4,
+        supernet_native_finetune_steps=2,
+        supernet_native_seed=17,
+        supernet_native_device="cpu",
+    )
+
+    queue_path, oracle_path, summary_path = write_supernet_bootstrap_queue(
+        config,
+        output_dir=tmp_path,
+        protocol_version="fair_vqe_protocol_v2",
+    )
+
+    with queue_path.open(newline="", encoding="utf-8") as handle:
+        queue_rows = list(csv.DictReader(handle))
+    with oracle_path.open(newline="", encoding="utf-8") as handle:
+        oracle_rows = list(csv.DictReader(handle))
+
+    assert queue_rows == oracle_rows
+    assert queue_rows[0]["source"] == "trackB_supernet"
+    assert queue_rows[0]["label_status"] == "pending"
+    assert queue_rows[0]["hamiltonian_id"] == "toy_ising"
+    assert queue_rows[0]["hamiltonian_class"] == "ising"
+    assert json.loads(queue_rows[0]["hamiltonian_terms"]) == [[-1.0, "ZI"], [-0.5, "IZ"]]
+    assert queue_rows[0]["supernet_init_params_ref"] == "bootstrap_params.json"
+    assert queue_rows[0]["screening_energy_is_final_label"] == "false"
+    assert summary_path.exists()
+    assert json.loads(summary_path.read_text(encoding="utf-8"))["mode"] == "supernet_native_bootstrap"
+
+
 def test_trackb_supernet_completed_label_is_preferred_boundary_anchor():
     from aicir.qas.vqe_loop.geometry import CandidateRecord
     from aicir.qas.vqe_loop.next_batch import _priority_boundary_anchors
