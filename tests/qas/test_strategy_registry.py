@@ -68,7 +68,7 @@ def test_supernet_registered_as_strategy():
 
 
 def test_run_supernet_routes_through_strategy(monkeypatch):
-    import aicir.qas.algorithms.strategies as strategies
+    import aicir.qas.algorithms.supernet as supernet
 
     captured: dict = {}
 
@@ -76,7 +76,7 @@ def test_run_supernet_routes_through_strategy(monkeypatch):
         captured.update(kwargs)
         return "RESULT"
 
-    monkeypatch.setattr(strategies, "train_supernet", fake_train_supernet)
+    monkeypatch.setattr(supernet, "train_supernet", fake_train_supernet)
 
     out = run("supernet", objective="OBJ", config="CFG", dataset="DS", hamiltonian="H")
 

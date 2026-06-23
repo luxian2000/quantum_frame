@@ -7,7 +7,7 @@ from typing import Any
 
 from . import config as qas_config
 from .registry import get_strategy
-from ..algorithms import strategies as _strategies  # noqa: F401  注册内置策略（import 副作用）
+from . import strategies as _strategies  # noqa: F401  注册内置策略（import 副作用）
 from ..algorithms.CRLQAS import train_crlqas
 from ..algorithms.PPO_RB import ppo_rb_qas
 from ..algorithms.PPR_DQL import train_ppr_dql

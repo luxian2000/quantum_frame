@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..core.registry import StrategySpec, register_strategy
-from ..core.strategy import SearchStrategy
-from .supernet import train_supernet
+from .registry import StrategySpec, register_strategy
+from .strategy import SearchStrategy
 
 
 class SupernetStrategy(SearchStrategy):
@@ -19,6 +18,8 @@ class SupernetStrategy(SearchStrategy):
     name = "supernet"
 
     def run(self, request: Any) -> Any:
+        from ..algorithms.supernet import train_supernet
+
         return train_supernet(
             objective=request.objective,
             config=request.config,

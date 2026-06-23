@@ -12,8 +12,8 @@
 
 当前代码分层：
 
-- `core/`：传统 QAS 的类型、评估器、reward、search env、统一 runner/config、`SearchStrategy`/策略注册表、backend 解析（`backend_utils`）与 NPU 分片原语（`sharding`）。
-- `algorithms/`：MoG-VQE、PPO-RB、PPR-DQL、CRLQAS、supernet 等具体算法实现，及其 `SearchStrategy` 适配（`strategies.py`）。
+- `core/`：传统 QAS 的类型、评估器、reward、search env、统一 runner/config、`SearchStrategy`/策略注册表、内置策略适配（`strategies.py`）、backend 解析（`backend_utils`）与 NPU 分片原语（`sharding`）。
+- `algorithms/`：MoG-VQE、PPO-RB、PPR-DQL、CRLQAS、supernet 等具体算法实现。
 - `library/`：可复用候选架构库与 ansatz 构造（`ansatz.py`）。
 - `problems/`：VQE/QAS 问题和 Hamiltonian 构造。
 - `vqe_loop/`：VQE-QAS 闭环，包括一键入口、fair-label 协议、trust-region geometry、Stage-2 selection/search、fair VQE、oracle calibration 和多 NPU 分片。
@@ -100,7 +100,7 @@ from aicir.qas import config, run
 - `aicir.qas.core.strategy.SearchStrategy`：抽象基类，每种算法实现 `run(request) -> 结果`。
 - `aicir.qas.core.registry`：`StrategySpec`（`name`/`strategy`/`aliases`/`requires_torch`）
   + `register_strategy`/`get_strategy`/`get_spec`/`registered_strategies`/`unregister_strategy`。
-- 内置策略在 `aicir.qas.algorithms.strategies` 中适配并注册（import 副作用）。
+- 内置策略在 `aicir.qas.core.strategies` 中适配并注册（import 副作用）。
 
 `run()` 先查注册表：命中则走 `strategy.run(run_config)`，未命中回落到旧分支。
 当前**仅 `supernet` 已迁移**为 `SupernetStrategy`；`ppo_rb`/`ppr_dql`/`crlqas`/
