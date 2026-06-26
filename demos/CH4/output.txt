@@ -1,0 +1,20 @@
+========================================================================================
+CH4 supernet VQE QAS on Ascend NPU (in-search sharding, single run)
+========================================================================================
+started at            : 2026-06-23T01:52:07
+finished at           : 2026-06-25T22:47:37
+platform              : Linux-4.19.90-2107.6.0.0251.71.oe1.bclinux.aarch64-aarch64-with-glibc2.35
+mode                  : aggressive
+NPUs (world_size)     : 8
+seed                  : 7
+device                : npu:0
+qubits / terms        : 18 / 6892
+basis/charge/spin/map : sto3g/0/0/JordanWignerMapper
+total wall-clock time : 248130.4 s
+
+global-best result (identical on all ranks):
+----------------------------------------------------------------------------------------
+  fine-tuned energy  : -52.7432708740 Ha
+  baseline VQE       : -53.1978912354 Ha
+  CNOT / 2-qubit     : 22 / 48
+  circuit files      : CH4_npu_cir.qasm, CH4_npu_cir.py
