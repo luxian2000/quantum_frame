@@ -1,0 +1,339 @@
+{
+  "row_count": 4,
+  "target_field": "fair_high",
+  "proxy_fields": [
+    "E1",
+    "E2",
+    "E5"
+  ],
+  "proxies": {
+    "E1": {
+      "spearman": -0.9999999999999998,
+      "kendall_pairwise_accuracy": 0.0,
+      "top_k": {
+        "count": 4.0,
+        "k": 2.0,
+        "fair_k": 2.0,
+        "proxy_k": 2.0,
+        "target_count": 4.0,
+        "intersection_count": 0.0,
+        "top_k_recall": 0.0,
+        "proxy_top_recall": 0.0,
+        "fair_top_recall": 0.0,
+        "target_mean_proxy_top_k": -1.5,
+        "target_mean_fair_top_k": -3.5,
+        "target_mean_all": -2.5,
+        "enrichment": -1.0
+      },
+      "cost": {
+        "10": {
+          "n": 10.0,
+          "total_cost": 10.0,
+          "amortized_cost": 1.0
+        },
+        "20": {
+          "n": 20.0,
+          "total_cost": 20.0,
+          "amortized_cost": 1.0
+        },
+        "40": {
+          "n": 40.0,
+          "total_cost": 40.0,
+          "amortized_cost": 1.0
+        },
+        "80": {
+          "n": 80.0,
+          "total_cost": 80.0,
+          "amortized_cost": 1.0
+        }
+      },
+      "status": "repair"
+    },
+    "E2": {
+      "spearman": 0.9999999999999998,
+      "kendall_pairwise_accuracy": 1.0,
+      "top_k": {
+        "count": 4.0,
+        "k": 2.0,
+        "fair_k": 2.0,
+        "proxy_k": 2.0,
+        "target_count": 4.0,
+        "intersection_count": 2.0,
+        "top_k_recall": 1.0,
+        "proxy_top_recall": 1.0,
+        "fair_top_recall": 1.0,
+        "target_mean_proxy_top_k": -3.5,
+        "target_mean_fair_top_k": -3.5,
+        "target_mean_all": -2.5,
+        "enrichment": 1.0
+      },
+      "cost": {
+        "10": {
+          "n": 10.0,
+          "total_cost": 50.0,
+          "amortized_cost": 5.0
+        },
+        "20": {
+          "n": 20.0,
+          "total_cost": 100.0,
+          "amortized_cost": 5.0
+        },
+        "40": {
+          "n": 40.0,
+          "total_cost": 200.0,
+          "amortized_cost": 5.0
+        },
+        "80": {
+          "n": 80.0,
+          "total_cost": 400.0,
+          "amortized_cost": 5.0
+        }
+      },
+      "status": "pass"
+    },
+    "E5": {
+      "spearman": 0.9999999999999998,
+      "kendall_pairwise_accuracy": 1.0,
+      "top_k": {
+        "count": 4.0,
+        "k": 2.0,
+        "fair_k": 2.0,
+        "proxy_k": 2.0,
+        "target_count": 4.0,
+        "intersection_count": 2.0,
+        "top_k_recall": 1.0,
+        "proxy_top_recall": 1.0,
+        "fair_top_recall": 1.0,
+        "target_mean_proxy_top_k": -3.5,
+        "target_mean_fair_top_k": -3.5,
+        "target_mean_all": -2.5,
+        "enrichment": 1.0
+      },
+      "cost": {
+        "10": {
+          "n": 10.0,
+          "total_cost": 120.0,
+          "amortized_cost": 12.0
+        },
+        "20": {
+          "n": 20.0,
+          "total_cost": 140.0,
+          "amortized_cost": 7.0
+        },
+        "40": {
+          "n": 40.0,
+          "total_cost": 180.0,
+          "amortized_cost": 4.5
+        },
+        "80": {
+          "n": 80.0,
+          "total_cost": 260.0,
+          "amortized_cost": 3.25
+        }
+      },
+      "status": "pass"
+    }
+  },
+  "warm_start_gain": {
+    "count": 4.0,
+    "mean_gain": 0.24999999999999992,
+    "gain_variance": 0.022500000000000013,
+    "std_gain": 0.15000000000000005,
+    "gain_cv_abs": 0.6000000000000004
+  },
+  "strata": {
+    "field": "hit_rate",
+    "threshold": 0.5,
+    "proxies": {
+      "E1": {
+        "low": {
+          "count": 2.0,
+          "spearman": -0.9999999999999998,
+          "top_k": {
+            "count": 2.0,
+            "k": 2.0,
+            "fair_k": 2.0,
+            "proxy_k": 2.0,
+            "target_count": 2.0,
+            "intersection_count": 2.0,
+            "top_k_recall": 1.0,
+            "proxy_top_recall": 1.0,
+            "fair_top_recall": 1.0,
+            "target_mean_proxy_top_k": -1.5,
+            "target_mean_fair_top_k": -1.5,
+            "target_mean_all": -1.5,
+            "enrichment": 0.0
+          }
+        },
+        "high": {
+          "count": 2.0,
+          "spearman": -0.9999999999999998,
+          "top_k": {
+            "count": 2.0,
+            "k": 2.0,
+            "fair_k": 2.0,
+            "proxy_k": 2.0,
+            "target_count": 2.0,
+            "intersection_count": 2.0,
+            "top_k_recall": 1.0,
+            "proxy_top_recall": 1.0,
+            "fair_top_recall": 1.0,
+            "target_mean_proxy_top_k": -3.5,
+            "target_mean_fair_top_k": -3.5,
+            "target_mean_all": -3.5,
+            "enrichment": 0.0
+          }
+        }
+      },
+      "E2": {
+        "low": {
+          "count": 2.0,
+          "spearman": 0.9999999999999998,
+          "top_k": {
+            "count": 2.0,
+            "k": 2.0,
+            "fair_k": 2.0,
+            "proxy_k": 2.0,
+            "target_count": 2.0,
+            "intersection_count": 2.0,
+            "top_k_recall": 1.0,
+            "proxy_top_recall": 1.0,
+            "fair_top_recall": 1.0,
+            "target_mean_proxy_top_k": -1.5,
+            "target_mean_fair_top_k": -1.5,
+            "target_mean_all": -1.5,
+            "enrichment": 0.0
+          }
+        },
+        "high": {
+          "count": 2.0,
+          "spearman": 0.9999999999999998,
+          "top_k": {
+            "count": 2.0,
+            "k": 2.0,
+            "fair_k": 2.0,
+            "proxy_k": 2.0,
+            "target_count": 2.0,
+            "intersection_count": 2.0,
+            "top_k_recall": 1.0,
+            "proxy_top_recall": 1.0,
+            "fair_top_recall": 1.0,
+            "target_mean_proxy_top_k": -3.5,
+            "target_mean_fair_top_k": -3.5,
+            "target_mean_all": -3.5,
+            "enrichment": 0.0
+          }
+        }
+      },
+      "E5": {
+        "low": {
+          "count": 2.0,
+          "spearman": 0.9999999999999998,
+          "top_k": {
+            "count": 2.0,
+            "k": 2.0,
+            "fair_k": 2.0,
+            "proxy_k": 2.0,
+            "target_count": 2.0,
+            "intersection_count": 2.0,
+            "top_k_recall": 1.0,
+            "proxy_top_recall": 1.0,
+            "fair_top_recall": 1.0,
+            "target_mean_proxy_top_k": -1.5,
+            "target_mean_fair_top_k": -1.5,
+            "target_mean_all": -1.5,
+            "enrichment": 0.0
+          }
+        },
+        "high": {
+          "count": 2.0,
+          "spearman": 0.9999999999999998,
+          "top_k": {
+            "count": 2.0,
+            "k": 2.0,
+            "fair_k": 2.0,
+            "proxy_k": 2.0,
+            "target_count": 2.0,
+            "intersection_count": 2.0,
+            "top_k_recall": 1.0,
+            "proxy_top_recall": 1.0,
+            "fair_top_recall": 1.0,
+            "target_mean_proxy_top_k": -3.5,
+            "target_mean_fair_top_k": -3.5,
+            "target_mean_all": -3.5,
+            "enrichment": 0.0
+          }
+        }
+      }
+    }
+  },
+  "temporal": {
+    "order_field": "evaluation_order_index",
+    "window_size": 2.0,
+    "proxies": {
+      "E1": {
+        "count": 4.0,
+        "order_field": "evaluation_order_index",
+        "window_size": 2.0,
+        "windows": [
+          {
+            "start_order": 0.0,
+            "end_order": 1.0,
+            "count": 2.0,
+            "spearman": -0.9999999999999998,
+            "kendall_pairwise_accuracy": 0.0
+          },
+          {
+            "start_order": 2.0,
+            "end_order": 3.0,
+            "count": 2.0,
+            "spearman": -0.9999999999999998,
+            "kendall_pairwise_accuracy": 0.0
+          }
+        ]
+      },
+      "E2": {
+        "count": 4.0,
+        "order_field": "evaluation_order_index",
+        "window_size": 2.0,
+        "windows": [
+          {
+            "start_order": 0.0,
+            "end_order": 1.0,
+            "count": 2.0,
+            "spearman": 0.9999999999999998,
+            "kendall_pairwise_accuracy": 1.0
+          },
+          {
+            "start_order": 2.0,
+            "end_order": 3.0,
+            "count": 2.0,
+            "spearman": 0.9999999999999998,
+            "kendall_pairwise_accuracy": 1.0
+          }
+        ]
+      },
+      "E5": {
+        "count": 4.0,
+        "order_field": "evaluation_order_index",
+        "window_size": 2.0,
+        "windows": [
+          {
+            "start_order": 0.0,
+            "end_order": 1.0,
+            "count": 2.0,
+            "spearman": 0.9999999999999998,
+            "kendall_pairwise_accuracy": 1.0
+          },
+          {
+            "start_order": 2.0,
+            "end_order": 3.0,
+            "count": 2.0,
+            "spearman": 0.9999999999999998,
+            "kendall_pairwise_accuracy": 1.0
+          }
+        ]
+      }
+    }
+  }
+}
