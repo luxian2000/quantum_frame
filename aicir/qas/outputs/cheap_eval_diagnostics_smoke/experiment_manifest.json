@@ -1,0 +1,60 @@
+{
+  "benchmark_set": [
+    "h2_4q",
+    "lih_12q",
+    "ising8_lattice"
+  ],
+  "depths": [
+    3,
+    4
+  ],
+  "n_architectures": 40,
+  "sampling_mode": "uniform",
+  "proxy_fields": [
+    "E1",
+    "E2",
+    "E3",
+    "E4",
+    "E5"
+  ],
+  "target_field": "fair_high",
+  "notes": {
+    "E1": "random init low-budget light VQE",
+    "E2": "random init high-budget light VQE",
+    "E3": "supernet warm-start low-budget light VQE",
+    "E4": "supernet warm-start high-budget finetune",
+    "E5": "current native supernet screening"
+  },
+  "experiment_fields": [
+    "problem_id",
+    "hamiltonian_class",
+    "sampling_mode",
+    "depth",
+    "architecture_id",
+    "ansatz_gene",
+    "n_qubits",
+    "n_params",
+    "two_q_count",
+    "E1",
+    "E2",
+    "E3",
+    "E4",
+    "E5",
+    "E5_mean",
+    "E5_min",
+    "E5_std",
+    "fair_high",
+    "fair_warm",
+    "fair_random",
+    "hit_rate",
+    "exposure_count",
+    "evaluation_order_index",
+    "error_log",
+    "walltime_E1",
+    "walltime_E2",
+    "walltime_E3",
+    "walltime_E4",
+    "walltime_E5",
+    "walltime_fair_high"
+  ]
+}
