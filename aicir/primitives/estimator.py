@@ -31,6 +31,15 @@ class StatevectorEstimator(BaseEstimator):
         raw = self.backend.expectation_sv(state, matrix)
         return float(np.real(complex(raw)))
 
+    def estimate(self, circuit, hamiltonian, **_ignored):
+        """直通精确期望（``BasicVQE(energy_estimator=...)`` 契约）。
+
+        忽略 shots/initial_state 等密度矩阵/采样相关 kwargs（本路径为精确态向量
+        期望）；供 Target 选中本估计器时让 VQE 经 primitives 求能量。
+        """
+
+        return _EnergyResult(self._expectation(circuit, hamiltonian))
+
     def run(self, circuits, observables, *, shots: int | None = None, parameter_values=None):
         if shots is not None:
             raise ValueError("StatevectorEstimator 为精确路径，不接受 shots；请用 ShotEstimator")
@@ -139,3 +148,32 @@ class ShotEstimator(BaseEstimator):
                 )
             )
         return results[0] if single else results
+
+
+def estimator_for_target(target, *, backend=None, noise_model=None, shots: int | None = None):
+    """按 :class:`~aicir.devices.Target` 能力选择并构造 Estimator（NEXT.md §3）。
+
+    选择优先级：
+
+    1. 给定 ``noise_model`` -> :class:`NoisyEstimator`（要求 ``supports_density_matrix``）。
+    2. 给定 ``shots`` -> :class:`ShotEstimator`（要求 ``supports_shots``）。
+    3. 否则按 Target 能力：``supports_statevector`` -> :class:`StatevectorEstimator`；
+       退而 ``supports_shots`` -> :class:`ShotEstimator`（默认 shots）。
+
+    Target 不支持任何可用执行路径时抛 ``ValueError``。供 ``vqc`` 等下游据
+    Target 自动选择执行路径，而非各自硬编码。
+    """
+
+    if noise_model is not None:
+        if not target.supports_density_matrix:
+            raise ValueError("noise_model requires a density-matrix-capable target")
+        return NoisyEstimator(noise_model, backend, shots=shots)
+    if shots is not None:
+        if not target.supports_shots:
+            raise ValueError("shots requested but target.supports_shots is False")
+        return ShotEstimator(backend, shots=shots)
+    if target.supports_statevector:
+        return StatevectorEstimator(backend)
+    if target.supports_shots:
+        return ShotEstimator(backend)
+    raise ValueError("target supports no estimation path (statevector/shots/density-matrix)")
