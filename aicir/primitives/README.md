@@ -17,6 +17,7 @@ Primitives 是算法层的统一执行入口，为不同后端的采样与期望
 | `BackendSampler` / `BackendEstimator` | 注入式 `runner` 扩展点（真实硬件/远端服务） |
 | `SampleResult` | `counts` 与 `probs` 采样结果载体 |
 | `EstimateResult` | 期望值与方差结果载体 |
+| `GradientResult` | 梯度向量 + 选用方法结果载体（`BaseEstimator.gradient`） |
 
 ---
 
@@ -126,6 +127,21 @@ print(result.metadata["groups"])
 
 `ShotEstimator` 暴露了 `estimate(circuit, hamiltonian)` 直通方法，可直接作为 `BasicVQE(energy_estimator=...)` 的依赖注入，无需修改 VQE 现有代码。
 
+### 3.3 梯度（按能力自动选方法）
+
+所有 Estimator 经基类提供 `gradient(circuit, observable, *, parameter_values, shots=None, method="auto")`，对模板电路的可训练参数求期望值梯度。以 estimator 自身执行路径为目标函数，再经 `aicir.qml.diff` 注册表分发梯度规则：`method="auto"` 时调用 `select_diff(backend, shots, noisy)` 自动优选——不支持 Torch 后端、带 shots 或带噪声时降级到 `psr` / `fd`；其余按名解析。返回 `GradientResult`。
+
+```python
+import numpy as np
+from aicir import Circuit, Hamiltonian, Parameter, ry
+from aicir.primitives import StatevectorEstimator
+
+template = Circuit(ry(Parameter("t"), 0), n_qubits=1)        # <Z> = cos(t)
+res = StatevectorEstimator().gradient(template, Hamiltonian([("Z", 1.0)]), parameter_values=[0.3])
+print(res.gradient)   # ≈ [-sin(0.3)]
+print(res.method)     # "psr"（numpy 后端无 Torch → auto 降级到 psr）
+```
+
 ---
 
 ## 4 结果对象字典
@@ -151,6 +167,15 @@ print(result.metadata["groups"])
 | `shots` | `int | None` | 分配的采样次数。精确路径为 `None`。 |
 | `term_results` | `tuple[Any, ...] | None` | 逐 Pauli 项明细。精确路径为 `None`。 |
 | `metadata` | `Mapping[str, Any]` | 包含 `method` (如 `"statevector"`, `"pauli_shots"`) 和 `"groups"` 的调试信息字典。 |
+
+### `GradientResult`
+
+| 属性 | 类型 | 描述 |
+| --- | --- | --- |
+| `gradient` | `np.ndarray` | 对各参数的偏导向量。 |
+| `method` | `str` | 实际选用的梯度方法名（`select_diff` 自动优选或显式指定）。 |
+| `nfev` | `int | None` | 目标函数求值次数。 |
+| `metadata` | `Mapping[str, Any]` | 含 `shots` / `noisy` 等执行信息。 |
 
 ---
 
