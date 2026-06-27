@@ -22,6 +22,29 @@ def test_swap_cz_cy_decompose_to_cx_and_preserve_unitary():
     assert _equiv(cir, out)
 
 
+def test_custom_gate_decomposition_is_registry_driven():
+    # 注册自定义门并携带 decomposition -> DecomposePass 无需改动即可识别（§7）。
+    from aicir.gates import GateSpec, register_gate, unregister_gate
+
+    def _my_swap_rule(qubits, controls, control_states, params):
+        if len(qubits) != 2 or controls:
+            return None
+        a, b = int(qubits[0]), int(qubits[1])
+        return [
+            {"type": "cx", "target_qubit": a, "control_qubits": [b], "control_states": [1]},
+            {"type": "cx", "target_qubit": b, "control_qubits": [a], "control_states": [1]},
+            {"type": "cx", "target_qubit": a, "control_qubits": [b], "control_states": [1]},
+        ]
+
+    register_gate(GateSpec("my_swap", 2, 0, decomposition=_my_swap_rule))
+    try:
+        cir = Circuit({"type": "my_swap", "qubit_1": 0, "qubit_2": 1}, n_qubits=2)
+        out = DecomposePass(basis_gates=("cx",)).run(cir)
+        assert [g["type"] for g in circuit_gate_dicts(out)] == ["cx", "cx", "cx"]
+    finally:
+        unregister_gate("my_swap")
+
+
 def test_gates_in_basis_are_left_untouched():
     cir = Circuit(swap(0, 1), hadamard(0), rz(0.3, 1), n_qubits=2)
     out = DecomposePass(basis_gates=("swap", "hadamard", "rz", "cx")).run(cir)

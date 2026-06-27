@@ -23,7 +23,12 @@
 
 from .backend import BackendEstimator, BackendSampler
 from .base import BaseEstimator, BaseSampler
-from .estimator import NoisyEstimator, ShotEstimator, StatevectorEstimator
+from .estimator import (
+    NoisyEstimator,
+    ShotEstimator,
+    StatevectorEstimator,
+    estimator_for_target,
+)
 from .results import EstimateResult, SampleResult
 from .sampler import NoisySampler, ShotSampler, StatevectorSampler
 
@@ -33,6 +38,7 @@ __all__ = [
     "BaseEstimator",
     "BaseSampler",
     "EstimateResult",
+    "estimator_for_target",
     "NoisyEstimator",
     "NoisySampler",
     "SampleResult",

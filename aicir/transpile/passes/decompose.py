@@ -1,7 +1,8 @@
 """DecomposePass：把高级门分解到目标门集（NEXT.md 第 2 节）。
 
-本片提供一组经数值验证的标准分解规则，把双比特高级门
-（``swap``/``cz``/``cy``）改写为 ``cx`` + 单比特门形式：
+分解规则由 ``GateSpec.decomposition`` 驱动（NEXT.md §7），内置一组经数值
+验证的标准规则，把双比特高级门（``swap``/``cz``/``cy``）改写为 ``cx`` +
+单比特门形式：
 
 - ``swap(a, b)``  -> ``cx(a,[b]) · cx(b,[a]) · cx(a,[b])``
 - ``cz(t,[c])``   -> ``h(t) · cx(t,[c]) · h(t)``
@@ -9,15 +10,14 @@
 
 分解只针对“不在目标门集内且存在规则”的门；已在门集内的门原样保留。
 规则展开产生的单比特门为 ``hadamard``/``rz``，本片不再把任意单比特门
-进一步做 Euler 基底翻译（留待后续）。受控形式仅支持单控制位。
+进一步做 Euler 基底翻译（留待后续）。受控形式仅支持单控制位。注册自定义门
+时携带 ``decomposition`` 即可被本 pass 自动识别。
 """
 
 from __future__ import annotations
 
-import math
-
 from ...core.circuit import Circuit
-from ...gates import canonical_gate_name
+from ...gates import canonical_gate_name, gate_decomposition
 from ...ir import circuit_gate_dicts, instruction_controls, instruction_qubits
 from ..base import TransformationPass
 from ._local_rewrite import circuit_from_gates
@@ -25,57 +25,15 @@ from ._local_rewrite import circuit_from_gates
 __all__ = ["DecomposePass"]
 
 
-def _single_control(gate: dict) -> int | None:
-    controls = instruction_controls(gate)
+def _apply_rule(rule, gate: dict) -> list[dict] | None:
+    """把门规范化为 ``(qubits, controls, control_states, params)`` 后调用分解规则。"""
+
+    qubits = tuple(instruction_qubits(gate))
+    controls = tuple(instruction_controls(gate))
     states = gate.get("control_states")
-    if len(controls) != 1:
-        return None
-    if states is not None and tuple(int(s) for s in states) != (1,):
-        return None
-    return int(controls[0])
-
-
-def _decompose_swap(gate: dict) -> list[dict] | None:
-    qubits = instruction_qubits(gate)
-    if len(qubits) != 2 or instruction_controls(gate):
-        return None
-    a, b = int(qubits[0]), int(qubits[1])
-    cab = {"type": "cx", "target_qubit": a, "control_qubits": [b], "control_states": [1]}
-    cba = {"type": "cx", "target_qubit": b, "control_qubits": [a], "control_states": [1]}
-    return [dict(cab), dict(cba), dict(cab)]
-
-
-def _decompose_cz(gate: dict) -> list[dict] | None:
-    qubits = instruction_qubits(gate)
-    control = _single_control(gate)
-    if len(qubits) != 1 or control is None:
-        return None
-    t = int(qubits[0])
-    return [
-        {"type": "hadamard", "target_qubit": t},
-        {"type": "cx", "target_qubit": t, "control_qubits": [control], "control_states": [1]},
-        {"type": "hadamard", "target_qubit": t},
-    ]
-
-
-def _decompose_cy(gate: dict) -> list[dict] | None:
-    qubits = instruction_qubits(gate)
-    control = _single_control(gate)
-    if len(qubits) != 1 or control is None:
-        return None
-    t = int(qubits[0])
-    return [
-        {"type": "rz", "target_qubit": t, "parameter": -math.pi / 2.0},
-        {"type": "cx", "target_qubit": t, "control_qubits": [control], "control_states": [1]},
-        {"type": "rz", "target_qubit": t, "parameter": math.pi / 2.0},
-    ]
-
-
-_RULES = {
-    "swap": _decompose_swap,
-    "cz": _decompose_cz,
-    "cy": _decompose_cy,
-}
+    states = tuple(int(s) for s in states) if states is not None else None
+    params = gate.get("parameter")
+    return rule(qubits, controls, states, params)
 
 
 class DecomposePass(TransformationPass):
@@ -105,8 +63,8 @@ class DecomposePass(TransformationPass):
             if name in self.basis_gates:
                 out.append(gate)
                 continue
-            rule = _RULES.get(name)
-            replacement = rule(gate) if rule is not None else None
+            rule = gate_decomposition(name)
+            replacement = _apply_rule(rule, gate) if rule is not None else None
             if replacement is not None:
                 out.extend(replacement)
                 continue
