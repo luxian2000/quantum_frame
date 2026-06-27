@@ -2,6 +2,43 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-27
+
+### Added
+
+- **`GateSpec` 元数据扩充：`generator` / `decomposition` 字段（NEXT.md §7）。**
+  - `aicir.gates.GateSpec` 新增 `generator`（单参数旋转门的 Pauli 生成元标签，
+    `U = exp(-i θ G / 2)`：`rx`→`"X"`、`ry`→`"Y"`、`rz`→`"Z"`、`crx/cry/crz` 记目标位
+    生成元、`rzz`→`"ZZ"`、`rxx`→`"XX"`）与 `decomposition`（分解规则可调用，签名
+    `(qubits, controls, control_states, params) -> list[dict] | None`）。
+  - 新增注册表 helper `gate_generator` / `parametric_pauli_gates` / `gate_decomposition`，
+    从 `aicir.gates` 导出；分解规则置于自包含的 `aicir/gates/decompositions.py`
+    （仅构造纯门字典，避开 `gates`↔`ir` 循环导入）。
+  - 配套 `tests/gates/test_gatespec_metadata.py`。
+- **`Target` 接入 primitives / vqc / metrics（NEXT.md §3）。**
+  - `aicir.primitives.estimator_for_target(target, *, backend=None, noise_model=None, shots=None)`
+    按 `Target` 能力选择 `Statevector`/`Shot`/`Noisy` 估计器；无可用执行路径抛 `ValueError`。
+  - `aicir.metrics.HardwareProfile.from_target(target, **overrides)` 从 Target 取
+    `native_gates`（空门集回退 `DEFAULT_NATIVE_GATES`）与 `coupling_map`。
+  - `aicir.primitives.StatevectorEstimator` 新增 `estimate()` 直通方法，满足
+    `BasicVQE(energy_estimator=...)` 注入契约。
+  - 配套 `tests/devices/test_target_integration.py`。
+- **`BasicVQE(..., target=Target(...))`：按设备能力注入 Estimator（NEXT.md §4 phase-1 item 4）。**
+  - 未显式注入 `energy_estimator` 时，经 `estimator_for_target` 注入估计器，使能量
+    求值走 primitives；显式 `energy_estimator` 优先。`BasicQAOA` 默认路径为稠密线性
+    代数（无线路），不在本次范围。
+  - 配套 `tests/vqc/test_vqe_target.py`。
+
+### Changed
+
+- **`DecomposePass` 改为 `GateSpec.decomposition` 字段驱动。**
+  - `aicir.transpile.DecomposePass` 的分解规则从注册表 `gate_decomposition` 读取，
+    不再硬编码；注册自定义门携带 `decomposition` 即被自动识别。行为对内置
+    `swap`/`cz`/`cy` 不变。
+- **`aicir.qml.deriv` 可微门集改为从 `GateSpec` 自省。**
+  - `_AD_PAULI_GENERATOR` / `_AD_DIFFERENTIABLE` 改为从 `parametric_pauli_gates()` /
+    `gate_generator()` 派生（与旧硬编码值逐一致），注册新 Pauli 旋转门即自动可伴随微分。
+
 ## 2026-06-23
 
 ### Added
