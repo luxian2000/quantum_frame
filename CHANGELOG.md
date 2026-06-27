@@ -6,6 +6,15 @@
 
 ### Added
 
+- **`select_diff` 接入 Estimator primitives：`BaseEstimator.gradient(...)`（NEXT.md §6 / QML todo 2.2）。**
+  - 新增 `BaseEstimator.gradient(circuit, observable, *, parameter_values, shots=None, method="auto")`，
+    以 estimator 自身执行路径为目标函数 `params -> <H>`，经 `aicir.qml.diff` 注册表分发梯度规则：
+    `method="auto"` 时调用 `select_diff(backend, shots, noisy)` 自动优选——不支持 Torch 后端、
+    带 shots 或带噪声时降级到 `psr`/`fd`；其余按名经 `resolve_diff` 解析。
+  - `NoisyEstimator` 置 `_noisy=True`，使噪声路径选到 `supports_noise` 的方法。
+  - 新增统一结果对象 `aicir.primitives.GradientResult`（NEXT.md §9，含 `gradient`/`method`/
+    `nfev`/`metadata`）。
+  - 配套 `tests/primitives/test_estimator_gradient.py`。
 - **`GateSpec` 元数据扩充：`generator` / `decomposition` 字段（NEXT.md §7）。**
   - `aicir.gates.GateSpec` 新增 `generator`（单参数旋转门的 Pauli 生成元标签，
     `U = exp(-i θ G / 2)`：`rx`→`"X"`、`ry`→`"Y"`、`rz`→`"Z"`、`crx/cry/crz` 记目标位

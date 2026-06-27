@@ -74,6 +74,50 @@ class BaseSampler(ABC):
 class BaseEstimator(ABC):
     """期望值估计 primitive 统一接口。"""
 
+    #: 子类若走噪声路径应置 ``True``，以便 ``gradient`` 自动选到 supports_noise 的方法。
+    _noisy: bool = False
+
     @abstractmethod
     def run(self, circuits, observables, *, shots: int | None = None, parameter_values=None):
         """估计期望值，返回 :class:`EstimateResult`（或其列表）。"""
+
+    def gradient(
+        self,
+        circuit,
+        observable,
+        *,
+        parameter_values,
+        shots: int | None = None,
+        method: str = "auto",
+    ):
+        """对模板电路参数求期望值梯度，自动按能力选择梯度方法（NEXT.md §6）。
+
+        以 estimator 自身的执行路径为目标函数 ``params -> <H>``，再经
+        ``aicir.qml.diff`` 注册表分发梯度规则：``method="auto"`` 时调用
+        ``select_diff(backend, shots, noisy)`` 自动优选（不支持 Torch/带 shots/带噪声
+        时降级到 ``psr`` 或 ``fd``）；其余按名解析。返回 :class:`GradientResult`。
+        """
+
+        from ..qml.diff import resolve_diff, select_diff
+        from .results import GradientResult
+
+        params = np.asarray(parameter_values, dtype=float).reshape(-1)
+        backend = getattr(self, "backend", None)
+        if method == "auto":
+            method = select_diff(backend=backend, shots=shots, noisy=self._noisy)
+        grad_fn = resolve_diff(method)
+
+        calls = 0
+
+        def energy(values):
+            nonlocal calls
+            calls += 1
+            return float(self.run(circuit, observable, shots=shots, parameter_values=values).value)
+
+        grad = np.asarray(grad_fn(energy, params), dtype=float)
+        return GradientResult(
+            gradient=grad,
+            method=method,
+            nfev=calls,
+            metadata={"shots": shots, "noisy": self._noisy},
+        )
