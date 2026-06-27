@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 
+from ..gates import gate_generator, parametric_pauli_gates
 from ..ir import circuit_instructions, instruction_name, instruction_to_gate_dict
 
 
@@ -472,9 +473,17 @@ def fd(
 _CDTYPE = np.complex64
 
 # Single-parameter gates differentiated by the adjoint method, mapped to the
-# (Hermitian) generator G in U = exp(-i θ G / 2).
-_AD_PAULI_GENERATOR = {"rx": "X", "ry": "Y", "rz": "Z", "crx": "X", "cry": "Y", "crz": "Z"}
-_AD_DIFFERENTIABLE = set(_AD_PAULI_GENERATOR) | {"rzz", "rxx"}
+# (Hermitian) generator G in U = exp(-i θ G / 2). Sourced from the GateSpec
+# registry (NEXT.md §7) so registering a new Pauli-rotation gate with a
+# ``generator`` makes it adjoint-differentiable without editing this module.
+# Single-Pauli generators (X/Y/Z, incl. controlled rotations) use the local
+# Pauli-matrix path; two-qubit generators (ZZ/XX) have bespoke matrices below.
+_AD_PAULI_GENERATOR = {
+    name: gen
+    for name in parametric_pauli_gates()
+    if (gen := gate_generator(name)) in ("X", "Y", "Z")
+}
+_AD_DIFFERENTIABLE = set(parametric_pauli_gates())
 
 _SWAP_LOCAL = np.array(
     [[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=_CDTYPE

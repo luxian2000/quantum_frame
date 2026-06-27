@@ -62,6 +62,7 @@
 | `shots` | 透传给 `Measure` 或 `PauliEstimator` 生成采样 counts |
 | `noise_model` | 传入后自动走 density-matrix 测量路径 |
 | `energy_estimator` | 默认 `"exact"`；也可传入 `PauliEstimator` 做有限 shots Pauli-term 能量估计 |
+| `target` | 可选 `aicir.devices.Target`；未显式注入 `energy_estimator` 时经 `estimator_for_target` 按设备能力（statevector/shots/noisy）注入估计器，使能量求值走 primitives。显式 `energy_estimator` 优先 |
 | `n_params` / `parameter_shape` | callable ansatz 无法从 `Circuit.parameters` 推断参数量时使用 |
 | `initial_state` / `initial_density_matrix` | 自定义初态 |
 

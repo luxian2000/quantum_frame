@@ -15,6 +15,7 @@ Primitives 是算法层的统一执行入口，为不同后端的采样与期望
 | `ShotEstimator` | 有限 shots 能量估计器（自带 Pauli 分组，基类：`BaseEstimator`） |
 | `NoisyEstimator` | 带噪声期望值估计器（密度矩阵；`shots=None` 确定性） |
 | `BackendSampler` / `BackendEstimator` | 注入式 `runner` 扩展点（真实硬件/远端服务） |
+| `estimator_for_target(target, ...)` | 按 `aicir.devices.Target` 能力选择并构造 Estimator |
 | `SampleResult` | `counts` 与 `probs` 采样结果载体 |
 | `EstimateResult` | 期望值与方差结果载体 |
 | `GradientResult` | 梯度向量 + 选用方法结果载体（`BaseEstimator.gradient`） |
@@ -104,6 +105,8 @@ print(result.value)    # -1.0
 print(result.variance) # None (精确模式无方差)
 print(result.shots)    # None 
 ```
+
+`StatevectorEstimator` 也暴露 `estimate(circuit, hamiltonian)` 直通方法（忽略 shots/initial_state 等 kwargs），与 `ShotEstimator`/`NoisyEstimator` 一致满足 `BasicVQE(energy_estimator=...)` 注入契约——使 VQE 精确能量求值也能走 primitives。
 
 ### 3.2 ShotEstimator (采样模式)
 
@@ -213,6 +216,21 @@ result = BackendEstimator(runner, shots=1024).run(circuit, ham)
 
 所有 `run(...)` 支持 `parameter_values=`，对模板电路延迟绑定，避免上层频繁手动生成电路副本。
 
-### 5.4 子模块采用
+### 5.4 按 Target 选择执行路径
 
-`vqc`/`qas`/`metrics` 采用加性集成：可经现有注入点（如 `BasicVQE(energy_estimator=...)`）消费 primitives，未重写其内部 `Measure`/`PauliEstimator` 调用；全量内部迁移属可选后续。
+`estimator_for_target(target, *, backend=None, noise_model=None, shots=None)` 据 `aicir.devices.Target` 的能力标志自动选择估计器，供下游按设备能力选执行路径而非各自硬编码：
+
+```python
+from aicir.devices import Target
+from aicir.primitives import estimator_for_target
+
+est = estimator_for_target(Target(n_qubits=2, supports_statevector=True))  # → StatevectorEstimator
+est = estimator_for_target(target, shots=2048)                            # → ShotEstimator（要求 supports_shots）
+est = estimator_for_target(target, noise_model=nm)                        # → NoisyEstimator（要求 supports_density_matrix）
+```
+
+选择优先级：给定 `noise_model` → `NoisyEstimator`；给定 `shots` → `ShotEstimator`；否则 `supports_statevector` → `StatevectorEstimator`，退而 `supports_shots` → `ShotEstimator`；无可用路径抛 `ValueError`。`BasicVQE(..., target=...)` 即经此工厂注入估计器。
+
+### 5.5 子模块采用
+
+`vqc`/`qas`/`metrics` 采用加性集成：可经现有注入点（如 `BasicVQE(energy_estimator=...)`、`BasicVQE(target=...)`）消费 primitives，未重写其内部 `Measure`/`PauliEstimator` 调用；全量内部迁移属可选后续。

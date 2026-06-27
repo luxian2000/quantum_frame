@@ -306,6 +306,16 @@ profile = HardwareProfile(
 | `gate_durations` | `dict` | 门执行时长（预留字段） |
 | `max_depth` | `int \| None` | 深度归一化上限 |
 
+也可从 `aicir.devices.Target` 直接构造，`native_gates` 取自 `target.basis_gates`（空门集回退默认 `DEFAULT_NATIVE_GATES`），`coupling_map` 取自 `target.coupling_map`（全连接 Target → 空耦合）；其余字段可经关键字覆盖：
+
+```python
+from aicir.devices import Target
+from aicir.metrics import HardwareProfile
+
+target = Target(n_qubits=3, basis_gates=("rx", "ry", "rz", "cx"), coupling_map=[(0, 1), (1, 2)])
+profile = HardwareProfile.from_target(target, max_depth=12)
+```
+
 #### 评分
 
 ```python

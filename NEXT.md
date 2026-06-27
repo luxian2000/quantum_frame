@@ -119,7 +119,7 @@ optimized = pm.run(circuit)
 
 短期可以让 `optimize_circuit` 继续存在，但内部委托给默认 `PassManager`。
 
-当前状态：`aicir.transpile` 提供 `TransformationPass`/`PassManager`/`default_optimization_pipeline`，本地优化 pass `CancelInversePass`/`MergeRotationsPass`/`CommuteSingleQubitPass`，结构 pass `ValidatePass`/`CanonicalizePass`，以及第二批面向硬件目标的 pass：`DecomposePass`（高级门分解到目标门集，内置 `swap→3×cx`、`cz→h·cx·h`、`cy→rz·cx·rz` 标准规则，仅单控制位，规则展开产生 `hadamard`/`rz`，暂不做任意单比特门的 Euler 基底翻译）、`LayoutPass`（显式/平凡 logical→physical 重标号，比特置换意义下等价）、`RoutingPass`（沿耦合图最短路径插 SWAP 并对称复位，整线路完全幺正等价，SWAP 数非最优）。三者消费 `aicir.devices.Target`（门集 + 耦合拓扑）；`PassManager` 字符串名支持 `decompose`/`layout`。尚未开始：基于置换跟踪的最优路由、自动择优布局、任意单比特门的目标基底翻译、`DecomposePass` 的 `GateSpec.decomposition` 字段驱动。
+当前状态：`aicir.transpile` 提供 `TransformationPass`/`PassManager`/`default_optimization_pipeline`，本地优化 pass `CancelInversePass`/`MergeRotationsPass`/`CommuteSingleQubitPass`，结构 pass `ValidatePass`/`CanonicalizePass`，以及第二批面向硬件目标的 pass：`DecomposePass`（高级门分解到目标门集，内置 `swap→3×cx`、`cz→h·cx·h`、`cy→rz·cx·rz` 标准规则，仅单控制位，规则展开产生 `hadamard`/`rz`，暂不做任意单比特门的 Euler 基底翻译）、`LayoutPass`（显式/平凡 logical→physical 重标号，比特置换意义下等价）、`RoutingPass`（沿耦合图最短路径插 SWAP 并对称复位，整线路完全幺正等价，SWAP 数非最优）。三者消费 `aicir.devices.Target`（门集 + 耦合拓扑）；`PassManager` 字符串名支持 `decompose`/`layout`。`DecomposePass` 已改为 **`GateSpec.decomposition` 字段驱动**（NEXT.md §7）——分解规则从注册表读取，注册自定义门时携带 `decomposition` 即被自动识别，无需改动 pass。尚未开始：基于置换跟踪的最优路由、自动择优布局、任意单比特门的目标基底翻译。
 
 ### 3. 引入硬件目标描述 `Target`
 
@@ -145,7 +145,9 @@ Target(
 - `qas`：限制搜索空间和硬件效率评分。
 - `metrics`：计算拓扑映射效率、native gate 效率和噪声敏感性。
 
-当前状态：第一片已落地。`aicir.devices` 提供冻结数据类 `Target`，字段含 `n_qubits`/`basis_gates`/`coupling_map` 与四个执行能力标志；`basis_gates` 按 `GateSpec` 规范名归一，`coupling_map` 按无向图处理并在构造时校验比特范围。提供门集查询 `supports(gate)` 与拓扑查询 `coupled(a, b)`/`neighbors(q)`/`fully_connected`。`DecomposePass`/`LayoutPass`/`RoutingPass` 已作为首批消费方。尚未接入 `measure`/`vqc`/`qas`/`metrics`。
+当前状态：第一片已落地。`aicir.devices` 提供冻结数据类 `Target`，字段含 `n_qubits`/`basis_gates`/`coupling_map` 与四个执行能力标志；`basis_gates` 按 `GateSpec` 规范名归一，`coupling_map` 按无向图处理并在构造时校验比特范围。提供门集查询 `supports(gate)` 与拓扑查询 `coupled(a, b)`/`neighbors(q)`/`fully_connected`。`DecomposePass`/`LayoutPass`/`RoutingPass` 已作为首批消费方。
+
+第二片已落地（2026-06-27）：**Target 接入 primitives/vqc/metrics**。`aicir.primitives.estimator_for_target(target, *, backend=None, noise_model=None, shots=None)` 按 Target 能力选择执行路径——给定 `noise_model`→`NoisyEstimator`（要求 `supports_density_matrix`）、给定 `shots`→`ShotEstimator`（要求 `supports_shots`）、否则 `supports_statevector`→`StatevectorEstimator`、退而 `supports_shots`→`ShotEstimator`；无可用路径抛 `ValueError`。`BasicVQE(..., target=Target(...))` 在未显式注入 `energy_estimator` 时经该工厂注入估计器，使能量求值走 primitives（§4 phase-1 item 4）；为此 `StatevectorEstimator` 新增 `estimate()` 直通方法。`metrics.HardwareProfile.from_target(target)` 从 Target 取 `native_gates`（空门集回退 `DEFAULT_NATIVE_GATES`）与 `coupling_map`。配套 `tests/devices/test_target_integration.py`、`tests/vqc/test_vqe_target.py`。尚未接入：`qas` 搜索空间/评分、`measure` 显式 shots 判定、`BasicQAOA`（默认路径为稠密线性代数、无线路，不经测量 primitive；其 `cost=` 注入已覆盖）。
 
 ### 4. 建立 `Sampler` 和 `Estimator` primitives
 
@@ -260,7 +262,7 @@ GateSpec(
 - `visual` 可从 spec 获取显示名称和参数格式。
 - `qas` 可从 spec 生成搜索动作空间。
 
-当前状态：第一、二片已落地。`aicir.gates` 提供 `GateSpec`（门名/别名/目标比特数/参数个数/是否受控/QASM 名/显示符号）与注册表 API（`register_gate`/`unregister_gate`/`get_gate_spec`/`registered_gate_names`/`canonical_gate_name`），内置门集已全部注册；`num_qubits`/`num_params` 为 `None` 表示可变（`unitary`、`measure`、`reset`、整寄存器 `identity`）。消费方已接入六处：`aicir.ir.Operation` 构造期按 spec 校验（未注册门名保持宽松）；`ValidatePass` 实质校验；`CanonicalizePass` 别名归一；QASM 导出名由 `GateSpec.qasm_name` 派生；矩阵路径（`gate_to_matrix`/`apply_gate_to_state` 等）入口经 `canonical_gate_name` 归一后按规范名分发；ASCII 与 matplotlib 绘图符号/配色族由 `GateSpec.symbol` 与规范名派生（注册自定义门可携带 symbol 直接显示）。`reset` 已接入线路标记、测量执行路径与绘图；matplotlib 使用与 `measure` 同色、标注 `Reset` 的虚线表示 reset，`Reset` 字号与 `Rz` 门主标签一致且虚线 dash 间距更大；虚线连接测量门与后续同一比特量子门，没有后续门时延伸到线路末端，且不叠加普通实线；遇到无完整方框的后续门时按虚拟方框左边界截断，虚拟方框内恢复普通实线，但 reset 尚未纳入 QASM 互转。尚未迁移：`matrix`/`generator`/`decomposition` 字段；`metrics`/`qas` 评分中的别名容忍集合（`DEFAULT_NATIVE_GATES`、双比特门判定等）属评分语义，留待单独处理。
+当前状态：第一、二片已落地。`aicir.gates` 提供 `GateSpec`（门名/别名/目标比特数/参数个数/是否受控/QASM 名/显示符号）与注册表 API（`register_gate`/`unregister_gate`/`get_gate_spec`/`registered_gate_names`/`canonical_gate_name`），内置门集已全部注册；`num_qubits`/`num_params` 为 `None` 表示可变（`unitary`、`measure`、`reset`、整寄存器 `identity`）。消费方已接入六处：`aicir.ir.Operation` 构造期按 spec 校验（未注册门名保持宽松）；`ValidatePass` 实质校验；`CanonicalizePass` 别名归一；QASM 导出名由 `GateSpec.qasm_name` 派生；矩阵路径（`gate_to_matrix`/`apply_gate_to_state` 等）入口经 `canonical_gate_name` 归一后按规范名分发；ASCII 与 matplotlib 绘图符号/配色族由 `GateSpec.symbol` 与规范名派生（注册自定义门可携带 symbol 直接显示）。`reset` 已接入线路标记、测量执行路径与绘图；matplotlib 使用与 `measure` 同色、标注 `Reset` 的虚线表示 reset，`Reset` 字号与 `Rz` 门主标签一致且虚线 dash 间距更大；虚线连接测量门与后续同一比特量子门，没有后续门时延伸到线路末端，且不叠加普通实线；遇到无完整方框的后续门时按虚拟方框左边界截断，虚拟方框内恢复普通实线，但 reset 尚未纳入 QASM 互转。第三片已落地（2026-06-27）：**`generator`/`decomposition` 字段**。`GateSpec` 新增 `generator`（单参数旋转门的 Pauli 生成元标签：`rx`→`"X"`、`ry`→`"Y"`、`rz`→`"Z"`、`crx/cry/crz` 记目标位生成元、`rzz`→`"ZZ"`、`rxx`→`"XX"`）与 `decomposition`（分解规则可调用，签名 `(qubits, controls, control_states, params) -> list[dict] | None`，规则置于自包含的 `aicir/gates/decompositions.py`，仅构造纯门字典以避开 `gates`↔`ir` 循环导入）。注册表新增 helper `gate_generator`/`parametric_pauli_gates`/`gate_decomposition`。消费方：`DecomposePass` 改为读 `gate_decomposition`（注册自定义门携带 `decomposition` 即被识别）；`qml.deriv` 的 `_AD_PAULI_GENERATOR`/`_AD_DIFFERENTIABLE` 改为从 `parametric_pauli_gates()`/`gate_generator()` 派生（注册新 Pauli 旋转门即自动可伴随微分），不再硬编码。配套 `tests/gates/test_gatespec_metadata.py`。尚未迁移：`matrix` 字段；`metrics`/`qas` 评分中的别名容忍集合（`DEFAULT_NATIVE_GATES`、双比特门判定等）属评分语义，留待单独处理。
 
 ### 8. 强化跨框架互操作
 
@@ -384,5 +386,5 @@ GateSpec(
 *   ✅ 已完成：`select_diff` 已接入 `Estimator` primitives——`BaseEstimator.gradient(..., method="auto")` 按后端/shots/噪声能力自动选择，不支持 Torch 时降级到 `psr`/`fd`，返回 `GradientResult`（见 §6 第三片当前状态）。
 
 #### 2.3 `GateSpec` 元数据扩充
-*   向 `GateSpec` 注册表添加解析梯度所需的 `generator` 和 `decomposition` 字段。
-*   允许 QML 梯度方法自动内省门类是否支持解析参数移位等计算，而无需硬编码判断。
+*   ✅ 已完成：`GateSpec` 已添加 `generator` 与 `decomposition` 字段（见 §7 第三片）。
+*   ✅ 已完成：`qml.deriv` 不再硬编码可微门集，改从 `gate_generator()`/`parametric_pauli_gates()` 自省。`matrix` 字段仍未迁移（矩阵构造暂留 `gate_to_matrix`）。
