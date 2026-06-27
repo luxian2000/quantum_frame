@@ -2,6 +2,20 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-27
+
+### Added
+
+- **`select_diff` 接入 Estimator primitives：`BaseEstimator.gradient(...)`（NEXT.md §6 / QML todo 2.2）。**
+  - 新增 `BaseEstimator.gradient(circuit, observable, *, parameter_values, shots=None, method="auto")`，
+    以 estimator 自身执行路径为目标函数 `params -> <H>`，经 `aicir.qml.diff` 注册表分发梯度规则：
+    `method="auto"` 时调用 `select_diff(backend, shots, noisy)` 自动优选——不支持 Torch 后端、
+    带 shots 或带噪声时降级到 `psr`/`fd`；其余按名经 `resolve_diff` 解析。
+  - `NoisyEstimator` 置 `_noisy=True`，使噪声路径选到 `supports_noise` 的方法。
+  - 新增统一结果对象 `aicir.primitives.GradientResult`（NEXT.md §9，含 `gradient`/`method`/
+    `nfev`/`metadata`）。
+  - 配套 `tests/primitives/test_estimator_gradient.py`。
+
 ## 2026-06-23
 
 ### Added
