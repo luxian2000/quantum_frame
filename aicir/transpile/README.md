@@ -233,7 +233,7 @@ optimized = CommuteSingleQubitPass(max_reorder_hops=8).run(circuit)
 
 ### 4.6  DecomposePass — 高级门分解
 
-把高级双比特门分解到目标门集，保持幺正等价。内置经数值验证的标准规则：
+把高级双比特门分解到目标门集，保持幺正等价。分解规则由 `GateSpec.decomposition` 字段**驱动**（`aicir.gates.gate_decomposition`），内置经数值验证的标准规则：
 
 | 高级门 | 分解 |
 | --- | --- |
@@ -250,6 +250,8 @@ out = DecomposePass(basis_gates=("cx",)).run(circuit)
 # 或从 Target 取门集
 out = DecomposePass(target=Target(n_qubits=4, basis_gates=("cx", "hadamard", "rz"))).run(circuit)
 ```
+
+> 规则取自注册表而非硬编码：注册自定义门时携带 `decomposition`（签名 `(qubits, controls, control_states, params) -> list[dict] | None`），`DecomposePass` 无需改动即可识别。受控形式仅支持单控制位；规则展开产生的单比特门为 `hadamard`/`rz`，暂不做任意单比特门的 Euler 基底翻译。
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |

@@ -25,6 +25,8 @@
 | `controlled` | `bool` | 是否必须携带至少一个控制位 |
 | `qasm_name` | `str \| None` | OpenQASM 导出名（`core/io/qasm.py` 的导出表由此派生）；`None` = 暂未约定 |
 | `symbol` | `str \| None` | ASCII / matplotlib 绘图显示符号（受控门为目标位符号）；`None` = 特殊绘制或退回通用 fallback |
+| `generator` | `str \| None` | 单参数旋转门的 Pauli 生成元标签（`U = exp(-i θ G / 2)`），如 `rx`→`"X"`、`rzz`→`"ZZ"`；受控旋转记目标位生成元。`None` = 非标准 Pauli 旋转。供 QML 自省能否用解析参数移位 |
+| `decomposition` | `Callable \| None` | 分解到更基础门集的规则，签名 `(qubits, controls, control_states, params) -> list[dict] \| None`（返回 `None` 表示当前形态不适用）。供 `transpile.DecomposePass` 驱动；`None` = 无内置规则 |
 
 ---
 
@@ -37,6 +39,9 @@
 | `register_gate(spec, *, overwrite=False)` | 注册一个 `GateSpec`；冲突时默认报错 |
 | `unregister_gate(name)` | 移除已注册门（含全部别名）；未注册时静默返回 |
 | `registered_gate_names()` | 返回全部已注册门的规范名元组 |
+| `gate_generator(name)` | 返回门的 Pauli 生成元标签（`rx`→`"X"`、`rzz`→`"ZZ"`）；无生成元或未注册返回 `None` |
+| `parametric_pauli_gates()` | 返回所有带 Pauli 生成元的门规范名集合（即解析参数移位适用门） |
+| `gate_decomposition(name)` | 返回门的分解规则可调用；无规则或未注册返回 `None` |
 
 ```python
 from aicir.gates import GateSpec, get_gate_spec, canonical_gate_name
@@ -70,35 +75,35 @@ canonical_gate_name("my_gate")    # "my_gate"（未注册，原样返回）
 
 ### 3.2  参数旋转门
 
-| 规范名 | 比特数 | 参数数 | QASM 名 | 绘图符号 |
-| --- | :---: | :---: | --- | :---: |
-| `rx` | 1 | 1 | `rx` | Rx |
-| `ry` | 1 | 1 | `ry` | Ry |
-| `rz` | 1 | 1 | `rz` | Rz |
-| `u2` | 1 | 2 | `u2` | U2 |
-| `u3` | 1 | 3 | `u3` | U3 |
+| 规范名 | 比特数 | 参数数 | QASM 名 | 绘图符号 | 生成元 |
+| --- | :---: | :---: | --- | :---: | :---: |
+| `rx` | 1 | 1 | `rx` | Rx | X |
+| `ry` | 1 | 1 | `ry` | Ry | Y |
+| `rz` | 1 | 1 | `rz` | Rz | Z |
+| `u2` | 1 | 2 | `u2` | U2 | — |
+| `u3` | 1 | 3 | `u3` | U3 | — |
 
 ### 3.3  受控门
 
-| 规范名 | 别名 | 目标比特数 | 参数数 | QASM 名 | 目标位符号 |
-| --- | --- | :---: | :---: | --- | :---: |
-| `cx` | `cnot` | 可变 | 0 | `cx` | X |
-| `cy` | — | 1 | 0 | `cy` | Y |
-| `cz` | — | 1 | 0 | `cz` | Z |
-| `crx` | — | 1 | 1 | `crx` | Rx |
-| `cry` | — | 1 | 1 | `cry` | Ry |
-| `crz` | — | 1 | 1 | `crz` | Rz |
-| `toffoli` | `ccnot` | 1 | 0 | `ccx` | X |
+| 规范名 | 别名 | 目标比特数 | 参数数 | QASM 名 | 目标位符号 | 生成元 / 分解 |
+| --- | --- | :---: | :---: | --- | :---: | :---: |
+| `cx` | `cnot` | 可变 | 0 | `cx` | X | — |
+| `cy` | — | 1 | 0 | `cy` | Y | 分解 `rz·cx·rz` |
+| `cz` | — | 1 | 0 | `cz` | Z | 分解 `h·cx·h` |
+| `crx` | — | 1 | 1 | `crx` | Rx | 生成元 X |
+| `cry` | — | 1 | 1 | `cry` | Ry | 生成元 Y |
+| `crz` | — | 1 | 1 | `crz` | Rz | 生成元 Z |
+| `toffoli` | `ccnot` | 1 | 0 | `ccx` | X | — |
 
 > `cx` / `cnot` 的 `num_qubits=None`：支持单目标或多目标写法（多目标等价于多个单目标 CX）。
 
 ### 3.4  双比特门
 
-| 规范名 | 比特数 | 参数数 | QASM 名 | 绘图符号 |
-| --- | :---: | :---: | --- | :---: |
-| `swap` | 2 | 0 | `swap` | （专用形状） |
-| `rzz` | 2 | 1 | `rzz` | （专用形状） |
-| `rxx` | 2 | 1 | `rxx` | （专用形状） |
+| 规范名 | 比特数 | 参数数 | QASM 名 | 绘图符号 | 生成元 / 分解 |
+| --- | :---: | :---: | --- | :---: | :---: |
+| `swap` | 2 | 0 | `swap` | （专用形状） | 分解 `3×cx` |
+| `rzz` | 2 | 1 | `rzz` | （专用形状） | 生成元 ZZ |
+| `rxx` | 2 | 1 | `rxx` | （专用形状） | 生成元 XX |
 
 ### 3.5  特殊指令
 
@@ -143,10 +148,14 @@ unregister_gate("my_iswap")
 | `aicir.core.gates`（`gate_to_matrix` 等） | 入口经 `canonical_gate_name` 归一后按规范名分发，别名与规范名共享矩阵缓存 |
 | `aicir.core.circuit`（ASCII 绘图） | 显示符号由 `GateSpec.symbol` 与规范名派生 |
 | `aicir.visual.plot`（matplotlib 绘图） | 配色族与显示符号由规范名派生；注册自定义门时携带 `symbol` 即可直接显示 |
+| `aicir.transpile.DecomposePass` | 分解规则由 `gate_decomposition`（`GateSpec.decomposition`）驱动；注册自定义门携带 `decomposition` 即被自动识别 |
+| `aicir.qml.deriv` | 可微门集与生成元由 `parametric_pauli_gates()` / `gate_generator()` 派生；注册新 Pauli 旋转门即自动可伴随微分 |
+
+> 分解规则置于自包含的 `decompositions.py`（仅构造纯门字典，不依赖 `aicir.ir` / `aicir.transpile`），以避开 `gates`↔`ir` 循环导入。
 
 ---
 
 ## 6  后续方向（尚未实现）
 
-- `matrix` / `generator` / `decomposition` 字段（矩阵构造仍由 `gate_to_matrix` 负责）。
+- `matrix` 字段（矩阵构造仍由 `gate_to_matrix` 负责）。
 - `metrics` / `qas` 评分中的别名容忍集合（`DEFAULT_NATIVE_GATES`、双比特门判定等）属评分语义，留待单独处理。

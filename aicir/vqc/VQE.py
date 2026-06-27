@@ -124,6 +124,7 @@ class BasicVQE:
         initial_density_matrix: Any = None,
         observable_name: str = "energy",
         energy_estimator: str | Any = "exact",
+        target: Any = None,
     ) -> None:
         self.cost = cost
         if cost is not None:
@@ -161,6 +162,16 @@ class BasicVQE:
         self.initial_density_matrix = initial_density_matrix
         self.observable_name = str(observable_name)
         self.energy_estimator = self._resolve_energy_estimator(energy_estimator)
+        # Target 接入（NEXT.md §3/§4）：未显式注入 estimator 时，按设备能力经
+        # estimator_for_target 选择并注入 primitives（statevector/shots/noisy），
+        # 使能量求值走 Estimator（phase-1 item 4）。显式注入的 estimator 优先。
+        self.target = target
+        if target is not None and self._uses_exact_energy_estimator():
+            from ..primitives import estimator_for_target
+
+            self.energy_estimator = estimator_for_target(
+                target, backend=self.backend, noise_model=noise_model, shots=shots
+            )
         if ansatz is None and not self._uses_exact_energy_estimator():
             raise ValueError("non-exact energy_estimator requires a Circuit or callable ansatz")
 

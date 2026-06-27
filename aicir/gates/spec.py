@@ -9,6 +9,7 @@ QASM 名称只在此注册一次，供 `Operation` 构造期校验与 `ValidateP
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any, Callable
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,13 @@ class GateSpec:
     - ``qasm_name``：OpenQASM 导出名；``None`` 表示暂未约定。
     - ``symbol``：ASCII/绘图显示符号（受控门为目标位符号）；``None``
       表示特殊绘制（swap/rzz/rxx/measure）或退回通用 fallback。
+    - ``generator``：单参数旋转门的 Pauli 生成元标签（``U = exp(-i θ G / 2)``），
+      如 ``rx`` 为 ``"X"``、``rzz`` 为 ``"ZZ"``；受控旋转记其目标位生成元。
+      ``None`` 表示非（标准 Pauli）参数化旋转。供 QML 自省能否用解析参数移位。
+    - ``decomposition``：把该门分解到更基础门集的规则，签名
+      ``(qubits, controls, control_states, params) -> list[dict] | None``
+      （返回 ``None`` 表示当前入参形态不适用，如多控制位）。供 ``transpile``
+      的 ``DecomposePass`` 驱动；``None`` 表示无内置分解规则。
     """
 
     name: str
@@ -36,6 +44,8 @@ class GateSpec:
     controlled: bool = False
     qasm_name: str | None = None
     symbol: str | None = None
+    generator: str | None = None
+    decomposition: Callable[..., Any] | None = None
 
     def __post_init__(self) -> None:
         name = str(self.name).strip()
