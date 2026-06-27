@@ -60,6 +60,8 @@ class NoisyEstimator(BaseEstimator):
     ``energy_estimator`` 注入。
     """
 
+    _noisy = True
+
     def __init__(self, noise_model, backend=None, *, shots: int | None = None) -> None:
         if noise_model is None:
             raise ValueError("NoisyEstimator 需要 noise_model=")
