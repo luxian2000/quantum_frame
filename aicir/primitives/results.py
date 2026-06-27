@@ -23,6 +23,21 @@ class SampleResult:
 
 
 @dataclass(frozen=True)
+class GradientResult:
+    """一次梯度估计的统一结果（NEXT.md 第 9 节）。
+
+    ``gradient`` 为对各参数的偏导向量；``method`` 记录实际选用的梯度方法名
+    （``select_diff`` 自动优选或显式指定）；``nfev`` 为目标函数求值次数（未统计时
+    为 ``None``）。
+    """
+
+    gradient: Any
+    method: str
+    nfev: int | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class EstimateResult:
     """一次期望值估计的统一结果。
 
