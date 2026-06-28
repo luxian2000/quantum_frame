@@ -27,9 +27,15 @@ quantum_frame/
 |   |-- optimizer/
 |   |-- primitives/
 |   |-- qas/
-|   |   `-- demos/
+|   |   |-- algorithms/
+|   |   |-- core/
+|   |   |-- demos/
+|   |   |-- library/
+|   |   |-- problems/
+|   |   `-- vqe_loop/
 |   |-- qml/
 |   |   `-- diff/
+|   |-- qrc/
 |   |-- transpile/
 |   |   `-- passes/
 |   |-- universal/
@@ -39,6 +45,7 @@ quantum_frame/
 |   `-- wireless/
 |-- demos/
 |   |-- BeH2/
+|   |-- CH4/
 |   |-- H2O/
 |   |   |-- result_cpu/
 |   |   |-- result_npu_1/
@@ -48,7 +55,7 @@ quantum_frame/
 |   |-- MaxCut/
 |   |-- mnist/
 |   |-- multi_ctrl/
-|   `-- visual_outputs/
+|   `-- QNN/
 |-- docs/
 |   `-- superpowers/
 |       |-- plans/
@@ -59,6 +66,8 @@ quantum_frame/
     |-- chemistry/
     |-- circuit/
     |   `-- io/
+    |-- core/
+    |-- devices/
     |-- docs/
     |-- execution/
     |-- gates/
@@ -70,6 +79,8 @@ quantum_frame/
     |   `-- qubo/
     |-- optimizer/
     |-- primitives/
+    |-- qas/
+    |-- qfun/
     |-- qml/
     |-- transpile/
     |-- universal/
