@@ -951,7 +951,7 @@ unregister_diff("mygrad")
 
 ## 16. 量子函数 `qfun`（`aicir.qml.qfun`）
 
-`qfun` 把"量子函数 + 设备 + 测量 + 梯度"统一成一个可调用对象，是上面注册表的高层消费方。约定：被装饰的函数**构造并返回一个 `Circuit`**（不依赖全局 tape），观测量在装饰器上用 `observable=` 声明；调用得期望值，`.grad` 得梯度。
+`qfun` 把"量子函数 + 设备 + 测量 + 梯度"统一成一个可调用对象，是上面注册表的高层消费方。约定：被装饰的函数**构造并返回一个 `Circuit`**（不依赖全局 tape），观测量在装饰器上用 `observable=` 声明；调用得期望值，`.grad` 得梯度。函数体也可返回 `expval`/`probs`/`sample` 测量对象在体内声明测量意图（见下"测量返回构造器"）。
 
 ```python
 from aicir import Circuit, Hamiltonian, ry
@@ -975,15 +975,48 @@ cost.grad(0.3)   # 梯度 = -sin(0.3)
 | --------------- | ----------- | -------------------------------------------------------------------------------------------------------------- |
 | `device`      | `"numpy"` | 后端：`numpy`/`cpu` → `NumpyBackend`，`gpu`/`torch` → `GPUBackend`，`npu` → `NPUBackend`    |
 | `differential` | `"psr"`   | 梯度方法名，经 §15 注册表 `resolve_diff` 解析（仅 `fn_gradient`）；`"auto"` 走 `select_diff` 自动择优 |
-| `observable`  | 必填        | 单个可观测量（如 `Hamiltonian`）或其列表；列表时 `cost(x)` 返回数组、`grad` 返回 Jacobian              |
+| `observable`  | 可选        | 单个可观测量（如 `Hamiltonian`）或其列表；列表时 `cost(x)` 返回数组、`grad` 返回 Jacobian。函数体返回 `expval(...)` 时可省略 |
 | `shots`       | `None`    | `None`/`0` 为精确期望；正整数走 shot 估计                                                                  |
 | `noise_model` | `None`    | 提供 `NoiseModel` 时把噪声附加到线路、经密度矩阵模拟读取期望；`differential="auto"` 据此以 `noisy=True` 择优 |
 
 ### 行为约定
 
-- 函数体必须返回 `Circuit`，否则抛 `TypeError`；返回线路含未绑定参数抛 `ValueError`。
+- 函数体须返回 `Circuit` 或 `expval`/`probs`/`sample` 测量对象，否则抛 `TypeError`；返回线路含未绑定参数抛 `ValueError`。
+- `observable=` 不在装饰期强制：返回裸 `Circuit` 且无装饰器 `observable=` 时于**调用期**抛 `ValueError`（函数体改用 `expval(c, H)` 则免）。
 - `differential="auto"` 在非 Torch 后端降级为 `psr`，有 shots/噪声时同样回退（见 §15 选择策略）。
-- 观测量声明在装饰器（而非函数体内 `return expval(H)`），故暂不提供 `expval` 帮助器。
+
+### 测量返回构造器（`expval`/`probs`/`sample`）
+
+函数体可返回测量对象表达测量意图（无全局 tape，故显式携带 `circuit`）：
+
+```python
+from aicir import Circuit, Hamiltonian, ry
+from aicir.qml import qfun, expval, probs, sample
+
+H = Hamiltonian([("Z", 1.0)])
+
+@qfun(differential="psr")            # observable 省略，由 expval 提供
+def cost(theta):
+    c = Circuit(n_qubits=1)
+    c.append(ry(theta, 0))
+    return expval(c, H)              # <H>，可微：cost.grad(x)
+
+@qfun()
+def dist(theta):
+    c = Circuit(n_qubits=1)
+    c.append(ry(theta, 0))
+    return probs(c, wires=None)      # 概率向量（wires 可限制并边缘化）
+
+@qfun(shots=128)
+def shots_counts(theta):
+    c = Circuit(n_qubits=1)
+    c.append(ry(theta, 0))
+    return sample(c)                 # counts 字典；无 shots= 抛 ValueError
+```
+
+- `expval(circuit, observable)` → 期望值（float/数组），是唯一可微返回；`probs`/`sample` 调用 `.grad` 抛 `ValueError`。
+- `probs(circuit, wires=None)` → 整寄存器概率向量；给 `wires` 时边缘化到对应比特。
+- `sample(circuit, wires=None)` → counts；shots 取自装饰器 `shots=`。
 
 ### 多参数（单数组参）
 

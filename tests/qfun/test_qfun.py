@@ -48,11 +48,16 @@ def test_body_must_return_circuit():
         bad(0.1)
 
 
-def test_observable_required():
+def test_observable_required_at_call():
+    # observable= 不再于装饰期强制；返回裸 Circuit 且无 observable 时调用期报错。
+    @qfun()
+    def cost(theta):
+        c = Circuit(n_qubits=1)
+        c.append(ry(theta, 0))
+        return c
+
     with pytest.raises(ValueError):
-        @qfun()
-        def cost(theta):
-            return Circuit(n_qubits=1)
+        cost(0.1)
 
 
 def test_unknown_device_raises():
@@ -166,3 +171,89 @@ def test_noise_model_auto_differential_runs():
     # auto 在 noisy=True 下选取合适方法，仍给出有限梯度
     g = cost.grad(0.3)
     assert np.isfinite(g)
+
+
+# ── §5 测量返回构造器：expval / probs / sample ──────────────────────────
+
+
+def test_expval_body_return_matches_decorator():
+    from aicir.qml import expval
+
+    @qfun(differential="psr")
+    def cost(theta):
+        c = Circuit(n_qubits=1)
+        c.append(ry(theta, 0))
+        return expval(c, H_Z)
+
+    assert np.isclose(cost(0.3), np.cos(0.3))
+    assert np.isclose(cost.grad(0.3), -np.sin(0.3))
+
+
+def test_probs_body_return_distribution():
+    from aicir.qml import probs
+
+    @qfun()
+    def circ(theta):
+        c = Circuit(n_qubits=1)
+        c.append(ry(theta, 0))
+        return probs(c)
+
+    p = circ(np.pi / 2)  # |+y> 测量 Z 基 → [0.5, 0.5]
+    assert p.shape == (2,)
+    assert np.isclose(p.sum(), 1.0)
+    assert np.allclose(p, [0.5, 0.5], atol=1e-7)
+
+
+def test_probs_wires_marginalizes():
+    from aicir import cx, pauli_x
+    from aicir.qml import probs
+
+    @qfun()
+    def circ(_):
+        c = Circuit(n_qubits=2)
+        c.append(pauli_x(0))  # |10>
+        c.append(cx(target_qubit=1, control_qubits=[0]))  # |11>
+        return probs(c, wires=[1])
+
+    p = circ(0.0)
+    assert p.shape == (2,)
+    assert np.allclose(p, [0.0, 1.0], atol=1e-7)
+
+
+def test_sample_body_return_counts():
+    from aicir import pauli_x
+    from aicir.qml import sample
+
+    @qfun(shots=128)
+    def circ(_):
+        c = Circuit(n_qubits=1)
+        c.append(pauli_x(0))
+        return sample(c)
+
+    counts = circ(0.0)
+    assert isinstance(counts, dict)
+    assert sum(counts.values()) == 128
+
+
+def test_sample_requires_shots():
+    from aicir.qml import sample
+
+    @qfun()
+    def circ(_):
+        return sample(Circuit(n_qubits=1))
+
+    with pytest.raises(ValueError):
+        circ(0.0)
+
+
+def test_grad_rejects_probs():
+    from aicir.qml import probs
+
+    @qfun()
+    def circ(theta):
+        c = Circuit(n_qubits=1)
+        c.append(ry(theta, 0))
+        return probs(c)
+
+    with pytest.raises(ValueError):
+        circ.grad(0.3)
