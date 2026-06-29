@@ -339,6 +339,22 @@ def _rxx(theta, qubit_1=0, qubit_2=1):
     )
 
 
+def _single_excitation(theta, qubit_1=0, qubit_2=1):
+    _ = (qubit_1, qubit_2)
+    t = float(theta)
+    c = math.cos(t / 2.0)
+    s = math.sin(t / 2.0)
+    return np.array(
+        [
+            [1.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j],
+            [0.0 + 0.0j, c, -s, 0.0 + 0.0j],
+            [0.0 + 0.0j, s, c, 0.0 + 0.0j],
+            [0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 1.0 + 0.0j],
+        ],
+        dtype=_CDTYPE,
+    )
+
+
 def _contains_torch_tensor(value) -> bool:
     if torch is None:
         return False
@@ -559,6 +575,36 @@ def _rxx_backend(theta, backend):
             [z, cell_c(), cell_nis(), z],
             [z, cell_nis(), cell_c(), z],
             [cell_nis(), z, z, cell_c()],
+        ],
+        dtype,
+        device,
+    )
+
+
+def _single_excitation_backend(theta, backend):
+    if not _contains_torch_tensor(theta):
+        return backend.cast(_single_excitation(theta))
+
+    ref = _first_torch_tensor(theta)
+    backend_dtype = getattr(backend, "_dtype", torch.complex64)
+    dtype = _torch_complex_dtype(backend_dtype)
+    device = getattr(backend, "_device", ref.device if ref is not None else None)
+    zero = torch.zeros((), dtype=_torch_real_dtype(dtype), device=device)
+    one_r = torch.ones((), dtype=_torch_real_dtype(dtype), device=device)
+    t = _torch_angle(theta, backend)
+    cos = torch.cos(t / 2.0)
+    sin = torch.sin(t / 2.0)
+    neg_sin = -sin
+    # 每个含梯度复数 cell 必须是新张量（见 _rxx_backend 说明）；实数 cos/sin 可共享，
+    # 常量 z/one 可重用。
+    z = _torch_complex(zero, complex_dtype=dtype)
+    one = _torch_complex(one_r, complex_dtype=dtype)
+    return _torch_base_matrix(
+        [
+            [one, z, z, z],
+            [z, _torch_complex(cos, complex_dtype=dtype), _torch_complex(neg_sin, complex_dtype=dtype), z],
+            [z, _torch_complex(sin, complex_dtype=dtype), _torch_complex(cos, complex_dtype=dtype), z],
+            [z, z, z, one],
         ],
         dtype,
         device,
@@ -1049,6 +1095,18 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
             backend,
         )
 
+    if gate_type == "single_excitation":
+        parameter = gate.get("parameter")
+        local = _single_excitation_backend(parameter, backend)
+        cache_key = None if _contains_torch_tensor(parameter) else (gate_type, _parameter_cache_key(parameter))
+        return _apply_local_matrix_to_state(
+            state,
+            _cast_local_matrix(backend, local, cache_key=cache_key),
+            [gate["qubit_1"], gate["qubit_2"]],
+            n_qubits,
+            backend,
+        )
+
     return None
 
 
@@ -1170,6 +1228,12 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
                 [gate["qubit_1"], gate["qubit_2"]],
                 int(cir_qubits),
             )
+        elif gate_type == "single_excitation":
+            return _expand_local_matrix_to_full(
+                _single_excitation(gate_parameter),
+                [gate["qubit_1"], gate["qubit_2"]],
+                int(cir_qubits),
+            )
         else:
             raise ValueError(f"不支持的门类型: {gate_type}")
     else:
@@ -1265,6 +1329,13 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
             local = _rzz_backend(gate_parameter, backend) if gate_type == "rzz" else _rxx_backend(gate_parameter, backend)
             return _expand_local_matrix_to_full(
                 local,
+                [gate["qubit_1"], gate["qubit_2"]],
+                int(cir_qubits),
+                backend=backend,
+            )
+        elif gate_type == "single_excitation":
+            return _expand_local_matrix_to_full(
+                _single_excitation_backend(gate_parameter, backend),
                 [gate["qubit_1"], gate["qubit_2"]],
                 int(cir_qubits),
                 backend=backend,
