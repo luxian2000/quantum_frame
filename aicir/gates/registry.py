@@ -81,6 +81,12 @@ def gate_generator(name: str) -> str | None:
     return spec.generator if spec is not None else None
 
 
+def gate_shift_rule(name: str) -> str | None:
+    """返回该门的参数移位规则类别（``two_term``/``four_term``/``None``）。"""
+    spec = get_gate_spec(name)
+    return spec.shift_rule if spec is not None else None
+
+
 def parametric_pauli_gates() -> frozenset[str]:
     """返回所有带 Pauli 生成元的门规范名集合（即解析参数移位适用门）。"""
 
