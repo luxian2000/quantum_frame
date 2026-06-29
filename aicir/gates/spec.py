@@ -32,6 +32,8 @@ class GateSpec:
     - ``generator``：单参数旋转门的 Pauli 生成元标签（``U = exp(-i θ G / 2)``），
       如 ``rx`` 为 ``"X"``、``rzz`` 为 ``"ZZ"``；受控旋转记其目标位生成元。
       ``None`` 表示非（标准 Pauli）参数化旋转。供 QML 自省能否用解析参数移位。
+    - ``shift_rule``：参数移位规则类别（``"two_term"`` / ``"four_term"``）；
+      ``None`` 表示未指定（标准 Pauli 旋转走默认两项规则）。供后续按门选择移位规则。
     - ``decomposition``：把该门分解到更基础门集的规则，签名
       ``(qubits, controls, control_states, params) -> list[dict] | None``
       （返回 ``None`` 表示当前入参形态不适用，如多控制位）。供 ``transpile``
@@ -47,6 +49,7 @@ class GateSpec:
     qasm_name: str | None = None
     symbol: str | None = None
     generator: str | None = None
+    shift_rule: str | None = None
     decomposition: Callable[..., Any] | None = None
 
     def __post_init__(self) -> None:
@@ -59,5 +62,7 @@ class GateSpec:
             raise ValueError("num_params must be non-negative or None")
         if int(self.num_controls) < 0:
             raise ValueError("num_controls must be non-negative")
+        if self.shift_rule is not None and self.shift_rule not in ("two_term", "four_term"):
+            raise ValueError("shift_rule must be 'two_term', 'four_term', or None")
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "aliases", tuple(str(alias) for alias in self.aliases))

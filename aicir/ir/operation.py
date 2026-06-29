@@ -9,7 +9,7 @@ from typing import Any
 from ..gates import get_gate_spec
 
 
-_PAIR_QUBIT_GATES = {"swap", "rzz", "rxx"}
+_PAIR_QUBIT_GATES = {"swap", "rzz", "rxx", "single_excitation"}
 _KNOWN_GATE_KEYS = {
     "type",
     "target_qubit",

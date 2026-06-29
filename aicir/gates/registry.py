@@ -81,6 +81,12 @@ def gate_generator(name: str) -> str | None:
     return spec.generator if spec is not None else None
 
 
+def gate_shift_rule(name: str) -> str | None:
+    """返回该门的参数移位规则类别（``two_term``/``four_term``/``None``）。"""
+    spec = get_gate_spec(name)
+    return spec.shift_rule if spec is not None else None
+
+
 def parametric_pauli_gates() -> frozenset[str]:
     """返回所有带 Pauli 生成元的门规范名集合（即解析参数移位适用门）。"""
 
@@ -129,6 +135,8 @@ _STANDARD_GATES = (
     GateSpec("swap", 2, 0, qasm_name="swap", decomposition=decompose_swap),
     GateSpec("rzz", 2, 1, qasm_name="rzz", generator="ZZ"),
     GateSpec("rxx", 2, 1, qasm_name="rxx", generator="XX"),
+    GateSpec("single_excitation", 2, 1, aliases=("givens",), qasm_name=None, shift_rule="four_term"),
+    GateSpec("double_excitation", 4, 1, qasm_name=None, shift_rule="four_term"),
     # unitary 的矩阵经 "parameter" 携带，但绘图占位场景允许缺省，故参数个数可变。
     GateSpec("unitary", None, None, symbol="U"),
     GateSpec("measure", None, 0, aliases=("measurement",)),
