@@ -44,6 +44,13 @@
 
 ### Changed
 
+- **`BasicVQE` 默认精确能量改经 `StatevectorEstimator` primitive（NEXT.md §4 phase-1 item 4 收尾）。**
+  未显式注入 `energy_estimator`、|0⟩ 起点精确态向量（无 shots/噪声/密度矩阵/自定义初始态、非
+  `return_state`）时，能量经新增 `BasicVQE._default_estimator()`→`StatevectorEstimator` 求值，与注入路径
+  统一。数值与原 `Measure` 精确路径一致。shots/噪声/密度矩阵/初始态等仍退回 `Measure`（primitives 仍可
+  经 `energy_estimator=` 注入或 `target=` 选中）；`BasicQAOA`（稠密无线路）不接入。配套
+  `tests/vqc/test_vqe_orchestration.py`。
+
 - **qfun `observable=` 不再于装饰期强制。** 函数体可经 `expval(...)` 自带观测量；"缺少 observable" 的错误
   下移到**调用期**，且仅在返回裸 `Circuit` 且无装饰器 `observable=` 时触发（向后兼容现有用法）。
 

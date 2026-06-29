@@ -179,6 +179,7 @@ class BasicVQE:
         self._last_circuit: Circuit | None = None
         self._last_measurement: Any = None
         self._last_estimator_result: Any = None
+        self._default_est: Any = None
         self._rng = np.random.default_rng(seed)
 
     def _init_cost_mode(
@@ -412,9 +413,35 @@ class BasicVQE:
         self._last_measurement = measurement
         return float(measurement.expectation_values[self.observable_name]), measurement
 
+    def _needs_measure_path(self, *, return_state: bool) -> bool:
+        """非精确-态向量场景退回 Measure：return_state、shots、噪声/密度矩阵，或自定义
+        初始态。这些 primitives 默认路径不覆盖（仍可经注入或 ``target=`` 走 primitives）。"""
+        return (
+            return_state
+            or self.shots is not None
+            or self.noise_model is not None
+            or self.use_density_matrix
+            or self.initial_state is not None
+            or self.initial_density_matrix is not None
+        )
+
+    def _default_estimator(self) -> Any:
+        """默认（未显式注入 estimator、|0⟩ 起点精确态向量）的 StatevectorEstimator，缓存。"""
+        if self._default_est is None:
+            from ..primitives import StatevectorEstimator
+
+            self._default_est = StatevectorEstimator(self.backend)
+        return self._default_est
+
     def _evaluate_circuit(self, params: np.ndarray, *, return_state: bool) -> tuple[float, Any]:
         if self._uses_exact_energy_estimator():
-            return self._measure_circuit_exact(params, return_state=return_state)
+            # 默认精确路径经 StatevectorEstimator primitive（phase-1 item 4）；
+            # shots/噪声/初始态等退回 Measure。显式注入的 estimator 走下方统一路径。
+            if self._needs_measure_path(return_state=return_state):
+                return self._measure_circuit_exact(params, return_state=return_state)
+            estimator = self._default_estimator()
+        else:
+            estimator = self.energy_estimator
 
         circuit = self.bind_ansatz(params)
         estimate_kwargs: dict[str, Any] = {
@@ -426,7 +453,7 @@ class BasicVQE:
         if self.shots is not None:
             estimate_kwargs["shots"] = self.shots
 
-        estimator_result = self.energy_estimator.estimate(circuit, self.observable, **estimate_kwargs)
+        estimator_result = estimator.estimate(circuit, self.observable, **estimate_kwargs)
         self._last_circuit = circuit
         self._last_estimator_result = estimator_result
         if return_state:
