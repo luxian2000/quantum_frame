@@ -22,9 +22,9 @@ from pathlib import Path
 import numpy as np
 
 from aicir import Hamiltonian, NumpyBackend
-from aicir.core.io.qasm import save_circuit_qasm3
 from aicir.measure import hamiltonian_pauli_terms
 from aicir.qas import Supernet, SupernetConfig, SupernetResult
+from demos.chemistry_ansatz import closed_shell_excitation_pools, save_qasm3_if_supported
 
 
 H2O_GEOMETRY_ANGSTROM = (
@@ -130,28 +130,31 @@ def exact_ground_energy(hamiltonian: Hamiltonian) -> float:
     return float(np.linalg.eigvalsh(matrix_np).min())
 
 
-# Nearest- + next-nearest-neighbour pairs on a 6-qubit line. H2O is a 4-electron,
-# 6-qubit ground state, far harder than LiH, so the search needs richer
-# entangling connectivity (and more depth/supernets) than the LiH demo.
-H2O_TWO_QUBIT_PAIRS = tuple((i, j) for i in range(6) for j in range(i + 1, 6) if j - i <= 2)
+H2O_HF_OCCUPIED_QUBITS, H2O_SINGLE_EXCITATIONS, H2O_DOUBLE_EXCITATIONS = (
+    closed_shell_excitation_pools(
+        H2O_ACTIVE_ELECTRONS,
+        H2O_ACTIVE_SPATIAL_ORBITALS,
+    )
+)
 
 
 def h2o_vqe_qas_config(**overrides) -> SupernetConfig:
     """Build the supernet search config for the H2O ground-state VQE.
 
-    Same style as ``demos/LiH``: the supernet searches over the single-qubit
-    pool ``{i, h, rx, ry, rz}`` and the two-qubit pool ``{cx, rzz}`` (``rzz`` is
-    a trainable entangler). Because the 6-qubit H2O ground state is much harder
-    to prepare than LiH's 4-qubit one, the defaults use more layers, denser
-    connectivity, and more supernets.
+    Same style as ``demos/LiH``: start from the closed-shell Hartree-Fock
+    determinant and search spin-preserving single excitations plus paired double
+    excitations.
     """
 
     params: dict = dict(
         n_qubits=6,
         layers=6,
-        single_qubit_gates=("i", "h", "rx", "ry", "rz"),
-        two_qubit_gates=("cx", "rzz"),
-        two_qubit_pairs=H2O_TWO_QUBIT_PAIRS,
+        single_qubit_gates=("i",),
+        two_qubit_gates=("single_excitation",),
+        two_qubit_pairs=H2O_SINGLE_EXCITATIONS,
+        four_qubit_gates=("double_excitation",),
+        four_qubit_groups=H2O_DOUBLE_EXCITATIONS,
+        hf_occupied_qubits=H2O_HF_OCCUPIED_QUBITS,
         # W>1 supernets relieve the single-supernet "fierce competition"; H2O
         # needs more of everything than LiH to approach chemical accuracy.
         supernet_num=5,
@@ -234,6 +237,11 @@ def _gate_to_python_call(gate: dict) -> tuple[str, str] | None:
         return "swap", f"{int(gate['qubit_1'])}, {int(gate['qubit_2'])}"
     if gate_type in ("rzz", "rxx"):
         return gate_type, f"{angle(gate['parameter'])}, {int(gate['qubit_1'])}, {int(gate['qubit_2'])}"
+    if gate_type in ("single_excitation", "givens"):
+        return "single_excitation", f"{angle(gate['parameter'])}, {int(gate['qubit_1'])}, {int(gate['qubit_2'])}"
+    if gate_type == "double_excitation":
+        qubits = [int(q) for q in gate["qubits"]]
+        return "double_excitation", f"{angle(gate['parameter'])}, {', '.join(str(q) for q in qubits)}"
 
     raise ValueError(f"Cannot serialize gate type {gate_type!r} to Python source")
 
@@ -347,15 +355,19 @@ def main() -> None:
     print(f"  fixed-ansatz VQE baseline : {baseline_energy:+.10f}")
     print(f"  |QAS - exact|             : {abs(qas_energy - exact):.3e} Ha")
     print(
-        "  selected CNOT / 2-qubit   : "
-        f"{metrics['selected_cnot_count']} / {metrics['selected_two_qubit_count']}"
+        "  selected excitations      : "
+        f"{metrics['selected_excitation_count']} "
+        f"(single={metrics['selected_two_qubit_count']}, double={metrics['selected_four_qubit_count']})"
     )
     print("  selected ansatz circuit:")
     print(metrics["selected_circuit_ascii"])
 
     qasm_path = Path(__file__).parent / "H2O_cir.qasm"
-    save_circuit_qasm3(result.best_circuit, qasm_path)
-    print(f"\n  OpenQASM 3.0 saved to: {qasm_path}")
+    saved_qasm, qasm_message = save_qasm3_if_supported(result.best_circuit, qasm_path)
+    if saved_qasm:
+        print(f"\n  OpenQASM 3.0 saved to: {qasm_message}")
+    else:
+        print(f"\n  OpenQASM 3.0 skipped: {qasm_message}")
 
     circuit_py_path = Path(__file__).parent / "H2O_cir.py"
     save_circuit_python(result.best_circuit, circuit_py_path)
