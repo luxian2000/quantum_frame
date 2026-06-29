@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import itertools
+import math
 import numbers
 from typing import Any
 
@@ -237,6 +238,50 @@ def psr(
     for index in np.ndindex(theta.shape):
         grad[index] = _shifted_difference(fn, theta, index, shift_value, coeff)
 
+    return grad
+
+
+# 激发门四项参数移位规则系数（生成元谱 {-1,0,1}，PennyLane SingleExcitation/DoubleExcitation 配方）
+# 移位 s1=π/2, s2=3π/2；系数 c1=(√2+1)/(4√2), c2=(√2−1)/(4√2)
+_FOUR_TERM_C1 = (math.sqrt(2.0) + 1.0) / (4.0 * math.sqrt(2.0))
+_FOUR_TERM_C2 = (math.sqrt(2.0) - 1.0) / (4.0 * math.sqrt(2.0))
+
+
+def psr4(
+    fn: Callable[[np.ndarray], float],
+    params: Any,
+    *,
+    shifts: tuple[float, float] = (np.pi / 2.0, 3.0 * np.pi / 2.0),
+    coefficients: tuple[float, float] | None = None,
+) -> np.ndarray:
+    """四项参数移位规则（激发门等 {-1,0,1} 谱生成元）。
+
+    grad = c1[f(θ+s1) − f(θ−s1)] − c2[f(θ+s2) − f(θ−s2)]，逐参数计算。
+    默认 (s1,s2)=(π/2, 3π/2)，(c1,c2)=((√2+1)/4√2, (√2−1)/4√2)。
+    autograd 为权威校验：若与 autograd 不符，应据其修正系数。
+
+    Args:
+        fn: 接受完整参数数组的标量值函数。
+        params: 当前参数值，支持标量与任意形状数组。
+        shifts: 两个正移位量 (s1, s2)，默认 (π/2, 3π/2)。
+        coefficients: 可选系数对 (c1, c2)，若为 None 则使用激发门默认值。
+
+    Returns:
+        与 params 形状相同的 NumPy 梯度数组。
+    """
+    s1, s2 = float(shifts[0]), float(shifts[1])
+    c1, c2 = coefficients if coefficients is not None else (_FOUR_TERM_C1, _FOUR_TERM_C2)
+    theta = np.asarray(params, dtype=float)
+    grad = np.zeros_like(theta, dtype=float)
+    for index in np.ndindex(theta.shape):
+        base = theta.copy()
+
+        def shifted(delta, _base=base, _index=index):
+            p = _base.copy()
+            p[_index] = _base[_index] + delta
+            return _as_scalar(fn(p), label="fn(params + shift)")
+
+        grad[index] = c1 * (shifted(s1) - shifted(-s1)) - c2 * (shifted(s2) - shifted(-s2))
     return grad
 
 
