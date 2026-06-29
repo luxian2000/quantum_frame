@@ -81,3 +81,48 @@ def test_double_excitation_is_unitary_and_conserves_N():
 def test_double_excitation_factory_serializes_qubits_list():
     d = double_excitation(0.3, 0, 1, 2, 3).to_dict()
     assert d["type"] == "double_excitation" and d["qubits"] == [0, 1, 2, 3]
+
+
+import pytest
+
+
+def _energy_grad_autograd_vs_fd(circuit_fn, theta0, n_qubits):
+    torch = pytest.importorskip("torch")
+    from aicir.backends.gpu_backend import GPUBackend
+    from aicir.core.gates import gate_to_matrix
+    backend = GPUBackend(device="cpu")
+
+    def energy(theta_t):
+        circuit = circuit_fn(theta_t)
+        state = backend.zeros_state(n_qubits)
+        for g in circuit.gates:
+            from aicir.core.gates import apply_gate_to_state
+            state = apply_gate_to_state(g, state, n_qubits, backend)
+        # H = Z on qubit 0
+        import numpy as np
+        z0 = np.kron(np.diag([1.0, -1.0]), np.eye(1 << (n_qubits - 1)))
+        H = backend.cast(z0.astype(np.complex64))
+        return backend.expectation_sv(state, H)
+
+    theta_t = torch.tensor(float(theta0), requires_grad=True)
+    e = energy(theta_t)
+    e.real.backward()
+    grad_ad = float(theta_t.grad)
+
+    eps = 1e-4
+    ep = float(energy(torch.tensor(theta0 + eps)).real.detach())
+    em = float(energy(torch.tensor(theta0 - eps)).real.detach())
+    grad_fd = (ep - em) / (2 * eps)
+    assert abs(grad_ad - grad_fd) < 1e-3
+
+
+def test_single_excitation_autograd_grad_matches_fd():
+    from aicir.core.circuit import Circuit
+    _energy_grad_autograd_vs_fd(
+        lambda th: Circuit(single_excitation(th, 0, 1), n_qubits=2), 0.6, 2)
+
+
+def test_double_excitation_autograd_grad_matches_fd():
+    from aicir.core.circuit import Circuit
+    _energy_grad_autograd_vs_fd(
+        lambda th: Circuit(double_excitation(th, 0, 1, 2, 3), n_qubits=4), 0.7, 4)
