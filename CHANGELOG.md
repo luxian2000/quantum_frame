@@ -6,6 +6,14 @@
 
 ### Added
 
+- **`TranspileResult` 统一结果对象 + `PassManager.run_with_result`（NEXT.md §9 收尾）。**
+  - `aicir.transpile.TranspileResult`（`aicir.transpile.result`）：字段 `circuit`/`layout`/`passes`/
+    `depth_before`/`depth_after`/`metadata`；置于 transpile 域内，避免 primitives↔transpile 耦合。
+  - `PassManager.run_with_result(circuit)`：运行流水线并返回 `TranspileResult`，深度经
+    `depth_proxy`（ASAP 层数），`layout` 取自含 `last_layout` 的 pass（如 `LayoutPass`，无则 `None`）。
+    `LayoutPass.run` 现记录 `last_layout`。`PassManager.run` 仍返回 `Circuit` 不变。
+  - 配套 `tests/transpile/test_transpile_result.py`。
+
 - **qfun 测量返回构造器 `expval`/`probs`/`sample`（NEXT.md §5 收尾）。** 函数体可返回这些对象在体内
   声明测量意图（无全局 tape，显式携带 circuit），替代/补充装饰器 `observable=`：
   - `expval(circuit, observable)` → 期望值（唯一可微返回）；`probs(circuit, wires=None)` → 概率向量

@@ -33,6 +33,8 @@ class LayoutPass(TransformationPass):
     def __init__(self, initial_layout=None, *, target=None) -> None:
         self.initial_layout = initial_layout
         self.target = target
+        # run() 后置：最近一次实际使用的 logical->physical 映射，供 TranspileResult 读取。
+        self.last_layout: dict[int, int] | None = None
 
     def _build_map(self, n_logical: int) -> dict[int, int]:
         layout = self.initial_layout
@@ -61,6 +63,7 @@ class LayoutPass(TransformationPass):
     def run(self, circuit: Circuit) -> Circuit:
         n_logical = int(circuit.n_qubits)
         mapping = self._build_map(n_logical)
+        self.last_layout = dict(mapping)
         gates = [remap_gate(gate, mapping) for gate in circuit_gate_dicts(circuit)]
 
         if self.target is not None:
