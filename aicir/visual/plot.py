@@ -77,6 +77,8 @@ _PARAMETERIZED_NONCLIFFORD_GATES = {
     "crz",
     "rzz",
     "rxx",
+    "single_excitation",
+    "double_excitation",
     "u2",
     "u3",
     "unitary",
@@ -192,6 +194,11 @@ def _pretty_angle(value: Any) -> str:
 
 def _gate_label(gate: dict) -> str:
     gate_type = gate["type"]
+    canonical = canonical_gate_name(gate_type)
+    if canonical == "single_excitation":
+        return "Giv"
+    if canonical == "double_excitation":
+        return "DEx"
     symbol = _single_gate_symbol(gate_type) or _controlled_target_symbol(gate_type)
     if symbol is None:
         symbol = str(gate_type).upper()[:3]
@@ -199,8 +206,19 @@ def _gate_label(gate: dict) -> str:
 
 
 def _angle_sublabel(gate: dict) -> str | None:
-    gate_type = gate.get("type")
-    if gate_type in {"rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"}:
+    gate_type = canonical_gate_name(gate.get("type"))
+    if gate_type in {
+        "rx",
+        "ry",
+        "rz",
+        "crx",
+        "cry",
+        "crz",
+        "rzz",
+        "rxx",
+        "single_excitation",
+        "double_excitation",
+    }:
         param = gate.get("parameter")
         if param is not None:
             return _pretty_angle(param)
@@ -220,11 +238,25 @@ def _sublabel_scale(gate: dict) -> float:
     return 0.40 if gate.get("type") in {"u2", "u3"} else 0.50
 
 
+def _excitation_qubits(gate: dict) -> list[int]:
+    qubits = gate.get("qubits")
+    if qubits:
+        return [int(q) for q in qubits]
+    if "qubit_1" in gate and "qubit_2" in gate:
+        values = [int(gate["qubit_1"]), int(gate["qubit_2"])]
+        if "qubit_3" in gate and "qubit_4" in gate:
+            values.extend([int(gate["qubit_3"]), int(gate["qubit_4"])])
+        return values
+    return []
+
+
 def _gate_qubits(gate: dict, n_qubits: int) -> list[int]:
     """All wires a gate touches (used for layer packing)."""
     gate_type = canonical_gate_name(gate["type"])
     if gate_type in {"swap", "rzz", "rxx"}:
         return [int(gate["qubit_1"]), int(gate["qubit_2"])]
+    if gate_type in {"single_excitation", "double_excitation"}:
+        return _excitation_qubits(gate)
     if gate_type in {"identity", "I", "unitary"}:
         return list(range(n_qubits))
     if gate_type in {"measure", "measurement", "reset"}:
@@ -261,6 +293,8 @@ def _gate_draws_box_on_qubit(gate: dict, qubit: int, n_qubits: int) -> bool:
         return qubit < int(gate.get("n_qubits", n_qubits))
     if gate_type in {"rzz", "rxx"}:
         return qubit in {int(gate["qubit_1"]), int(gate["qubit_2"])}
+    if gate_type in {"single_excitation", "double_excitation"}:
+        return qubit in set(_excitation_qubits(gate))
     if gate_type == "swap":
         return False
 
@@ -534,6 +568,28 @@ def _render_gate(ax, gate, x, n_qubits, fontsize, reset_link_targets=None):
         _draw_box(ax, x, _yy(lower_qubit, n_qubits), label, facecolor, edgecolor,
                   fontsize=fontsize, sublabel=_angle_sublabel(gate),
                   sublabel_inside=False, sublabel_scale=_sublabel_scale(gate))
+        return
+
+    if gate_type in {"single_excitation", "double_excitation"}:
+        qubits = _excitation_qubits(gate)
+        if not qubits:
+            return
+        _draw_connector(ax, x, min(qubits), max(qubits), n_qubits, edgecolor)
+        label = _gate_label(gate)
+        lower_qubit = max(qubits)
+        for qubit in qubits:
+            _draw_box(
+                ax,
+                x,
+                _yy(qubit, n_qubits),
+                label,
+                facecolor,
+                edgecolor,
+                fontsize=fontsize,
+                sublabel=_angle_sublabel(gate) if qubit == lower_qubit else None,
+                sublabel_inside=False,
+                sublabel_scale=_sublabel_scale(gate),
+            )
         return
 
     controls = [int(q) for q in gate.get("control_qubits", [])]

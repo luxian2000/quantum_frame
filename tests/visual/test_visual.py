@@ -4,7 +4,27 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from aicir import Circuit, cnot, crz, cz, hadamard, measure, reset, rxx, rzz, rx, rz, s_gate, swap, t_gate, toffoli, u2, u3
+from aicir import (
+    Circuit,
+    cnot,
+    crz,
+    cz,
+    double_excitation,
+    hadamard,
+    measure,
+    reset,
+    rxx,
+    rzz,
+    rx,
+    rz,
+    s_gate,
+    single_excitation,
+    swap,
+    t_gate,
+    toffoli,
+    u2,
+    u3,
+)
 from aicir.visual import (
     circuit_to_text,
     draw_circuit,
@@ -304,6 +324,38 @@ def test_plot_rxx_gate_label_is_rxx(plt):
 
     value_ys = [text.get_position()[1] for text in ax.texts if text.get_text() == "π/2"]
     assert value_ys == pytest.approx([-(0.62 / 2 + 0.04)])
+
+
+def test_plot_single_excitation_gate_label_and_angle(plt):
+    circuit = Circuit(single_excitation(np.pi / 2, 0, 2), n_qubits=3)
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    labels = [text.get_text() for text in ax.texts]
+    assert fig is ax.figure
+    assert labels.count("Giv") == 2
+    assert labels.count("π/2") == 1
+    assert "SIN" not in labels
+    value_ys = [text.get_position()[1] for text in ax.texts if text.get_text() == "π/2"]
+    assert value_ys == pytest.approx([-(0.62 / 2 + 0.04)])
+
+
+def test_plot_double_excitation_gate_label_and_angle(plt):
+    circuit = Circuit(double_excitation(np.pi / 3, 0, 2, 1, 3), n_qubits=4)
+
+    fig, ax = plot(circuit, layered=False, save=False)
+
+    labels = [text.get_text() for text in ax.texts]
+    vertical_connectors = [
+        line for line in ax.lines
+        if np.allclose(line.get_xdata(), [0.0, 0.0], atol=1e-6)
+        and np.allclose(line.get_ydata(), [0.0, 3.0], atol=1e-6)
+    ]
+    assert fig is ax.figure
+    assert labels.count("DEx") == 4
+    assert labels.count("π/3") == 1
+    assert "DOU" not in labels
+    assert vertical_connectors
 
 
 def test_plot_joint_measure_draws_boxes_connected_by_solid_line(plt):

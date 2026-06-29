@@ -1,0 +1,20 @@
+========================================================================================
+BeH2 supernet VQE QAS on Ascend NPU (in-search sharding, single run)
+========================================================================================
+started at            : 2026-06-22T15:11:15
+finished at           : 2026-06-22T18:08:52
+platform              : Linux-4.19.90-2107.6.0.0251.71.oe1.bclinux.aarch64-aarch64-with-glibc2.35
+mode                  : safe
+NPUs (world_size)     : 4
+seed                  : 7
+device                : npu:0
+qubits / terms        : 16 / 1313
+basis/charge/spin/map : 3-21g/0/0/JordanWignerMapper
+total wall-clock time : 10656.6 s
+
+global-best result (identical on all ranks):
+----------------------------------------------------------------------------------------
+  fine-tuned energy  : -18.5680789948 Ha
+  baseline VQE       : -19.0915603638 Ha
+  CNOT / 2-qubit     : 22 / 38
+  circuit files      : BeH2_npu_cir.qasm, BeH2_npu_cir.py
