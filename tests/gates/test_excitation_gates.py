@@ -70,9 +70,12 @@ def test_double_excitation_matrix_couples_0011_and_1100():
 def test_double_excitation_is_unitary_and_conserves_N():
     m = gate_to_matrix({"type": "double_excitation", "qubits": [0, 1, 2, 3],
                         "parameter": 1.1}, cir_qubits=4, backend=NumpyBackend())
-    assert np.allclose(m.conj().T @ m, np.eye(16))
+    # 强制 complex128：16×16 complex64 矩阵乘法在某些 BLAS 路径下会产生
+    # overflow/invalid 警告（矩阵值本身正确）；用 np.dot 规避 @ 触发的 BLAS 问题
+    m = m.astype(complex)
+    assert np.allclose(np.dot(m.conj().T, m), np.eye(16))
     N = _num_op(4)
-    assert np.allclose(m.conj().T @ N @ m, N)
+    assert np.allclose(np.dot(np.dot(m.conj().T, N), m), N)
 
 
 def test_double_excitation_factory_serializes_qubits_list():

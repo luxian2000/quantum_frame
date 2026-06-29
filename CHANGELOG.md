@@ -6,6 +6,21 @@
 
 ### Added
 
+- **粒子数守恒激发门 `single_excitation`（别名 `givens`）与 `double_excitation`。**
+  - `single_excitation(θ, qubit_1, qubit_2)`：实 Givens 旋转，作用于 |01⟩↔|10⟩ 子空间，
+    保持粒子数守恒；`givens` 为规范别名。`GateSpec.generator=None`、`qasm_name=None`、
+    `shift_rule=None`（两参数移位需配合 `psr4`）。
+  - `double_excitation(θ, q0, q1, q2, q3)`：四比特粒子数守恒激发门，作用于 |0011⟩↔|1100⟩
+    子空间；`GateSpec.generator=None`、`qasm_name=None`、`shift_rule="four_term"`。
+  - 两门均在顶层 `aicir` 导出。
+  - 配套 `tests/gates/test_excitation_gates.py`。
+
+- **`aicir.qml.deriv.psr4`：四项参数移位规则（激发门 {−1, 0, 1} 特征谱）。**
+  - 移位点 ±π/2、±3π/2，权重按四项规则推导，适用于 `single_excitation`/`double_excitation`
+    等特征值谱为 {−1, 0, 1} 的生成元。
+  - `psr4` 已加入 `aicir.qml.deriv.__all__`。
+  - 配套 `tests/qml/test_psr4.py`。
+
 - **`GateSpec.num_controls`：受控门的控制位数量作为注册表数据。**
   - `aicir.gates.GateSpec` 新增 `num_controls: int = 0`（受控门的控制位数量）。
     内置门：`cx`/`cy`/`cz`/`crx`/`cry`/`crz`→`1`、`toffoli`→`2`、其余→`0`；

@@ -160,6 +160,7 @@ from aicir import (
     cx, cnot, cy, cz,
     crx, cry, crz,
     swap, rzz, rxx, ms_gate,
+    single_excitation, double_excitation,  # 粒子数守恒激发门（givens 为 single_excitation 别名）
     toffoli, ccnot,
     u2, u3,
     measure,     # 线路内联合 Pauli 投影测量标记，返回 Measurement
