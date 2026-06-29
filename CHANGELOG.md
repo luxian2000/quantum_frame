@@ -6,6 +6,21 @@
 
 ### Added
 
+- **qfun 测量返回构造器 `expval`/`probs`/`sample`（NEXT.md §5 收尾）。** 函数体可返回这些对象在体内
+  声明测量意图（无全局 tape，显式携带 circuit），替代/补充装饰器 `observable=`：
+  - `expval(circuit, observable)` → 期望值（唯一可微返回）；`probs(circuit, wires=None)` → 概率向量
+    （`wires` 边缘化）；`sample(circuit, wires=None)` → counts（shots 取自装饰器，缺省抛 `ValueError`）。
+  - `.grad` 仅对 expval 有效；probs/sample 调用 `.grad` 抛 `ValueError`。均从 `aicir.qml` 导出。
+  - 配套 `tests/qfun/test_qfun.py`。
+
+- **`GateSpec.matrix` 字段 + `gate_matrix()` 访问器 + `gate_to_matrix` 自定义门回退（NEXT.md §7 收尾）。**
+  - `GateSpec.matrix`：后端感知局部矩阵构造器 `(params, backend) -> 局部矩阵`，已为全部不受控标准门
+    填充（复用 core 局部矩阵原语，于 `aicir.core.gates` 导入时附加）；受控门、`measure`/`reset`/`unitary` 为 `None`。
+  - `aicir.gates.gate_matrix(name, params=(), backend=None)` 读取局部矩阵；`set_gate_matrix` 附加构造器。
+  - `gate_to_matrix` 未硬编码门的回退经 `GateSpec.matrix` 构造局部矩阵并嵌入，使自定义**不受控**门注册
+    `matrix=` 后即可模拟，无需改 core。内置门分发与 autograd/local-apply 热路径不变。
+  - 配套 `tests/gates/test_gatespec_matrix.py`（含 numpy/torch 一致性漂移护栏）。
+
 - **粒子数守恒激发门 `single_excitation`（别名 `givens`）与 `double_excitation`。**
   - `single_excitation(θ, qubit_1, qubit_2)`：实 Givens 旋转，作用于 |01⟩↔|10⟩ 子空间，
     保持粒子数守恒；`givens` 为规范别名。`GateSpec.generator=None`、`qasm_name=None`、
@@ -28,6 +43,9 @@
   - 配套 `tests/gates/test_gatespec_num_controls.py`。
 
 ### Changed
+
+- **qfun `observable=` 不再于装饰期强制。** 函数体可经 `expval(...)` 自带观测量；"缺少 observable" 的错误
+  下移到**调用期**，且仅在返回裸 `Circuit` 且无装饰器 `observable=` 时触发（向后兼容现有用法）。
 
 - **`aicir.qas` supernet 改用 aicir 门，移除模块内自定义门定义。**
   - `aicir/qas/algorithms/supernet.py` 删除其本地 `GateSpec` 数据类与

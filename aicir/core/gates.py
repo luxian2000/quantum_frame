@@ -1172,6 +1172,27 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
     return None
 
 
+def _local_target_qubits(gate):
+    """自定义门回退路径的目标比特列表（``qubits`` 优先，退而 ``target_qubit``）。"""
+    if gate.get("qubits") is not None:
+        return [int(q) for q in gate["qubits"]]
+    if gate.get("target_qubit") is not None:
+        return [int(gate["target_qubit"])]
+    raise ValueError("门缺少 qubits/target_qubit，无法定位作用比特")
+
+
+def _registry_fallback_matrix(gate, gate_type, gate_parameter, cir_qubits, backend):
+    """对未硬编码门，经 GateSpec.matrix 局部矩阵嵌入到整线路；无构造器返回 ``None``。"""
+    from ..gates import gate_matrix as _registry_gate_matrix
+
+    local = _registry_gate_matrix(gate_type, gate_parameter, backend)
+    if local is None:
+        return None
+    return _expand_local_matrix_to_full(
+        local, _local_target_qubits(gate), int(cir_qubits), backend=backend
+    )
+
+
 def gate_to_matrix(gate, cir_qubits=1, backend=None):
     gate = normalize_gate(gate)
     gate_type = canonical_gate_name(gate["type"])
@@ -1303,6 +1324,9 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
                 int(cir_qubits),
             )
         else:
+            fallback = _registry_fallback_matrix(gate, gate_type, gate_parameter, cir_qubits, backend)
+            if fallback is not None:
+                return fallback
             raise ValueError(f"不支持的门类型: {gate_type}")
     else:
         if gate_type == "pauli_x":
@@ -1416,6 +1440,9 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
                 backend=backend,
             )
         else:
+            fallback = _registry_fallback_matrix(gate, gate_type, gate_parameter, cir_qubits, backend)
+            if fallback is not None:
+                return fallback
             raise ValueError(f"不支持的门类型: {gate_type}")
 
     if gate_qubits < cir_qubits:
@@ -1427,3 +1454,70 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
     elif gate_qubits > cir_qubits:
         raise ValueError(f"量子门的量子比特数量超出总量子比特数: {gate_qubits} > {cir_qubits}")
     return gate_matrix
+
+
+# ---------------------------------------------------------------------------
+# GateSpec.matrix 局部矩阵构造器（NEXT.md §7）。复用上面的局部矩阵原语，于本
+# 模块导入时附加到注册表（避免 gates ↔ core 循环导入）。仅不受控门有局部矩阵；
+# 受控门/measure/reset 不在此抽象内。
+# ---------------------------------------------------------------------------
+
+
+def _local_single_builder(name):
+    def build(params, backend):
+        gate = {"type": name, "target_qubit": 0, "parameter": params}
+        if backend is None:
+            return _single_qubit_base_for_gate(gate)
+        return _single_qubit_base_for_gate_backend(gate, backend)
+
+    return build
+
+
+def _local_swap_builder(params, backend):
+    return _swap(0, 1)
+
+
+def _local_rzz_builder(params, backend):
+    return _rzz(params) if backend is None else _rzz_backend(params, backend)
+
+
+def _local_rxx_builder(params, backend):
+    return _rxx(params) if backend is None else _rxx_backend(params, backend)
+
+
+def _local_single_excitation_builder(params, backend):
+    if backend is None:
+        return _single_excitation(params, 0, 1)
+    return _single_excitation_backend(params, backend)
+
+
+def _local_double_excitation_builder(params, backend):
+    if backend is None:
+        return _double_excitation(params, 0, 1, 2, 3)
+    return _double_excitation_backend(params, backend)
+
+
+_LOCAL_MATRIX_BUILDERS = {
+    "pauli_x": _local_single_builder("pauli_x"),
+    "pauli_y": _local_single_builder("pauli_y"),
+    "pauli_z": _local_single_builder("pauli_z"),
+    "hadamard": _local_single_builder("hadamard"),
+    "s_gate": _local_single_builder("s_gate"),
+    "t_gate": _local_single_builder("t_gate"),
+    "rx": _local_single_builder("rx"),
+    "ry": _local_single_builder("ry"),
+    "rz": _local_single_builder("rz"),
+    "u2": _local_single_builder("u2"),
+    "u3": _local_single_builder("u3"),
+    "swap": _local_swap_builder,
+    "rzz": _local_rzz_builder,
+    "rxx": _local_rxx_builder,
+    "single_excitation": _local_single_excitation_builder,
+    "double_excitation": _local_double_excitation_builder,
+}
+
+from ..gates import set_gate_matrix as _set_gate_matrix
+
+for _name, _builder in _LOCAL_MATRIX_BUILDERS.items():
+    _set_gate_matrix(_name, _builder)
+del _name, _builder

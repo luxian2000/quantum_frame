@@ -104,6 +104,38 @@ def gate_decomposition(name: str):
     return spec.decomposition if spec is not None else None
 
 
+def set_gate_matrix(name: str, builder) -> None:
+    """为已注册门附加局部矩阵构造器（``GateSpec.matrix``）。
+
+    ``GateSpec`` 为冻结数据类，故经 ``replace`` 重注册。标准门的矩阵构造器
+    依赖 ``aicir.core.gates`` 的局部矩阵原语，于 core 导入时经此附加（避免
+    ``gates`` ↔ ``core`` 循环导入）。未注册门静默忽略。
+    """
+    from dataclasses import replace
+
+    spec = _REGISTRY.get(str(name))
+    if spec is None:
+        return
+    register_gate(replace(spec, matrix=builder), overwrite=True)
+
+
+def gate_matrix(name: str, params=(), backend=None):
+    """返回门的**局部**稠密幺正矩阵；无构造器或未注册门返回 ``None``。
+
+    ``params`` 为门参数（无参门忽略）；``backend`` 非空时返回后端张量。
+    构造器由 ``aicir.core.gates`` 在导入时附加，故首次调用前确保其已导入。
+    """
+    spec = _LOOKUP.get(str(name))
+    if spec is None or spec.matrix is None:
+        # 标准门构造器随 core.gates 导入附加；惰性触发一次以避免顺序坑。
+        import aicir.core.gates  # noqa: F401
+
+        spec = _LOOKUP.get(str(name))
+        if spec is None or spec.matrix is None:
+            return None
+    return spec.matrix(params, backend)
+
+
 # ---------------------------------------------------------------------------
 # aicir 内置门集（与 gate_to_matrix / QASM 导出表保持一致）
 # ---------------------------------------------------------------------------

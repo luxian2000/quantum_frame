@@ -213,7 +213,9 @@ grad = cost.grad(0.1)
 - 噪声封装：`@qfun(..., noise_model=NoiseModel)` 把噪声附加到线路，经 `Measure.run` 走密度矩阵模拟读取期望值；`differential="auto"` 在 `noise_model` 非空时以 `noisy=True` 走 `select_diff`。
 - shot 封装：`shots=` 自首片即透传至 `Measure.run`（无新接口）。
 
-与 §5 原草图的有意差异：观测量声明在装饰器（`observable=`）而非函数体内 `return expval(H)`；函数体显式 `return Circuit`。因此暂未提供 `expval` 测量帮助器（设计取舍，非待办）。§5 主体收尾，剩 `expval` 帮助器一项有意保留。
+第四片已落地（2026-06-29）：**`expval`/`probs`/`sample` 测量返回构造器**。函数体可返回这些对象在体内声明测量意图（无全局 tape，故显式携带 circuit），替代/补充装饰器 `observable=`：`expval(circuit, observable)` → 期望值（唯一可微返回，`.grad` 仅对其有效）、`probs(circuit, wires=None)` → 概率向量（`wires` 边缘化）、`sample(circuit, wires=None)` → counts（shots 取自装饰器）。`QFun._resolve` 按返回值类型分发：裸 `Circuit` 走装饰器 `observable=`（行为不变），测量对象走其自带声明。配套行为变更：`observable=` 不再于装饰期强制，"缺少 observable" 错误下移到调用期（仅返回裸 `Circuit` 且无装饰器 observable 时触发）。均从 `aicir.qml` 导出。配套 `tests/qfun/test_qfun.py`。**§5 收尾完成。**
+
+与 §5 原草图的差异：观测量既可在装饰器 `observable=`、也可在函数体 `expval(c, H)` 声明；函数体显式 `return Circuit`/测量对象（非隐式 tape）。
 
 ### 6. 把梯度方法做成策略注册表
 
@@ -262,7 +264,7 @@ GateSpec(
 - `visual` 可从 spec 获取显示名称和参数格式。
 - `qas` 可从 spec 生成搜索动作空间。
 
-当前状态：第一、二片已落地。`aicir.gates` 提供 `GateSpec`（门名/别名/目标比特数/参数个数/是否受控/QASM 名/显示符号）与注册表 API（`register_gate`/`unregister_gate`/`get_gate_spec`/`registered_gate_names`/`canonical_gate_name`），内置门集已全部注册；`num_qubits`/`num_params` 为 `None` 表示可变（`unitary`、`measure`、`reset`、整寄存器 `identity`）。消费方已接入六处：`aicir.ir.Operation` 构造期按 spec 校验（未注册门名保持宽松）；`ValidatePass` 实质校验；`CanonicalizePass` 别名归一；QASM 导出名由 `GateSpec.qasm_name` 派生；矩阵路径（`gate_to_matrix`/`apply_gate_to_state` 等）入口经 `canonical_gate_name` 归一后按规范名分发；ASCII 与 matplotlib 绘图符号/配色族由 `GateSpec.symbol` 与规范名派生（注册自定义门可携带 symbol 直接显示）。`reset` 已接入线路标记、测量执行路径与绘图；matplotlib 使用与 `measure` 同色、标注 `Reset` 的虚线表示 reset，`Reset` 字号与 `Rz` 门主标签一致且虚线 dash 间距更大；虚线连接测量门与后续同一比特量子门，没有后续门时延伸到线路末端，且不叠加普通实线；遇到无完整方框的后续门时按虚拟方框左边界截断，虚拟方框内恢复普通实线，但 reset 尚未纳入 QASM 互转。第三片已落地（2026-06-27）：**`generator`/`decomposition` 字段**。`GateSpec` 新增 `generator`（单参数旋转门的 Pauli 生成元标签：`rx`→`"X"`、`ry`→`"Y"`、`rz`→`"Z"`、`crx/cry/crz` 记目标位生成元、`rzz`→`"ZZ"`、`rxx`→`"XX"`）与 `decomposition`（分解规则可调用，签名 `(qubits, controls, control_states, params) -> list[dict] | None`，规则置于自包含的 `aicir/gates/decompositions.py`，仅构造纯门字典以避开 `gates`↔`ir` 循环导入）。注册表新增 helper `gate_generator`/`parametric_pauli_gates`/`gate_decomposition`。消费方：`DecomposePass` 改为读 `gate_decomposition`（注册自定义门携带 `decomposition` 即被识别）；`qml.deriv` 的 `_AD_PAULI_GENERATOR`/`_AD_DIFFERENTIABLE` 改为从 `parametric_pauli_gates()`/`gate_generator()` 派生（注册新 Pauli 旋转门即自动可伴随微分），不再硬编码。配套 `tests/gates/test_gatespec_metadata.py`。尚未迁移：`matrix` 字段；`metrics`/`qas` 评分中的别名容忍集合（`DEFAULT_NATIVE_GATES`、双比特门判定等）属评分语义，留待单独处理。
+当前状态：第一、二片已落地。`aicir.gates` 提供 `GateSpec`（门名/别名/目标比特数/参数个数/是否受控/QASM 名/显示符号）与注册表 API（`register_gate`/`unregister_gate`/`get_gate_spec`/`registered_gate_names`/`canonical_gate_name`），内置门集已全部注册；`num_qubits`/`num_params` 为 `None` 表示可变（`unitary`、`measure`、`reset`、整寄存器 `identity`）。消费方已接入六处：`aicir.ir.Operation` 构造期按 spec 校验（未注册门名保持宽松）；`ValidatePass` 实质校验；`CanonicalizePass` 别名归一；QASM 导出名由 `GateSpec.qasm_name` 派生；矩阵路径（`gate_to_matrix`/`apply_gate_to_state` 等）入口经 `canonical_gate_name` 归一后按规范名分发；ASCII 与 matplotlib 绘图符号/配色族由 `GateSpec.symbol` 与规范名派生（注册自定义门可携带 symbol 直接显示）。`reset` 已接入线路标记、测量执行路径与绘图；matplotlib 使用与 `measure` 同色、标注 `Reset` 的虚线表示 reset，`Reset` 字号与 `Rz` 门主标签一致且虚线 dash 间距更大；虚线连接测量门与后续同一比特量子门，没有后续门时延伸到线路末端，且不叠加普通实线；遇到无完整方框的后续门时按虚拟方框左边界截断，虚拟方框内恢复普通实线，但 reset 尚未纳入 QASM 互转。第三片已落地（2026-06-27）：**`generator`/`decomposition` 字段**。`GateSpec` 新增 `generator`（单参数旋转门的 Pauli 生成元标签：`rx`→`"X"`、`ry`→`"Y"`、`rz`→`"Z"`、`crx/cry/crz` 记目标位生成元、`rzz`→`"ZZ"`、`rxx`→`"XX"`）与 `decomposition`（分解规则可调用，签名 `(qubits, controls, control_states, params) -> list[dict] | None`，规则置于自包含的 `aicir/gates/decompositions.py`，仅构造纯门字典以避开 `gates`↔`ir` 循环导入）。注册表新增 helper `gate_generator`/`parametric_pauli_gates`/`gate_decomposition`。消费方：`DecomposePass` 改为读 `gate_decomposition`（注册自定义门携带 `decomposition` 即被识别）；`qml.deriv` 的 `_AD_PAULI_GENERATOR`/`_AD_DIFFERENTIABLE` 改为从 `parametric_pauli_gates()`/`gate_generator()` 派生（注册新 Pauli 旋转门即自动可伴随微分），不再硬编码。配套 `tests/gates/test_gatespec_metadata.py`。第四片已落地（2026-06-29）：**`matrix` 字段（Approach C）**。`GateSpec.matrix` 为后端感知局部矩阵构造器 `(params, backend) -> 局部矩阵`，已为全部不受控标准门填充（复用 `aicir.core.gates` 局部矩阵原语，于 core 导入时经 `set_gate_matrix` 附加，避免 `gates`↔`core` 循环导入）；受控门、`measure`/`reset`/`unitary` 为 `None`。新增访问器 `gate_matrix(name, params=(), backend=None)`（读局部矩阵）。`gate_to_matrix` 未硬编码门的 `else` 回退经 `GateSpec.matrix` 构造局部矩阵并经 `_expand_local_matrix_to_full` 嵌入，使自定义**不受控**门注册 `matrix=` 后即可模拟，无需改 core——**内置门分发与 autograd/local-apply 热路径零改动**。配套 `tests/gates/test_gatespec_matrix.py`（numpy/torch 一致性漂移护栏 + 自定义门端到端模拟）。尚未迁移：内置门 `gate_to_matrix` 分发本身仍硬编码（Approach B/A，未做）；受控自定义门不在局部矩阵抽象内；`metrics`/`qas` 评分中的别名容忍集合（`DEFAULT_NATIVE_GATES`、双比特门判定等）属评分语义，留待单独处理。
 
 ### 8. 强化跨框架互操作
 
@@ -312,8 +314,8 @@ GateSpec(
 
 主要目标是提升 QML/VQA 用户体验。
 
-1. 新增 `aicir.qnode`。
-2. 新增 `expval`、`probs`、`sample` 等测量返回构造器。
+1. 新增 `aicir.qnode`。已落地（命名为 `qfun`，见 §5 当前状态）。
+2. 新增 `expval`、`probs`、`sample` 等测量返回构造器。已落地（见 §5 第四片）。
 3. 新增 `DiffMethod` 注册表。
 4. 将 `qml.deriv`、`optimizer.params`、`vqc` 逐步接入 QNode。
 5. 可选新增 Torch layer 包装，方便混合神经网络训练。
@@ -387,4 +389,5 @@ GateSpec(
 
 #### 2.3 `GateSpec` 元数据扩充
 *   ✅ 已完成：`GateSpec` 已添加 `generator` 与 `decomposition` 字段（见 §7 第三片）。
-*   ✅ 已完成：`qml.deriv` 不再硬编码可微门集，改从 `gate_generator()`/`parametric_pauli_gates()` 自省。`matrix` 字段仍未迁移（矩阵构造暂留 `gate_to_matrix`）。
+*   ✅ 已完成：`qml.deriv` 不再硬编码可微门集，改从 `gate_generator()`/`parametric_pauli_gates()` 自省。
+*   ✅ 已完成（2026-06-29）：`GateSpec.matrix` 字段（Approach C，见 §7 第四片）——已为不受控标准门填充局部矩阵构造器，新增 `gate_matrix()` 访问器，`gate_to_matrix` 经其回退模拟自定义不受控门。内置门分发未迁（Approach B/A 未做）。

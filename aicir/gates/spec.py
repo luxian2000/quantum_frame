@@ -38,6 +38,11 @@ class GateSpec:
       ``(qubits, controls, control_states, params) -> list[dict] | None``
       （返回 ``None`` 表示当前入参形态不适用，如多控制位）。供 ``transpile``
       的 ``DecomposePass`` 驱动；``None`` 表示无内置分解规则。
+    - ``matrix``：构造该门**局部**稠密幺正矩阵的后端感知可调用，签名
+      ``(params, backend) -> 局部矩阵``，作用于 ``num_qubits`` 个目标比特
+      （比特顺序 = 门的比特列表顺序；无参门忽略 ``params``）。供
+      ``gate_to_matrix`` 对未硬编码的自定义门回退构造矩阵，及 ``gate_matrix``
+      访问器读取；``None`` 表示无局部矩阵（如受控门、``measure``/``reset``）。
     """
 
     name: str
@@ -51,6 +56,7 @@ class GateSpec:
     generator: str | None = None
     shift_rule: str | None = None
     decomposition: Callable[..., Any] | None = None
+    matrix: Callable[..., Any] | None = None
 
     def __post_init__(self) -> None:
         name = str(self.name).strip()
