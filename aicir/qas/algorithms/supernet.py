@@ -44,6 +44,7 @@ from ...backends.npu_backend import NPUBackend
 from ...core.operators import Hamiltonian
 from ...core.circuit import Circuit, cx, hadamard, rx, ry, rz, rzz
 from ...core.gates import apply_gate_to_state, gate_to_matrix
+from ...gates import get_gate_spec
 from ...ir import circuit_instructions
 from ...qml.deriv import psr
 from ..core.sharding import (
@@ -68,63 +69,77 @@ ParameterKey = tuple[str, int, int, tuple[str, ...], int, str, int]
 _NO_TWO_QUBIT = "none"
 
 
-@dataclass(frozen=True)
-class GateSpec:
-    """Builder + arity metadata for one searchable gate.
+# 可搜索的单/双比特门 token：搜索空间字母表（SupernetConfig 公开面），非门定义。
+_SINGLE_QUBIT_TOKENS = ("i", "h", "rx", "ry", "rz")
+_TWO_QUBIT_TOKENS = ("cx", "rzz")
 
-    ``n_params`` is the number of trainable angles the gate owns: 0 for fixed
-    gates (the identity placeholder ``i`` and ``cx``) and 1 for the rotations
-    ``rx/ry/rz`` and the parameterized two-qubit ``rzz``. ``builder`` turns a
-    parameter list plus a qubit tuple into an aicir gate dict, or returns
-    ``None`` for a no-op (used by ``i`` so that no gate is emitted at all).
-    """
-
-    name: str
-    n_params: int
-    arity: int
-    builder: Callable[[Sequence[Any], Sequence[int]], dict[str, Any] | None]
-
-
-# Scoped single-qubit gate set: identity placeholder + the three Pauli rotations.
-_SINGLE_QUBIT_GATES: dict[str, GateSpec] = {
-    "i": GateSpec("i", 0, 1, lambda params, qubits: None),
-    "h": GateSpec("h", 0, 1, lambda params, qubits: hadamard(int(qubits[0]))),
-    "rx": GateSpec("rx", 1, 1, lambda params, qubits: rx(params[0], target_qubit=int(qubits[0]))),
-    "ry": GateSpec("ry", 1, 1, lambda params, qubits: ry(params[0], target_qubit=int(qubits[0]))),
-    "rz": GateSpec("rz", 1, 1, lambda params, qubits: rz(params[0], target_qubit=int(qubits[0]))),
+# 搜索 token → aicir 规范门名。"i" 表示"该槽不放门"，故不在表内。
+_TOKEN_CANONICAL: dict[str, str] = {
+    "h": "hadamard",
+    "rx": "rx",
+    "ry": "ry",
+    "rz": "rz",
+    "cx": "cx",
+    "rzz": "rzz",
 }
 
-# Scoped two-qubit gate set: fixed CNOT entangler + trainable ZZ rotation.
-_TWO_QUBIT_GATES: dict[str, GateSpec] = {
-    "cx": GateSpec(
-        "cx",
-        0,
-        2,
-        lambda params, qubits: cx(target_qubit=int(qubits[1]), control_qubits=[int(qubits[0])]),
-    ),
-    "rzz": GateSpec(
-        "rzz",
-        1,
-        2,
-        lambda params, qubits: rzz(params[0], qubit_1=int(qubits[0]), qubit_2=int(qubits[1])),
-    ),
-}
+# 单比特旋转 token → aicir.core 工厂；门语义全部来自 aicir，本模块不定义门。
+_SINGLE_ROTATION_FACTORY = {"rx": rx, "ry": ry, "rz": rz}
+
+
+def _token_n_params(token: str) -> int:
+    """该 token 的可训练角度数；取自 aicir.gates 注册表（"i" 无门、0 个）。"""
+    if token == "i":
+        return 0
+    return int(get_gate_spec(_TOKEN_CANONICAL[token]).num_params)
+
+
+def _build_single_gate(token: str, params: Sequence[Any], qubit: int) -> dict[str, Any] | None:
+    """构造单比特门（经 aicir.core 工厂）；"i" 不放门，返回 None。"""
+    if token == "i":
+        return None
+    canonical = _TOKEN_CANONICAL[token]
+    if canonical == "hadamard":
+        return hadamard(int(qubit))
+    return _SINGLE_ROTATION_FACTORY[canonical](params[0], target_qubit=int(qubit))
+
+
+def _build_two_qubit_gate(
+    token: str, params: Sequence[Any], control: int, target: int
+) -> dict[str, Any]:
+    """构造双比特门（经 aicir.core 工厂）；控制/目标拆分由注册表 num_controls 驱动。"""
+    canonical = _TOKEN_CANONICAL[token]
+    n_controls = int(get_gate_spec(canonical).num_controls)
+    ordered = (int(control), int(target))
+    controls = ordered[:n_controls]
+    targets = ordered[n_controls:]
+    if canonical == "cx":
+        return cx(target_qubit=targets[0], control_qubits=list(controls))
+    return rzz(params[0], qubit_1=targets[0], qubit_2=targets[1])
 
 
 def _normalize_single_gate(name: str) -> str:
     gate = str(name).strip().lower()
-    if gate not in _SINGLE_QUBIT_GATES:
+    if gate not in _SINGLE_QUBIT_TOKENS:
         raise ValueError(
-            f"supernet single-qubit gates are {tuple(_SINGLE_QUBIT_GATES)}; got {name!r}"
+            f"supernet single-qubit gates are {tuple(_SINGLE_QUBIT_TOKENS)}; got {name!r}"
+        )
+    if gate != "i" and get_gate_spec(_TOKEN_CANONICAL[gate]) is None:
+        raise ValueError(
+            f"supernet single-qubit token {name!r} maps to an unregistered aicir gate"
         )
     return gate
 
 
 def _normalize_two_qubit_gate(name: str) -> str:
     gate = str(name).strip().lower()
-    if gate not in _TWO_QUBIT_GATES:
+    if gate not in _TWO_QUBIT_TOKENS:
         raise ValueError(
-            f"supernet two-qubit gates are {tuple(_TWO_QUBIT_GATES)}; got {name!r}"
+            f"supernet two-qubit gates are {tuple(_TWO_QUBIT_TOKENS)}; got {name!r}"
+        )
+    if get_gate_spec(_TOKEN_CANONICAL[gate]) is None:
+        raise ValueError(
+            f"supernet two-qubit token {name!r} maps to an unregistered aicir gate"
         )
     return gate
 
@@ -363,8 +378,7 @@ class Supernet:
             for layer_id, layer in enumerate(architecture.layers):
                 single_layout = tuple(_normalize_single_gate(g) for g in layer.single_qubit_gates)
                 for qubit_id, gate_type in enumerate(single_layout):
-                    spec = _SINGLE_QUBIT_GATES[gate_type]
-                    for param_index in range(spec.n_params):
+                    for param_index in range(_token_n_params(gate_type)):
                         key = self.single_parameter_key(
                             supernet_id, layer_id, single_layout, qubit_id, gate_type, param_index
                         )
@@ -373,8 +387,7 @@ class Supernet:
                 for pair_index, choice in enumerate(two_layout):
                     if choice == _NO_TWO_QUBIT:
                         continue
-                    spec = _TWO_QUBIT_GATES[choice]
-                    for param_index in range(spec.n_params):
+                    for param_index in range(_token_n_params(choice)):
                         key = self.two_qubit_parameter_key(
                             supernet_id, layer_id, two_layout, pair_index, choice, param_index
                         )
@@ -536,9 +549,8 @@ class Supernet:
 
             single_layout = tuple(_normalize_single_gate(gate) for gate in layer.single_qubit_gates)
             for qubit_id, gate_type in enumerate(single_layout):
-                spec = _SINGLE_QUBIT_GATES[gate_type]
                 params: list[torch.Tensor | float] = []
-                for param_index in range(spec.n_params):
+                for param_index in range(_token_n_params(gate_type)):
                     key = self.single_parameter_key(
                         supernet_id, layer_id, single_layout, qubit_id, gate_type, param_index
                     )
@@ -547,7 +559,7 @@ class Supernet:
                     active_keys.append(key)
                     if isinstance(theta, torch.Tensor):
                         active_tensors.append(theta)
-                gate = spec.builder(params, (qubit_id,))
+                gate = _build_single_gate(gate_type, params, qubit_id)
                 if gate is not None:
                     gates.append(gate)
 
@@ -555,10 +567,9 @@ class Supernet:
             for pair_index, choice in enumerate(two_layout):
                 if choice == _NO_TWO_QUBIT:
                     continue
-                spec = _TWO_QUBIT_GATES[choice]
                 control, target = self.config.two_qubit_pairs[pair_index]
                 params = []
-                for param_index in range(spec.n_params):
+                for param_index in range(_token_n_params(choice)):
                     key = self.two_qubit_parameter_key(
                         supernet_id, layer_id, two_layout, pair_index, choice, param_index
                     )
@@ -567,7 +578,7 @@ class Supernet:
                     active_keys.append(key)
                     if isinstance(theta, torch.Tensor):
                         active_tensors.append(theta)
-                gate = spec.builder(params, (int(control), int(target)))
+                gate = _build_two_qubit_gate(choice, params, control, target)
                 if gate is not None:
                     gates.append(gate)
 
@@ -1321,19 +1332,19 @@ class Supernet:
         return metrics
 
     def _run_fixed_h2_vqe_baseline(self, hamiltonian: Any) -> float:
-        # Conventional fixed VQE reference (Fig. 3a): every configured rotation
-        # type on every qubit, then one fixed CNOT entangler per pair. The gate
-        # specs carry arity, so multi-/zero-parameter gates are sized correctly.
+        # 固定参考线路（Fig. 3a）：每层对每个量子比特施加所有已配置的单比特旋转类型，
+        # 再对每对量子比特施加一个固定纠缠门。门参数数及语义全部来自 aicir.gates 注册表。
         single_types = tuple(dict.fromkeys(self.config.single_qubit_gates))
         if self.config.two_qubit_gates:
             entangler = "cx" if "cx" in self.config.two_qubit_gates else self.config.two_qubit_gates[0]
-            entangler_spec: GateSpec | None = _TWO_QUBIT_GATES[entangler]
+            entangler_n_params = _token_n_params(entangler)
         else:
-            entangler_spec = None
+            entangler = None
+            entangler_n_params = 0
 
-        per_layer = sum(_SINGLE_QUBIT_GATES[g].n_params for g in single_types) * self.config.n_qubits
-        if entangler_spec is not None:
-            per_layer += entangler_spec.n_params * len(self.config.two_qubit_pairs)
+        per_layer = sum(_token_n_params(g) for g in single_types) * self.config.n_qubits
+        if entangler is not None:
+            per_layer += entangler_n_params * len(self.config.two_qubit_pairs)
         total = per_layer * self.config.layers
 
         parameters = [self._new_shared_parameter() for _ in range(total)]
@@ -1347,17 +1358,17 @@ class Supernet:
             for _ in range(self.config.layers):
                 for qubit in range(self.config.n_qubits):
                     for gate_type in single_types:
-                        spec = _SINGLE_QUBIT_GATES[gate_type]
-                        slot = parameters[cursor : cursor + spec.n_params]
-                        cursor += spec.n_params
-                        gate = spec.builder(slot, (qubit,))
+                        n = _token_n_params(gate_type)
+                        slot = parameters[cursor : cursor + n]
+                        cursor += n
+                        gate = _build_single_gate(gate_type, slot, qubit)
                         if gate is not None:
                             gates.append(gate)
-                if entangler_spec is not None:
+                if entangler is not None:
                     for control, target in self.config.two_qubit_pairs:
-                        slot = parameters[cursor : cursor + entangler_spec.n_params]
-                        cursor += entangler_spec.n_params
-                        gate = entangler_spec.builder(slot, (int(control), int(target)))
+                        slot = parameters[cursor : cursor + entangler_n_params]
+                        cursor += entangler_n_params
+                        gate = _build_two_qubit_gate(entangler, slot, int(control), int(target))
                         if gate is not None:
                             gates.append(gate)
             state = self._simulate_gates(gates)
