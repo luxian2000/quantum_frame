@@ -22,10 +22,10 @@ A from-scratch quantum circuit simulator and quantum-algorithm framework for Pyt
 
 
 - **Unified quantum state** — `State` class handles pure states (amplitude vector) and mixed states (density matrix) with a consistent API
-- **Rich gate library** — single-qubit, rotation, controlled, multi-target, and multi-control gates; typed `Operation` IR with construction-time validation
+- **Rich gate library** — single-qubit, rotation, controlled, multi-target, multi-control, and particle-conserving excitation gates (`single_excitation`/Givens, `double_excitation`); typed `Operation` IR with construction-time validation
 - **Flexible measurement** — in-circuit Pauli projection, terminal readout, shot sampling, exact mode, state snapshots, and partial traces
 - **Variational algorithms** — `BasicVQE`, `run_vqe`, QAOA, VQD, SSVQE with built-in ansatz templates (HEA, trapped-ion HEA-TI)
-- **QML gradients** — parameter-shift (`psr`, `spsr`, `multipsr`), finite-difference, SPSA, quantum natural gradient, and PyTorch `autograd`
+- **QML gradients** — parameter-shift (`psr`, `spsr`, `multipsr`, four-term `psr4` for excitation gates), finite-difference, SPSA, quantum natural gradient, and PyTorch `autograd`
 - **Quantum architecture search** — weight-shared supernet, CRLQAS, PPR\_DQL, PPO\_RB (requires PyTorch)
 - **Noise simulation** — depolarizing, bit/phase flip, amplitude damping, ion-trap noise via density-matrix evolution
 - **OpenQASM I/O** — round-trip import/export for OpenQASM 2.0 and 3.0; Qiskit, PennyLane, and WuYue interop
@@ -416,7 +416,7 @@ print(U.shape)   # (4, 4)
 
 ```python
 import math
-from aicir import Circuit, rx, ry, u2, u3, crx, rzz, rxx, swap, toffoli
+from aicir import Circuit, rx, ry, u2, u3, crx, rzz, rxx, swap, toffoli, single_excitation, double_excitation
 
 cir = Circuit(
     rx(math.pi / 2, 0),              # Rx(π/2) 作用在 qubit 0
@@ -428,7 +428,20 @@ cir = Circuit(
     rxx(math.pi / 3, 0, 1),          # RXX / Mølmer-Sørensen 作用在 qubit0 和 qubit1
     swap(0, 1),                      # SWAP qubit0 和 qubit1
     toffoli(2, [0, 1]),              # Toffoli，控制=[0,1]，目标=qubit2
+    single_excitation(0.3, 0, 1),    # 粒子数守恒 Givens 单激发，qubit0/qubit1
     n_qubits=3,
+)
+```
+
+`double_excitation(θ, q1, q2, q3, q4)`（4 比特、粒子数守恒、耦合 |0011⟩↔|1100⟩）同样可直接构造，配合 HF 参考态做化学 VQE：
+
+```python
+from aicir import Circuit, double_excitation, pauli_x
+
+cir = Circuit(
+    pauli_x(1), pauli_x(3),          # 制备 HF 行列式 |0101⟩
+    double_excitation(0.2, 0, 2, 1, 3),  # 双激发耦合 |0101⟩↔|1010⟩
+    n_qubits=4,
 )
 ```
 
