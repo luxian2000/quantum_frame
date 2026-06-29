@@ -25,6 +25,7 @@ class GateSpec:
       ``None`` 表示可变（如 ``unitary`` 的矩阵参数在占位场景可缺省）。
     - ``aliases``：等价的 ``type`` 写法（如 ``"X"``、``"cnot"``）。
     - ``controlled``：是否必须携带至少一个控制位。
+    - ``num_controls``：控制位数量；``controlled == (num_controls > 0)``。
     - ``qasm_name``：OpenQASM 导出名；``None`` 表示暂未约定。
     - ``symbol``：ASCII/绘图显示符号（受控门为目标位符号）；``None``
       表示特殊绘制（swap/rzz/rxx/measure）或退回通用 fallback。
@@ -42,6 +43,7 @@ class GateSpec:
     num_params: int | None
     aliases: tuple[str, ...] = ()
     controlled: bool = False
+    num_controls: int = 0
     qasm_name: str | None = None
     symbol: str | None = None
     generator: str | None = None
@@ -55,5 +57,7 @@ class GateSpec:
             raise ValueError("num_qubits must be non-negative or None")
         if self.num_params is not None and int(self.num_params) < 0:
             raise ValueError("num_params must be non-negative or None")
+        if int(self.num_controls) < 0:
+            raise ValueError("num_controls must be non-negative")
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "aliases", tuple(str(alias) for alias in self.aliases))
