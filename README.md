@@ -380,6 +380,9 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 | `rzz(θ, q1, q2)`         | 角度, qubit_1, qubit_2           | ZZ 旋转门       |
 | `rxx(θ, q1, q2)`         | 角度, qubit_1, qubit_2           | XX 旋转门       |
 | `ms_gate(θ, q1, q2)`     | 角度, qubit_1, qubit_2           | `rxx` 的别名  |
+| `single_excitation(θ, q1, q2)` | 角度, qubit_1, qubit_2     | 粒子数守恒 Givens 单激发门 |
+| `givens(θ, q1, q2)`      | 角度, qubit_1, qubit_2           | `single_excitation` 的别名 |
+| `double_excitation(θ, q1, q2, q3, q4)` | 角度, 四个 qubit  | 粒子数守恒双激发门（耦合 \|0011⟩↔\|1100⟩） |
 | `toffoli(t, [c0,c1,...])` | target, control_list             | 多控制 X 门     |
 | `ccnot(t, [c0,c1,...])`   | target, control_list             | 同 toffoli      |
 | `measure(q...)`           | qubit list                       | 线路内测量标记  |
