@@ -369,8 +369,8 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 | `rz(θ, q)`               | 角度, target_qubit               | Rz 旋转门       |
 | `u2(φ, λ, q)`           | phi, lambda, target_qubit        | U2 门           |
 | `u3(θ, φ, λ, q)`       | theta, phi, lambda, target_qubit | U3 通用单比特门 |
-| `cx(t, [c])`              | target, control_list             | CNOT（控制-X）  |
-| `cnot(t, [c])`            | target, control_list             | 同 cx           |
+| `cx(t, [c])`              | target（单个或列表）, control_list | CNOT（控制-X）；目标支持单个或多个（多目标等价于多个单目标 CX） |
+| `cnot(t, [c])`            | target（单个或列表）, control_list | 同 cx           |
 | `cy(t, [c])`              | target, control_list             | 控制-Y          |
 | `cz(t, [c])`              | target, control_list             | 控制-Z          |
 | `crx(θ, t, [c])`         | 角度, target, control_list       | 受控 Rx         |
