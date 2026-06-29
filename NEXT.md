@@ -178,6 +178,8 @@ values = estimator.run(circuits, observables, parameter_values=params)
 
 下游 `vqc`/`qas`/`metrics` 采用**加性集成**：算法层可经 `energy_estimator=` 等现有注入点消费 primitives（VQE 已端到端验证 `ShotEstimator`/`NoisyEstimator`），未重写其内部 `Measure`/`PauliEstimator` 调用——全量内部迁移仍属可选后续。
 
+默认路径切换已落地（2026-06-29，phase-1 item 4）：`BasicVQE` 在**未显式注入 estimator、|0⟩ 起点精确态向量**（无 shots/噪声/密度矩阵/自定义初始态、非 `return_state`）时，默认能量经新增的 `BasicVQE._default_estimator()`→`StatevectorEstimator` 求值（`_evaluate_circuit` 与注入路径统一）；shots/噪声/密度矩阵/初始态等场景仍退回 `Measure`（这些 primitives 仍可经 `energy_estimator=` 注入或 `target=` 经 `estimator_for_target` 选中）。`BasicQAOA` 默认路径为稠密矩阵指数、**无线路**，不接入 Estimator（其 `cost=` 注入已覆盖 primitives）。配套 `tests/vqc/test_vqe_orchestration.py::test_vqe_default_exact_energy_uses_statevector_estimator`。
+
 ### 5. 增加 PennyLane 风格 `QNode`
 
 建议新增轻量 QNode，用于统一“量子函数 + 设备 + 测量 + 梯度”：
@@ -299,7 +301,7 @@ GateSpec(
 1. 新增 typed IR，保留门字典兼容入口。已落地：`aicir.ir.Operation` 支持与现有门字典互转，`Measurement` 支持测量声明与现有 `measure` 门字典互转，`Observable` 支持包装 Pauli string、Hamiltonian 和 dense matrix，`CircuitIR` 支持从现有 `Circuit` 构造并转回 `Circuit`；`Circuit` 构造、`append`、`extend` 已可接收 `Operation` 和 `Measurement`，并继续保存现有门字典 surface；`Circuit.operations` / `Circuit.ir` typed IR 视图和 `aicir.ir` 访问 helper 已接入 JSON/QASM/DAG、绘图、测量、Pauli 估计、transpile/optimizer、QML 伴随梯度、metrics、noise、QAS 等主要内部路径。
 2. 新增 `Pass` / `PassManager`，把现有线路优化规则拆成 pass。已落地：`aicir.transpile` 提供 `TransformationPass`、`PassManager`、`default_optimization_pipeline`，并提供 `CancelInversePass`、`MergeRotationsPass`、`CommuteSingleQubitPass` 等第一批本地优化 pass；`optimize_circuit` 已委托给默认 pipeline。
 3. 新增 `Sampler` / `Estimator` primitives，先包装现有 `Measure` 和 `PauliEstimator`。已落地：`aicir.primitives` 提供 `ShotSampler`/`StatevectorEstimator`/`ShotEstimator` 与统一结果对象（见第 4 节当前状态）。
-4. 让 `BasicVQE` 和 `BasicQAOA` 优先调用 `Estimator`。部分可用：`BasicVQE(energy_estimator=ShotEstimator(...))` 已可直接注入（estimate 直通契约）；默认路径切换尚未开始。
+4. 让 `BasicVQE` 和 `BasicQAOA` 优先调用 `Estimator`。已落地（2026-06-29）：`BasicVQE` 默认精确（|0⟩ 起点、无 shots/噪声/密度矩阵/初始态）能量经 `StatevectorEstimator` primitive（见第 4 节当前状态）；注入 `energy_estimator=` 仍优先。`BasicQAOA` 默认为稠密矩阵指数无线路，不接入（`cost=` 注入覆盖）。shots/噪声默认路径仍走 `Measure`（可经注入/`target=` 走 primitives）属可选后续。
 
 ### 第二阶段：硬件目标和门注册表
 

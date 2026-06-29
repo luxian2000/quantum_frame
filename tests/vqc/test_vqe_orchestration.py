@@ -173,3 +173,16 @@ def test_non_exact_energy_estimator_requires_circuit_ansatz():
         assert "requires a Circuit" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_vqe_default_exact_energy_uses_statevector_estimator():
+    # §4 收尾：默认精确（|0> 起点、无 shots/噪声）能量经 StatevectorEstimator primitive。
+    from aicir.primitives import StatevectorEstimator
+
+    solver = BasicVQE(_z_hamiltonian_object(), ansatz=_single_ry_template(), backend=NumpyBackend())
+    assert solver.energy(np.array([0.0])) == np.float32(1.0)
+    assert isinstance(solver._default_estimator(), StatevectorEstimator)
+    assert solver._last_measurement is None
+    assert solver._last_estimator_result is not None
+    # 数值与解析一致：<Z> = cos(theta)
+    assert np.isclose(solver.energy(np.array([0.7])), np.cos(0.7), atol=1e-7)
