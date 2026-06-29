@@ -82,6 +82,34 @@ class PassManager:
                 return current
         return current
 
+    def run_with_result(self, circuit: Circuit):
+        """运行流水线并返回 :class:`TranspileResult`（NEXT.md 第 9 节）。
+
+        记录编译前后深度、pass 名序列与布局映射（取自含 ``last_layout`` 的 pass，
+        如 ``LayoutPass``；无则为 ``None``）。``circuit`` 返回值同 :meth:`run`。
+        """
+        from ..metrics._utils import depth_proxy
+        from .result import TranspileResult
+
+        if not hasattr(circuit, "n_qubits") or not has_circuit_instructions(circuit):
+            raise TypeError("PassManager.run_with_result expects a Circuit or CircuitIR-like object")
+        if not isinstance(circuit, Circuit):
+            circuit = Circuit(*circuit_gate_dicts(circuit), n_qubits=int(circuit.n_qubits))
+
+        depth_before = int(depth_proxy(circuit))
+        result_circuit = self.run(circuit)
+        layout = None
+        for item in self.passes:
+            if getattr(item, "last_layout", None) is not None:
+                layout = item.last_layout
+        return TranspileResult(
+            circuit=result_circuit,
+            layout=layout,
+            passes=tuple(getattr(item, "name", type(item).__name__) for item in self.passes),
+            depth_before=depth_before,
+            depth_after=int(depth_proxy(result_circuit)),
+        )
+
 
 def _optimize_pipeline(*, max_rounds: int = 64, max_reorder_hops: int = 8) -> PassManager:
     """构造默认的本地线路优化流水线（cancel→merge→commute，跑到不动点）。"""

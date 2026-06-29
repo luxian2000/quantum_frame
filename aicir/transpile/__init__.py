@@ -2,6 +2,7 @@
 
 from .base import TransformationPass
 from .passmanager import PassManager, optimize
+from .result import TranspileResult
 from .rewrite import optimize_basic, optimize_circuit
 from .passes import (
     CancelInversePass,
@@ -24,6 +25,7 @@ __all__ = [
     "PassManager",
     "RoutingPass",
     "TransformationPass",
+    "TranspileResult",
     "ValidatePass",
     "optimize",
     "optimize_basic",

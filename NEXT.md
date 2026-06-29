@@ -292,6 +292,8 @@ GateSpec(
 
 统一结果对象会让 demos、tests、QAS、VQE 和报告生成更稳定。
 
+当前状态：本节已收尾。`SampleResult`/`EstimateResult`/`GradientResult` 早前随 primitives/qml 落地于 `aicir.primitives.results`。`TranspileResult`（2026-06-29）落地于 `aicir.transpile.result` 并从 `aicir.transpile` 导出（置于 transpile 域内，避免 primitives↔transpile 耦合），字段含 `circuit`/`layout`/`passes`/`depth_before`/`depth_after`/`metadata`；新增 `PassManager.run_with_result(circuit)` 运行流水线并返回该对象（深度经 `metrics._utils.depth_proxy` ASAP 层数，`layout` 取自含 `last_layout` 的 pass 如 `LayoutPass`，无则 `None`）。`PassManager.run` 仍返回 `Circuit` 不变。配套 `tests/transpile/test_transpile_result.py`。
+
 ## 推荐推进顺序
 
 ### 第一阶段：统一执行和优化基础
