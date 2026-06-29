@@ -2,6 +2,28 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-29
+
+### Added
+
+- **`GateSpec.num_controls`：受控门的控制位数量作为注册表数据。**
+  - `aicir.gates.GateSpec` 新增 `num_controls: int = 0`（受控门的控制位数量）。
+    内置门：`cx`/`cy`/`cz`/`crx`/`cry`/`crz`→`1`、`toffoli`→`2`、其余→`0`；
+    对所有注册门满足不变量 `controlled == (num_controls > 0)`。加性、非破坏。
+  - 配套 `tests/gates/test_gatespec_num_controls.py`。
+
+### Changed
+
+- **`aicir.qas` supernet 改用 aicir 门，移除模块内自定义门定义。**
+  - `aicir/qas/algorithms/supernet.py` 删除其本地 `GateSpec` 数据类与
+    `_SINGLE_QUBIT_GATES` / `_TWO_QUBIT_GATES` builder 字典；改为按 `aicir.gates`
+    注册表校验 token、读取 `num_params` / `num_controls`，并经 `aicir.core` 门工厂
+    （`hadamard`/`rx`/`ry`/`rz`/`cx`/`rzz`）构造门。双比特门控制/目标拆分由注册表
+    `num_controls` 驱动，不再硬编码。
+  - 纯内部重构、行为保持：发出的门字典逐字节不变（门名、比特字段、`control_states`、
+    参数位置）；搜索空间 token（`i`/`h`）与公开配置面不变。
+  - 配套 `tests/test_supernet_gate_pool.py`（行为锁定特征测试）。
+
 ## 2026-06-27
 
 ### Added
