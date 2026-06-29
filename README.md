@@ -203,7 +203,7 @@ from aicir.qml import psr, spsr, multipsr
 # 线路编译与优化 pass pipeline
 from aicir.transpile import PassManager, optimize, optimize_basic, optimize_circuit
 
-# 门元信息注册表（GateSpec）
+# 门元信息注册表（GateSpec：num_qubits/num_params/num_controls/generator/decomposition）
 from aicir.gates import GateSpec, get_gate_spec, register_gate, canonical_gate_name
 
 # Sampler / Estimator primitives（统一执行入口）
