@@ -136,6 +136,7 @@ _STANDARD_GATES = (
     GateSpec("rzz", 2, 1, qasm_name="rzz", generator="ZZ"),
     GateSpec("rxx", 2, 1, qasm_name="rxx", generator="XX"),
     GateSpec("single_excitation", 2, 1, aliases=("givens",), qasm_name=None, shift_rule="four_term"),
+    GateSpec("double_excitation", 4, 1, qasm_name=None, shift_rule="four_term"),
     # unitary 的矩阵经 "parameter" 携带，但绘图占位场景允许缺省，故参数个数可变。
     GateSpec("unitary", None, None, symbol="U"),
     GateSpec("measure", None, 0, aliases=("measurement",)),
