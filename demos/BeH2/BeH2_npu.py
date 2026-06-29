@@ -57,9 +57,9 @@ from aicir.backends.npu_backend import (
     is_npu_available,
     npu_runtime_context_from_env,
 )
-from aicir.core.io.qasm import save_circuit_qasm3
 from aicir.measure import hamiltonian_pauli_terms
 from aicir.qas import supernet_qas
+from demos.chemistry_ansatz import save_qasm3_if_supported
 
 from demos.BeH2.BeH2 import (
     BEH2_BASIS,
@@ -167,7 +167,8 @@ def _write_report(
         "-" * 88,
         f"  fine-tuned energy  : {record['fine_tuned_energy']:+.10f} Ha",
         f"  baseline VQE       : {record['baseline_vqe_energy']:+.10f} Ha",
-        f"  CNOT / 2-qubit     : {record['cnot']} / {record['two_qubit']}",
+        f"  excitations         : {record['excitations']} "
+        f"(single={record['two_qubit']}, double={record['four_qubit']})",
         "  circuit files      : BeH2_npu_cir.qasm, BeH2_npu_cir.py",
         "",
     ]
@@ -233,12 +234,14 @@ def main(argv: list[str] | None = None) -> None:
         "baseline_vqe_energy": float(metrics["baseline_vqe_energy"]),
         "cnot": int(metrics["selected_cnot_count"]),
         "two_qubit": int(metrics["selected_two_qubit_count"]),
+        "four_qubit": int(metrics["selected_four_qubit_count"]),
+        "excitations": int(metrics["selected_excitation_count"]),
         "seconds": elapsed,
     }
     _log(
         f"fine_tuned_energy={record['fine_tuned_energy']:+.10f} "
         f"baseline={record['baseline_vqe_energy']:+.10f} "
-        f"cnot={record['cnot']} time={elapsed:.1f}s",
+        f"excitations={record['excitations']} time={elapsed:.1f}s",
         rank,
     )
 
@@ -261,8 +264,11 @@ def main(argv: list[str] | None = None) -> None:
         print(f"text report saved to: {report_path}")
 
         qasm_path = out_dir / "BeH2_npu_cir.qasm"
-        save_circuit_qasm3(result.best_circuit, qasm_path)
-        print(f"OpenQASM 3.0 saved to: {qasm_path}")
+        saved_qasm, qasm_message = save_qasm3_if_supported(result.best_circuit, qasm_path)
+        if saved_qasm:
+            print(f"OpenQASM 3.0 saved to: {qasm_message}")
+        else:
+            print(f"OpenQASM 3.0 skipped: {qasm_message}")
 
         py_path = out_dir / "BeH2_npu_cir.py"
         save_circuit_python(result.best_circuit, py_path, func_name="build_beh2_npu_qas_circuit")

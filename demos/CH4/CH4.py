@@ -24,9 +24,9 @@ from pathlib import Path
 import numpy as np
 
 from aicir import Hamiltonian, NumpyBackend
-from aicir.core.io.qasm import save_circuit_qasm3
 from aicir.measure import hamiltonian_pauli_terms
 from aicir.qas import supernet_qas
+from demos.chemistry_ansatz import closed_shell_excitation_pools, save_qasm3_if_supported
 from demos.H2O.H2O import circuit_to_python_source
 
 
@@ -6973,18 +6973,19 @@ def ch4_vqe_qas_kwargs() -> dict:
     """Recommended starter configuration for 18-qubit CH4 supernet search."""
 
     n_qubits = 2 * CH4_ACTIVE_SPATIAL_ORBITALS
-    two_qubit_pairs = tuple(
-        (i, j)
-        for i in range(n_qubits)
-        for j in range(i + 1, n_qubits)
-        if j - i <= 1
+    hf_qubits, single_excitations, double_excitations = closed_shell_excitation_pools(
+        CH4_ACTIVE_ELECTRONS,
+        CH4_ACTIVE_SPATIAL_ORBITALS,
     )
     return {
         "n_qubits": n_qubits,
         "layers": 4,
-        "single_qubit_gates": ("i", "h", "rx", "ry", "rz"),
-        "two_qubit_gates": ("cx", "rzz"),
-        "two_qubit_pairs": two_qubit_pairs,
+        "single_qubit_gates": ("i",),
+        "two_qubit_gates": ("single_excitation",),
+        "two_qubit_pairs": single_excitations,
+        "four_qubit_gates": ("double_excitation",),
+        "four_qubit_groups": double_excitations,
+        "hf_occupied_qubits": hf_qubits,
         "supernet_num": 6,
         "supernet_steps": 300,
         "ranking_num": 120,
@@ -7090,14 +7091,18 @@ def main(argv: list[str] | None = None) -> None:
     if exact is not None:
         print(f"|QAS - exact|             : {abs(qas_energy - exact):.3e} Ha")
     print(
-        "selected CNOT / 2-qubit   : "
-        f"{metrics['selected_cnot_count']} / {metrics['selected_two_qubit_count']}"
+        "selected excitations      : "
+        f"{metrics['selected_excitation_count']} "
+        f"(single={metrics['selected_two_qubit_count']}, double={metrics['selected_four_qubit_count']})"
     )
     print(f"wall-clock time           : {elapsed:.1f}s")
 
     qasm_path = Path(__file__).with_name("CH4_cir.qasm")
-    save_circuit_qasm3(result.best_circuit, qasm_path)
-    print(f"OpenQASM 3.0 saved to: {qasm_path}")
+    saved_qasm, qasm_message = save_qasm3_if_supported(result.best_circuit, qasm_path)
+    if saved_qasm:
+        print(f"OpenQASM 3.0 saved to: {qasm_message}")
+    else:
+        print(f"OpenQASM 3.0 skipped: {qasm_message}")
 
     py_path = Path(__file__).with_name("CH4_cir.py")
     save_circuit_python(result.best_circuit, py_path)

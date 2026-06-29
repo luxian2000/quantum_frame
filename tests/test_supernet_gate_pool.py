@@ -67,3 +67,41 @@ def test_identity_token_emits_no_gate():
     arch = Architecture((LayerArchitecture(("i", "i", "i"), ("none", "none")),))
     circuit, _keys, _tensors = qas.build_circuit(arch, supernet_id=0)
     assert circuit.gates == []
+
+
+def test_hf_reference_and_excitation_pool_emit_chemistry_gates():
+    qas = Supernet(
+        SupernetConfig(
+            n_qubits=4,
+            layers=1,
+            single_qubit_gates=("i",),
+            two_qubit_gates=("single_excitation",),
+            two_qubit_pairs=((0, 2),),
+            four_qubit_gates=("double_excitation",),
+            four_qubit_groups=((0, 2, 1, 3),),
+            hf_occupied_qubits=(1, 3),
+            seed=0,
+        )
+    )
+    arch = Architecture(
+        (
+            LayerArchitecture(
+                ("i", "i", "i", "i"),
+                ("single_excitation",),
+                ("double_excitation",),
+            ),
+        )
+    )
+    circuit, keys, _tensors = qas.build_circuit(arch, supernet_id=0)
+    gates = circuit.gates
+
+    assert [g["type"] for g in gates] == [
+        "pauli_x",
+        "pauli_x",
+        "single_excitation",
+        "double_excitation",
+    ]
+    assert [g["target_qubit"] for g in gates[:2]] == [1, 3]
+    assert gates[2]["qubit_1"] == 0 and gates[2]["qubit_2"] == 2
+    assert tuple(gates[3]["qubits"]) == (0, 2, 1, 3)
+    assert [key[0] for key in keys] == ["tq", "fq"]

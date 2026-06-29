@@ -129,10 +129,12 @@ def main(argv: list[str] | None = None) -> None:
             build_h2o_hamiltonian,
             exact_ground_energy,
             circuit_to_python_source,
-            H2O_TWO_QUBIT_PAIRS,
+            H2O_HF_OCCUPIED_QUBITS,
+            H2O_SINGLE_EXCITATIONS,
+            H2O_DOUBLE_EXCITATIONS,
         )
         from aicir.qas import supernet_qas
-        from aicir.core.io.qasm import save_circuit_qasm3
+        from demos.chemistry_ansatz import save_qasm3_if_supported
 
         hamiltonian = build_h2o_hamiltonian()
         exact = exact_ground_energy(hamiltonian)  # exact value computed on CPU (numpy)
@@ -141,9 +143,12 @@ def main(argv: list[str] | None = None) -> None:
         log("search configuration:")
         log(f"  qubits                 : {hamiltonian.n_qubits}")
         log(f"  layers (depth)         : {args.layers}")
-        log("  single-qubit gates     : (i, h, rx, ry, rz)")
-        log("  two-qubit gates        : (cx, rzz)")
-        log(f"  two-qubit pairs        : {len(H2O_TWO_QUBIT_PAIRS)} (nearest + next-nearest)")
+        log(f"  HF occupied qubits     : {H2O_HF_OCCUPIED_QUBITS}")
+        log("  single-qubit gates     : (i)")
+        log("  two-qubit gates        : (single_excitation)")
+        log(f"  single excitations     : {len(H2O_SINGLE_EXCITATIONS)}")
+        log("  four-qubit gates       : (double_excitation)")
+        log(f"  paired doubles         : {len(H2O_DOUBLE_EXCITATIONS)}")
         log(f"  supernet_num (W)       : {args.supernet_num}")
         log(f"  supernet_steps         : {args.supernet_steps}")
         log(f"  ranking_num            : {args.ranking_num}")
@@ -161,6 +166,12 @@ def main(argv: list[str] | None = None) -> None:
             supernet_steps=args.supernet_steps,
             finetune_steps=args.finetune_steps,
             ranking_num=args.ranking_num,
+            single_qubit_gates=("i",),
+            two_qubit_gates=("single_excitation",),
+            two_qubit_pairs=H2O_SINGLE_EXCITATIONS,
+            four_qubit_gates=("double_excitation",),
+            four_qubit_groups=H2O_DOUBLE_EXCITATIONS,
+            hf_occupied_qubits=H2O_HF_OCCUPIED_QUBITS,
             device=args.device,
             seed=args.seed,
         )
@@ -182,8 +193,9 @@ def main(argv: list[str] | None = None) -> None:
         log(f"chemical accuracy (<1.6 mHa): {abs_err < 1.6e-3}")
         log(f"variational bound (>= exact): {qas_energy >= exact - 1e-6}")
         log(
-            "selected CNOT / two-qubit: "
-            f"{metrics['selected_cnot_count']} / {metrics['selected_two_qubit_count']}"
+            "selected excitations      : "
+            f"{metrics['selected_excitation_count']} "
+            f"(single={metrics['selected_two_qubit_count']}, double={metrics['selected_four_qubit_count']})"
         )
         log(f"wall-clock time          : {elapsed:.1f} s")
         log("")
@@ -193,7 +205,7 @@ def main(argv: list[str] | None = None) -> None:
         # Save the searched circuit and plot it, just like demos/H2O/H2O.py,
         # under NPU-specific names so the CPU demo artifacts (H2O_cir.*) stay.
         qasm_path = Path(__file__).with_name("H2O_cir_npu.qasm")
-        save_circuit_qasm3(result.best_circuit, qasm_path)
+        saved_qasm, qasm_message = save_qasm3_if_supported(result.best_circuit, qasm_path)
 
         py_path = Path(__file__).with_name("H2O_cir_npu.py")
         source = circuit_to_python_source(
@@ -211,7 +223,10 @@ def main(argv: list[str] | None = None) -> None:
         py_path.write_text(source, encoding="utf-8")
 
         log("")
-        log(f"OpenQASM 3.0 saved to    : {qasm_path}")
+        if saved_qasm:
+            log(f"OpenQASM 3.0 saved to    : {qasm_message}")
+        else:
+            log(f"OpenQASM 3.0 skipped     : {qasm_message}")
         log(f"Python circuit saved to  : {py_path}")
 
         # Plot via the generated module's __main__ (runs on CPU; no NPU needed),

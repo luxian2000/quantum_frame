@@ -19,9 +19,9 @@ from pathlib import Path
 import numpy as np
 
 from aicir import Hamiltonian, NumpyBackend
-from aicir.core.io.qasm import save_circuit_qasm3
 from aicir.measure import hamiltonian_pauli_terms
 from aicir.qas import Supernet, SupernetConfig, SupernetResult
+from demos.chemistry_ansatz import closed_shell_excitation_pools, save_qasm3_if_supported
 
 
 LIH_GEOMETRY_ANGSTROM = (  # 以埃为单位给出 LiH 分子的几何构型。
@@ -102,21 +102,24 @@ def exact_ground_energy(hamiltonian: Hamiltonian) -> float:
 def lih_vqe_qas_config(**overrides) -> SupernetConfig:
     """Build the supernet search config for the LiH ground-state VQE.
 
-    The supernet searches over the single-qubit pool ``{i, h, rx, ry, rz}`` and
-    the two-qubit pool ``{cx, rzz}`` placed on a linear chain. ``rzz`` is a
-    trainable entangler, so the search can prepare the entangled ground state
-    while QAS keeps the circuit shallow. ``task="vqe"`` makes the objective the
-    Hamiltonian expectation ``<psi(theta)|H|psi(theta)>``.
+    The search starts from the closed-shell Hartree-Fock determinant and uses a
+    chemistry-motivated excitation pool: spin-preserving ``single_excitation``
+    (Givens) gates plus paired ``double_excitation`` gates.
     """
 
-    # 默认搜索空间偏向浅层线路：单比特门负责局部表达，
-    # 线性链上的双比特门负责逐步建立纠缠。
+    hf_qubits, single_excitations, double_excitations = closed_shell_excitation_pools(
+        LIH_ACTIVE_ELECTRONS,
+        LIH_ACTIVE_SPATIAL_ORBITALS,
+    )
     params: dict = dict(
         n_qubits=4,
         layers=3,
-        single_qubit_gates=("i", "h", "rx", "ry", "rz"),
-        two_qubit_gates=("cx", "rzz"),
-        two_qubit_pairs=((0, 1), (1, 2), (2, 3)),
+        single_qubit_gates=("i",),
+        two_qubit_gates=("single_excitation",),
+        two_qubit_pairs=single_excitations,
+        four_qubit_gates=("double_excitation",),
+        four_qubit_groups=double_excitations,
+        hf_occupied_qubits=hf_qubits,
         # W>1 supernets relieve the single-supernet "fierce competition" that
         # otherwise mis-ranks architectures and stalls the energy ~0.04 Ha high.
         supernet_num=3,
@@ -204,6 +207,11 @@ def _gate_to_python_call(gate: dict) -> tuple[str, str] | None:
         return "swap", f"{int(gate['qubit_1'])}, {int(gate['qubit_2'])}"
     if gate_type in ("rzz", "rxx"):
         return gate_type, f"{angle(gate['parameter'])}, {int(gate['qubit_1'])}, {int(gate['qubit_2'])}"
+    if gate_type in ("single_excitation", "givens"):
+        return "single_excitation", f"{angle(gate['parameter'])}, {int(gate['qubit_1'])}, {int(gate['qubit_2'])}"
+    if gate_type == "double_excitation":
+        qubits = [int(q) for q in gate["qubits"]]
+        return "double_excitation", f"{angle(gate['parameter'])}, {', '.join(str(q) for q in qubits)}"
 
     raise ValueError(f"Cannot serialize gate type {gate_type!r} to Python source")
 
@@ -318,15 +326,19 @@ def main() -> None:
     print(f"  fixed-ansatz VQE baseline : {baseline_energy:+.10f}")
     print(f"  |QAS - exact|             : {abs(qas_energy - exact):.3e} Ha")
     print(
-        "  selected CNOT / 2-qubit   : "
-        f"{metrics['selected_cnot_count']} / {metrics['selected_two_qubit_count']}"
+        "  selected excitations      : "
+        f"{metrics['selected_excitation_count']} "
+        f"(single={metrics['selected_two_qubit_count']}, double={metrics['selected_four_qubit_count']})"
     )
     print("  selected ansatz circuit:")
     print(metrics["selected_circuit_ascii"])
 
     qasm_path = Path(__file__).parent / "LiH_cir.qasm"
-    save_circuit_qasm3(result.best_circuit, qasm_path)
-    print(f"\n  OpenQASM 3.0 saved to: {qasm_path}")
+    saved_qasm, qasm_message = save_qasm3_if_supported(result.best_circuit, qasm_path)
+    if saved_qasm:
+        print(f"\n  OpenQASM 3.0 saved to: {qasm_message}")
+    else:
+        print(f"\n  OpenQASM 3.0 skipped: {qasm_message}")
 
     # 4. 同时导出 Python 重建脚本，方便后续画图和复用线路。
     circuit_py_path = Path(__file__).parent / "LiH_cir.py"
