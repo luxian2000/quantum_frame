@@ -712,6 +712,10 @@ def single_excitation(theta, qubit_1=0, qubit_2=1):
 givens = single_excitation
 
 
+def double_excitation(theta, qubit_1=0, qubit_2=1, qubit_3=2, qubit_4=3):
+    return Operation("double_excitation", qubits=(qubit_1, qubit_2, qubit_3, qubit_4), params=(theta,))
+
+
 def toffoli(target_qubit=2, control_qubits=(0, 1)):
     return Operation("toffoli", qubits=(target_qubit,), controls=tuple(control_qubits))
 

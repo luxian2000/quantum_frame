@@ -53,3 +53,31 @@ def test_givens_alias_and_factory():
     op = single_excitation(0.5, qubit_1=1, qubit_2=2)
     d = op.to_dict()
     assert d["type"] == "single_excitation" and d["qubit_1"] == 1 and d["qubit_2"] == 2
+
+
+from aicir import double_excitation
+
+
+def test_double_excitation_matrix_couples_0011_and_1100():
+    m = gate_to_matrix({"type": "double_excitation", "qubits": [0, 1, 2, 3],
+                        "parameter": 0.8}, cir_qubits=4, backend=NumpyBackend())
+    c, s = math.cos(0.4), math.sin(0.4)
+    expected = np.eye(16, dtype=complex)
+    expected[3, 3] = c
+    expected[3, 12] = -s
+    expected[12, 3] = s
+    expected[12, 12] = c
+    assert np.allclose(m, expected)
+
+
+def test_double_excitation_is_unitary_and_conserves_N():
+    m = gate_to_matrix({"type": "double_excitation", "qubits": [0, 1, 2, 3],
+                        "parameter": 1.1}, cir_qubits=4, backend=NumpyBackend())
+    assert np.allclose(m.conj().T @ m, np.eye(16))
+    N = _num_op(4)
+    assert np.allclose(m.conj().T @ N @ m, N)
+
+
+def test_double_excitation_factory_serializes_qubits_list():
+    d = double_excitation(0.3, 0, 1, 2, 3).to_dict()
+    assert d["type"] == "double_excitation" and d["qubits"] == [0, 1, 2, 3]
