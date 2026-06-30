@@ -213,6 +213,8 @@ def _parse_report(text: str) -> dict:
         "wall_clock": grab(r"total wall-clock time\s*:\s*([\d.]+)", float),
         "fine_tuned": grab(r"fine-tuned energy\s*:\s*([-\d.]+)", float),
         "baseline": grab(r"baseline VQE\s*:\s*([-\d.]+)", float),
+        "layers": grab(r"layers \(depth\)\s*:\s*(\d+)", int),
+        "gradient": grab(r"gradient\s*:\s*(\S+)"),
     }
     qt = re.search(r"qubits / terms\s*:\s*(\d+)\s*/\s*(\d+)", text)
     if qt:
@@ -258,6 +260,9 @@ def render_markdown(
     wall_h = wall / 3600.0 if wall is not None else float("nan")
     n_terms = report.get("n_terms", 1313)
     ws = report.get("world_size", 8)
+    layers = report.get("layers") or cfg["layers"]
+    gradient = report.get("gradient") or "ad"
+    grad_label = {"psr": "参数移位 `psr`", "ad": "自动微分 `ad`"}.get(gradient, f"`{gradient}`")
 
     # 精确能量相关
     if exact_energy is not None:
@@ -302,21 +307,21 @@ def render_markdown(
 结论：
 
 - 保存线路（`BeH2_cir_spin.py`）经 statevector 复算得到 `{circuit_energy:.10f} Ha`，与 NPU 运行报告的 `fine-tuned energy = {ft:.10f} Ha` 一致，相差约 `{abs(delta_report):.2e} Ha`，源于 NPU complex64 精度与求值路径差异。
-- 值得注意的是，同一次 NPU 运行中**固定 ansatz 的 VQE 基线 `{base:.10f} Ha` 比 QAS 搜索到的线路更低（更优）约 `{gap_mha:.2f} mHa`**。也就是说，在这组 16 比特 / `L={cfg['layers']}` 配置下，supernet 搜索本身没有收敛到优于固定基线的结构——这与 H2O 的 NPU 版（`demos/H2O/result_npu.md`）观察到的现象一致：更大的搜索空间加剧了权重共享 supernet 的“竞争”，最终选出的子线路欠优化。若要改善，可考虑增大 `supernet_steps`/`finetune_steps`、调整 `supernet_num (W)` 或减小层数。
+- 值得注意的是，同一次 NPU 运行中**固定 ansatz 的 VQE 基线 `{base:.10f} Ha` 比 QAS 搜索到的线路更低（更优）约 `{gap_mha:.2f} mHa`**。也就是说，在这组 16 比特 / `L={layers}` 配置下，supernet 搜索本身没有收敛到优于固定基线的结构——这与 H2O 的 NPU 版（`demos/H2O/result_npu.md`）观察到的现象一致：更大的搜索空间加剧了权重共享 supernet 的“竞争”，最终选出的子线路欠优化。若要改善，可考虑增大 `supernet_steps`/`finetune_steps`、调整 `supernet_num (W)` 或减小层数。
 
 ## 搜索配置
 
 本次 NPU 运行（见 `demos/BeH2/output_spin.txt` 头部，对应 `demos/BeH2/BeH2_npu.py`）的设置：
 
 - 设备：{ws} 块 Ascend NPU，`device={report.get('device', 'npu:0')}`，`world_size={ws}`，`mode={report.get('mode', 'safe')}`（与单卡数值等价的搜索内分片）
-- 量子比特数：{report.get('n_qubits', 16)}，层数（深度）：{cfg['layers']}
+- 量子比特数：{report.get('n_qubits', 16)}，层数（深度）：{layers}
 - HF 参考态占据比特：`({hf})`
 - 单比特门池：`{{i}}`，用于保留 supernet 每层可跳过的占位门
 - 两比特门池：`{{single_excitation}}`，连接来自 closed-shell spin-preserving singles
 - 四比特门池：`{{double_excitation}}`，连接来自 closed-shell paired doubles
 - 超网络数 `supernet_num={cfg['supernet_num']}`，搜索步数 `supernet_steps={cfg['supernet_steps']}`，排序数 `ranking_num={cfg['ranking_num']}`，微调步数 `finetune_steps={cfg['finetune_steps']}`
 - 学习率 `learning_rate={cfg['learning_rate']}`，微调学习率 `finetune_learning_rate={cfg['finetune_learning_rate']}`
-- 梯度方式：参数移位 `psr`（`--gradient psr`）
+- 梯度方式：{grad_label}（`--gradient {gradient}`）
 - 随机种子 `seed={report.get('seed', cfg['seed'])}`（所有 rank 同 seed，保证权重/候选集一致）
 - 任务 `task="{cfg['task']}"`
 - 总墙钟时间：约 {wall:.1f} s（约 {wall_h:.2f} 小时）
@@ -365,7 +370,7 @@ circuit = {circuit_energy:.10f} Ha
 
 ```bash
 # 在 {ws} 块 Ascend NPU 上重新搜索（需 torch_npu，约 {wall_h:.0f} 小时）
-torchrun --nproc_per_node={ws} demos/BeH2/BeH2_npu.py --gradient psr --output output_spin.txt
+torchrun --nproc_per_node={ws} demos/BeH2/BeH2_npu.py --gradient {gradient} --output output_spin.txt
 
 # 仅根据已记录的线路重新绘图
 python -m demos.BeH2.BeH2_cir_spin

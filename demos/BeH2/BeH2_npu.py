@@ -25,15 +25,26 @@ PPO-RB 面向小规模目标态制备，不适合 16 量子比特分子哈密顿
   | 吞吐 | ~1×（rank 0 瓶颈） | ~world_size× |
   | 适用 | 复现/正确性基线 | 提速、加大探索 |
 
-16 比特 BeH2 Hamiltonian 含 1313 个 Pauli 项。NPU 版本默认使用参数移位梯度，
-避免 autograd 为每个 Pauli 项保留大反向图；如需对比可传 ``--gradient ad``。
+16 比特 BeH2 Hamiltonian 含 1313 个 Pauli 项。本版本默认使用 autograd 梯度
+（``--gradient ad``，每步 1 次前向 + 1 次 backward，比 psr 快约 2P 倍，已通过
+``_NpuHamiltonianExpectationFn`` 消除 complex64 瓶颈）；如需逐位可复现的基线可传
+``--gradient psr`` 改用参数移位。
+
+按 ``demos/BeH2/result_spin.md`` 的结论调参：相比 8 卡 / L=4 的旧版，本版本默认
+**减小层数（L=3）** 并改用激发门池（``single_excitation`` / ``double_excitation``），
+以缓解权重共享 supernet 在大搜索空间下选出欠优子线路的问题。
 
 每个 rank 通过 ``LOCAL_RANK`` 绑定一张 NPU，与 ``demos/demo_npu.py`` /
 ``aicir/qas/README.md`` 的 NPU 约定一致。搜索完成后返回的 ``SupernetResult``
 在所有 rank 上均为全局最优，由 rank 0 落盘：
 
-- ``output.txt``         : 分片搜索结果的文本报告（模式、卡数、能量、线路指标）
-- ``BeH2_npu_cir.qasm`` / ``BeH2_npu_cir.py`` : 全局最优线路
+- ``output_spin.txt``     : 分片搜索结果的文本报告（模式、卡数、能量、线路指标）
+- ``BeH2_npu_cir.qasm``   : 全局最优线路（QASM；激发门暂不支持时跳过）
+- ``BeH2_cir_spin.py``    : 全局最优线路（Python）
+- ``BeH2_cir_spin.png``   : 全局最优线路图
+
+分析文件 ``result_spin.md``（精确基态能量对比）由 ``demos/BeH2/BeH2_result_spin.py``
+解析 ``output_spin.txt`` 与 ``BeH2_cir_spin.py`` 后生成。
 
 运行方式（4 卡）：
 
@@ -95,7 +106,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="BeH2 16-qubit supernet VQE QAS on 4 Ascend NPU (task-parallel).",
     )
-    parser.add_argument("--layers", type=int, default=4)
+    parser.add_argument("--layers", type=int, default=3)
     parser.add_argument("--supernet-num", type=int, default=6)
     parser.add_argument("--supernet-steps", type=int, default=300)
     parser.add_argument("--ranking-num", type=int, default=120)
@@ -115,14 +126,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--gradient",
         choices=("psr", "ad"),
-        default="psr",
-        help="梯度方式：psr=参数移位（默认）；ad=autograd（每步 1 次前向+1 次 backward，比 psr 快约 2P 倍；"
-             "需 Ascend float32 autograd 可用，已通过 _NpuHamiltonianExpectationFn 消除 complex64 瓶颈）。",
+        default="ad",
+        help="梯度方式：ad=autograd（默认，每步 1 次前向+1 次 backward，比 psr 快约 2P 倍；"
+             "需 Ascend float32 autograd 可用，已通过 _NpuHamiltonianExpectationFn 消除 complex64 瓶颈）；"
+             "psr=参数移位（逐位可复现的基线）。",
     )
     parser.add_argument(
         "--output",
-        default="output.txt",
-        help="文本报告路径（默认写在脚本同目录）。",
+        default="output_spin.txt",
+        help="文本报告路径（默认写在脚本同目录）；analysis 文件 result_spin.md 由 "
+             "BeH2_result_spin.py 解析此报告后生成。",
     )
     parser.add_argument(
         "--allow-cpu-fallback",
@@ -169,7 +182,9 @@ def _write_report(
         f"  baseline VQE       : {record['baseline_vqe_energy']:+.10f} Ha",
         f"  excitations         : {record['excitations']} "
         f"(single={record['two_qubit']}, double={record['four_qubit']})",
-        "  circuit files      : BeH2_npu_cir.qasm, BeH2_npu_cir.py",
+        f"  layers (depth)     : {record['layers']}",
+        f"  gradient            : {record['gradient']}",
+        "  circuit files      : BeH2_npu_cir.qasm, BeH2_cir_spin.py, BeH2_cir_spin.png",
         "",
     ]
     output_path.write_text("\n".join(lines), encoding="utf-8")
@@ -230,6 +245,8 @@ def main(argv: list[str] | None = None) -> None:
     record = {
         "seed": args.seed,
         "device": device,
+        "layers": args.layers,
+        "gradient": args.gradient,
         "fine_tuned_energy": float(metrics["fine_tuned_energy"]),
         "baseline_vqe_energy": float(metrics["baseline_vqe_energy"]),
         "cnot": int(metrics["selected_cnot_count"]),
@@ -270,9 +287,28 @@ def main(argv: list[str] | None = None) -> None:
         else:
             print(f"OpenQASM 3.0 skipped: {qasm_message}")
 
-        py_path = out_dir / "BeH2_npu_cir.py"
-        save_circuit_python(result.best_circuit, py_path, func_name="build_beh2_npu_qas_circuit")
+        py_path = out_dir / "BeH2_cir_spin.py"
+        save_circuit_python(
+            result.best_circuit,
+            py_path,
+            func_name="build_beh2_npu_qas_circuit",
+            figure_name="BeH2_cir_spin.png",
+            title="BeH2 supernet ground-state ansatz (spin-preserving)",
+        )
         print(f"Python circuit saved to: {py_path}")
+
+        png_path = out_dir / "BeH2_cir_spin.png"
+        try:
+            from aicir.visual import plot
+
+            plot(
+                result.best_circuit,
+                png_path,
+                title="BeH2 supernet ground-state ansatz (spin-preserving, L=%d)" % args.layers,
+            )
+            print(f"Circuit figure saved to: {png_path}")
+        except Exception as exc:  # matplotlib 可选；NPU 机器无 matplotlib 时跳过绘图
+            print(f"Circuit figure skipped: {exc}")
 
 
 if __name__ == "__main__":
