@@ -1,6 +1,6 @@
 from demos.BeH2.BeH2 import beh2_vqe_qas_kwargs
 from demos.CH4.CH4 import ch4_vqe_qas_kwargs
-from demos.H2O.H2O_dqas import h2o_dqas_config
+from demos.H2O.H2O_dqas import _validate_requested_device, h2o_dqas_config
 from demos.H2O.H2O import h2o_vqe_qas_config
 from demos.LiH.LiH import lih_vqe_qas_config
 
@@ -33,3 +33,17 @@ def test_h2o_dqas_demo_uses_excitation_pool():
     assert cfg.single_excitations
     assert cfg.double_excitations
     assert cfg.hf_occupied_qubits
+
+
+def test_h2o_dqas_rejects_out_of_range_npu_device():
+    message = _validate_requested_device("npu:2", npu_count=2)
+
+    assert message is not None
+    assert "npu:2" in message
+    assert "npu:0..npu:1" in message
+
+
+def test_h2o_dqas_accepts_cpu_and_valid_npu_device():
+    assert _validate_requested_device("cpu", npu_count=0) is None
+    assert _validate_requested_device("npu:1", npu_count=2) is None
+    assert _validate_requested_device("npu", npu_count=1) is None
