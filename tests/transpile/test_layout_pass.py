@@ -6,7 +6,7 @@ import pytest
 from aicir.core.circuit import Circuit, cx, hadamard, rz
 from aicir.devices import Target
 from aicir.ir import circuit_gate_dicts
-from aicir.transpile import LayoutPass, PassManager
+from aicir.transpile import LayoutPass, PassManager, RoutingPass
 
 
 def test_trivial_layout_is_identity():
@@ -46,6 +46,49 @@ def test_physical_out_of_target_range_rejected():
     target = Target(n_qubits=2)
     with pytest.raises(ValueError):
         LayoutPass({0: 0, 1: 5}, target=target).run(cir)
+
+
+def _swaps(circuit: Circuit) -> int:
+    return sum(1 for g in circuit_gate_dicts(circuit) if g["type"] == "swap")
+
+
+def test_auto_layout_places_interacting_qubits_adjacent():
+    # 逻辑 0、2 频繁交互；line 拓扑下平凡布局需路由，auto 布局应让其相邻 -> 0 SWAP。
+    cir = Circuit(cx(2, [0]), cx(2, [0]), hadamard(1), n_qubits=3)
+    target = Target(n_qubits=3, coupling_map=[(0, 1), (1, 2)])
+
+    trivial = RoutingPass(target=target).run(LayoutPass(target=target).run(cir))
+    auto = RoutingPass(target=target).run(LayoutPass("auto", target=target).run(cir))
+
+    assert _swaps(trivial) > 0
+    assert _swaps(auto) == 0
+    # 交互对映射到相邻物理比特
+    m = LayoutPass("auto", target=target)
+    m.run(cir)
+    assert target.coupled(m.last_layout[0], m.last_layout[2])
+
+
+def test_auto_layout_is_injective_and_in_range():
+    cir = Circuit(cx(1, [0]), cx(3, [2]), n_qubits=4)
+    target = Target(n_qubits=4, coupling_map=[(0, 1), (1, 2), (2, 3)])
+    lp = LayoutPass("auto", target=target)
+    lp.run(cir)
+    physical = list(lp.last_layout.values())
+    assert len(set(physical)) == len(physical)
+    assert all(0 <= p < 4 for p in physical)
+
+
+def test_auto_layout_requires_target():
+    cir = Circuit(cx(1, [0]), n_qubits=2)
+    with pytest.raises(ValueError):
+        LayoutPass("auto").run(cir)
+
+
+def test_auto_layout_fully_connected_is_identity():
+    cir = Circuit(cx(2, [0]), n_qubits=3)
+    target = Target(n_qubits=3)  # fully connected
+    out = LayoutPass("auto", target=target).run(cir)
+    assert circuit_gate_dicts(out) == circuit_gate_dicts(cir)
 
 
 def test_runs_inside_passmanager_by_name():

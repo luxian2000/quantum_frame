@@ -3,10 +3,12 @@
 import numpy as np
 
 from aicir import Circuit, cx, hadamard, pauli_x
+from aicir.devices import Target
 from aicir.transpile import (
     CancelInversePass,
     LayoutPass,
     PassManager,
+    RoutingPass,
     TranspileResult,
 )
 
@@ -36,6 +38,27 @@ def test_run_with_result_captures_layout():
     assert result.layout == {0: 1, 1: 0}
     assert "LayoutPass" in result.passes
     assert result.circuit.n_qubits == 2
+
+
+def test_run_with_result_captures_routing_permutation():
+    # 距离-3 的 cx 路由后比特置换被携带；layout 记录最终 logical->physical wire。
+    circuit = Circuit(cx(target_qubit=3, control_qubits=[0]), n_qubits=4)
+    target = Target(n_qubits=4, coupling_map=[(0, 1), (1, 2), (2, 3)])
+    rp = RoutingPass(target=target)
+    result = PassManager([rp]).run_with_result(circuit)
+    assert result.layout == rp.final_layout
+    assert result.layout != {q: q for q in range(4)}
+
+
+def test_run_with_result_composes_layout_then_routing():
+    # LayoutPass(logical->physical) ∘ RoutingPass(physical 置换) 组合为 logical->final wire。
+    circuit = Circuit(cx(target_qubit=1, control_qubits=[0]), n_qubits=2)
+    target = Target(n_qubits=4, coupling_map=[(0, 1), (1, 2), (2, 3)])
+    layout = LayoutPass(initial_layout={0: 0, 1: 3}, target=target)
+    routing = RoutingPass(target=target)
+    result = PassManager([layout, routing]).run_with_result(circuit)
+    composed = {q: routing.final_layout[p] for q, p in layout.last_layout.items()}
+    assert result.layout == composed
 
 
 def test_run_with_result_default_metadata_empty():

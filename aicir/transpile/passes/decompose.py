@@ -16,13 +16,50 @@
 
 from __future__ import annotations
 
+import math
+
+import numpy as np
+
 from ...core.circuit import Circuit
-from ...gates import canonical_gate_name, gate_decomposition
+from ...gates import canonical_gate_name, gate_decomposition, gate_matrix
 from ...ir import circuit_gate_dicts, instruction_controls, instruction_qubits
 from ..base import TransformationPass
 from ._local_rewrite import circuit_from_gates
 
 __all__ = ["DecomposePass"]
+
+_ZYZ_BASIS = frozenset({"rz", "ry"})
+
+
+def _zyz_angles(u: np.ndarray) -> tuple[float, float, float]:
+    """把 2x2 幺正分解为 ``Rz(beta)·Ry(gamma)·Rz(delta)`` 的角度（忽略全局相位）。"""
+    det = u[0, 0] * u[1, 1] - u[0, 1] * u[1, 0]
+    v = u / np.sqrt(det + 0j)  # 归一到 SU(2)
+    c, s = abs(v[0, 0]), abs(v[1, 0])
+    gamma = 2.0 * math.atan2(s, c)
+    if s < 1e-12:  # 对角：仅 beta+delta 可定
+        return float(2.0 * np.angle(v[1, 1])), float(gamma), 0.0
+    if c < 1e-12:  # 反对角：仅 beta-delta 可定
+        ang = float(np.angle(v[1, 0]))
+        return ang, float(gamma), -ang
+    a, b = float(np.angle(v[1, 1])), float(np.angle(v[1, 0]))
+    return a + b, float(gamma), a - b
+
+
+def _zyz_decomposition(name: str, gate: dict, qubit: int) -> list[dict] | None:
+    """单比特门 -> ``rz·ry·rz`` 门字典序列（基底等价至全局相位）；不可分解返回 ``None``。"""
+    local = gate_matrix(name, gate.get("parameter", ()), None)
+    if local is None:
+        return None
+    u = np.asarray(local, dtype=complex)
+    if u.shape != (2, 2):
+        return None
+    beta, gamma, delta = _zyz_angles(u)
+    return [
+        {"type": "rz", "target_qubit": qubit, "parameter": delta},
+        {"type": "ry", "target_qubit": qubit, "parameter": gamma},
+        {"type": "rz", "target_qubit": qubit, "parameter": beta},
+    ]
 
 
 def _apply_rule(rule, gate: dict) -> list[dict] | None:
@@ -68,6 +105,17 @@ class DecomposePass(TransformationPass):
             if replacement is not None:
                 out.extend(replacement)
                 continue
+            # 单比特门：基底含 rz/ry 时经 ZYZ 翻译到目标基底（等价至全局相位）。
+            qubits = instruction_qubits(gate)
+            if (
+                len(qubits) == 1
+                and not instruction_controls(gate)
+                and _ZYZ_BASIS <= self.basis_gates
+            ):
+                zyz = _zyz_decomposition(name, gate, int(qubits[0]))
+                if zyz is not None:
+                    out.extend(zyz)
+                    continue
             if self.skip_unsupported:
                 out.append(gate)
                 continue

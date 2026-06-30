@@ -260,40 +260,43 @@ out = DecomposePass(target=Target(n_qubits=4, basis_gates=("cx", "hadamard", "rz
 | `skip_unsupported` | `False` | `True` 时对不在门集且无规则的门保持原样；`False` 时这类双比特门抛 `ValueError` |
 
 - 受控形式仅支持单控制位（`control_states=(1,)`）。
-- 规则展开产生 `hadamard`/`rz`；本片不再把任意单比特门进一步做 Euler 基底翻译（留待后续）。
+- 注册表规则展开产生 `hadamard`/`rz`。此外：基底含 `rz` 与 `ry` 时，任意**不受控单比特门**经 **ZYZ（Euler）翻译**为 `rz·ry·rz`（经 `GateSpec.matrix` 取 2x2 矩阵，等价**至全局相位**——对不受控单比特门物理无关）。基底不含 `rz`/`ry` 时单比特门按旧行为原样保留。
 
 ### 4.7  LayoutPass — 逻辑→物理布局
 
-按给定的 logical→physical 映射重新标号比特，不插入任何门，线路在比特置换意义下与原线路等价。
+重新标号比特，不插入任何门，线路在比特置换意义下与原线路等价。支持显式 / 平凡 / 自动三种模式。
 
 ```python
 from aicir.transpile import LayoutPass
 from aicir.devices import Target
 
 target = Target(n_qubits=4, coupling_map=[(0, 1), (1, 2), (2, 3)])
-out = LayoutPass(initial_layout={0: 2, 1: 3}, target=target).run(circuit)  # 输出 n_qubits=4
-out = LayoutPass([3, 1]).run(circuit)   # 序列形式：逻辑 0→3, 逻辑 1→1
-out = LayoutPass().run(circuit)          # None=平凡恒等布局
+out = LayoutPass(initial_layout={0: 2, 1: 3}, target=target).run(circuit)  # 显式；输出 n_qubits=4
+out = LayoutPass([3, 1]).run(circuit)        # 序列形式：逻辑 0→3, 逻辑 1→1
+out = LayoutPass().run(circuit)               # None=平凡恒等布局
+out = LayoutPass("auto", target=target).run(circuit)  # 自动：按交互频率贪心相邻化
 ```
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| `initial_layout` | `None` | `dict`（`logical→physical`）或序列（下标=逻辑位，值=物理位）；`None`=恒等 |
-| `target` | `None` | 给出时输出 `n_qubits` 取 `target.n_qubits` 并校验物理位范围 |
+| `initial_layout` | `None` | `dict`（`logical→physical`）/ 序列（下标=逻辑位，值=物理位）/ `"auto"` / `None`=恒等 |
+| `target` | `None` | 给出时输出 `n_qubits` 取 `target.n_qubits` 并校验物理位范围；`"auto"` 必填 |
 
 - 映射必须单射（不同逻辑位不能映射到同一物理位）。
-- 自动择优布局（按拓扑/噪声）留待后续。
+- `"auto"`：按双比特门交互频率降序，贪心地把高频交互的逻辑对放到耦合图相邻的物理比特上，减少后续 `RoutingPass` 的 SWAP；需 `target`，全连接时退为恒等。为贪心启发式（非全局最优），按噪声择优留待后续。
 
 ### 4.8  RoutingPass — 拓扑路由
 
-沿 `Target.coupling_map` 最短路径插入 SWAP，使每个双比特门作用在相邻物理比特上；施加该门后按相反顺序插回 SWAP 复位，因此整条线路与原线路**完全幺正等价**（无需跟踪置换）。
+沿 `Target.coupling_map` 最短路径插入 SWAP，使每个双比特门作用在相邻物理比特上。采用**置换跟踪**：施加该门后**不复位** SWAP，而是把由此产生的比特置换向前携带，后续门按当前位置重新映射。因此整条线路与原线路等价**至最终比特置换**（`final_layout`），SWAP 数量比“插入-复位”方案大致减半，且相邻化的比特对在后续门上无需再插 SWAP。
 
 ```python
 from aicir.transpile import RoutingPass
 from aicir.devices import Target
 
 target = Target(n_qubits=4, coupling_map=[(0, 1), (1, 2), (2, 3)])
-out = RoutingPass(target=target).run(circuit)
+rp = RoutingPass(target=target)
+out = rp.run(circuit)
+rp.final_layout   # {logical -> physical wire}，覆盖全部物理线，未移动者恒等
 ```
 
 | 参数 | 说明 |
@@ -302,7 +305,8 @@ out = RoutingPass(target=target).run(circuit)
 
 - 假设线路比特已是物理比特（通常先经 `LayoutPass`）。
 - 仅支持单比特门与恰好 2 个不同比特的双比特门；更高阶门（如 `toffoli`）抛 `NotImplementedError`。
-- SWAP 数非最优；基于置换跟踪的最优路由留待后续。
+- 运行后 `final_layout` 给出最终 `logical -> physical wire` 置换；`last_layout` 镜像它（恒等时为 `None`），供 `PassManager.run_with_result` 记入 `TranspileResult.layout`，并与前置 `LayoutPass` 链式组合（`composed[q] = routing[layout[q]]`）。读测量结果时需按该置换还原比特顺序。
+- SWAP 数仍非全局最优（贪心、未跨门优化插入顺序）；基于代价的最优路由留待后续。
 - 典型组合：`LayoutPass → RoutingPass → DecomposePass`（把插入的 `swap` 再分解为 `cx`）。
 
 ---

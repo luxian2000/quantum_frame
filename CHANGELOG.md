@@ -2,6 +2,34 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-06-30
+
+### Added
+
+- **`LayoutPass` 自动布局 `initial_layout="auto"`（NEXT.md §2 transpile 硬化）。**
+  按双比特门交互频率降序，贪心地把高频交互的逻辑对放到耦合图相邻的物理比特上，
+  减少后续 `RoutingPass` 的 SWAP。需 `target`；全连接时退为恒等。贪心启发式（非全局最优）。
+  配套 `tests/transpile/test_layout_pass.py`。
+- **`DecomposePass` 单比特 ZYZ 基底翻译（NEXT.md §2 transpile 硬化）。**
+  基底含 `rz` 与 `ry` 时，任意不受控单比特门经 `GateSpec.matrix` 取 2x2 矩阵、
+  Euler 分解为 `rz·ry·rz`（等价**至全局相位**）。基底不含 `rz`/`ry` 时按旧行为原样保留。
+  配套 `tests/transpile/test_decompose_pass.py`。
+
+### Changed
+
+- **`RoutingPass` 升级为置换跟踪路由（NEXT.md §2 transpile 硬化）。**
+  - 插入 SWAP 后**不再复位**：把由路由产生的比特置换向前携带，后续门（含单比特门）
+    按当前位置重新映射。整线路与原线路等价**至最终比特置换**，SWAP 数较旧“插入-复位”
+    方案大致减半，且相邻化的比特对在后续门上无需再插 SWAP（跨门复用）。
+  - 新增运行后属性 `final_layout`（`logical -> physical wire`，覆盖全部物理线，未移动者恒等）
+    与 `last_layout`（镜像，恒等时 `None`）。
+  - `PassManager.run_with_result` 现按 pass 顺序**组合**各 `last_layout`，使
+    `LayoutPass → RoutingPass` 链式得到 `composed[q] = routing[layout[q]]` 并记入
+    `TranspileResult.layout`。
+  - **接口变化**：路由输出不再与原线路完全幺正等价，而是等价至 `final_layout` 置换；
+    读测量结果时需据此还原比特顺序。
+  - 配套 `tests/transpile/test_routing_pass.py`、`tests/transpile/test_transpile_result.py`。
+
 ## 2026-06-29
 
 ### Added

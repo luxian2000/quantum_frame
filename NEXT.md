@@ -119,7 +119,13 @@ optimized = pm.run(circuit)
 
 短期可以让 `optimize_circuit` 继续存在，但内部委托给默认 `PassManager`。
 
-当前状态：`aicir.transpile` 提供 `TransformationPass`/`PassManager`/`default_optimization_pipeline`，本地优化 pass `CancelInversePass`/`MergeRotationsPass`/`CommuteSingleQubitPass`，结构 pass `ValidatePass`/`CanonicalizePass`，以及第二批面向硬件目标的 pass：`DecomposePass`（高级门分解到目标门集，内置 `swap→3×cx`、`cz→h·cx·h`、`cy→rz·cx·rz` 标准规则，仅单控制位，规则展开产生 `hadamard`/`rz`，暂不做任意单比特门的 Euler 基底翻译）、`LayoutPass`（显式/平凡 logical→physical 重标号，比特置换意义下等价）、`RoutingPass`（沿耦合图最短路径插 SWAP 并对称复位，整线路完全幺正等价，SWAP 数非最优）。三者消费 `aicir.devices.Target`（门集 + 耦合拓扑）；`PassManager` 字符串名支持 `decompose`/`layout`。`DecomposePass` 已改为 **`GateSpec.decomposition` 字段驱动**（NEXT.md §7）——分解规则从注册表读取，注册自定义门时携带 `decomposition` 即被自动识别，无需改动 pass。尚未开始：基于置换跟踪的最优路由、自动择优布局、任意单比特门的目标基底翻译。
+当前状态：`aicir.transpile` 提供 `TransformationPass`/`PassManager`/`default_optimization_pipeline`，本地优化 pass `CancelInversePass`/`MergeRotationsPass`/`CommuteSingleQubitPass`，结构 pass `ValidatePass`/`CanonicalizePass`，以及第二批面向硬件目标的 pass：`DecomposePass`（高级门分解到目标门集，内置 `swap→3×cx`、`cz→h·cx·h`、`cy→rz·cx·rz` 标准规则，仅单控制位，规则展开产生 `hadamard`/`rz`，暂不做任意单比特门的 Euler 基底翻译）、`LayoutPass`（显式/平凡 logical→physical 重标号，比特置换意义下等价）、`RoutingPass`（沿耦合图最短路径插 SWAP）。三者消费 `aicir.devices.Target`（门集 + 耦合拓扑）；`PassManager` 字符串名支持 `decompose`/`layout`。`DecomposePass` 已改为 **`GateSpec.decomposition` 字段驱动**（NEXT.md §7）——分解规则从注册表读取，注册自定义门时携带 `decomposition` 即被自动识别，无需改动 pass。
+
+`RoutingPass` 已升级为**置换跟踪**路由（2026-06-30）：插入 SWAP 后**不复位**，把比特置换向前携带，后续门按当前位置重映射；整线路等价**至最终置换**（`final_layout`，覆盖全部物理线），SWAP 数较“插入-复位”方案大致减半且可跨门复用。`final_layout`/`last_layout` 暴露置换，`PassManager.run_with_result` 将其记入 `TranspileResult.layout` 并与前置 `LayoutPass` 链式组合（`composed[q] = routing[layout[q]]`）。配套 `tests/transpile/test_routing_pass.py`、`tests/transpile/test_transpile_result.py`。
+
+`LayoutPass` 新增**自动布局**（2026-06-30）：`initial_layout="auto"` 按双比特门交互频率贪心地把高频交互逻辑对放到耦合图相邻物理比特上，减少 `RoutingPass` 的 SWAP（需 `target`，全连接退为恒等，贪心启发式非全局最优）。`DecomposePass` 新增**单比特 ZYZ 翻译**（2026-06-30）：基底含 `rz`+`ry` 时任意不受控单比特门经 `GateSpec.matrix` 取 2x2 矩阵、Euler 分解为 `rz·ry·rz`（等价至全局相位）。配套 `tests/transpile/test_layout_pass.py`、`tests/transpile/test_decompose_pass.py`。
+
+尚未开始：基于代价的全局最优路由（当前为贪心、未跨门优化插入顺序）、按噪声/校准择优的布局、受控门的目标基底翻译。
 
 ### 3. 引入硬件目标描述 `Target`
 
