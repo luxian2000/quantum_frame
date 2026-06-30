@@ -1406,12 +1406,18 @@ def beh2_vqe_qas_kwargs() -> dict:
     }
 
 
-def save_circuit_python(circuit, file_path: Path, func_name: str = "build_beh2_qas_circuit") -> None:
+def save_circuit_python(
+    circuit,
+    file_path: Path,
+    func_name: str = "build_beh2_qas_circuit",
+    figure_name: str = "BeH2_cir.png",
+    title: str = "BeH2 supernet ground-state ansatz",
+) -> None:
     source = circuit_to_python_source(
         circuit,
         func_name=func_name,
-        figure_name="BeH2_cir.png",
-        title="BeH2 supernet ground-state ansatz",
+        figure_name=figure_name,
+        title=title,
     )
     source = (
         source.replace("by demos/H2O/H2O.py.", "by demos/BeH2/BeH2.py.")
