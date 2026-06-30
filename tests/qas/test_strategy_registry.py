@@ -23,6 +23,13 @@ def test_supernet_strategy_registered_as_import_side_effect():
     assert isinstance(get_strategy("supernet"), SearchStrategy)
 
 
+def test_dqas_strategy_registered_as_import_side_effect():
+    assert "dqas" in registered_strategies()
+    spec = get_spec("dqas")
+    assert spec is not None and spec.requires_torch is True
+    assert isinstance(get_strategy("dqas"), SearchStrategy)
+
+
 def test_nonmigrated_methods_fall_back_to_table():
     for method in (
         "crlqas",

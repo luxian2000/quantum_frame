@@ -54,6 +54,7 @@ def test_available_qas_methods_contains_public_names():
         "ppr_dql",
         "crlqas",
         "qdrats",
+        "dqas",
     )
 
 

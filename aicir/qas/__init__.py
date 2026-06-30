@@ -91,6 +91,7 @@ from .core import config
 _OPTIONAL_RL_EXPORTS: list[str] = []
 try:
     from .algorithms.crlqas import AdamSPSAConfig, CRLQASConfig, CRLQASResult, crlqas, train_crlqas
+    from .algorithms.dqas import DQASConfig, DQASResult, DifferentiableQAS, dqas, train_dqas
     from .algorithms.pprdql import PPRDQLConfig, PPRDQLPolicy, PPRDQLResult, ppr_dql_state_to_circuit, train_ppr_dql
     from .algorithms.pporb import PPORollbackConfig, ppo_rb_qas
     from .algorithms.qdrats import QDRATSConfig, QDRATSResult, QuantumDARTS, qdrats, train_qdrats
@@ -116,6 +117,9 @@ else:
             "Architecture",
             "CRLQASConfig",
             "CRLQASResult",
+            "DQASConfig",
+            "DQASResult",
+            "DifferentiableQAS",
             "LayerArchitecture",
             "PPRDQLConfig",
             "PPRDQLPolicy",
@@ -131,6 +135,7 @@ else:
             "available_qas_methods",
             "classification_supernet",
             "crlqas",
+            "dqas",
             "default_qas_config",
             "h2_vqe_supernet",
             "ppr_dql_state_to_circuit",
@@ -139,6 +144,7 @@ else:
             "run",
             "supernet_qas",
             "train_crlqas",
+            "train_dqas",
             "train_ppr_dql",
             "train_qdrats",
             "train_supernet",

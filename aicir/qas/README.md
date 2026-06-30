@@ -2,7 +2,7 @@
 
 `aicir.qas` 是量子构架搜索（Quantum Architecture Search, QAS）模块。
 
-该模块用于自动搜索量子线路结构。当前仓库中包含多类 QAS 实现：一类面向变分量子算法（VQA）的 ansatz 架构搜索，一类面向给定目标态或哈密顿量任务的强化学习式量子线路搜索，另有面向 VQE ansatz 拓扑压缩的多目标遗传搜索。算法实现位于 `aicir/qas/algorithms/`；运行 `supernet.py`、`crlqas.py`、`pprdql.py`、`pporb.py` 和 `qdrats.py` 需要可用的 `torch`，`mogvqe.py` 的默认路径不依赖 `torch`。
+该模块用于自动搜索量子线路结构。当前仓库中包含多类 QAS 实现：一类面向变分量子算法（VQA）的 ansatz 架构搜索，一类面向给定目标态或哈密顿量任务的强化学习式量子线路搜索，另有面向 VQE ansatz 拓扑压缩的多目标遗传搜索。算法实现位于 `aicir/qas/algorithms/`；运行 `supernet.py`、`crlqas.py`、`pprdql.py`、`pporb.py`、`qdrats.py` 和 `dqas.py` 需要可用的 `torch`，`mogvqe.py` 的默认路径不依赖 `torch`。
 
 - `algorithms/supernet.py`：基于超网络和权重共享的 VQA ansatz 架构搜索，支持分类任务和 H2 VQE 示例
 - `algorithms/mogvqe.py`：MoG-VQE（Multiobjective Genetic VQE），输入 block-based hardware-efficient ansatz，使用 NSGA-II 修改线路拓扑，并输出修改后的 aicir `Circuit`
@@ -10,6 +10,7 @@
 - `algorithms/pprdql.py`：基于 aicir 状态演化实现的 PPR-DQL（Probabilistic Policy Reuse with Deep Q-Learning）
 - `algorithms/pporb.py`：Trust Region-based PPO with Rollback 版本的量子架构搜索
 - `algorithms/qdrats.py`：QDRATS 量子架构搜索（哈密顿量能量最小化，统一入口方法名 `qdrats`）
+- `algorithms/dqas.py`：DQAS（Differentiable Quantum Architecture Search）量子架构搜索，按论文的 categorical 概率模型采样线路结构，并用 score-function/REINFORCE 估计架构梯度（统一入口方法名 `dqas`）
 
 当前代码分层：
 
@@ -54,8 +55,9 @@
 | `"ppr_dql"`            | `target_state`                             | `config`、`policy_library`           | `PPRDQLResult`     |
 | `"crlqas"`             | `hamiltonian`                              | `config`                               | `CRLQASResult`     |
 | `"qdrats"`             | `hamiltonian`                              | `config`                               | `QDRATSResult`     |
+| `"dqas"`               | `hamiltonian`                              | `config`                               | `DQASResult`       |
 
-方法名大小写不敏感，也支持常见别名，例如 `"h2"`/`"h2_vqe"`（→ `supernet_h2`）、`"ppr"`（→ `ppr_dql`）、`"crl"`（→ `crlqas`）、`"ppo"`（→ `ppo_rb`）。
+方法名大小写不敏感，也支持常见别名，例如 `"h2"`/`"h2_vqe"`（→ `supernet_h2`）、`"ppr"`（→ `ppr_dql`）、`"crl"`（→ `crlqas`）、`"ppo"`（→ `ppo_rb`）、`"differentiable_qas"`（→ `dqas`）。
 
 示例：
 
@@ -78,6 +80,8 @@ result = run("supernet", config=cfg)
 - `config.ppo_rb(...)`：PPO-RB 超参数配置
 - `config.ppr_dql(...)`：PPR-DQL 超参数配置
 - `config.crlqas(...)`：CRLQAS 超参数配置；`adam_spsa` 可传字典，例如 `config.crlqas(adam_spsa={"iterations": 10})`
+- `config.qdrats(...)`：QDRATS 超参数与搜索门池配置；`gate_pool="generic"` 或 `"excitation"`
+- `config.dqas(...)`：DQAS 超参数与搜索门池配置；`gate_pool` 可传 `"generic"` 或显式门名序列
 
 底层专用接口仍然保留，适合需要直接控制某个算法实现的用户：
 
@@ -87,6 +91,8 @@ result = run("supernet", config=cfg)
 - `ppo_rb_qas(target_density_matrix, epsilon, config=None)`
 - `train_ppr_dql(state, config=None, policy_library=None)` / `ppr_dql_state_to_circuit(...)`
 - `train_crlqas(hamiltonian, config=None)` / `crlqas(...)`
+- `train_qdrats(hamiltonian, config=None)` / `qdrats(...)`
+- `train_dqas(hamiltonian, config=None)` / `dqas(...)`
 
 可通过以下方式导入：
 
@@ -94,7 +100,58 @@ result = run("supernet", config=cfg)
 from aicir.qas import config, run
 ```
 
-### 2.1 SearchStrategy 协议与策略注册表（模块化进行中）
+### 2.1 DQAS/QDRATS 搜索门池配置
+
+`qdrats` 和 `dqas` 都通过配置对象声明搜索门池，但两者的结构语义不同：
+
+- `qdrats` 使用 slot/candidate 搜索。`gate_pool="generic"` 时，每个 target 比特一个 slot，候选为 `{rz·ry·rz, identity, cx_*}`；`gate_pool="excitation"` 时，每个给定激发算符一个 slot，候选为 `{single_excitation/double_excitation(θ), identity}`，并可用 `hf_occupied_qubits` 前置 Hartree-Fock 初态制备。
+- `dqas` 使用论文 DQAS 的全局 categorical operation pool。每个线路 placeholder 从同一个展开后的门池中采样一个 operation；`theta[position, operation, parameter]` 作为参数池复用。
+
+QDRATS generic 门池：
+
+```python
+from aicir.qas import config, run
+
+cfg = config.qdrats(
+    n_qubits=4,
+    layers=3,
+    gate_pool="generic",
+)
+
+result = run("qdrats", hamiltonian=hamiltonian, config=cfg)
+```
+
+QDRATS excitation 门池：
+
+```python
+cfg = config.qdrats(
+    n_qubits=4,
+    layers=2,
+    gate_pool="excitation",
+    single_excitations=((0, 1), (2, 3)),
+    double_excitations=((0, 1, 2, 3),),
+    hf_occupied_qubits=(0, 1),
+)
+
+result = run("qdrats", hamiltonian=hamiltonian, config=cfg)
+```
+
+DQAS 显式门池：
+
+```python
+cfg = config.dqas(
+    n_qubits=4,
+    layers=5,
+    gate_pool=("identity", "rx", "ry", "cx"),
+    two_qubit_pairs=((0, 1), (1, 2), (2, 3)),
+)
+
+result = run("dqas", hamiltonian=hamiltonian, config=cfg)
+```
+
+DQAS 当前支持的门名为 `identity`、`rx`、`ry`、`rz`、`rzryrz`、`cx`。`gate_pool="generic"` 等价于 `("identity", "rzryrz", "cx")`，其中 `cx` 默认展开为所有有向非自环连接；传 `two_qubit_pairs=((control, target), ...)` 可限制 CNOT 搜索连接。为了保证 sampled index 可复现，推荐用 tuple/list 表达门池；`pool={...}` 也可作为别名传入，但会按固定门序规范化。旧字段 `operation_pool` 仍作为兼容别名保留。
+
+### 2.2 SearchStrategy 协议与策略注册表（模块化进行中）
 
 `run(method, ...)` 的方法分发正从 `runner` 的 `_Spec` 分发表迁移为**策略注册表**，与
 `aicir.qml.diff`（`DiffMethod`）、`aicir.gates`（`GateSpec`）同一习惯：
@@ -102,14 +159,13 @@ from aicir.qas import config, run
 分两个文件，均从 `aicir.qas.core` 再导出：
 
 - `aicir.qas.core.registry`（框架，通常不动）：`SearchStrategy`（抽象基类，每种算法实现 `run(request) -> 结果`）、`StrategySpec`（`name`/`strategy`/`aliases`/`requires_torch`），配套 `register_strategy`/`unregister_strategy`/`get_strategy`/`get_spec`/`registered_strategies`。
-- `aicir.qas.core.strategies`（数据，随算法增长）：内置策略（当前 `SupernetStrategy`）的适配与注册（import 副作用，由 `runner` 触发）。**新增同类算法只改本文件**：写一个 `SearchStrategy` 子类并 `register_strategy(...)` 即可，框架无需改动。该模块同时再导出注册表 API。
+- `aicir.qas.core.strategies`（数据，随算法增长）：内置策略（当前 `SupernetStrategy` 和 `DQASStrategy`）的适配与注册（import 副作用，由 `runner` 触发）。**新增同类算法只改本文件**：写一个 `SearchStrategy` 子类并 `register_strategy(...)` 即可，框架无需改动。该模块同时再导出注册表 API。
 
 `run()` 先查注册表：命中（`get_strategy(method)` 非 `None`）则走 `strategy.run(run_config)`，
-未命中回落到 `runner` 的 `_Spec` 分发表。当前**仅 `supernet` 已迁移**为 `SupernetStrategy`
-（`requires_torch=True`）；`ppo_rb`/`ppr_dql`/`crlqas`/`qdrats`/`supernet_classification`/
+未命中回落到 `runner` 的 `_Spec` 分发表。当前 `supernet` 已迁移为 `SupernetStrategy`，
+`dqas` 已迁移为 `DQASStrategy`（均 `requires_torch=True`）；`ppo_rb`/`ppr_dql`/`crlqas`/`qdrats`/`supernet_classification`/
 `supernet_h2` 仍走分发表，行为不变，后续逐个适配。对用户而言 `run("supernet", ...)` 的
 调用方式与返回值完全不变。
-对用户而言 `run("supernet", ...)` 调用方式与返回值完全不变。
 
 ## 3. supernet：面向变分量子算法的超网络架构搜索
 
