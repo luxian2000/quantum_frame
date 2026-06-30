@@ -18,7 +18,15 @@
   `operation_pool` 兼容别名。支持门名 `identity`、`rx`、`ry`、`rz`、`rzryrz`、`cx`；
   `"generic"` 等价于 `("identity", "rzryrz", "cx")`。`cx` 默认展开为所有有向非自环连接，
   也可通过 `two_qubit_pairs=((control, target), ...)` 限制。tuple/list 保持用户顺序；
-  set 形式会按固定门序规范化以避免 sampled index 不可复现。
+  set 形式会按固定门序规范化以避免 sampled index 不可复现。另新增
+  `gate_pool="excitation"`：全局 operation pool 展开为 identity、给定
+  `single_excitations`、给定 `double_excitations`，并支持 `hf_occupied_qubits`
+  前置 Hartree-Fock 初态制备。
+- **H2O DQAS NPU demo。**
+  新增 `demos/H2O/H2O_dqas.py`，默认 `device="npu:0"`，在 H2O 6-qubit active-space
+  Hamiltonian 上用 DQAS + excitation pool 搜索基态 ansatz，写出文本报告、NPU 命名的
+  `H2O_dqas_npu_cir.py` 和 `H2O_dqas_npu_cir.png`。脚本支持 `--device cpu` dry run 以便
+  在无 Ascend 环境验证搜索、保存和绘图路径。
 - **transpile merge-rotations 支持 excitation 门。** `single_excitation`/`double_excitation`
   为固定生成元的旋转门，角度可加（`G(θ1)·G(θ2)=G(θ1+θ2)`）；`MergeRotationsPass`/
   `optimize` 现把相邻、同操作数（同顺序）的两个 excitation 门按角度相加合并，角度抵消

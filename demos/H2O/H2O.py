@@ -251,6 +251,7 @@ def circuit_to_python_source(
     func_name: str = "build_h2o_qas_circuit",
     figure_name: str = "H2O_cir.png",
     title: str = "H2O supernet ground-state ansatz",
+    function_docstring: str = "Return the supernet-searched H2O ground-state circuit.",
     generated_by: str = "demos/H2O/H2O.py",
     description: str = "supernet-searched ansatz that prepares the H2O active-space ground state.",
     regen_cmd: str = "python -m demos.H2O.H2O",
@@ -293,7 +294,7 @@ def circuit_to_python_source(
         "",
         "",
         f"def {func_name}():",
-        '    """Return the supernet-searched H2O ground-state circuit."""',
+        f'    """{function_docstring}"""',
         "    gates = [",
     ]
     for name, args in calls:

@@ -100,6 +100,54 @@ def test_dqas_operation_pool_alias_still_works():
     assert model.operation_labels == ("rz_0", "ry_0")
 
 
+def test_dqas_excitation_pool_expands_global_operations_and_hf_prep():
+    model = DifferentiableQAS(
+        DQASConfig(
+            n_qubits=4,
+            layers=1,
+            gate_pool="excitation",
+            single_excitations=((0, 1),),
+            double_excitations=((0, 1, 2, 3),),
+            hf_occupied_qubits=(1, 3),
+        )
+    )
+
+    assert model.operation_labels == ("identity", "single_0_1", "double_0_1_2_3")
+    assert model.theta.shape == (1, 3, 1)
+
+    indices = model.backend_tensor([1], dtype="long")
+    circuit, parameters = model._build_circuit(indices)
+
+    assert [gate["type"] for gate in circuit.gates[:2]] == ["pauli_x", "pauli_x"]
+    assert circuit.gates[2]["type"] == "single_excitation"
+    assert parameters
+
+
+def test_dqas_excitation_pool_runs_with_aicir_simulator():
+    from aicir import Hamiltonian
+
+    hamiltonian = Hamiltonian(n_qubits=2, terms=[("XX", -0.5), ("YY", -0.5)])
+    cfg = DQASConfig(
+        n_qubits=2,
+        layers=1,
+        gate_pool="excitation",
+        single_excitations=((0, 1),),
+        hf_occupied_qubits=(0,),
+        search_epochs=20,
+        theta_steps=2,
+        finetune_steps=30,
+        batch_size=4,
+        seed=3,
+        device="cpu",
+    )
+
+    result = train_dqas(hamiltonian=hamiltonian, config=cfg)
+
+    assert "single_excitation" in {gate["type"] for gate in result.circuit.gates}
+    assert "pauli_x" in {gate["type"] for gate in result.circuit.gates}
+    assert result.architecture_probabilities.shape == (1, 2)
+
+
 def test_dqas_config_factory_runner_and_strategy_registration():
     cfg = config.create(
         "DQAS",
