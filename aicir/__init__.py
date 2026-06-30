@@ -227,6 +227,7 @@ for _module_name in [
     "primitives",
     "qas",
     "qml",
+    "qrc",
     "transpile",
     "universal",
     "visual",
