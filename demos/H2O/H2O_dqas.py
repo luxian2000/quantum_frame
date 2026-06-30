@@ -79,6 +79,39 @@ def _device_report(device: str) -> list[str]:
     return lines
 
 
+def _validate_requested_device(device: str, npu_count: int | None = None) -> str | None:
+    """Return a user-facing error if an explicit NPU index is outside range."""
+    value = str(device).strip().lower()
+    if not value.startswith("npu"):
+        return None
+    if ":" not in value:
+        return None
+    _, raw_index = value.split(":", 1)
+    try:
+        index = int(raw_index)
+    except ValueError:
+        return f"Invalid NPU device {device!r}; expected forms like 'npu', 'npu:0', or 'npu:1'."
+
+    if npu_count is None:
+        npu_mod = getattr(torch, "npu", None)
+        if npu_mod is None:
+            return None
+        try:
+            npu_count = int(npu_mod.device_count())
+        except Exception:  # pragma: no cover - platform dependent
+            return None
+
+    if npu_count <= 0:
+        return f"Invalid NPU device {device!r}; no NPU devices are visible to torch."
+    if index < 0 or index >= npu_count:
+        valid = "npu:0" if npu_count == 1 else f"npu:0..npu:{npu_count - 1}"
+        return (
+            f"Invalid NPU device {device!r}; torch reports {npu_count} visible "
+            f"NPU device(s), so valid explicit devices are {valid}."
+        )
+    return None
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="H2O DQAS excitation search on NPU.")
     parser.add_argument("--device", default="npu:0", help="torch device, e.g. npu:0 / npu / cpu")
@@ -153,6 +186,12 @@ def main(argv: list[str] | None = None) -> None:
                 log("[warning] the run below will fail unless an 'npu' device is available.")
         for line in _device_report(args.device):
             log(line)
+        device_error = _validate_requested_device(args.device)
+        if device_error is not None:
+            log("")
+            log(f"[error] {device_error}")
+            log("[hint] In this run torch.npu.device_count() showed the valid range. Try --device npu:0 or --device npu:1.")
+            raise SystemExit(2)
 
         hamiltonian = build_h2o_hamiltonian()
         exact = exact_ground_energy(hamiltonian)
