@@ -126,6 +126,26 @@ def _is_close_to_zero(value: Any) -> bool:
         return False
 
 
+def _excitation_key(gate: dict[str, Any]) -> tuple[str, tuple[int, ...]] | None:
+    """返回 excitation 门的 (类型, 操作数) 键；非 excitation 返回 ``None``。
+
+    ``single_excitation``/``double_excitation`` 是固定生成元的旋转门，角度可加
+    （``G(θ1)·G(θ2)=G(θ1+θ2)``），故同类型、同操作数（同顺序）的相邻门可合并。
+    """
+    gtype = gate.get("type")
+    if gtype == "single_excitation":
+        a, b = gate.get("qubit_1"), gate.get("qubit_2")
+        if a is None or b is None:
+            return None
+        return ("single_excitation", (int(a), int(b)))
+    if gtype == "double_excitation":
+        qubits = gate.get("qubits")
+        if qubits is None:
+            return None
+        return ("double_excitation", tuple(int(q) for q in qubits))
+    return None
+
+
 def _try_merge_rotation_at(gates: list[dict[str, Any]], index: int, gate: dict[str, Any]) -> bool:
     prev = gates[index]
     gf = _gate_family_from_name(gate.get("type", ""))
@@ -137,6 +157,18 @@ def _try_merge_rotation_at(gates: list[dict[str, Any]], index: int, gate: dict[s
         and not (prev.get("control_qubits") or [])
         and not (gate.get("control_qubits") or [])
     ):
+        try:
+            merged_param = prev.get("parameter", 0.0) + gate.get("parameter", 0.0)
+        except TypeError:
+            return False
+        if _is_close_to_zero(merged_param):
+            del gates[index]
+        else:
+            prev["parameter"] = merged_param
+        return True
+
+    exc_key = _excitation_key(gate)
+    if exc_key is not None and exc_key == _excitation_key(prev):
         try:
             merged_param = prev.get("parameter", 0.0) + gate.get("parameter", 0.0)
         except TypeError:

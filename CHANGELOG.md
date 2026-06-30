@@ -6,6 +6,20 @@
 
 ### Added
 
+- **transpile merge-rotations 支持 excitation 门。** `single_excitation`/`double_excitation`
+  为固定生成元的旋转门，角度可加（`G(θ1)·G(θ2)=G(θ1+θ2)`）；`MergeRotationsPass`/
+  `optimize` 现把相邻、同操作数（同顺序）的两个 excitation 门按角度相加合并，角度抵消
+  为 0 时整对消去。配套 `tests/transpile/test_excitation_merge.py`。
+- **QDRATS 可配置门池 `gate_pool`（支持 excitation ansatz）。**
+  `QDRATSConfig` 新增 `gate_pool`（`"generic"` 默认 / `"excitation"`）、`single_excitations`、
+  `double_excitations`、`hf_occupied_qubits`。QuantumDARTS 重构为 slot/candidate 抽象：
+  - `"generic"`（默认）：每个 target 比特一个 slot，候选 `{rz·ry·rz, identity, cx_*}`，
+    张量形状/RNG 与旧实现一致，**数值不变**。
+  - `"excitation"`：从 closed-shell HF 参考态出发，每个激发算符一个 slot，候选
+    `{single_excitation/double_excitation(θ), identity}`，离散化线路前置 HF 的 `pauli_x`
+    制备。与 supernet 同款粒子数/自旋保持 ansatz，改由 QDRATS 可微搜索。
+  - 配套 `tests/algorithms/test_qdrats.py`（generic 向后兼容 + excitation 行为）。
+  - demo `demos/H2O/H2O_qdrats.py` 切换为 excitation 池（复用 H2O singles/doubles/HF）。
 - **QAS `SearchStrategy` 协议 + 策略注册表（QAS README §2.1 落地）。**
   新增 `aicir.qas.core.strategy.SearchStrategy`（抽象基类，`run(request) -> 结果`）、
   `aicir.qas.core.registry`（`StrategySpec` + `register_strategy`/`unregister_strategy`/

@@ -201,6 +201,9 @@ rz(θ₁, q) · rz(θ₂, q)  →  rz(θ₁ + θ₂, q)
 
 - 仅合并无控制位的单比特旋转门。
 - 合并后角度接近零（`|θ| < 1e-15`）时直接移除该门。
+- 同样支持固定生成元的 **excitation 旋转门**：相邻、同操作数（同顺序）的
+  `single_excitation`/`double_excitation` 按角度相加合并（`G(θ₁)·G(θ₂)=G(θ₁+θ₂)`），
+  抵消为 0 时整对消去。
 
 ```python
 from aicir.transpile import MergeRotationsPass
