@@ -98,10 +98,18 @@ class PassManager:
 
         depth_before = int(depth_proxy(circuit))
         result_circuit = self.run(circuit)
+        # 按 pass 顺序组合各 last_layout：LayoutPass(logical->physical) 与
+        # RoutingPass(physical->physical 置换) 链式组合为 logical->final wire，
+        # 即 composed[q] = later[earlier[q]]。
         layout = None
         for item in self.passes:
-            if getattr(item, "last_layout", None) is not None:
-                layout = item.last_layout
+            mapping = getattr(item, "last_layout", None)
+            if mapping is None:
+                continue
+            if layout is None:
+                layout = dict(mapping)
+            else:
+                layout = {q: mapping.get(p, p) for q, p in layout.items()}
         return TranspileResult(
             circuit=result_circuit,
             layout=layout,

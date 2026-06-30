@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from aicir.core.circuit import Circuit, cx, cy, cz, hadamard, rz, swap
+from aicir.core.circuit import Circuit, cx, cy, cz, hadamard, pauli_x, rx, rz, swap, u3
 from aicir.devices import Target
 from aicir.ir import circuit_gate_dicts
 from aicir.transpile import DecomposePass, PassManager
@@ -11,6 +11,15 @@ from aicir.transpile import DecomposePass, PassManager
 
 def _equiv(a: Circuit, b: Circuit) -> bool:
     return np.allclose(np.asarray(a.unitary()), np.asarray(b.unitary()), atol=1e-5)
+
+
+def _equiv_up_to_phase(a: Circuit, b: Circuit) -> bool:
+    A = np.asarray(a.unitary())
+    B = np.asarray(b.unitary())
+    idx = np.unravel_index(np.argmax(np.abs(A)), A.shape)
+    if abs(B[idx]) < 1e-9:
+        return False
+    return np.allclose(A, (A[idx] / B[idx]) * B, atol=1e-6)
 
 
 def test_swap_cz_cy_decompose_to_cx_and_preserve_unitary():
@@ -68,6 +77,31 @@ def test_unsupported_two_qubit_gate_raises_unless_skipped():
     # skip_unsupported 时原样保留
     out = DecomposePass(basis_gates=("rz",), skip_unsupported=True).run(cir)
     assert [g["type"] for g in circuit_gate_dicts(out)] == ["cx"]
+
+
+@pytest.mark.parametrize(
+    "gate",
+    [hadamard(0), pauli_x(0), rx(0.7, 0), rz(1.3, 0), u3(0.4, 1.1, -0.6, 0)],
+)
+def test_single_qubit_zyz_decompose_to_rz_ry(gate):
+    cir = Circuit(gate, n_qubits=1)
+    out = DecomposePass(basis_gates=("rz", "ry")).run(cir)
+    types = {g["type"] for g in circuit_gate_dicts(out)}
+    assert types <= {"rz", "ry"}
+    assert _equiv_up_to_phase(cir, out)
+
+
+def test_zyz_not_applied_when_basis_lacks_rz_ry():
+    # 基底无 rz/ry -> 单比特门不做 ZYZ，原样保留（旧行为）。
+    cir = Circuit(hadamard(0), n_qubits=1)
+    out = DecomposePass(basis_gates=("cx",), skip_unsupported=True).run(cir)
+    assert [g["type"] for g in circuit_gate_dicts(out)] == ["hadamard"]
+
+
+def test_zyz_leaves_basis_single_qubit_gate_untouched():
+    cir = Circuit(rz(0.5, 0), n_qubits=1)
+    out = DecomposePass(basis_gates=("rz", "ry")).run(cir)
+    assert [g["type"] for g in circuit_gate_dicts(out)] == ["rz"]
 
 
 def test_runs_inside_passmanager_by_name():
