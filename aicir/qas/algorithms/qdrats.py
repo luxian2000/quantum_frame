@@ -23,7 +23,18 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from aicir import Circuit, GPUBackend, Hamiltonian, NPUBackend, cx, ry, rz
+from aicir import (
+    Circuit,
+    GPUBackend,
+    Hamiltonian,
+    NPUBackend,
+    cx,
+    double_excitation,
+    pauli_x,
+    ry,
+    rz,
+    single_excitation,
+)
 from ...core.gates import gate_to_matrix
 from ..problems.hamiltonians import hamiltonian_matrix as pauli_hamiltonian_matrix
 
@@ -31,11 +42,35 @@ from ..problems.hamiltonians import hamiltonian_matrix as pauli_hamiltonian_matr
 HamiltonianInput = np.ndarray | torch.Tensor | Hamiltonian | Sequence[tuple[float, str]]
 
 
+@dataclass(frozen=True)
+class _Candidate:
+    """搜索每个 slot 上的一个候选门。
+
+    - ``kind``：``identity``/``rzryrz``/``cx``/``single_excitation``/``double_excitation``。
+    - ``qubits``：作用比特（``cx`` 为 ``(control, target)``）。
+    - ``n_params``：可训练角度个数（从该 slot 的 theta 前 ``n_params`` 个取）。
+    - ``label``：离散化展示用标签。
+    """
+
+    kind: str
+    qubits: tuple[int, ...]
+    n_params: int
+    label: str
+
+
 @dataclass
 class QDRATSConfig:
     n_qubits: int | None = None
     layers: int = 3
     hidden_dim: int = 8
+
+    # 门池选择（QAS README §2.1 风格的可配置 pool）：
+    # - "generic"（默认）：每个 target 比特一个 slot，候选 {rz·ry·rz, identity, cx_*}。
+    # - "excitation"：HF 参考态 + 每个激发算符一个 slot，候选 {excitation(θ), identity}。
+    gate_pool: str = "generic"
+    single_excitations: tuple[tuple[int, int], ...] = ()
+    double_excitations: tuple[tuple[int, int, int, int], ...] = ()
+    hf_occupied_qubits: tuple[int, ...] = ()
 
     search_epochs: int = 100
     theta_steps: int = 2
@@ -115,19 +150,22 @@ class QuantumDARTS:
         self.device = self.backend._device
         self.n_qubits = int(self.config.n_qubits)
         self.layers = int(self.config.layers)
-        self.max_candidates = self.n_qubits + 1 if self.n_qubits > 1 else 2
+        self._hf_occupied = tuple(int(q) for q in self.config.hf_occupied_qubits)
 
-        self._candidate_labels = tuple(
-            self._build_candidate_labels_for_target(target)
-            for target in range(self.n_qubits)
-        )
+        # 每个 slot 一份候选列表；同一 slot 布局在每层重复。slot 维取代旧的
+        # per-qubit 维，generic 模式下 n_slots == n_qubits、shape 与旧实现一致。
+        self._slots = self._build_slots()
+        self.n_slots = len(self._slots)
+        self.max_candidates = len(self._slots[0])
+        self._max_params = max(c.n_params for slot in self._slots for c in slot)
+        self._slot_labels = tuple(tuple(c.label for c in slot) for slot in self._slots)
 
         init_scale = 1.0e-2
         self.architecture_left = torch.nn.Parameter(
             init_scale
             * torch.randn(
                 self.layers,
-                self.n_qubits,
+                self.n_slots,
                 int(self.config.hidden_dim),
                 dtype=torch.float32,
                 device=self.device,
@@ -137,7 +175,7 @@ class QuantumDARTS:
             init_scale
             * torch.randn(
                 self.layers,
-                self.n_qubits,
+                self.n_slots,
                 int(self.config.hidden_dim),
                 self.max_candidates,
                 dtype=torch.float32,
@@ -147,8 +185,8 @@ class QuantumDARTS:
         self.theta = torch.nn.Parameter(
             torch.empty(
                 self.layers,
-                self.n_qubits,
-                3,
+                self.n_slots,
+                self._max_params,
                 dtype=torch.float32,
                 device=self.device,
             ).uniform_(-0.05, 0.05)
@@ -181,16 +219,63 @@ class QuantumDARTS:
         if cfg.temperature_decay <= 0:
             raise ValueError("temperature_decay must be positive")
 
-    def _build_candidate_labels_for_target(self, target: int) -> tuple[str, ...]:
-        labels = ["rzryrz", "identity"]
-        labels.extend(f"cx_{control}_to_{target}" for control in range(self.n_qubits) if control != target)
-        return tuple(labels)
+        pool = str(cfg.gate_pool)
+        if pool not in ("generic", "excitation"):
+            raise ValueError(f"unknown gate_pool {pool!r}; use 'generic' or 'excitation'")
+        if pool == "excitation":
+            n = int(cfg.n_qubits)
+            if not cfg.single_excitations and not cfg.double_excitations:
+                raise ValueError(
+                    "gate_pool='excitation' requires single_excitations and/or double_excitations"
+                )
+            for i, j in cfg.single_excitations:
+                if not (0 <= int(i) < n and 0 <= int(j) < n):
+                    raise ValueError(f"single excitation {(i, j)} out of range for {n} qubits")
+            for group in cfg.double_excitations:
+                if len(group) != 4 or any(not (0 <= int(q) < n) for q in group):
+                    raise ValueError(f"double excitation {group} invalid for {n} qubits")
+            for q in cfg.hf_occupied_qubits:
+                if not (0 <= int(q) < n):
+                    raise ValueError(f"hf_occupied_qubit {q} out of range for {n} qubits")
 
-    def candidate_labels_for_target(self, target: int) -> tuple[str, ...]:
-        target = int(target)
-        if target < 0 or target >= self.n_qubits:
-            raise ValueError("target qubit is outside [0, n_qubits)")
-        return self._candidate_labels[target]
+    def _build_slots(self) -> list[list[_Candidate]]:
+        """构造每个 slot 的候选列表（同一 slot 在每层重复）。"""
+        if str(self.config.gate_pool) == "excitation":
+            slots: list[list[_Candidate]] = []
+            for i, j in self.config.single_excitations:
+                i, j = int(i), int(j)
+                slots.append([
+                    _Candidate("single_excitation", (i, j), 1, f"single_{i}_{j}"),
+                    _Candidate("identity", (), 0, "identity"),
+                ])
+            for group in self.config.double_excitations:
+                qs = tuple(int(q) for q in group)
+                slots.append([
+                    _Candidate("double_excitation", qs, 1, "double_" + "_".join(map(str, qs))),
+                    _Candidate("identity", (), 0, "identity"),
+                ])
+            return slots
+
+        # generic：每个 target 比特一个 slot，候选 {rz·ry·rz, identity, cx_*}。
+        slots = []
+        for target in range(self.n_qubits):
+            candidates = [
+                _Candidate("rzryrz", (target,), 3, "rzryrz"),
+                _Candidate("identity", (), 0, "identity"),
+            ]
+            candidates.extend(
+                _Candidate("cx", (control, target), 0, f"cx_{control}_to_{target}")
+                for control in range(self.n_qubits)
+                if control != target
+            )
+            slots.append(candidates)
+        return slots
+
+    def candidate_labels_for_target(self, slot: int) -> tuple[str, ...]:
+        slot = int(slot)
+        if slot < 0 or slot >= self.n_slots:
+            raise ValueError("slot index is outside [0, n_slots)")
+        return self._slot_labels[slot]
 
     def _architecture_logits(self) -> torch.Tensor:
         return torch.einsum("lnh,lnhk->lnk", self.architecture_left, self.architecture_right)
@@ -211,7 +296,7 @@ class QuantumDARTS:
                 sampled = one_hot + probs - probs.detach()
             else:
                 sampled = probs
-        return sampled.reshape(self.layers, self.n_qubits, self.max_candidates)
+        return sampled.reshape(self.layers, self.n_slots, self.max_candidates)
 
     def _deterministic_indices(self) -> torch.Tensor:
         return self._architecture_logits().argmax(dim=-1)
@@ -225,55 +310,70 @@ class QuantumDARTS:
     def _identity_matrix(self) -> torch.Tensor:
         return self.backend.eye(1 << self.n_qubits)
 
-    def _rzryrz_matrix(self, layer: int, target: int, *, detach_theta: bool) -> torch.Tensor:
-        angles = self.theta[layer, target]
+    def _gate_matrix(self, gate: dict) -> torch.Tensor:
+        return gate_to_matrix(gate, cir_qubits=self.n_qubits, backend=self.backend)
+
+    def _candidate_matrix(self, layer: int, slot: int, candidate_index: int, *, detach_theta: bool) -> torch.Tensor:
+        cand = self._slots[slot][candidate_index]
+        if cand.kind == "identity":
+            return self._identity_matrix()
+        angles = self.theta[layer, slot]
         if detach_theta:
             angles = angles.detach()
-        rz0 = gate_to_matrix(rz(angles[0], target_qubit=target), cir_qubits=self.n_qubits, backend=self.backend)
-        ry1 = gate_to_matrix(ry(angles[1], target_qubit=target), cir_qubits=self.n_qubits, backend=self.backend)
-        rz2 = gate_to_matrix(rz(angles[2], target_qubit=target), cir_qubits=self.n_qubits, backend=self.backend)
-        return self.backend.matmul(rz2, self.backend.matmul(ry1, rz0))
-
-    def _candidate_matrix(self, layer: int, target: int, candidate_index: int, *, detach_theta: bool) -> torch.Tensor:
-        if candidate_index == 0:
-            return self._rzryrz_matrix(layer, target, detach_theta=detach_theta)
-        if candidate_index == 1:
-            return self._identity_matrix()
-        controls = [q for q in range(self.n_qubits) if q != target]
-        control = controls[candidate_index - 2]
-        gate = cx(target_qubit=target, control_qubits=[control])
-        return gate_to_matrix(gate, cir_qubits=self.n_qubits, backend=self.backend)
+        if cand.kind == "rzryrz":
+            t = cand.qubits[0]
+            rz0 = self._gate_matrix(rz(angles[0], target_qubit=t))
+            ry1 = self._gate_matrix(ry(angles[1], target_qubit=t))
+            rz2 = self._gate_matrix(rz(angles[2], target_qubit=t))
+            return self.backend.matmul(rz2, self.backend.matmul(ry1, rz0))
+        if cand.kind == "cx":
+            control, target = cand.qubits
+            return self._gate_matrix(cx(target_qubit=target, control_qubits=[control]))
+        if cand.kind == "single_excitation":
+            i, j = cand.qubits
+            return self._gate_matrix(single_excitation(angles[0], i, j))
+        if cand.kind == "double_excitation":
+            return self._gate_matrix(double_excitation(angles[0], *cand.qubits))
+        raise ValueError(f"unknown candidate kind {cand.kind!r}")
 
     def _mixed_gate_matrix(
         self,
         layer: int,
-        target: int,
+        slot: int,
         weights: torch.Tensor,
         *,
         detach_theta: bool,
     ) -> torch.Tensor:
         matrices = [
-            self._candidate_matrix(layer, target, index, detach_theta=detach_theta)
+            self._candidate_matrix(layer, slot, index, detach_theta=detach_theta)
             for index in range(self.max_candidates)
         ]
         stacked = torch.stack(matrices, dim=0)
         complex_weights = weights.to(dtype=stacked.dtype).reshape(-1, 1, 1)
         return torch.sum(complex_weights * stacked, dim=0)
 
-    def _initial_state(self) -> torch.Tensor:
-        if self.config.initial_state is None:
-            return self.backend.zeros_state(self.n_qubits)
-        state = self.backend.cast(self.config.initial_state)
+    def _hf_state(self) -> torch.Tensor:
+        state = self.backend.zeros_state(self.n_qubits)
+        for q in self._hf_occupied:
+            state = self.backend.apply_unitary(state, self._gate_matrix(pauli_x(target_qubit=q)))
         return state.reshape(-1)
+
+    def _initial_state(self) -> torch.Tensor:
+        if self.config.initial_state is not None:
+            state = self.backend.cast(self.config.initial_state)
+            return state.reshape(-1)
+        if self._hf_occupied:
+            return self._hf_state()
+        return self.backend.zeros_state(self.n_qubits).reshape(-1)
 
     def _simulate_selection(self, selection: torch.Tensor, *, detach_theta: bool) -> torch.Tensor:
         state = self._initial_state()
         for layer in range(self.layers):
-            for target in range(self.n_qubits):
+            for slot in range(self.n_slots):
                 matrix = self._mixed_gate_matrix(
                     layer,
-                    target,
-                    selection[layer, target],
+                    slot,
+                    selection[layer, slot],
                     detach_theta=detach_theta,
                 )
                 state = self.backend.apply_unitary(state, matrix)
@@ -306,9 +406,9 @@ class QuantumDARTS:
         idx = indices.detach().cpu().numpy().astype(int)
         labels: list[tuple[str, ...]] = []
         for layer in range(self.layers):
-            layer_labels = []
-            for target in range(self.n_qubits):
-                layer_labels.append(self._candidate_labels[target][int(idx[layer, target])])
+            layer_labels = [
+                self._slot_labels[slot][int(idx[layer, slot])] for slot in range(self.n_slots)
+            ]
             labels.append(tuple(layer_labels))
         return tuple(labels)
 
@@ -318,23 +418,34 @@ class QuantumDARTS:
         gates: list[dict[str, Any]] = []
         parameters: dict[str, float] = {}
 
+        # excitation 模式：先用 X 门制备 HF 参考态（使保存线路从 |0> 可复现）。
+        for q in self._hf_occupied:
+            gates.append(pauli_x(target_qubit=q))
+
         for layer in range(self.layers):
-            for target in range(self.n_qubits):
-                choice = int(idx[layer, target])
-                if choice == 0:
-                    values = theta_np[layer, target]
-                    parameters[f"theta_{layer}_{target}_rz0"] = float(values[0])
-                    parameters[f"theta_{layer}_{target}_ry"] = float(values[1])
-                    parameters[f"theta_{layer}_{target}_rz2"] = float(values[2])
-                    gates.append(rz(float(values[0]), target_qubit=target))
-                    gates.append(ry(float(values[1]), target_qubit=target))
-                    gates.append(rz(float(values[2]), target_qubit=target))
-                elif choice == 1:
+            for slot in range(self.n_slots):
+                cand = self._slots[slot][int(idx[layer, slot])]
+                angles = theta_np[layer, slot]
+                if cand.kind == "identity":
                     continue
-                else:
-                    controls = [q for q in range(self.n_qubits) if q != target]
-                    control = controls[choice - 2]
+                if cand.kind == "rzryrz":
+                    t = cand.qubits[0]
+                    parameters[f"theta_{layer}_{slot}_rz0"] = float(angles[0])
+                    parameters[f"theta_{layer}_{slot}_ry"] = float(angles[1])
+                    parameters[f"theta_{layer}_{slot}_rz2"] = float(angles[2])
+                    gates.append(rz(float(angles[0]), target_qubit=t))
+                    gates.append(ry(float(angles[1]), target_qubit=t))
+                    gates.append(rz(float(angles[2]), target_qubit=t))
+                elif cand.kind == "cx":
+                    control, target = cand.qubits
                     gates.append(cx(target_qubit=target, control_qubits=[control]))
+                elif cand.kind == "single_excitation":
+                    i, j = cand.qubits
+                    parameters[f"theta_{layer}_{slot}"] = float(angles[0])
+                    gates.append(single_excitation(float(angles[0]), i, j))
+                elif cand.kind == "double_excitation":
+                    parameters[f"theta_{layer}_{slot}"] = float(angles[0])
+                    gates.append(double_excitation(float(angles[0]), *cand.qubits))
 
         return Circuit(*gates, n_qubits=self.n_qubits, backend=self.backend), parameters
 
