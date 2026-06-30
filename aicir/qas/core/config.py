@@ -21,6 +21,8 @@ _ALIASES = {
     "qdarts": "qdrats",
     "quantumdarts": "qdrats",
     "quantum_darts": "qdrats",
+    "differentiable_qas": "dqas",
+    "differentiable_quantum_architecture_search": "dqas",
 }
 
 
@@ -96,6 +98,14 @@ def qdrats(**kwargs: Any) -> Any:
     return _build(QDRATSConfig, kwargs)
 
 
+def dqas(**kwargs: Any) -> Any:
+    """Build a ``DQAS`` config with optional field overrides."""
+
+    from ..algorithms.dqas import DQASConfig
+
+    return _build(DQASConfig, kwargs)
+
+
 def adam_spsa(**kwargs: Any) -> Any:
     """Build the nested Adam-SPSA config used by ``CRLQAS``."""
 
@@ -157,6 +167,7 @@ _FACTORIES = {
     "ppr_dql": ppr_dql,
     "crlqas": crlqas,
     "qdrats": qdrats,
+    "dqas": dqas,
 }
 
 __all__ = [
@@ -165,6 +176,7 @@ __all__ = [
     "create",
     "crl",
     "crlqas",
+    "dqas",
     "for_method",
     "method_names",
     "ppo",

@@ -6,6 +6,19 @@
 
 ### Added
 
+- **DQAS / Differentiable Quantum Architecture Search 接入统一 QAS 入口。**
+  新增 `aicir/qas/algorithms/dqas.py`：按 Zhang et al. (2022) DQAS 的 independent categorical
+  概率模型采样线路结构，维护 `alpha[p, c]` 架构 logits 与 `theta[p, c, l]` 参数池，
+  用 score-function/REINFORCE 估计架构梯度，并用 autograd 更新线路参数。公共入口新增
+  `config.dqas(...)`、`run("dqas", hamiltonian=..., config=...)`，并导出 `DQASConfig`、
+  `DQASResult`、`DifferentiableQAS`、`dqas`、`train_dqas`。`dqas` 已注册为
+  `DQASStrategy`（`requires_torch=True`）。配套 `tests/algorithms/test_dqas.py`。
+- **DQAS 搜索门池 API：`gate_pool` / `pool` / legacy `operation_pool`。**
+  `DQASConfig` 新增 `gate_pool`（默认 `"generic"`）、`two_qubit_pairs`、`pool` 别名，并保留
+  `operation_pool` 兼容别名。支持门名 `identity`、`rx`、`ry`、`rz`、`rzryrz`、`cx`；
+  `"generic"` 等价于 `("identity", "rzryrz", "cx")`。`cx` 默认展开为所有有向非自环连接，
+  也可通过 `two_qubit_pairs=((control, target), ...)` 限制。tuple/list 保持用户顺序；
+  set 形式会按固定门序规范化以避免 sampled index 不可复现。
 - **transpile merge-rotations 支持 excitation 门。** `single_excitation`/`double_excitation`
   为固定生成元的旋转门，角度可加（`G(θ1)·G(θ2)=G(θ1+θ2)`）；`MergeRotationsPass`/
   `optimize` 现把相邻、同操作数（同顺序）的两个 excitation 门按角度相加合并，角度抵消
@@ -25,9 +38,10 @@
   `aicir.qas.core.registry`（`StrategySpec` + `register_strategy`/`unregister_strategy`/
   `get_strategy`/`get_spec`/`registered_strategies`，均从 `aicir.qas.core` 再导出）、
   `aicir.qas.core.strategies`（内置策略适配并注册，import 副作用）。`run(method, ...)`
-  先查注册表命中则走 `strategy.run`，未命中回落到 `runner` 的 `_Spec` 分发表。当前仅
-  `supernet` 迁移为 `SupernetStrategy`（`requires_torch=True`），其余方法行为不变；
-  `run("supernet", ...)` 调用方式与返回值完全不变。配套 `tests/qas/test_strategy_registry.py`。
+  先查注册表命中则走 `strategy.run`，未命中回落到 `runner` 的 `_Spec` 分发表。当前
+  `supernet` 迁移为 `SupernetStrategy`，`dqas` 迁移为 `DQASStrategy`（均
+  `requires_torch=True`），其余方法行为不变；`run("supernet", ...)` 调用方式与返回值
+  完全不变。配套 `tests/qas/test_strategy_registry.py`。
 - **`LayoutPass` 自动布局 `initial_layout="auto"`（NEXT.md §2 transpile 硬化）。**
   按双比特门交互频率降序，贪心地把高频交互的逻辑对放到耦合图相邻的物理比特上，
   减少后续 `RoutingPass` 的 SWAP。需 `target`；全连接时退为恒等。贪心启发式（非全局最优）。
