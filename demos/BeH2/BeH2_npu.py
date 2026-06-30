@@ -42,9 +42,11 @@ PPO-RB 面向小规模目标态制备，不适合 16 量子比特分子哈密顿
 - ``BeH2_npu_cir.qasm``   : 全局最优线路（QASM；激发门暂不支持时跳过）
 - ``BeH2_cir_spin.py``    : 全局最优线路（Python）
 - ``BeH2_cir_spin.png``   : 全局最优线路图
+- ``result_spin.md``      : 分析文件（精确基态能量 + 复算线路能量对比）
 
-分析文件 ``result_spin.md``（精确基态能量对比）由 ``demos/BeH2/BeH2_result_spin.py``
-解析 ``output_spin.txt`` 与 ``BeH2_cir_spin.py`` 后生成。
+分析文件 ``result_spin.md`` 由本脚本在 rank 0 搜索结束后内联生成（复用
+``demos/BeH2/BeH2_result_spin.py`` 的 ``generate_result_md``）；也可单独运行
+``python -m demos.BeH2.BeH2_result_spin`` 解析 ``output_spin.txt`` 重新生成。
 
 运行方式（4 卡）：
 
@@ -309,6 +311,40 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Circuit figure saved to: {png_path}")
         except Exception as exc:  # matplotlib 可选；NPU 机器无 matplotlib 时跳过绘图
             print(f"Circuit figure skipped: {exc}")
+
+        # 内联生成分析文件 result_spin.md：精确基态能量 + 复算线路能量对比。
+        # 直接用 result.best_circuit 与内存中的 report，无需解析 output_spin.txt。
+        result_report = {
+            "world_size": world_size,
+            "seed": args.seed,
+            "device": device,
+            "mode": args.mode,
+            "wall_clock": elapsed,
+            "fine_tuned": record["fine_tuned_energy"],
+            "baseline": record["baseline_vqe_energy"],
+            "n_qubits": hamiltonian.n_qubits,
+            "n_terms": n_terms,
+            "excitations": record["excitations"],
+            "single": record["two_qubit"],
+            "double": record["four_qubit"],
+            "layers": args.layers,
+            "gradient": args.gradient,
+        }
+        try:
+            from demos.BeH2.BeH2_result_spin import generate_result_md
+
+            try:
+                md_path, _, _ = generate_result_md(
+                    result.best_circuit, result_report, backend=backend, device=device
+                )
+            except Exception as exc:  # 精确对角化失败（如内存不足）时退回仅复算线路能量
+                print(f"exact diagonalization failed ({exc}); writing result_spin.md without exact energy")
+                md_path, _, _ = generate_result_md(
+                    result.best_circuit, result_report, backend=backend, device=device, skip_exact=True
+                )
+            print(f"analysis saved to: {md_path}")
+        except Exception as exc:
+            print(f"result_spin.md skipped: {exc}")
 
 
 if __name__ == "__main__":

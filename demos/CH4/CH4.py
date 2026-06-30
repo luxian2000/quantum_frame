@@ -6997,12 +6997,18 @@ def ch4_vqe_qas_kwargs() -> dict:
     }
 
 
-def save_circuit_python(circuit, file_path: Path, func_name: str = "build_ch4_qas_circuit") -> None:
+def save_circuit_python(
+    circuit,
+    file_path: Path,
+    func_name: str = "build_ch4_qas_circuit",
+    figure_name: str = "CH4_cir.png",
+    title: str = "CH4 supernet ground-state ansatz",
+) -> None:
     source = circuit_to_python_source(
         circuit,
         func_name=func_name,
-        figure_name="CH4_cir.png",
-        title="CH4 supernet ground-state ansatz",
+        figure_name=figure_name,
+        title=title,
     )
     source = (
         source.replace("by demos/H2O/H2O.py.", "by demos/CH4/CH4.py.")

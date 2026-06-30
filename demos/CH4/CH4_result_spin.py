@@ -1,20 +1,20 @@
-"""求 BeH2 精确基态能量、复算线路能量并生成 result_spin.md（在 NPU 机器上运行）。
+"""求 CH4 精确基态能量、复算线路能量并生成 result_spin.md（在 NPU 机器上运行）。
 
-    python -m demos.BeH2.BeH2_result_spin                 # 默认稀疏 Lanczos，几分钟
-    python -m demos.BeH2.BeH2_result_spin --method dense  # 全谱稠密对角化（大内存机器）
-    python -m demos.BeH2.BeH2_result_spin --allow-cpu-fallback  # 本地冒烟测试
+    python -m demos.CH4.CH4_result_spin                 # 默认稀疏 Lanczos，几分钟
+    python -m demos.CH4.CH4_result_spin --method dense  # 全谱稠密对角化（大内存机器）
+    python -m demos.CH4.CH4_result_spin --allow-cpu-fallback  # 本地冒烟测试
 
 流程：
-1. 精确基态能量：用“带符号置换”逻辑高效构造 16 比特 Hamiltonian（每个 Pauli 串每行只有一个
-   非零，逐项向量化累加，避免 to_matrix 的逐项 2^16×2^16 临时矩阵），再取最小特征值。
-   - 默认 ``--method sparse``：scipy Lanczos ``eigsh(k=1, which="SA")``，只求最小特征值，
-     几秒、GB 级内存，对极端特征值收敛到精确值；
+1. 精确基态能量：用“带符号置换”逻辑高效构造 18 比特 Hamiltonian（每个 Pauli 串每行只有一个
+   非零，逐项向量化累加，避免 to_matrix 的逐项 2^18×2^18 临时矩阵），再取最小特征值。
+   - 默认 ``--method sparse``：scipy Lanczos ``eigsh(k=1, which="SA")``，只求最小特征值；
+     18 比特 / 6892 项的 CSR 构造较 BeH2 重得多（COO 中间体约数十 GB），仅建议在大内存机器上跑；
    - ``--method dense``：完整稠密对角化。注意 Ascend 无 complex ``eigvalsh`` 内核，torch 会
-     自动回退到 CPU 跑全谱（约 70–100 GB 工作区、很慢），仅建议在大内存机器上使用。
-2. 逐门把保存线路作用到态向量（16 比特无法构造 2^16 全局 unitary，故不走 circuit.unitary()），
+     自动回退到 CPU 跑全谱（2^18 维稠密极大、很慢），仅建议在超大内存机器上使用。
+2. 逐门把保存线路作用到态向量（18 比特无法构造 2^18 全局 unitary，故不走 circuit.unitary()），
    再对全部 Pauli 项逐项计算 <psi|P|psi> 求和得到线路能量；
 3. 解析 output_spin.txt 中 NPU 运行报告的能量/配置；
-4. 写出 demos/BeH2/result_spin.md。
+4. 写出 demos/CH4/result_spin.md。
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ from pathlib import Path
 import numpy as np
 
 from aicir.core.gates import apply_gate_to_state
-from demos.BeH2.BeH2 import beh2_vqe_qas_kwargs, build_beh2_hamiltonian
-from demos.BeH2.BeH2_cir_spin import build_beh2_npu_qas_circuit
+from demos.CH4.CH4 import ch4_vqe_qas_kwargs, build_ch4_hamiltonian
+from demos.CH4.CH4_cir_spin import build_ch4_npu_qas_circuit
 
 HERE = Path(__file__).parent
 REPORT_PATH = HERE / "output_spin.txt"
@@ -55,7 +55,7 @@ def select_device(allow_cpu_fallback: bool):
 # 1. 稠密对角化：精确基态能量
 # ---------------------------------------------------------------------------
 def build_dense_hamiltonian(dtype=np.complex64) -> np.ndarray:
-    """高效构造 16 比特 Hamiltonian 稠密矩阵。
+    """高效构造 18 比特 Hamiltonian 稠密矩阵。
 
     每个 Pauli 串都是“带符号置换”：P|j> = phase(j) · |j ^ flipmask>，每行只有一个非零，
     因此可对 j 向量化散射累加，避免 to_matrix 逐项构造 2^n×2^n 的 kron 临时矩阵。
@@ -82,7 +82,7 @@ def _term_mask(labels, n):
 
 def _build_hamiltonian(*, dense: bool, dtype=np.complex64):
     """统一的带符号置换构造器；dense=True 返回稠密 ndarray，否则返回 scipy CSR。"""
-    ham = build_beh2_hamiltonian()
+    ham = build_ch4_hamiltonian()
     n = ham.n_qubits
     dim = 1 << n
     j = np.arange(dim, dtype=np.int64)
@@ -122,10 +122,10 @@ def _build_hamiltonian(*, dense: bool, dtype=np.complex64):
 def exact_ground_energy(method: str, device: str, dtype=np.complex64) -> tuple[float, str]:
     """返回 (基态能量, 求解路径标签)。
 
-    method="sparse"（默认，推荐）：scipy Lanczos `eigsh(k=1, which='SA')`，只求最小特征值，
-        几秒内完成、内存约 GB 级；Lanczos 对极端特征值收敛到精确值，等价于精确基态能量。
+    method="sparse"（默认，推荐）：scipy Lanczos `eigsh(k=1, which='SA')`，只求最小特征值；
+        18 比特 / 6892 项的 CSR 构造较 BeH2 重，COO 中间体可达数十 GB，需大内存机器。
     method="dense"：完整稠密对角化。注意 Ascend 无 complex `eigvalsh` 内核，torch 会自动
-        回退到 CPU 跑全谱（约 70–100 GB 工作区、耗时很长），故仅在大内存机器上使用。
+        回退到 CPU 跑全谱（2^18 维稠密极大、耗时很长），故仅在超大内存机器上使用。
     """
     if method == "sparse":
         from scipy.sparse.linalg import eigsh
@@ -157,11 +157,11 @@ def exact_ground_energy(method: str, device: str, dtype=np.complex64) -> tuple[f
 def compute_circuit_energy(backend, circuit=None) -> float:
     """逐门演化 + 逐 Pauli 项求期望，返回线路能量。
 
-    ``circuit`` 为 None 时读取 ``BeH2_cir_spin.py`` 保存的线路；也可直接传入
-    搜索返回的 ``result.best_circuit`` 以避免依赖落盘文件（供 BeH2_npu.py 内联调用）。
+    ``circuit`` 为 None 时读取 ``CH4_cir_spin.py`` 保存的线路；也可直接传入
+    搜索返回的 ``result.best_circuit`` 以避免依赖落盘文件（供 CH4_npu.py 内联调用）。
     """
     if circuit is None:
-        circuit = build_beh2_npu_qas_circuit()
+        circuit = build_ch4_npu_qas_circuit()
     n = circuit.n_qubits
 
     state = backend.zeros_state(n)
@@ -171,7 +171,7 @@ def compute_circuit_energy(backend, circuit=None) -> float:
     psi = np.asarray(backend.to_numpy(state)).reshape(-1).astype(np.complex128)
     T = psi.reshape((2,) * n)
 
-    ham = build_beh2_hamiltonian()
+    ham = build_ch4_hamiltonian()
     energy = 0.0 + 0.0j
     for term in ham.terms:
         energy += term.coefficient * np.vdot(T, _pauli_apply(T, term.qubit_labels, n))
@@ -249,9 +249,9 @@ def render_markdown(
     report: dict,
     circuit=None,
 ) -> str:
-    cfg = beh2_vqe_qas_kwargs()
+    cfg = ch4_vqe_qas_kwargs()
     if circuit is None:
-        circuit = build_beh2_npu_qas_circuit()
+        circuit = build_ch4_npu_qas_circuit()
     counts = _gate_counts(circuit)
     hf = ", ".join(str(q) for q in cfg["hf_occupied_qubits"])
 
@@ -265,8 +265,10 @@ def render_markdown(
     delta_report = circuit_energy - ft if ft is not None else float("nan")
     wall = report.get("wall_clock")
     wall_h = wall / 3600.0 if wall is not None else float("nan")
-    n_terms = report.get("n_terms", 1313)
-    ws = report.get("world_size", 8)
+    n_qubits = report.get("n_qubits", 18)
+    dim = 1 << n_qubits
+    n_terms = report.get("n_terms", 6892)
+    ws = report.get("world_size", 4)
     layers = report.get("layers") or cfg["layers"]
     gradient = report.get("gradient") or "ad"
     grad_label = {"psr": "参数移位 `psr`", "ad": "自动微分 `ad`"}.get(gradient, f"`{gradient}`")
@@ -283,7 +285,7 @@ def render_markdown(
             f"| 绝对误差 | {abs(err):.10f} |\n"
         )
         exact_block = f"""
-本次精确基态能量由对角化求得（`{exact_path}`）：构造 {report.get('n_qubits', 16)} 比特 Hamiltonian（2^{report.get('n_qubits', 16)}=65536 维）后取最小特征值。
+本次精确基态能量由对角化求得（`{exact_path}`）：构造 {n_qubits} 比特 Hamiltonian（2^{n_qubits}={dim} 维）后取最小特征值。
 
 - 保存线路能量比精确基态能量高约 `{abs(err_mha):.3f} mHa`，处于化学精度（约 1.6 mHa）{within}（线路能量 ≥ 精确基态能量，满足变分下界）。
 - 同一次运行的固定 ansatz VQE 基线 `{base:.10f} Ha` 相对精确基态高约 `{base_err_mha:.3f} mHa`。"""
@@ -295,9 +297,9 @@ def render_markdown(
     # 结论里 QAS vs baseline
     gap_mha = (ft - base) * 1000.0 if (ft is not None and base is not None) else float("nan")
 
-    return f"""# BeH2 基态能量结果（NPU 自旋保持 ansatz 版）
+    return f"""# CH4 基态能量结果（NPU 自旋保持 ansatz 版）
 
-本次结果使用 `demos/BeH2/BeH2.py` 中的 {report.get('n_qubits', 16)} 比特 BeH2 活性空间 Hamiltonian（3-21G 基组、6 电子/8 空间轨道活性空间、Jordan-Wigner 映射，共 {n_terms} 个 Pauli 项），以及 `demos/BeH2/BeH2_cir_spin.py` 中保存的、在 **{ws} 块 Ascend NPU**（`device={report.get('device', 'npu:0')}`，`world_size={ws}`，搜索内分片 in-search sharding）上由 supernet QAS 搜索得到的线路。
+本次结果使用 `demos/CH4/CH4.py` 中的 {n_qubits} 比特 CH4 活性空间 Hamiltonian（STO-3G 基组、10 电子/9 空间轨道活性空间、Jordan-Wigner 映射，共 {n_terms} 个 Pauli 项），以及 `demos/CH4/CH4_cir_spin.py` 中保存的、在 **{ws} 块 Ascend NPU**（`device={report.get('device', 'npu:0')}`，`world_size={ws}`，搜索内分片 in-search sharding）上由 supernet QAS 搜索得到的线路。
 
 该线路采用分子 VQE 更合适的粒子数/自旋保持 ansatz：先用 {n_x} 个 `pauli_x` 制备 closed-shell Hartree-Fock 参考态（占据比特 `{hf}`），再从 `single_excitation` 与 `double_excitation` 门池中搜索激发算符。
 
@@ -313,15 +315,15 @@ def render_markdown(
 
 结论：
 
-- 保存线路（`BeH2_cir_spin.py`）经 statevector 复算得到 `{circuit_energy:.10f} Ha`，与 NPU 运行报告的 `fine-tuned energy = {ft:.10f} Ha` 一致，相差约 `{abs(delta_report):.2e} Ha`，源于 NPU complex64 精度与求值路径差异。
-- 值得注意的是，同一次 NPU 运行中**固定 ansatz 的 VQE 基线 `{base:.10f} Ha` 比 QAS 搜索到的线路更低（更优）约 `{gap_mha:.2f} mHa`**。也就是说，在这组 16 比特 / `L={layers}` 配置下，supernet 搜索本身没有收敛到优于固定基线的结构——这与 H2O 的 NPU 版（`demos/H2O/result_npu.md`）观察到的现象一致：更大的搜索空间加剧了权重共享 supernet 的“竞争”，最终选出的子线路欠优化。若要改善，可考虑增大 `supernet_steps`/`finetune_steps`、调整 `supernet_num (W)` 或减小层数。
+- 保存线路（`CH4_cir_spin.py`）经 statevector 复算得到 `{circuit_energy:.10f} Ha`，与 NPU 运行报告的 `fine-tuned energy = {ft:.10f} Ha` 一致，相差约 `{abs(delta_report):.2e} Ha`，源于 NPU complex64 精度与求值路径差异。
+- 同一次 NPU 运行中固定 ansatz 的 VQE 基线为 `{base:.10f} Ha`，与 QAS 搜索到的线路相差约 `{gap_mha:.2f} mHa`（正值表示搜索线路更优）。在这组 {n_qubits} 比特 / `L={layers}` 配置下，若 supernet 搜索未收敛到优于固定基线的结构，可考虑增大 `supernet_steps`/`finetune_steps`、调整 `supernet_num (W)` 或减小层数（参见 `demos/BeH2/result_spin.md` 的同类观察）。
 
 ## 搜索配置
 
-本次 NPU 运行（见 `demos/BeH2/output_spin.txt` 头部，对应 `demos/BeH2/BeH2_npu.py`）的设置：
+本次 NPU 运行（见 `demos/CH4/output_spin.txt` 头部，对应 `demos/CH4/CH4_npu.py`）的设置：
 
 - 设备：{ws} 块 Ascend NPU，`device={report.get('device', 'npu:0')}`，`world_size={ws}`，`mode={report.get('mode', 'safe')}`（与单卡数值等价的搜索内分片）
-- 量子比特数：{report.get('n_qubits', 16)}，层数（深度）：{layers}
+- 量子比特数：{n_qubits}，层数（深度）：{layers}
 - HF 参考态占据比特：`({hf})`
 - 单比特门池：`{{i}}`，用于保留 supernet 每层可跳过的占位门
 - 两比特门池：`{{single_excitation}}`，连接来自 closed-shell spin-preserving singles
@@ -344,9 +346,10 @@ def render_markdown(
 ## 生成文件
 
 ```text
-demos/BeH2/BeH2_cir_spin.py
-demos/BeH2/output_spin.txt
-demos/BeH2/BeH2_npu_cir.qasm
+demos/CH4/CH4_cir_spin.py
+demos/CH4/CH4_cir_spin.png
+demos/CH4/output_spin.txt
+demos/CH4/CH4_npu_cir.qasm
 ```
 
 OpenQASM 3.0 导出当前会跳过，因为 QASM 导出器暂不支持 `single_excitation` / `double_excitation` 这类高层化学激发门。
@@ -355,15 +358,15 @@ OpenQASM 3.0 导出当前会跳过，因为 QASM 导出器暂不支持 `single_e
 
 精确基态能量与线路能量都由本脚本算得（求解路径：`{exact_path or '(skipped)'}`）：
 
-1. **精确基态能量**：用同一套“带符号置换”逻辑高效构造 {report.get('n_qubits', 16)} 比特 Hamiltonian（每个 Pauli 串每行只有一个非零，逐项向量化累加，避免 `to_matrix` 的逐项 2^16 临时矩阵），再取最小特征值。默认走稀疏 Lanczos `scipy.sparse.linalg.eigsh(k=1, which="SA")`（只求最小特征值，几秒、GB 级内存，对极端特征值收敛到精确值）。Ascend 当前没有 complex `eigvalsh` 内核，故 `--method dense` 的全谱稠密对角化会被 torch 自动回退到 CPU 运行（约 70–100 GB 工作区、耗时很长），仅建议在大内存机器上使用。
-2. **线路能量**：按门逐个作用到态向量（16 比特无法构造 65536×65536 全局 unitary，故不走 `circuit.unitary()`），再对 {n_terms} 个 Pauli 项逐项计算 `<psi|P|psi>` 求和。
+1. **精确基态能量**：用同一套“带符号置换”逻辑高效构造 {n_qubits} 比特 Hamiltonian（每个 Pauli 串每行只有一个非零，逐项向量化累加，避免 `to_matrix` 的逐项 2^{n_qubits} 临时矩阵），再取最小特征值。默认走稀疏 Lanczos `scipy.sparse.linalg.eigsh(k=1, which="SA")`；18 比特 / {n_terms} 项的 CSR 构造较 BeH2 重得多（COO 中间体约数十 GB），需大内存机器。Ascend 当前没有 complex `eigvalsh` 内核，故 `--method dense` 的全谱稠密对角化会被 torch 自动回退到 CPU 运行（2^{n_qubits} 维稠密极大、耗时很长），仅建议在超大内存机器上使用。
+2. **线路能量**：按门逐个作用到态向量（{n_qubits} 比特无法构造 {dim}×{dim} 全局 unitary，故不走 `circuit.unitary()`），再对 {n_terms} 个 Pauli 项逐项计算 `<psi|P|psi>` 求和。
 
 ```bash
-# 默认稀疏 Lanczos 求精确基态能量 + 复算线路能量并刷新本文件（几分钟）
-python -m demos.BeH2.BeH2_result_spin
+# 默认稀疏 Lanczos 求精确基态能量 + 复算线路能量并刷新本文件
+python -m demos.CH4.CH4_result_spin
 
-# 如需完整稠密对角化（大内存机器；Ascend 无内核会回退到 CPU 全谱）
-python -m demos.BeH2.BeH2_result_spin --method dense
+# 如需完整稠密对角化（超大内存机器；Ascend 无内核会回退到 CPU 全谱）
+python -m demos.CH4.CH4_result_spin --method dense
 ```
 
 复算输出（device={device}）：
@@ -376,11 +379,11 @@ circuit = {circuit_energy:.10f} Ha
 ## 复现方式
 
 ```bash
-# 在 {ws} 块 Ascend NPU 上重新搜索（需 torch_npu，约 {wall_h:.0f} 小时）
-torchrun --nproc_per_node={ws} demos/BeH2/BeH2_npu.py --gradient {gradient} --output output_spin.txt
+# 在 {ws} 块 Ascend NPU 上重新搜索（需 torch_npu）
+torchrun --nproc_per_node={ws} demos/CH4/CH4_npu.py --gradient {gradient} --output output_spin.txt
 
 # 仅根据已记录的线路重新绘图
-python -m demos.BeH2.BeH2_cir_spin
+python -m demos.CH4.CH4_cir_spin
 ```
 """
 
@@ -397,8 +400,8 @@ def generate_result_md(
 ) -> tuple[Path, float, float | None]:
     """计算精确基态能量 + 复算线路能量并写出 ``result_spin.md``，返回 (路径, 线路能量, 精确能量)。
 
-    供 ``BeH2_npu.py`` 在搜索结束后内联调用：直接传入 ``result.best_circuit`` 与内存中的
-    ``report`` 字典，无需再解析 ``output_spin.txt``。``skip_exact=True`` 跳过（可能很重的）
+    供 ``CH4_npu.py`` 在搜索结束后内联调用：直接传入 ``result.best_circuit`` 与内存中的
+    ``report`` 字典，无需再解析 ``output_spin.txt``。``skip_exact=True`` 跳过（18 比特下很重的）
     精确对角化。若已有初始化好的 NPU ``backend``/``device`` 可传入复用。
     """
     if backend is None:
@@ -417,7 +420,7 @@ def generate_result_md(
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="NPU 稠密对角化求精确基态能量 + 复算 BeH2 线路能量并生成 result_spin.md。",
+        description="NPU 稀疏/稠密对角化求精确基态能量 + 复算 CH4 线路能量并生成 result_spin.md。",
     )
     parser.add_argument(
         "--allow-cpu-fallback",
@@ -427,14 +430,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--skip-exact",
         action="store_true",
-        help="跳过精确基态能量计算。",
+        help="跳过精确基态能量计算（18 比特 / 6892 项的 CSR 构造很重时建议加上）。",
     )
     parser.add_argument(
         "--method",
         choices=("sparse", "dense"),
         default="sparse",
-        help="精确基态求解法：sparse=Lanczos eigsh（默认，几秒/GB 级）；"
-             "dense=全谱稠密对角化（Ascend 无内核会回退 CPU，约 70–100 GB、很慢）。",
+        help="精确基态求解法：sparse=Lanczos eigsh（默认，COO 中间体可达数十 GB）；"
+             "dense=全谱稠密对角化（2^18 维极大，Ascend 无内核会回退 CPU）。",
     )
     args = parser.parse_args(argv)
 
@@ -446,7 +449,7 @@ def main(argv: list[str] | None = None) -> None:
 
     t0 = time.time()
     result_path, circuit_energy, exact_energy = generate_result_md(
-        build_beh2_npu_qas_circuit(),
+        build_ch4_npu_qas_circuit(),
         report,
         backend=backend,
         device=device,
