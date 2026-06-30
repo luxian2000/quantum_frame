@@ -16,6 +16,15 @@ from .architecture_search import ArchitectureSearch, NoiseAdaptiveQAS
 from .evaluator import ArchitectureEvaluator, evaluate_architectures, metric_catalog
 from .reward import RewardComposer, RewardWeights
 from .search_env import NoisyQASEnv, QASState
+from .strategies import (
+    SearchStrategy,
+    StrategySpec,
+    get_spec,
+    get_strategy,
+    register_strategy,
+    registered_strategies,
+    unregister_strategy,
+)
 
 __all__ = [
     "ArchitectureEvaluator",
@@ -31,6 +40,13 @@ __all__ = [
     "RewardWeights",
     "SearchConfig",
     "SearchResult",
+    "SearchStrategy",
+    "StrategySpec",
     "evaluate_architectures",
+    "get_spec",
+    "get_strategy",
     "metric_catalog",
+    "register_strategy",
+    "registered_strategies",
+    "unregister_strategy",
 ]

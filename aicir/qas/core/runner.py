@@ -95,6 +95,13 @@ def run(request: QASRunConfig | QASMethod, **kwargs: Any) -> Any:
     run_config = _as_run_config(request, kwargs)
     method = qas_config.canonical_method(run_config.method)
 
+    # 先查策略注册表（README §2.1）：命中则走 strategy.run，未命中回落到旧分发表。
+    from .strategies import get_strategy
+
+    strategy = get_strategy(method)
+    if strategy is not None:
+        return strategy.run(run_config)
+
     spec = _TABLE.get(method)
     if spec is None:
         raise ValueError(f"Unsupported QAS method: {run_config.method!r}")
@@ -115,6 +122,9 @@ def _as_run_config(request: QASRunConfig | QASMethod, kwargs: dict[str, Any]) ->
         return request
     return QASRunConfig(method=request, **kwargs)
 
+
+# import 副作用：注册内置策略（当前仅 supernet）。轻量，不在 import 期触 torch。
+from . import strategies as _strategies  # noqa: E402,F401
 
 __all__ = [
     "QASRunConfig",

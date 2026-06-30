@@ -6,6 +6,14 @@
 
 ### Added
 
+- **QAS `SearchStrategy` 协议 + 策略注册表（QAS README §2.1 落地）。**
+  新增 `aicir.qas.core.strategy.SearchStrategy`（抽象基类，`run(request) -> 结果`）、
+  `aicir.qas.core.registry`（`StrategySpec` + `register_strategy`/`unregister_strategy`/
+  `get_strategy`/`get_spec`/`registered_strategies`，均从 `aicir.qas.core` 再导出）、
+  `aicir.qas.core.strategies`（内置策略适配并注册，import 副作用）。`run(method, ...)`
+  先查注册表命中则走 `strategy.run`，未命中回落到 `runner` 的 `_Spec` 分发表。当前仅
+  `supernet` 迁移为 `SupernetStrategy`（`requires_torch=True`），其余方法行为不变；
+  `run("supernet", ...)` 调用方式与返回值完全不变。配套 `tests/qas/test_strategy_registry.py`。
 - **`LayoutPass` 自动布局 `initial_layout="auto"`（NEXT.md §2 transpile 硬化）。**
   按双比特门交互频率降序，贪心地把高频交互的逻辑对放到耦合图相邻的物理比特上，
   减少后续 `RoutingPass` 的 SWAP。需 `target`；全连接时退为恒等。贪心启发式（非全局最优）。
