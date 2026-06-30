@@ -17,14 +17,26 @@ from typing import Any, Sequence
 import numpy as np
 import torch
 
-from aicir import Circuit, GPUBackend, Hamiltonian, NPUBackend, cx, rx, ry, rz
+from aicir import (
+    Circuit,
+    GPUBackend,
+    Hamiltonian,
+    NPUBackend,
+    cx,
+    double_excitation,
+    pauli_x,
+    rx,
+    ry,
+    rz,
+    single_excitation,
+)
 from ...core.gates import gate_to_matrix
 from ..problems.hamiltonians import hamiltonian_matrix as pauli_hamiltonian_matrix
 
 
 HamiltonianInput = np.ndarray | torch.Tensor | Hamiltonian | Sequence[tuple[float, str]]
 GatePoolInput = str | Sequence[str] | set[str]
-_GATE_ORDER = ("identity", "rx", "ry", "rz", "rzryrz", "cx")
+_GATE_ORDER = ("identity", "rx", "ry", "rz", "rzryrz", "cx", "excitation")
 
 
 @dataclass(frozen=True)
@@ -41,6 +53,9 @@ class DQASConfig:
     layers: int = 3
     gate_pool: GatePoolInput = "generic"
     two_qubit_pairs: tuple[tuple[int, int], ...] | None = None
+    single_excitations: tuple[tuple[int, int], ...] = ()
+    double_excitations: tuple[tuple[int, int, int, int], ...] = ()
+    hf_occupied_qubits: tuple[int, ...] = ()
     pool: GatePoolInput | None = None
     operation_pool: GatePoolInput | None = None
 
@@ -166,6 +181,9 @@ class DifferentiableQAS:
             raise ValueError("baseline_momentum must be in [0, 1)")
         self._normalized_gate_pool()
         self._normalized_two_qubit_pairs()
+        self._normalized_single_excitations()
+        self._normalized_double_excitations()
+        self._normalized_hf_occupied_qubits()
 
     def _build_operation_pool(self) -> list[_Operation]:
         gate_names = self._normalized_gate_pool()
@@ -188,6 +206,16 @@ class DifferentiableQAS:
                 operations.extend(
                     _Operation("cx", (control, target), 0, f"cx_{control}_to_{target}")
                     for control, target in pairs
+                )
+            elif gate_name == "excitation":
+                operations.append(_Operation("identity", (), 0, "identity"))
+                operations.extend(
+                    _Operation("single_excitation", (i, j), 1, f"single_{i}_{j}")
+                    for i, j in self._normalized_single_excitations()
+                )
+                operations.extend(
+                    _Operation("double_excitation", qs, 1, "double_" + "_".join(map(str, qs)))
+                    for qs in self._normalized_double_excitations()
                 )
             else:
                 raise ValueError(f"unsupported DQAS gate {gate_name!r}")
@@ -215,6 +243,8 @@ class DifferentiableQAS:
             key = pool.strip().lower().replace("-", "_")
             if key == "generic":
                 return ("identity", "rzryrz", "cx")
+            if key == "excitation":
+                return ("excitation",)
             names = (key,)
         elif isinstance(pool, set):
             lowered = {str(name).strip().lower().replace("-", "_") for name in pool}
@@ -257,6 +287,46 @@ class DifferentiableQAS:
         if len(set(normalized)) != len(normalized):
             raise ValueError("two_qubit_pairs contains duplicate pairs")
         return tuple(normalized)
+
+    def _normalized_single_excitations(self) -> tuple[tuple[int, int], ...]:
+        n_qubits = int(self.config.n_qubits)
+        normalized: list[tuple[int, int]] = []
+        for i, j in self.config.single_excitations:
+            i, j = int(i), int(j)
+            if i == j:
+                raise ValueError("single_excitations cannot contain self-excitations")
+            if not (0 <= i < n_qubits and 0 <= j < n_qubits):
+                raise ValueError(f"single excitation {(i, j)} out of range for {n_qubits} qubits")
+            normalized.append((i, j))
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("single_excitations contains duplicate entries")
+        return tuple(normalized)
+
+    def _normalized_double_excitations(self) -> tuple[tuple[int, int, int, int], ...]:
+        n_qubits = int(self.config.n_qubits)
+        normalized: list[tuple[int, int, int, int]] = []
+        for group in self.config.double_excitations:
+            if len(group) != 4:
+                raise ValueError(f"double excitation {group!r} must contain exactly four qubits")
+            qs = tuple(int(q) for q in group)
+            if len(set(qs)) != 4:
+                raise ValueError(f"double excitation {qs!r} must use four distinct qubits")
+            if any(not (0 <= q < n_qubits) for q in qs):
+                raise ValueError(f"double excitation {qs!r} out of range for {n_qubits} qubits")
+            normalized.append(qs)
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("double_excitations contains duplicate entries")
+        return tuple(normalized)
+
+    def _normalized_hf_occupied_qubits(self) -> tuple[int, ...]:
+        n_qubits = int(self.config.n_qubits)
+        occupied = tuple(int(q) for q in self.config.hf_occupied_qubits)
+        if len(set(occupied)) != len(occupied):
+            raise ValueError("hf_occupied_qubits contains duplicate qubits")
+        for q in occupied:
+            if not (0 <= q < n_qubits):
+                raise ValueError(f"hf_occupied_qubit {q} out of range for {n_qubits} qubits")
+        return occupied
 
     def backend_tensor(self, value: Any, *, dtype: str = "float") -> torch.Tensor:
         if dtype == "long":
@@ -336,12 +406,25 @@ class DifferentiableQAS:
         if op.kind == "cx":
             control, target = op.qubits
             return self._gate_matrix(cx(target_qubit=target, control_qubits=[control]))
+        if op.kind == "single_excitation":
+            i, j = op.qubits
+            return self._gate_matrix(single_excitation(angles[0], i, j))
+        if op.kind == "double_excitation":
+            return self._gate_matrix(double_excitation(angles[0], *op.qubits))
         raise ValueError(f"unknown operation kind {op.kind!r}")
+
+    def _hf_state(self) -> torch.Tensor:
+        state = self.backend.zeros_state(self.n_qubits)
+        for q in self._normalized_hf_occupied_qubits():
+            state = self.backend.apply_unitary(state, self._gate_matrix(pauli_x(target_qubit=q)))
+        return state.reshape(-1)
 
     def _initial_state(self) -> torch.Tensor:
         if self.config.initial_state is not None:
             state = self.backend.cast(self.config.initial_state)
             return state.reshape(-1)
+        if self.config.hf_occupied_qubits:
+            return self._hf_state()
         return self.backend.zeros_state(self.n_qubits).reshape(-1)
 
     def _simulate_indices(self, indices: torch.Tensor, *, detach_theta: bool) -> torch.Tensor:
@@ -381,6 +464,8 @@ class DifferentiableQAS:
         theta_np = self.theta.detach().cpu().numpy()
         gates: list[dict[str, Any]] = []
         parameters: dict[str, float] = {}
+        for q in self._normalized_hf_occupied_qubits():
+            gates.append(pauli_x(target_qubit=q))
         for layer, op_index in enumerate(idx):
             op = self._operations[op_index]
             angles = theta_np[layer, op_index]
@@ -406,6 +491,13 @@ class DifferentiableQAS:
             elif op.kind == "cx":
                 control, target = op.qubits
                 gates.append(cx(target_qubit=target, control_qubits=[control]))
+            elif op.kind == "single_excitation":
+                i, j = op.qubits
+                parameters[f"theta_{layer}_{op_index}"] = float(angles[0])
+                gates.append(single_excitation(float(angles[0]), i, j))
+            elif op.kind == "double_excitation":
+                parameters[f"theta_{layer}_{op_index}"] = float(angles[0])
+                gates.append(double_excitation(float(angles[0]), *op.qubits))
         return Circuit(*gates, n_qubits=self.n_qubits, backend=self.backend), parameters
 
     def _evaluate_deterministic(self, hamiltonian_matrix: torch.Tensor) -> tuple[torch.Tensor, float]:

@@ -105,7 +105,7 @@ from aicir.qas import config, run
 `qdrats` 和 `dqas` 都通过配置对象声明搜索门池，但两者的结构语义不同：
 
 - `qdrats` 使用 slot/candidate 搜索。`gate_pool="generic"` 时，每个 target 比特一个 slot，候选为 `{rz·ry·rz, identity, cx_*}`；`gate_pool="excitation"` 时，每个给定激发算符一个 slot，候选为 `{single_excitation/double_excitation(θ), identity}`，并可用 `hf_occupied_qubits` 前置 Hartree-Fock 初态制备。
-- `dqas` 使用论文 DQAS 的全局 categorical operation pool。每个线路 placeholder 从同一个展开后的门池中采样一个 operation；`theta[position, operation, parameter]` 作为参数池复用。
+- `dqas` 使用论文 DQAS 的全局 categorical operation pool。每个线路 placeholder 从同一个展开后的门池中采样一个 operation；`theta[position, operation, parameter]` 作为参数池复用。`gate_pool="excitation"` 时，全局池展开为 identity、给定 singles 和给定 doubles，并可用 `hf_occupied_qubits` 前置 Hartree-Fock 初态制备。
 
 QDRATS generic 门池：
 
@@ -149,7 +149,7 @@ cfg = config.dqas(
 result = run("dqas", hamiltonian=hamiltonian, config=cfg)
 ```
 
-DQAS 当前支持的门名为 `identity`、`rx`、`ry`、`rz`、`rzryrz`、`cx`。`gate_pool="generic"` 等价于 `("identity", "rzryrz", "cx")`，其中 `cx` 默认展开为所有有向非自环连接；传 `two_qubit_pairs=((control, target), ...)` 可限制 CNOT 搜索连接。为了保证 sampled index 可复现，推荐用 tuple/list 表达门池；`pool={...}` 也可作为别名传入，但会按固定门序规范化。旧字段 `operation_pool` 仍作为兼容别名保留。
+DQAS 当前支持的通用门名为 `identity`、`rx`、`ry`、`rz`、`rzryrz`、`cx`。`gate_pool="generic"` 等价于 `("identity", "rzryrz", "cx")`，其中 `cx` 默认展开为所有有向非自环连接；传 `two_qubit_pairs=((control, target), ...)` 可限制 CNOT 搜索连接。`gate_pool="excitation"` 需要传 `single_excitations` 和/或 `double_excitations`，可选 `hf_occupied_qubits`。为了保证 sampled index 可复现，推荐用 tuple/list 表达门池；`pool={...}` 也可作为别名传入，但会按固定门序规范化。旧字段 `operation_pool` 仍作为兼容别名保留。
 
 ### 2.2 SearchStrategy 协议与策略注册表（模块化进行中）
 
