@@ -6,6 +6,7 @@
 
 ### Added
 
+- 2026-07-01 新增 `split_cores`（Billionnet-Jaumard 分解）：将二次 QUBO 经 posiform + 蕴含图 + Tarjan SCC 拆分为相互独立的 hard core，`min f == Σ min f_i`，可细分连通块。
 - **`aicir.chemistry` 改为每分子一个模块的 `molecules/` 包（公共 API 不变）。**
   `chemistry/molecule.py` 拆为 `chemistry/molecules/`：`_base.py`（`MoleculeHamiltonian`
   数据类 + `MOLECULES` 注册表 + `register_molecule` + 访问器），每个分子一个自注册模块，
