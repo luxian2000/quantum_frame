@@ -19,17 +19,22 @@
 
 ## aicir 当前状态
 
-`aicir` 已经具备较完整的研究型量子算法框架雏形：
+`aicir` 已经是较完整的研究型量子算法框架，本文档规划的多数底层抽象已落地：
 
-- `aicir.core` 提供 `Circuit`、门构造器、参数绑定和 QASM/JSON 互转。
-- `aicir.backends` 提供 NumPy、GPU、NPU 后端；`aicir.noise` 提供噪声模型；`aicir.core.operators` 提供 Pauli/Hamiltonian 算符（顶层 `aicir` 仍再导出 `Hamiltonian`/`PauliOp`/`PauliString`）。
+- `aicir.core` 提供 `Circuit`、门构造器、参数绑定，统一 `State`（态向量/密度矩阵），QASM/JSON 及 Qiskit/PennyLane/WuYue 互转；`Circuit` 保留门字典公开 surface，同时提供 `.operations`/`.ir` typed IR 视图。
+- `aicir.ir` 提供 typed IR（`Operation`/`Measurement`/`Observable`/`CircuitIR`）与统一访问 helper；JSON/QASM/绘图/测量/transpile/metrics/noise/QAS 主要内部路径已优先消费 typed IR。
+- `aicir.gates` 提供 `GateSpec` 注册表：门名/别名/QASM 名/显示符号/`generator`/`decomposition`/`matrix` 元信息。门矩阵构造为**注册表单一来源**（Approach A）——`gate_to_matrix` 与 `apply_gate_to_state` 两条路径都经 `GateSpec.matrix` 分发，注册自定义门（含受控/多比特目标）即可在两路模拟。
+- `aicir.backends` 提供 NumPy、GPU、NPU 后端；`aicir.noise` 提供噪声模型；`aicir.core.operators` 提供 Pauli/Hamiltonian 算符（顶层 `aicir` 再导出 `Hamiltonian`/`PauliOp`/`PauliString`）。
+- `aicir.transpile` 提供 `PassManager` pass 流水线（validate/canonicalize/cancel/merge/commute/decompose/layout/routing）与统一结果 `TranspileResult`；面向硬件目标的 pass 消费 `aicir.devices.Target`。
+- `aicir.devices` 提供硬件目标描述 `Target`（门集 + 耦合拓扑 + 执行能力标志）。
+- `aicir.primitives` 提供 `Sampler`/`Estimator`（statevector/shot/noisy/backend 变体）与统一结果 `SampleResult`/`EstimateResult`/`GradientResult`。
 - `aicir.measure` 提供测量、采样和 Pauli 项能量估计。
-- `aicir.optimizer` 提供线路结构优化和经典参数优化器。
-- `aicir.qml` 提供参数移位、有限差分、自动微分、伴随微分、量子自然梯度等方法。
-- `aicir.vqc` 提供 VQE、QAOA、VQD、SSVQE 和 ansatz 模板。
-- `aicir.qas` 提供量子架构搜索、搜索空间、奖励和评估工具。
+- `aicir.optimizer` 提供经典参数优化器；线路结构优化已迁至 `aicir.transpile`。
+- `aicir.qml` 提供参数移位、有限差分、自动微分、伴随微分、量子自然梯度等方法，`DiffMethod` 策略注册表（`select_diff` 自动优选），以及 PennyLane 风格 `qfun`（量子函数 + 设备 + 测量 + 梯度）。
+- `aicir.vqc` 提供 VQE、QAOA、VQD、SSVQE 和 ansatz 模板；默认精确能量走 `StatevectorEstimator` primitive。
+- `aicir.qas` 提供量子架构搜索（supernet/QDRATS/DQAS/CRLQAS/PPO-RB/PPR-DQL/MoG-VQE）、搜索空间、奖励与评估，统一入口 `run`/`config` + `SearchStrategy` 策略注册表。
 
-主要短板是：核心线路表示仍以门字典列表为主，类型约束和元信息不足；编译优化还不是 pass pipeline；后端、噪声、测量、梯度、硬件约束之间缺少统一的执行抽象。
+剩余主要缺口：`Target` 尚未接入 `qas` 搜索空间/硬件效率评分与 `metrics` 评分（仍用硬编码 `DEFAULT_NATIVE_GATES` 代理）；QASM3 完整 round-trip 与 `reset` 的 QASM 互转未做；路由为贪心（非全局最优）、布局未按噪声择优；`vqc`/`qas`/`metrics` 对 primitives 为加性集成、未全量内部迁移；部分子系统（`aicir.qrc` 量子储备池计算等）仍为占位骨架。
 
 ## 目标目录结构
 
