@@ -4,6 +4,20 @@
 
 ## 2026-07-01
 
+### Added
+
+- **`aicir.chemistry` 改为每分子一个模块的 `molecules/` 包（公共 API 不变）。**
+  `chemistry/molecule.py` 拆为 `chemistry/molecules/`：`_base.py`（`MoleculeHamiltonian`
+  数据类 + `MOLECULES` 注册表 + `register_molecule` + 访问器），每个分子一个自注册模块，
+  **文件名用分子式大小写**（`H2.py`/`LiH.py`/`H2O.py`/`NH3.py`/`N2.py`/`BeH2.py`），
+  canonical 名称统一小写。新增预置：`lih`(4q,2e/2o)、`h2o`(6q,4e/3o)、`nh3`(12q,6e/6o)、
+  `n2`(14q,10e/7o)、`beh2`(16q,6e/8o,3-21G)，系数取自各自 demo 的 PySCF/Qiskit Nature 结果。
+  公共接口（`get_molecule`/`molecule_hamiltonian`/`molecule_matrix`/`available_molecules`/…
+  从 `aicir.chemistry` 导入）完全不变，另新增 `register_molecule` 与各分子常量。配套
+  `tests/chemistry/test_molecules.py`：≤6 qubit 小分子有 dense-matrix 基态能量守卫
+  （`h2o` 对上 `-6.1596636772`）；12–16 qubit 的 nh3/n2/beh2（dense 构造过慢/过大）走
+  结构守卫，系数由上游 PySCF/Qiskit Nature 保证。
+
 ### Changed
 
 - **GateSpec.matrix Approach A：门矩阵两条路径统一经注册表分发（分支 `gatespec`）。**
