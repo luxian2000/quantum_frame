@@ -20,6 +20,9 @@
   - 行为保持：全量既有测试通过（VQE 能量、Bell 态、QASM round-trip 均经此路径）。
   - 配套 `tests/gates/test_matrix_dispatch_consistency.py`、`test_matrix_autograd.py`、
     `test_custom_gate_dispatch.py`（均按 numpy/torch/**npu** 后端参数化）。
+  - **NPU 平台验证**：三个测试文件在 Ascend NPU 上 `135 passed`（`npu` 参数化分支实际
+    命中设备，非 CPU 回退）——两路一致、autograd 对有限差分、自定义门两路一致均在真实
+    NPU 后端通过。
 
 ## 2026-06-30
 
