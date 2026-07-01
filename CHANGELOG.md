@@ -2,6 +2,25 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-01
+
+### Changed
+
+- **GateSpec.matrix Approach A：门矩阵两条路径统一经注册表分发（分支 `gatespec`）。**
+  `aicir.core.gates` 的 `gate_to_matrix`（全矩阵）与 `apply_gate_to_state`（局部）不再
+  各自硬编码 if/elif 分发链，改为经新增 helper `_gate_local_matrix(gate)` 从
+  `GateSpec.matrix` 注册表取局部矩阵（受控门取底门局部矩阵，`_CONTROLLED_BASE_GATE`
+  映射 + `_controlled_local_from_base` 包裹），再分别经 `_expand_local_matrix_to_full` /
+  `_apply_local_matrix_to_state` 施加。门局部矩阵**唯一来源**即注册表。
+  - `gate_to_matrix` 从 ~260 行双路（numpy/backend）折叠为 ~10 行。
+  - **新能力**：自定义**不受控**门注册 `matrix=` 后现在也能走快速局部路径
+    （`apply_gate_to_state` 旧实现对未硬编码门返回 `None`，只能回退全矩阵）。
+  - 移除因此产生的 14 个死构造器（`_hadamard`/`_crx`/`_cy`/`_cz`/`_crz`/`_toffoli`/
+    `_swap_backend`/`_single_qubit_from_base_backend` 等）。
+  - 行为保持：全量既有测试通过（VQE 能量、Bell 态、QASM round-trip 均经此路径）。
+  - 配套 `tests/gates/test_matrix_dispatch_consistency.py`、`test_matrix_autograd.py`、
+    `test_custom_gate_dispatch.py`（均按 numpy/torch/**npu** 后端参数化）。
+
 ## 2026-06-30
 
 ### Added
