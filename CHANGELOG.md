@@ -6,7 +6,7 @@
 
 ### Added
 
-- 2026-07-01 新增 `split_cores`（Billionnet-Jaumard 分解）：将二次 QUBO 经 posiform + 蕴含图 + Tarjan SCC 拆分为相互独立的 hard core，`min f == Σ min f_i`，可细分连通块。
+- `split_cores`（Billionnet-Jaumard 分解）：将二次 QUBO 经 posiform + 蕴含图 + Tarjan SCC 拆分为相互独立的 hard core，`min f == Σ min f_i`，可细分连通块。
 - **`aicir.chemistry` 改为每分子一个模块的 `molecules/` 包（公共 API 不变）。**
   `chemistry/molecule.py` 拆为 `chemistry/molecules/`：`_base.py`（`MoleculeHamiltonian`
   数据类 + `MOLECULES` 注册表 + `register_molecule` + 访问器），每个分子一个自注册模块，
@@ -131,29 +131,30 @@
 ### Added
 
 - **`TranspileResult` 统一结果对象 + `PassManager.run_with_result`（NEXT.md §9 收尾）。**
+
   - `aicir.transpile.TranspileResult`（`aicir.transpile.result`）：字段 `circuit`/`layout`/`passes`/
     `depth_before`/`depth_after`/`metadata`；置于 transpile 域内，避免 primitives↔transpile 耦合。
   - `PassManager.run_with_result(circuit)`：运行流水线并返回 `TranspileResult`，深度经
     `depth_proxy`（ASAP 层数），`layout` 取自含 `last_layout` 的 pass（如 `LayoutPass`，无则 `None`）。
     `LayoutPass.run` 现记录 `last_layout`。`PassManager.run` 仍返回 `Circuit` 不变。
   - 配套 `tests/transpile/test_transpile_result.py`。
-
 - **qfun 测量返回构造器 `expval`/`probs`/`sample`（NEXT.md §5 收尾）。** 函数体可返回这些对象在体内
   声明测量意图（无全局 tape，显式携带 circuit），替代/补充装饰器 `observable=`：
+
   - `expval(circuit, observable)` → 期望值（唯一可微返回）；`probs(circuit, wires=None)` → 概率向量
     （`wires` 边缘化）；`sample(circuit, wires=None)` → counts（shots 取自装饰器，缺省抛 `ValueError`）。
   - `.grad` 仅对 expval 有效；probs/sample 调用 `.grad` 抛 `ValueError`。均从 `aicir.qml` 导出。
   - 配套 `tests/qfun/test_qfun.py`。
-
 - **`GateSpec.matrix` 字段 + `gate_matrix()` 访问器 + `gate_to_matrix` 自定义门回退（NEXT.md §7 收尾）。**
+
   - `GateSpec.matrix`：后端感知局部矩阵构造器 `(params, backend) -> 局部矩阵`，已为全部不受控标准门
     填充（复用 core 局部矩阵原语，于 `aicir.core.gates` 导入时附加）；受控门、`measure`/`reset`/`unitary` 为 `None`。
   - `aicir.gates.gate_matrix(name, params=(), backend=None)` 读取局部矩阵；`set_gate_matrix` 附加构造器。
   - `gate_to_matrix` 未硬编码门的回退经 `GateSpec.matrix` 构造局部矩阵并嵌入，使自定义**不受控**门注册
     `matrix=` 后即可模拟，无需改 core。内置门分发与 autograd/local-apply 热路径不变。
   - 配套 `tests/gates/test_gatespec_matrix.py`（含 numpy/torch 一致性漂移护栏）。
-
 - **粒子数守恒激发门 `single_excitation`（别名 `givens`）与 `double_excitation`。**
+
   - `single_excitation(θ, qubit_1, qubit_2)`：实 Givens 旋转，作用于 |01⟩↔|10⟩ 子空间，
     保持粒子数守恒；`givens` 为规范别名。`GateSpec.generator=None`、`qasm_name=None`、
     `shift_rule=None`（两参数移位需配合 `psr4`）。
@@ -161,14 +162,14 @@
     子空间；`GateSpec.generator=None`、`qasm_name=None`、`shift_rule="four_term"`。
   - 两门均在顶层 `aicir` 导出。
   - 配套 `tests/gates/test_excitation_gates.py`。
-
 - **`aicir.qml.deriv.psr4`：四项参数移位规则（激发门 {−1, 0, 1} 特征谱）。**
+
   - 移位点 ±π/2、±3π/2，权重按四项规则推导，适用于 `single_excitation`/`double_excitation`
     等特征值谱为 {−1, 0, 1} 的生成元。
   - `psr4` 已加入 `aicir.qml.deriv.__all__`。
   - 配套 `tests/qml/test_psr4.py`。
-
 - **`GateSpec.num_controls`：受控门的控制位数量作为注册表数据。**
+
   - `aicir.gates.GateSpec` 新增 `num_controls: int = 0`（受控门的控制位数量）。
     内置门：`cx`/`cy`/`cz`/`crx`/`cry`/`crz`→`1`、`toffoli`→`2`、其余→`0`；
     对所有注册门满足不变量 `controlled == (num_controls > 0)`。加性、非破坏。
@@ -182,11 +183,10 @@
   统一。数值与原 `Measure` 精确路径一致。shots/噪声/密度矩阵/初始态等仍退回 `Measure`（primitives 仍可
   经 `energy_estimator=` 注入或 `target=` 选中）；`BasicQAOA`（稠密无线路）不接入。配套
   `tests/vqc/test_vqe_orchestration.py`。
-
 - **qfun `observable=` 不再于装饰期强制。** 函数体可经 `expval(...)` 自带观测量；"缺少 observable" 的错误
   下移到**调用期**，且仅在返回裸 `Circuit` 且无装饰器 `observable=` 时触发（向后兼容现有用法）。
-
 - **`aicir.qas` supernet 改用 aicir 门，移除模块内自定义门定义。**
+
   - `aicir/qas/algorithms/supernet.py` 删除其本地 `GateSpec` 数据类与
     `_SINGLE_QUBIT_GATES` / `_TWO_QUBIT_GATES` builder 字典；改为按 `aicir.gates`
     注册表校验 token、读取 `num_params` / `num_controls`，并经 `aicir.core` 门工厂
@@ -275,6 +275,7 @@
 ### Added
 
 - **NPU 局部量子门 autograd 安全路径：`_NpuLocalGateApplyFn` + `NPUBackend.apply_flat_gate`。**
+
   - 根因：`_apply_local_matrix_to_state_flat`（n_qubits > 8 时 NPU 路径）在 npu_complex 分支中：
     `flat`（complex64）被 `.real` 和 `.imag` 各读一次（2 条 backward 路径），
     `updated = matmul(M, gathered)` 同样被 `.real`/`.imag` 各读一次（再 2 条）。
@@ -293,8 +294,8 @@
   - 配套测试：`tests/backends/test_npu_hamiltonian_grad.py` 新增 2 项
     （前向等价性、autodiff vs 有限差分梯度一致性 < 1e-3）；套件合计 6/6 pass，
     全量 847 passed（含原有预期失败不变）。
-
 - **NPU complex64-free autodiff：`_NpuHamiltonianExpectationFn` + `NPUBackend.hamiltonian_expectation_pauli`。**
+
   - 根因：`Supernet._hamiltonian_expectation` Pauli 循环中 `state`（complex64）被 1313 次用作期望
     值的 bra/ket，backward 需 1313 次累加 `state.grad`（complex64 add → `aclnnAdd(DT_COMPLEX64)`
     → Ascend 缺失该算子，`--gradient ad` 必然崩溃）。
@@ -342,6 +343,7 @@
 ### Added
 
 - **`qfun` 第二片（NEXT.md §5）：多参数 + 多测量 + `BasicVQE` 接入。**
+
   - 多参数：单观测量时 `cost(x)`/`cost.grad(x)` 接受单数组参（vector），梯度返回同形数组。
   - 多测量：`observable=[H1, H2, ...]` → `cost(x)` 返回 `(n_obs,)` 数组，`cost.grad(x)`
     返回 Jacobian（标量参→`(n_obs,)`，向量参→`(n_obs, n_param)`），逐观测量经同一
@@ -351,13 +353,14 @@
     `hamiltonian` 改为可选位置参（cost 模式下不需要）。配套 `tests/vqc/test_vqe_qfun.py`、
     扩充 `tests/qfun/test_qfun.py`。
 - **`qfun` 第三片（NEXT.md §5）：`BasicQAOA` 接入 + 噪声路径封装。**
+
   - `BasicQAOA(cost=<qfun>, p=...)`（须单观测量 qfun）旁路稠密矩阵 ansatz，`energy`/梯度委托
     `cost`/`cost.grad`，`n_params=2p`；`problem_hamiltonian` 改为可选，`QAOAResult.statevector`
     允许 `None`（cost 模式）。配套 `tests/vqc/test_qaoa_qfun.py`。
   - `@qfun(..., noise_model=NoiseModel)` 把噪声附加到线路、经 `Measure.run` 走密度矩阵模拟读取
     期望值；`differential="auto"` 在有噪声时以 `noisy=True` 走 `select_diff`。
-
 - **`aicir.primitives` 第 4 节主体落地：补齐 Sampler/Estimator 全变体 + 延迟绑定 + 扩展点。**
+
   - 采样新增 `StatevectorSampler`（精确解析概率，拒绝 `shots=`）、`NoisySampler`
     （`noise_model` 附加到线路走密度矩阵采样）。
   - 估计新增 `NoisyEstimator`（密度矩阵期望，`shots=None` 确定性 / `shots>=1` 叠加散粒），
@@ -368,8 +371,8 @@
     序列 → 数组序列）。
   - 下游加性集成：`BasicVQE` 经 `energy_estimator=` 直接消费 `ShotEstimator`/`NoisyEstimator`，
     未改 VQE 内部（已端到端测试）。扩充 `tests/primitives/test_primitives.py`。
-
 - **`aicir.backends.npu_probe` 模块：Ascend NPU 硬件能力探测与缓存。**
+
   - 公开 API：`probe_npu(backend=None, *, allow_cpu_fallback=False, refresh=False)` 探测 NPU
     dtype / 算子 / 张量维度 / 内存能力，缓存到磁盘（`~/.cache/aicir/`，支持 `AICIR_CACHE_DIR` 覆盖），
     缓存键为 `device | torch_version | torch_npu_version`。
