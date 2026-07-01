@@ -46,16 +46,16 @@ def to_posiform(poly: Polynomial) -> Posiform:
             constant += coeff
         elif len(term) == 1:
             v = term[0]
-            if coeff >= 0:
+            if coeff > 0:
                 add((2 * v,), coeff)
-            else:
+            elif coeff < 0:
                 constant += coeff
                 add((2 * v + 1,), -coeff)
         else:
             i, j = term
-            if coeff >= 0:
+            if coeff > 0:
                 add((2 * i, 2 * j), coeff)
-            else:
+            elif coeff < 0:
                 # coeff < 0: c*xi*xj = c + (-c)*x_bar_i + (-c)*xi*x_bar_j
                 constant += coeff
                 add((2 * i + 1,), -coeff)
