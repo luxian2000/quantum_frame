@@ -23,6 +23,21 @@
   - **NPU 平台验证**：三个测试文件在 Ascend NPU 上 `135 passed`（`npu` 参数化分支实际
     命中设备，非 CPU 回退）——两路一致、autograd 对有限差分、自定义门两路一致均在真实
     NPU 后端通过。
+  - **收尾：受控自定义门 + 多比特目标受控门接入。** `_gate_local_matrix` 改为「任意
+    携带 `control_qubits` 的门」都走受控路径，底门名取 `_CONTROLLED_BASE_GATE.get(type, type)`
+    （内置受控门映射到不同底门，自定义门底门即自身），目标轴由 `_gate_axes(gate)` 取得
+    （`axes = controls + target_axes`）。`_controlled_local_from_base` 泛化为接受
+    `2^k × 2^k` 底门（`k` 个目标比特），底门维度须为 2 的幂且与目标比特数一致。因此
+    `{"type": <自定义门>, "control_qubits": [...]}`、受控 `swap`（Fredkin/CSWAP）、受控
+    自定义 2 比特门现在两条路径都能模拟。配套 `test_custom_gate_dispatch.py` 增加受控
+    单比特 / 受控 swap / 受控自定义 2 比特门用例。
+
+### Fixed
+
+- **`tests/circuit/io/test_json_qasm_io.py` torch 未导入。**
+  `test_json_serializes_torch_tensor_parameters_as_numeric_values` 直接用 `torch.tensor(...)`
+  但文件未 import torch（`NameError`，主分支上一直失败）。改为顶层 `try: import torch`
+  守卫 + `@unittest.skipIf(torch is None, ...)`；有 torch 时运行、无 torch 时干净跳过。
 
 ## 2026-06-30
 

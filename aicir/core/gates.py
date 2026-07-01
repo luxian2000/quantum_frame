@@ -871,25 +871,37 @@ def _single_qubit_base_for_gate(gate):
     return None
 
 
-def _controlled_local_from_base(base_single, control_states):
+def _controlled_local_from_base(base, control_states):
+    """把 ``base``（作用于 ``k`` 个目标比特的 ``2^k × 2^k`` 局部矩阵）包裹为受控门局部矩阵。
+
+    当全部控制比特命中 ``control_states`` 时对目标施加 ``base``，否则为恒等。目标比特可
+    多于一个（``k >= 1``）：单比特底门（``k=1``，如 ``cx`` 的 X 底门）与多比特底门
+    （如受控 ``swap`` 的 4x4 底门）统一处理。
+    """
     control_states = [int(state) for state in control_states]
+    for state in control_states:
+        if state not in (0, 1):
+            raise ValueError("control_states 只能包含 0 或 1")
     n_controls = len(control_states)
-    dim = 1 << (n_controls + 1)
-    if torch is not None and isinstance(base_single, torch.Tensor):
+    base_dim = int(base.shape[0])
+    n_targets = base_dim.bit_length() - 1
+    if (1 << n_targets) != base_dim:
+        raise ValueError("controlled 底门维度必须是 2 的幂")
+    dim = 1 << (n_controls + n_targets)
+    control_index = 0
+    for state in control_states:
+        control_index = (control_index << 1) | state
+    block_indices = [(control_index << n_targets) | target for target in range(base_dim)]
+
+    if torch is not None and isinstance(base, torch.Tensor):
+        zero = base.new_tensor(0.0 + 0.0j)
+        one = base.new_tensor(1.0 + 0.0j)
         rows = []
-        control_index = 0
-        for state in control_states:
-            if state not in (0, 1):
-                raise ValueError("control_states 只能包含 0 或 1")
-            control_index = (control_index << 1) | state
-        block_indices = [(control_index << 1) | target_state for target_state in (0, 1)]
-        zero = base_single.new_tensor(0.0 + 0.0j)
-        one = base_single.new_tensor(1.0 + 0.0j)
         for row in range(dim):
             row_entries = []
             for col in range(dim):
                 if row in block_indices and col in block_indices:
-                    row_entries.append(base_single[block_indices.index(row), block_indices.index(col)])
+                    row_entries.append(base[block_indices.index(row), block_indices.index(col)])
                 elif row == col:
                     row_entries.append(one)
                 else:
@@ -898,14 +910,7 @@ def _controlled_local_from_base(base_single, control_states):
         return torch.stack(rows)
 
     local = np.eye(dim, dtype=_CDTYPE)
-    control_index = 0
-    for state in control_states:
-        if state not in (0, 1):
-            raise ValueError("control_states 只能包含 0 或 1")
-        control_index = (control_index << 1) | state
-
-    block_indices = [(control_index << 1) | target_state for target_state in (0, 1)]
-    local[np.ix_(block_indices, block_indices)] = np.asarray(base_single, dtype=_CDTYPE)
+    local[np.ix_(block_indices, block_indices)] = np.asarray(base, dtype=_CDTYPE)
     return local
 
 
@@ -956,18 +961,29 @@ def _gate_axes(gate):
 def _gate_local_matrix(gate, gate_type, backend):
     """门局部矩阵的**唯一来源**（Approach A）：返回 ``(local, axes, cache_key)``。
 
-    非受控门经 ``GateSpec.matrix`` 注册表取局部矩阵；受控门取底门（``_CONTROLLED_BASE_GATE``）
-    的局部矩阵，再由 ``_controlled_local_from_base`` 按本门实例的 ``control_states`` 包裹。
-    无局部矩阵（未注册门 / ``measure`` 等）返回 ``(None, None, None)``。
+    受控门取底门局部矩阵再由 ``_controlled_local_from_base`` 按本门实例的 ``control_states``
+    包裹，底门有两种：内置受控类型（``_CONTROLLED_BASE_GATE`` 映射到不同门名，如
+    ``cx→pauli_x``）；或**任意携带 ``control_qubits`` 的门**（底门即该门自身的非受控矩阵，
+    要求为单比特 2x2），从而支持受控自定义门。非受控门直接取注册表局部矩阵。无局部矩阵
+    （未注册门 / ``measure`` 等）返回 ``(None, None, None)``。
     """
     from ..gates import gate_matrix as _registry_gate_matrix
 
     parameter = gate.get("parameter")
-    if gate_type in _CONTROLLED_BASE_GATE:
+
+    if gate.get("control_qubits"):
         controls, control_states = _normalized_control_data(gate)
-        base = _registry_gate_matrix(_CONTROLLED_BASE_GATE[gate_type], parameter, backend)
+        base_name = _CONTROLLED_BASE_GATE.get(gate_type, gate_type)
+        base = _registry_gate_matrix(base_name, parameter, backend)
+        target_axes = _gate_axes(gate)
+        if base is None:
+            return None, None, None
+        base_dim = int(base.shape[0])
+        if (base_dim & (base_dim - 1)) != 0 or (1 << len(target_axes)) != base_dim:
+            # 底门未注册/非 2 的幂，或目标比特数与底门维度不符。
+            return None, None, None
         local = _controlled_local_from_base(base, control_states)
-        axes = controls + [int(gate["target_qubit"])]
+        axes = controls + target_axes
         cache_key = None if _contains_torch_tensor(parameter) else (
             "ctrl",
             gate_type,
