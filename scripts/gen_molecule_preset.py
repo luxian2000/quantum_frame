@@ -19,20 +19,32 @@ Run from the repository root:
     # CPU dry run (small molecules, or to validate the pipeline)
     PYTHONPATH=. python scripts/gen_molecule_preset.py --molecule h2o --device cpu
 
-    # all large presets (ch4/n2/beh2/nh3) in one NPU run
+    # all large presets (ch4/n2/beh2/nh3) sequentially on one NPU
     PYTHONPATH=. python scripts/gen_molecule_preset.py --all-large --device npu:0
 
-    # same, split across 4 NPUs (one molecule per rank, no --device needed)
-    torchrun --nproc_per_node=4 scripts/gen_molecule_preset.py --all-large
+    # same, one molecule per NPU across 4 devices (plain subprocesses, staggered
+    # launch to avoid concurrent Ascend/TBE driver init races — no torchrun)
+    PYTHONPATH=. python scripts/gen_molecule_preset.py --all-large --num-devices 4
 
 Requires ``torch`` and ``scipy``. Qubit ordering is big-endian (qubit ``q`` → bit
 ``n-1-q``), matching ``aicir`` gate/state conventions.
+
+Multi-device note: this deliberately does not use ``torchrun``. All-devices-at-once
+launchers start every process at nearly the same instant, which can crash the
+Ascend NPU/TBE op-compiler on concurrent first-touch initialization (seen in
+practice as ``AclSetCompileopt`` / ``No module named 'tbe'`` errors). ``--num-devices``
+instead spawns plain, staggered subprocesses per molecule (same convention as
+``aicir/qas/vqe_loop/shard_scheduler.py``): independent task parallelism, no
+``torch.distributed``/HCCL involved.
 """
 
 from __future__ import annotations
 
 import argparse
 import importlib
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -67,11 +79,33 @@ MAX_QUBITS = 32
 LARGE = ("nh3", "n2", "beh2", "ch4")
 
 
-def _distributed_context():
-    """Return ``NPURuntimeContext`` parsed from WORLD_SIZE/RANK/LOCAL_RANK (torchrun)."""
-    from aicir.backends.npu_backend import npu_runtime_context_from_env
+def _launch_parallel(names, num_devices: int, args, stagger_seconds: float) -> None:
+    """Spawn one plain subprocess per molecule, round-robin across NPUs.
 
-    return npu_runtime_context_from_env()
+    Deliberately not torchrun: launching all devices at once can crash the Ascend
+    NPU/TBE op-compiler on concurrent first-touch initialization. Staggering the
+    launches and using independent single-device processes (no torch.distributed)
+    avoids that, matching ``aicir/qas/vqe_loop/shard_scheduler.py``.
+    """
+    procs = []
+    for i, name in enumerate(names):
+        device = f"npu:{i % num_devices}"
+        command = [
+            sys.executable, str(Path(__file__).resolve()),
+            "--molecule", name, "--device", device, "--out-dir", args.out_dir,
+        ]
+        if args.allow_cpu_fallback:
+            command.append("--allow-cpu-fallback")
+        if args.no_energy:
+            command.append("--no-energy")
+        print(f"launching {name} on {device}: {' '.join(command)}")
+        procs.append((name, subprocess.Popen(command)))
+        if i + 1 < len(names):
+            time.sleep(stagger_seconds)
+
+    failed = [name for name, proc in procs if proc.wait() != 0]
+    if failed:
+        raise SystemExit(f"failed: {', '.join(failed)}")
 
 
 def _resolve_backend(device: str, allow_cpu_fallback: bool):
@@ -226,21 +260,21 @@ def main() -> None:
                         help="skip the (matrix-free) ground-energy computation")
     parser.add_argument("--out-dir", default="aicir/chemistry/molecules",
                         help="output directory for the generated preset")
+    parser.add_argument("--num-devices", type=int, default=1,
+                        help="with --all-large: spawn one subprocess per molecule, "
+                             "round-robin across this many npu:N devices (no torchrun)")
+    parser.add_argument("--stagger-seconds", type=float, default=5.0,
+                        help="delay between subprocess launches in --num-devices mode, "
+                             "to avoid concurrent Ascend/TBE driver init races")
     args = parser.parse_args()
 
+    if args.all_large and args.num_devices > 1:
+        _launch_parallel(list(LARGE), args.num_devices, args, args.stagger_seconds)
+        return
+
+    names = list(LARGE) if args.all_large else [args.molecule]
+    backend = None if args.no_energy else _resolve_backend(args.device, args.allow_cpu_fallback)
     out_dir = Path(args.out_dir)
-    ctx = _distributed_context()
-
-    if args.all_large and ctx.distributed:
-        # torchrun launched multiple ranks: split the independent molecules across
-        # them, one NPU each (embarrassingly parallel — no inter-rank communication).
-        names = list(LARGE)[ctx.rank :: ctx.world_size]
-        backend = None if args.no_energy else _resolve_backend(f"npu:{ctx.local_rank}", args.allow_cpu_fallback)
-        print(f"[rank {ctx.rank}/{ctx.world_size}] assigned: {names or '(none)'}")
-    else:
-        names = list(LARGE) if args.all_large else [args.molecule]
-        backend = None if args.no_energy else _resolve_backend(args.device, args.allow_cpu_fallback)
-
     for name in names:
         _generate_one(name, backend, out_dir, args.no_energy)
 
