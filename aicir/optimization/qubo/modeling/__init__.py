@@ -39,6 +39,7 @@ from .problems import (
 )
 from .registry import ModelContext, VariableMetadata, VariableRegistry
 from .solution import DecodedSolution, decode_integer, decode_solution
+from .split import split_cores, split_polynomial
 
 __version__ = "0.1.0"
 
@@ -90,6 +91,8 @@ __all__ = [
     "permutation",
     "qubo_energy",
     "quadratic_objective",
+    "split_cores",
+    "split_polynomial",
     "tsp_model",
     "tsp_qubo_builder",
     "qubo_to_ising_indices",
