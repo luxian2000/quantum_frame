@@ -82,3 +82,24 @@ def test_split_cores_rejects_cubic():
         assert "degree <= 2" in str(exc)
     else:
         raise AssertionError("Expected cubic input to be rejected.")
+
+
+def test_split_cores_omits_independently_satisfiable_terms():
+    reg = VariableRegistry()
+    a = Binary("a", registry=reg)
+    b = Binary("b", registry=reg)
+    c = Binary("c", registry=reg)
+    # a*b - 2a - 2b + 5 is a frustrated hard core (min 2); the loose "+ c" is a
+    # positive literal that is independently satisfiable (c = 0) and must NOT be
+    # returned as its own core. This guards the self-dual filter: dropping it
+    # would emit c as a spurious second core (min still preserved, but not lean).
+    f = (a * b - 2 * a - 2 * b + 5) + c
+    c_id = next(iter(c.terms))[0]
+
+    pieces = split_cores(f)
+    non_constant = [p for p in pieces if any(term for term in p.terms)]
+
+    assert len(non_constant) == 1
+    core_vars = {v for term in non_constant[0].terms for v in term}
+    assert c_id not in core_vars
+    assert abs(_min_energy(f) - sum(_min_energy(p) for p in pieces)) < 1e-9

@@ -126,7 +126,7 @@ def split_cores(poly: Polynomial) -> list[Polynomial]:
         monomial = Polynomial.constant(coeff, poly.registry)
         for node in key:
             monomial = monomial * _literal_poly(node, poly.registry)
-        cores[cid] = cores.get(cid, Polynomial({}, poly.registry)) + monomial
+        cores[cid] = cores.get(cid, Polynomial.constant(0.0, poly.registry)) + monomial
 
     pieces = [cores[cid] for cid in sorted(cores)]
     if abs(posiform.constant) > 1e-12:
