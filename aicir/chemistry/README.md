@@ -19,15 +19,20 @@
 
 ## 2. 当前预置
 
-当前只预置已确认系数来源的 H2 Hamiltonian。未确认的分子不会写入注册表。
+每个分子一个模块，**文件名用分子式大小写**（`molecules/H2.py`、`molecules/BeH2.py`…），import 时自注册进 `MOLECULES`。canonical 名称统一小写（`get_molecule("BeH2")` 与 `get_molecule("beh2")` 等价）。系数均来自 PySCF / Qiskit Nature。
 
-| 名称 | 分子 | qubits | basis | mapping | 说明 |
-| --- | --- | ---: | --- | --- | --- |
-| `h2` | H2 | 2 | STO-3G | ParityMapper(two_qubit_reduction) | 适合最小 VQE 示例 |
-| `h2_jw` | H2 | 4 | STO-3G | JordanWignerMapper | 未做对称性约化的 4-qubit 版本 |
-| `h2_tapered` | H2 | 1 | STO-3G | TaperedQubitMapper | taper 后的 1-qubit 版本 |
+| 名称 | 分子 | qubits | basis | mapping | 模块 | 验证 |
+| --- | --- | ---: | --- | --- | --- | --- |
+| `h2` | H2 | 2 | STO-3G | ParityMapper(two_qubit_reduction) | `molecules/H2.py` | 基态能量 |
+| `h2_jw` | H2 | 4 | STO-3G | JordanWignerMapper | `molecules/H2.py` | 基态能量 |
+| `h2_tapered` | H2 | 1 | STO-3G | TaperedQubitMapper | `molecules/H2.py` | 基态能量 |
+| `lih` | LiH | 4 | STO-3G | JordanWignerMapper（2e/2o） | `molecules/LiH.py` | 基态能量 |
+| `h2o` | H2O | 6 | STO-3G | JordanWignerMapper（4e/3o） | `molecules/H2O.py` | 基态能量 |
+| `nh3` | NH3 | 12 | STO-3G | JordanWignerMapper（6e/6o） | `molecules/NH3.py` | 结构守卫 |
+| `n2` | N2 | 14 | STO-3G | JordanWignerMapper（10e/7o） | `molecules/N2.py` | 结构守卫 |
+| `beh2` | BeH2 | 16 | 3-21G | JordanWignerMapper（6e/8o） | `molecules/BeH2.py` | 结构守卫 |
 
-chemistry preset 使用简短 canonical 名称，不保留旧长名称或额外别名。
+新增分子：在 `molecules/` 下加一个分子式命名的模块，`register_molecule(MoleculeHamiltonian(...))`；小分子（≤6 qubit，dense 构造快）在 `tests/chemistry/test_molecules.py` 的 `_GROUND_ENERGIES` 补一条基态能量守卫，大分子加入 `_STRUCTURAL_ONLY`（≥12 qubit dense 构造过慢/过大，只做结构一致性检查，系数由上游 PySCF/Qiskit Nature 保证）。
 
 ---
 
@@ -89,5 +94,5 @@ print(result.energy)
 ## 5. 验证命令
 
 ```bash
-PYTHONPATH=. pytest tests/chemistry/test_molecule.py
+PYTHONPATH=. pytest tests/chemistry/test_molecules.py
 ```
