@@ -22,6 +22,9 @@ Run from the repository root:
     # all large presets (ch4/n2/beh2/nh3) in one NPU run
     PYTHONPATH=. python scripts/gen_molecule_preset.py --all-large --device npu:0
 
+    # same, split across 4 NPUs (one molecule per rank, no --device needed)
+    torchrun --nproc_per_node=4 scripts/gen_molecule_preset.py --all-large
+
 Requires ``torch`` and ``scipy``. Qubit ordering is big-endian (qubit ``q`` → bit
 ``n-1-q``), matching ``aicir`` gate/state conventions.
 """
@@ -62,6 +65,13 @@ MAX_QUBITS = 32
 
 # Molecules whose dense matrix is infeasible — the matrix-free targets for --all-large.
 LARGE = ("nh3", "n2", "beh2", "ch4")
+
+
+def _distributed_context():
+    """Return ``NPURuntimeContext`` parsed from WORLD_SIZE/RANK/LOCAL_RANK (torchrun)."""
+    from aicir.backends.npu_backend import npu_runtime_context_from_env
+
+    return npu_runtime_context_from_env()
 
 
 def _resolve_backend(device: str, allow_cpu_fallback: bool):
@@ -218,9 +228,19 @@ def main() -> None:
                         help="output directory for the generated preset")
     args = parser.parse_args()
 
-    names = list(LARGE) if args.all_large else [args.molecule]
-    backend = None if args.no_energy else _resolve_backend(args.device, args.allow_cpu_fallback)
     out_dir = Path(args.out_dir)
+    ctx = _distributed_context()
+
+    if args.all_large and ctx.distributed:
+        # torchrun launched multiple ranks: split the independent molecules across
+        # them, one NPU each (embarrassingly parallel — no inter-rank communication).
+        names = list(LARGE)[ctx.rank :: ctx.world_size]
+        backend = None if args.no_energy else _resolve_backend(f"npu:{ctx.local_rank}", args.allow_cpu_fallback)
+        print(f"[rank {ctx.rank}/{ctx.world_size}] assigned: {names or '(none)'}")
+    else:
+        names = list(LARGE) if args.all_large else [args.molecule]
+        backend = None if args.no_energy else _resolve_backend(args.device, args.allow_cpu_fallback)
+
     for name in names:
         _generate_one(name, backend, out_dir, args.no_energy)
 
