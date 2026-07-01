@@ -1,11 +1,14 @@
 """在 4 张 Ascend NPU 上用 supernet QAS 搜索 CH4 的 VQE 线路（内搜索分片）。
 
-方法选择：与 ``demos/CH4/CH4.py`` 一致，使用 ``supernet`` (``supernet_qas``)。
-它是面向任意哈密顿量做 VQE ansatz 结构搜索的唯一 QAS 方法；CRLQAS / PPR-DQL /
-PPO-RB 面向小规模目标态制备，不适合 18 量子比特分子哈密顿量。
+方法选择：与 ``demos/CH4/CH4.py`` 一致，使用 ``supernet`` 方法，但通过统一入口
+``aicir.qas.run("supernet", config=..., hamiltonian=...)`` 调用（而非便捷封装
+``supernet_qas``），配置通过 ``aicir.qas.config.supernet(**kwargs)`` 构建。
+``supernet`` 是面向任意哈密顿量做 VQE ansatz 结构搜索的唯一 QAS 方法；CRLQAS /
+PPR-DQL / PPO-RB 面向小规模目标态制备，不适合 18 量子比特分子哈密顿量。
 
-所有 rank 使用**相同随机种子**，``supernet_qas`` 在内部将训练/排名/微调阶段切分到
-多 NPU 上并行执行（内搜索分片）。``--mode`` 控制分片策略，两种模式区别如下：
+所有 rank 使用**相同随机种子**，底层 ``Supernet.train`` 在内部将训练/排名/微调阶段
+切分到多 NPU 上并行执行（内搜索分片）。``--mode``（转发至 ``SupernetConfig.shard_mode``）
+控制分片策略，两种模式区别如下：
 
 - ``safe``（默认）：**与单卡数值完全等价（确定性可复现）**。每步所有 rank 用相同
   种子采样**同一架构**，只把 *候选 supernet 的选择评估* 切分到各 rank（``_sharded_select``）；
@@ -72,7 +75,8 @@ from aicir.backends.npu_backend import (
     npu_runtime_context_from_env,
 )
 from aicir.measure import hamiltonian_pauli_terms
-from aicir.qas import supernet_qas
+from aicir.qas import config as qas_config
+from aicir.qas import run as qas_run
 from demos.chemistry_ansatz import save_qasm3_if_supported
 
 from demos.CH4.CH4 import (
@@ -217,7 +221,7 @@ def main(argv: list[str] | None = None) -> None:
         )
         print(f"Qubits: {hamiltonian.n_qubits}  Terms: {n_terms}")
 
-    # 所有 rank 使用相同 seed；supernet_qas 内部将训练/排名/微调切分到各 NPU（内搜索分片）。
+    # 所有 rank 使用相同 seed；Supernet.train 内部将训练/排名/微调切分到各 NPU（内搜索分片）。
     kwargs = ch4_vqe_qas_kwargs()
     kwargs.update(
         {
@@ -228,10 +232,11 @@ def main(argv: list[str] | None = None) -> None:
             "finetune_steps": args.finetune_steps,
             "seed": args.seed,          # 同一 seed，保证各 rank 权重/候选集一致
             "device": device,
-            "mode": args.mode,
+            "shard_mode": args.mode,
             "use_parameter_shift": args.gradient == "psr",
         }
     )
+    supernet_config = qas_config.supernet(**kwargs)
 
     _log(
         f"start sharded supernet search (seed={args.seed}, mode={args.mode}, gradient={args.gradient}) ...",
@@ -239,7 +244,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     started_at = datetime.now().isoformat(timespec="seconds")
     start = time.time()
-    result = supernet_qas(hamiltonian, **kwargs)
+    result = qas_run("supernet", config=supernet_config, hamiltonian=hamiltonian)
     elapsed = time.time() - start
 
     # result 在所有 rank 上均为全局最优，无需 all-gather。

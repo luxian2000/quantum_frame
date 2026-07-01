@@ -20,7 +20,8 @@ import numpy as np
 
 from aicir import Hamiltonian, NumpyBackend
 from aicir.measure import hamiltonian_pauli_terms
-from aicir.qas import Supernet, SupernetConfig, SupernetResult
+from aicir.qas import SupernetConfig, SupernetResult
+from aicir.qas import run as qas_run
 from demos.chemistry_ansatz import closed_shell_excitation_pools, save_qasm3_if_supported
 
 
@@ -139,16 +140,17 @@ def lih_vqe_qas_config(**overrides) -> SupernetConfig:
 def search_ground_state_qas(hamiltonian: Hamiltonian, **overrides) -> SupernetResult:
     """Search a ground-state-preparing circuit for ``hamiltonian`` with supernet.
 
-    Wraps :mod:`aicir.qas.algorithms.supernet`: it sets up a weight-shared supernet, samples
-    and optimises ansatze in one stage, ranks them, and fine-tunes the best one.
-    The returned result exposes the fine-tuned energy, the fixed-ansatz VQE
-    baseline, and the selected circuit in ``final_metrics``.
+    Calls the uniform ``aicir.qas.run("supernet", config=..., hamiltonian=...)``
+    entry point: it sets up a weight-shared supernet, samples and optimises
+    ansatze in one stage, ranks them, and fine-tunes the best one. The returned
+    result exposes the fine-tuned energy, the fixed-ansatz VQE baseline, and the
+    selected circuit in ``final_metrics``.
     """
 
     # 若调用方未显式指定量子比特数，则与输入哈密顿量保持一致。
     overrides.setdefault("n_qubits", hamiltonian.n_qubits)
     config = lih_vqe_qas_config(**overrides)
-    return Supernet(config).train(hamiltonian=hamiltonian)
+    return qas_run("supernet", config=config, hamiltonian=hamiltonian)
 
 
 # Map each aicir gate dict onto the circuit builder that reconstructs it. Each
