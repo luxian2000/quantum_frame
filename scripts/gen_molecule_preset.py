@@ -19,6 +19,9 @@ Run from the repository root:
     # CPU dry run (small molecules, or to validate the pipeline)
     PYTHONPATH=. python scripts/gen_molecule_preset.py --molecule h2o --device cpu
 
+    # all large presets (ch4/n2/beh2/nh3) in one NPU run
+    PYTHONPATH=. python scripts/gen_molecule_preset.py --all-large --device npu:0
+
 Requires ``torch`` and ``scipy``. Qubit ordering is big-endian (qubit ``q`` → bit
 ``n-1-q``), matching ``aicir`` gate/state conventions.
 """
