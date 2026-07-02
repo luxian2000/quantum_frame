@@ -83,6 +83,19 @@ class NumpyBackend(Backend):
     def real(self, tensor):
         return np.real(tensor)
 
+    def tensordot(self, a, b, axes):
+        out = np.tensordot(np.asarray(a), np.asarray(b), axes=axes)
+        return out.astype(self._dtype)
+
+    def transpose(self, a, axes):
+        return np.transpose(np.asarray(a), axes)
+
+    def reshape(self, a, shape):
+        return np.reshape(np.asarray(a), tuple(shape))
+
+    def conj(self, a):
+        return np.conj(np.asarray(a))
+
     def abs_sq(self, tensor):
         return np.abs(tensor) ** 2
 
