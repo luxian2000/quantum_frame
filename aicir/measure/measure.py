@@ -141,6 +141,7 @@ class Measure:
                                      与 initial_state 互斥）
             observables:             可观测量字典 {name: operator_matrix}
             return_state:            是否在结果中附带 state / final_state
+            method:                  "statevector"（默认，逐门态矢量演化）或 "tensor"（张量网络求末态后复用既有测量机制；仅纯态、无噪声）
         """
         if not hasattr(circuit, "n_qubits"):
             raise TypeError("circuit 需要具备 n_qubits 属性")
