@@ -54,7 +54,7 @@
 
 在统一测量入口 `Measure.run` 中传入 `method="tensor"`，即可用张量网络路径代替逐门态矢量演化求末态，再复用原有的 shots/exact、末端读出、`observables` 等逻辑。**注意以下几点与 `method="statevector"`（默认）不同：**
 
-- **`snap`（快照）在 `method="tensor"` 下不生效。** 末态是经张量网络一次性求得的，没有逐操作演化轨迹可供在中间下标处拍快照；传入 `snap` 不会报错，但不会产生任何快照记录。
+- **`snap`（快照）在 `method="tensor"` 下仅接受 `None`/`[]`。** 末态是经张量网络一次性求得的，没有逐操作演化轨迹可供在中间下标处拍快照；内部递归用的是 0 操作的 stripped 电路，故传入**非空** `snap` 会因下标越界抛 `ValueError`（如 `snap=[0]` → `snap 含越界操作下标 0（操作数=0）`）。
 - **`method="tensor"` 忽略调用方传入的 `initial_state`/`initial_density_matrix`，始终从 `|0...0>` 出发演化。** 内部实现是先用 `tn_statevector` 求出电路作用在 `|0...0>` 上的末态，再把它当作一段空电路的 `initial_state` 交给 `method="statevector"` 路径继续处理（末端读出/shots/observables 等）；因此不支持从非零初态或指定密度矩阵起算。
 - **仅支持纯态、无噪声**：若电路带 `noise_model`，或电路内嵌了 `measure(...)` 标记门，`method="tensor"` 会直接抛 `ValueError`（噪声路径必须走密度矩阵、内嵌 measure 标记与一次性收缩语义冲突）。
 
