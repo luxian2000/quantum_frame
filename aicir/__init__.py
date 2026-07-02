@@ -215,13 +215,14 @@ try:
     from .simulator import (
         partial_amplitude,
         single_amplitude,
+        tn_expectation,
         tn_statevector,
     )
 except ModuleNotFoundError as exc:
     if not _is_missing_torch(exc):
         raise
 else:
-    _export(["tn_statevector", "single_amplitude", "partial_amplitude"])
+    _export(["tn_statevector", "single_amplitude", "partial_amplitude", "tn_expectation"])
 
 # 导入 ``aicir.measure`` 子包会把 ``aicir.measure`` 属性重新绑定为该子模块，
 # 覆盖上面从 ``.core`` 导入的同名门构造器 ``measure``。这里显式恢复门构造器，

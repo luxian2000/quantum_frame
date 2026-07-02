@@ -70,3 +70,14 @@ def partial_amplitude(circuit, *, open_qubits=None, bitstrings=None, backend=Non
         result = contract(tensors, indices, open_idx, backend)
         return np.asarray(backend.to_numpy(result)).reshape(-1)
     return np.array([single_amplitude(circuit, b, backend=backend) for b in bitstrings])
+
+
+def tn_expectation(circuit, observable, *, backend=None):
+    """经张量网络收缩求期望值 ⟨ψ|O|ψ⟩。torch/NPU 后端上对参数门可微。"""
+    backend = _resolve_backend(circuit, backend)
+    psi = _statevector_tensor(circuit, backend)
+    if hasattr(observable, "to_matrix"):
+        operator = observable.to_matrix(backend)
+    else:
+        operator = backend.cast(observable)
+    return backend.expectation_sv(psi, operator)
