@@ -710,6 +710,29 @@ class NPUBackend(GPUBackend):
             return torch.complex(real, imag)
         return super().kron(a, b)
 
+    def tensordot(self, a, b, axes):
+        if self._is_npu_complex(a) or self._is_npu_complex(b):
+            from ._contract import tensordot_via_matmul
+            return tensordot_via_matmul(self, a, b, axes)
+        return super().tensordot(a, b, axes)
+
+    def transpose(self, a, axes):
+        if self._is_npu_complex(a):
+            perm = [int(x) for x in axes]
+            return torch.complex(torch.real(a).permute(*perm), torch.imag(a).permute(*perm))
+        return super().transpose(a, axes)
+
+    def reshape(self, a, shape):
+        shape = tuple(int(s) for s in shape)
+        if self._is_npu_complex(a):
+            return torch.complex(torch.real(a).reshape(shape), torch.imag(a).reshape(shape))
+        return super().reshape(a, shape)
+
+    def conj(self, a):
+        if self._is_npu_complex(a):
+            return torch.complex(torch.real(a), -torch.imag(a))
+        return super().conj(a)
+
     def dagger(self, matrix):
         """NPU workaround: conjugate transpose via real/imag split (avoids torch.conj on complex64)."""
         if self._is_npu_complex(matrix):
