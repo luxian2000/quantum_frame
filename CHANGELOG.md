@@ -2,6 +2,24 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-02
+
+### Added
+
+- **`aicir.qml.TorchLayer`：把 `QFun` 封装成 `torch.nn.Module` 量子层，可一行嵌入
+  PyTorch 混合网络。** 前向调用 `qfun(params)`、反向调用 `qfun.grad(params)`（参数移位
+  Jacobian）接入 torch autograd，与 `QFun` 后端解耦（`device="numpy"/"gpu"/"npu"` 皆可），
+  梯度方法仍走 `aicir.qml.diff` 注册表单一真源。经典输入与可训练权重经 `torch.cat` 拼成
+  单参数向量喂给 `qfun`，梯度同时回流到前置经典层与本层权重；支持批量输入与多观测量输出。
+  `torch` 为可选依赖，缺失时 `aicir.qml.TorchLayer is None`。配套 `tests/qml/test_torch_layer.py`
+  与 `aicir/qml/README.md` §17。
+- **`aicir.simulator` 精确张量网络模拟引擎：`tn_statevector` / `single_amplitude` /
+  `partial_amplitude` / `tn_expectation`，并为 `Measure.run` 增加 `method="tensor"`。**
+  收缩建立在新的 `Backend` 原语（`tensordot/transpose/reshape/conj`）之上，NPU 的
+  `tensordot` 复用 autograd-safe 复数 matmul（real/imag 分解），期望值在 torch/NPU 后端
+  可微；收缩路径用 opt_einsum（可选）或内置贪心。仅纯态、无噪声。配套
+  `demos/demo_npu_tensor.py`（远程 NPU 验证）与 `aicir/simulator/README.md`。MPS 截断另立 Spec 2。
+
 ## 2026-07-01
 
 ### Added
