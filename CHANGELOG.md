@@ -6,6 +6,27 @@
 
 ### Added
 
+- **`aicir.chemistry.build_molecule`：电子结构现算流水线（`chem` extra：`qiskit-nature` +
+  `pyscf`），与固定预置并列。** 给定任意分子几何/基组/映射（`jordan_wigner`/`parity`/
+  `bravyi_kitaev`，可选 `active_electrons`/`active_orbitals` 做 active-space 裁剪），驱动
+  `PySCFDriver` + Qiskit Nature mapper 现算 qubit Hamiltonian，返回与预置同构的
+  `MoleculeHamiltonian`。仅 Jordan-Wigner 映射额外填充 `n_electrons`/`hf_occupation`/
+  `excitations` 三个字段（HF 参考态占据 + singles/doubles 费米子激发，qubit 索引与
+  `terms` 同一比特序），用于桥接 `aicir.vqc.ansatz.uccsd`。未安装 `chem` extra 时抛
+  `ImportError` 并提示安装命令，不影响核心 `numpy`-only 依赖。配套
+  `tests/chemistry/test_pipeline.py`、`test_pipeline_guard.py`、`test_molecule_metadata.py`
+  与 `aicir/chemistry/README.md` §3。
+- **`aicir.vqc.ansatz.uccsd`：UCCSD 化学 ansatz 模板，吃纯数据、与 `aicir.chemistry`
+  解耦。** `uccsd(n_qubits, hf_occupation, excitations, reps=1, ...)` 用 HF 占据位铺
+  `pauli_x` 参考态，再按激发列表逐个施加单/双激发门；非相邻 orbital 间的激发通过
+  fSWAP 网络（`ansatz/_excitation.py`：`fswap_ops`/`single_excitation_ops`/
+  `double_excitation_ops`）精确实现，双激发的创生/湮灭对角色由参数*位置*（而非数值
+  大小）决定，正确处理 HF 占据/未占据在比特序上交错分布的情形（如 H2 4-qubit JW：
+  占据 {1,3}、未占据 {0,2}）。参数顺序为先 reps 外层、后激发内层。配套
+  `uccsd_parameter_count`、`tests/vqc/test_uccsd_ansatz.py`、
+  `tests/vqc/test_excitation_circuits.py`（JW 生成元 expm oracle，覆盖交错角色配对）、
+  以及端到端集成测试 `tests/vqc/test_uccsd_vqe_integration.py`（`build_molecule` →
+  `uccsd` → `BasicVQE`，H2 收敛到基态能量，VQE 能量与精确对角化基态相差 ~1e-7）。
 - **`aicir.qml.TorchLayer`：把 `QFun` 封装成 `torch.nn.Module` 量子层，可一行嵌入
   PyTorch 混合网络。** 前向调用 `qfun(params)`、反向调用 `qfun.grad(params)`（参数移位
   Jacobian）接入 torch autograd，与 `QFun` 后端解耦（`device="numpy"/"gpu"/"npu"` 皆可），

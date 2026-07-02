@@ -104,10 +104,15 @@ def uccsd(
             param = values[index] if values is not None else Parameter(f"{parameter_prefix}_{index}")
             index += 1
             if kind == "single":
+                # 单激发是两个 orbital 间对称的占据/未占据翻转，数值顺序不影响物理，
+                # 排序只是让 single_excitation_ops 的 p<q 前置条件恒满足。
                 p, q = sorted(idx)
                 gates.extend(single_excitation_ops(param, p, q))
             else:
-                p, q, r, s = sorted(idx)
+                # 双激发的角色（创生对 vs 湮灭对）由 idx 的位置顺序决定，*不能*
+                # 按数值排序——占据/未占据在比特序上可能交错（见
+                # double_excitation_ops 文档字符串），排序会拆错创生/湮灭配对。
+                p, q, r, s = idx
                 gates.extend(double_excitation_ops(param, p, q, r, s))
 
     return Circuit(*gates, n_qubits=n_qubits, backend=backend)
