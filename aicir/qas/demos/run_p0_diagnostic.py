@@ -31,7 +31,7 @@ from typing import Any, Mapping, Sequence
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
-from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+from aicir.qas.library.ansatz import SupernetAnsatzGene
 from aicir.qas.problems.hamiltonians import VQEProblem
 from aicir.qas.vqe_loop.cheap_eval_experiment import (
     CheapEvalExperimentConfig,

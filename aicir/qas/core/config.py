@@ -6,30 +6,23 @@ from typing import Any, Callable
 
 QASMethod = str
 
-_PUBLIC_METHODS = ("supernet", "supernet_classification", "supernet_h2", "ppo_rb", "ppr_dql", "crlqas", "vqe_loop")
-
-_METHOD_ALIASES = {
-    # supernet (formerly VQA_QAS): keep the old strings working for run().
-    "supernet": "supernet",
+# 非规范名的等价写法 → 规范方法名。规范名本身（``_FACTORIES`` 的键）无需登记。
+_ALIASES = {
     "vqa": "supernet",
     "vqa_qas": "supernet",
-    "supernet_classification": "supernet_classification",
     "vqa_classification": "supernet_classification",
     "classification": "supernet_classification",
-    "supernet_h2": "supernet_h2",
     "vqa_h2": "supernet_h2",
     "h2": "supernet_h2",
     "h2_vqe": "supernet_h2",
     "ppo": "ppo_rb",
-    "ppo_rb": "ppo_rb",
     "ppr": "ppr_dql",
-    "ppr_dql": "ppr_dql",
     "crl": "crlqas",
-    "crlqas": "crlqas",
-    "closed_loop": "vqe_loop",
-    "vqe_qas": "vqe_loop",
-    "vqe_qas_loop": "vqe_loop",
-    "vqe_loop": "vqe_loop",
+    "qdarts": "qdrats",
+    "quantumdarts": "qdrats",
+    "quantum_darts": "qdrats",
+    "differentiable_qas": "dqas",
+    "differentiable_quantum_architecture_search": "dqas",
 }
 
 
@@ -73,7 +66,7 @@ def supernet_h2(**kwargs: Any) -> Any:
 def ppo_rb(**kwargs: Any) -> Any:
     """Build a ``PPO_RB`` config with optional field overrides."""
 
-    from ..algorithms.PPO_RB import PPORollbackConfig
+    from ..algorithms.pporb import PPORollbackConfig
 
     return _build(PPORollbackConfig, kwargs)
 
@@ -81,7 +74,7 @@ def ppo_rb(**kwargs: Any) -> Any:
 def ppr_dql(**kwargs: Any) -> Any:
     """Build a ``PPR_DQL`` config with optional field overrides."""
 
-    from ..algorithms.PPR_DQL import PPRDQLConfig
+    from ..algorithms.pprdql import PPRDQLConfig
 
     return _build(PPRDQLConfig, kwargs)
 
@@ -89,7 +82,7 @@ def ppr_dql(**kwargs: Any) -> Any:
 def crlqas(**kwargs: Any) -> Any:
     """Build a ``CRLQAS`` config with optional field overrides."""
 
-    from ..algorithms.CRLQAS import CRLQASConfig
+    from ..algorithms.crlqas import CRLQASConfig
 
     values = dict(kwargs)
     if isinstance(values.get("adam_spsa"), dict):
@@ -97,25 +90,26 @@ def crlqas(**kwargs: Any) -> Any:
     return _build(CRLQASConfig, values)
 
 
-def vqe_loop(**kwargs: Any) -> Any:
-    """Build a ``vqe_loop`` closed-loop config with optional field overrides."""
+def qdrats(**kwargs: Any) -> Any:
+    """Build a ``QDRATS`` config with optional field overrides."""
 
-    from pathlib import Path
+    from ..algorithms.qdrats import QDRATSConfig
 
-    from ..vqe_loop import ClosedLoopConfig
+    return _build(QDRATSConfig, kwargs)
 
-    values = dict(kwargs)
-    if "output_dir" in values:
-        values["output_dir"] = Path(values["output_dir"])
-    if "protocol" in values:
-        values["protocol"] = Path(values["protocol"])
-    return _build(ClosedLoopConfig, values)
+
+def dqas(**kwargs: Any) -> Any:
+    """Build a ``DQAS`` config with optional field overrides."""
+
+    from ..algorithms.dqas import DQASConfig
+
+    return _build(DQASConfig, kwargs)
 
 
 def adam_spsa(**kwargs: Any) -> Any:
     """Build the nested Adam-SPSA config used by ``CRLQAS``."""
 
-    from ..algorithms.CRLQAS import AdamSPSAConfig
+    from ..algorithms.crlqas import AdamSPSAConfig
 
     return _build(AdamSPSAConfig, kwargs)
 
@@ -139,16 +133,18 @@ def for_method(method: QASMethod, **kwargs: Any) -> Any:
 def method_names() -> tuple[str, ...]:
     """Return public method names that have config factory functions."""
 
-    return _PUBLIC_METHODS
+    return tuple(_FACTORIES)
 
 
 def canonical_method(method: QASMethod) -> str:
     key = str(method).strip().lower().replace("-", "_")
-    try:
-        return _METHOD_ALIASES[key]
-    except KeyError as exc:
-        methods = ", ".join(method_names())
-        raise ValueError(f"Unsupported QAS method {method!r}. Available methods: {methods}.") from exc
+    if key in _FACTORIES:
+        return key
+    canon = _ALIASES.get(key)
+    if canon is not None:
+        return canon
+    methods = ", ".join(method_names())
+    raise ValueError(f"Unsupported QAS method {method!r}. Available methods: {methods}.")
 
 
 def _build(config_type: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
@@ -162,6 +158,7 @@ ppo = ppo_rb
 ppr = ppr_dql
 crl = crlqas
 
+# 规范方法名 → 配置工厂。方法集合的单一来源（``method_names`` 由此派生）。
 _FACTORIES = {
     "supernet": supernet,
     "supernet_classification": supernet_classification,
@@ -169,7 +166,8 @@ _FACTORIES = {
     "ppo_rb": ppo_rb,
     "ppr_dql": ppr_dql,
     "crlqas": crlqas,
-    "vqe_loop": vqe_loop,
+    "qdrats": qdrats,
+    "dqas": dqas,
 }
 
 __all__ = [
@@ -178,14 +176,15 @@ __all__ = [
     "create",
     "crl",
     "crlqas",
+    "dqas",
     "for_method",
     "method_names",
     "ppo",
     "ppo_rb",
     "ppr",
     "ppr_dql",
+    "qdrats",
     "supernet",
     "supernet_classification",
     "supernet_h2",
-    "vqe_loop",
 ]

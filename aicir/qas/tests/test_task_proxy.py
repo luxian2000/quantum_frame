@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
-from aicir.qas.primitives.ansatz import OperatorSequenceAnsatzGene
+from aicir.qas.library.ansatz import OperatorSequenceAnsatzGene
 
 
 def operator_row(operators, fair=None):

@@ -10,7 +10,7 @@ sys.path.insert(0, str(project_root))
 
 import numpy as np
 
-from aicir.qas.algorithms.PPR_DQL import PPRDQLConfig, train_ppr_dql
+from aicir.qas.algorithms.pprdql import PPRDQLConfig, train_ppr_dql
 from aicir.backends.numpy_backend import NumpyBackend
 from aicir.core.gates import gate_to_matrix
 from aicir.core.io.qasm import save_circuit_qasm3

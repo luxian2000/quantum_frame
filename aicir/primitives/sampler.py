@@ -90,8 +90,8 @@ class ShotSampler(BaseSampler):
         if self.shots <= 0:
             raise ValueError("shots must be positive")
 
-    def run(self, circuits, *, shots: int | None = None, measure_qubits=()):
-        items, single = normalize_run_inputs(circuits)
+    def run(self, circuits, *, shots: int | None = None, measure_qubits=(), parameter_values=None):
+        items, single = normalize_run_inputs(circuits, parameter_values)
         use_shots = self.shots if shots is None else int(shots)
         measure = Measure(self.backend)
         results = [
@@ -105,4 +105,54 @@ class ShotSampler(BaseSampler):
             )
             for circuit in items
         ]
+        return results[0] if single else results
+
+
+class StatevectorSampler(BaseSampler):
+    """精确采样：返回演化态的解析概率分布，无散粒噪声（``counts`` 为空）。"""
+
+    def __init__(self, backend=None) -> None:
+        self.backend = backend if backend is not None else NumpyBackend()
+
+    def run(self, circuits, *, shots: int | None = None, parameter_values=None):
+        if shots is not None:
+            raise ValueError("StatevectorSampler 为精确路径，不接受 shots；请用 ShotSampler")
+        items, single = normalize_run_inputs(circuits, parameter_values)
+        measure = Measure(self.backend)
+        results = [
+            _sample_result_from_measure(measure.run(circuit, shots=None, return_state=True))
+            for circuit in items
+        ]
+        return results[0] if single else results
+
+
+class NoisySampler(BaseSampler):
+    """带噪声采样：把 ``noise_model`` 附加到线路，经密度矩阵模拟采样。"""
+
+    def __init__(self, noise_model, backend=None, *, shots: int = 1024) -> None:
+        if noise_model is None:
+            raise ValueError("NoisySampler 需要 noise_model=")
+        self.noise_model = noise_model
+        self.backend = backend if backend is not None else NumpyBackend()
+        self.shots = int(shots)
+        if self.shots <= 0:
+            raise ValueError("shots must be positive")
+
+    def run(self, circuits, *, shots: int | None = None, measure_qubits=(), parameter_values=None):
+        items, single = normalize_run_inputs(circuits, parameter_values)
+        use_shots = self.shots if shots is None else int(shots)
+        measure = Measure(self.backend)
+        results = []
+        for circuit in items:
+            circuit.noise_model = self.noise_model
+            results.append(
+                _sample_result_from_measure(
+                    measure.run(
+                        circuit,
+                        shots=use_shots,
+                        return_state=False,
+                        measure_qubits=measure_qubits,
+                    )
+                )
+            )
         return results[0] if single else results

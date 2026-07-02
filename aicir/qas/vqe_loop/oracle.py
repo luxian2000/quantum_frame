@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from math import sqrt
 from typing import Any, Callable, Mapping, Sequence, TypeVar
 
-from aicir.qas.primitives.ansatz import ChemistryExcitationAnsatzGene, OperatorSequenceAnsatzGene, SupernetAnsatzGene
+from aicir.qas.library.ansatz import ChemistryExcitationAnsatzGene, OperatorSequenceAnsatzGene, SupernetAnsatzGene
 from aicir.qas.vqe_loop.benchmark_table import decoded_ansatz_gene_payload
 from aicir.qas.vqe_loop.benchmark_table import as_float as _as_float
 

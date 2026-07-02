@@ -23,7 +23,7 @@ from aicir.metrics.circuit_structure import (
 from aicir.metrics.hardware import native_depth_twoq_efficiency
 from aicir.metrics.trainability import structure_proxy
 from aicir.qas.core.reward import RewardWeights
-from aicir.qas.primitives.ansatz import SupernetAnsatzGene, architecture_from_supernet_gene
+from aicir.qas.library.ansatz import SupernetAnsatzGene, architecture_from_supernet_gene
 from aicir.qas.problems.hamiltonians import VQEProblem
 from aicir.qas.vqe_loop.benchmark_table import parse_pauli_hamiltonian_terms
 from aicir.qas.vqe_loop.benchmark_table import hamiltonian_from_terms

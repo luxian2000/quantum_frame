@@ -38,13 +38,34 @@ from aicir.qml.diff import (
 )
 
 
-def test_builtin_methods_registered():
-    assert set(registered_diffs()) == {"psr", "fd", "auto", "spsa", "spsr"}
+def test_builtin_fn_gradients_registered():
+    assert set(registered_diffs(category="fn_gradient")) == {"psr", "fd", "auto", "spsa", "spsr"}
+
+
+def test_builtin_circuit_gradient_and_preconditioners_registered():
+    assert set(registered_diffs(category="circuit_gradient")) == {"ad"}
+    assert set(registered_diffs(category="preconditioner")) == {"qng", "bdqng", "kqng", "dqng"}
+
+
+def test_registered_diffs_no_filter_is_all_categories():
+    assert set(registered_diffs()) == {
+        "psr", "fd", "auto", "spsa", "spsr",
+        "ad", "qng", "bdqng", "kqng", "dqng",
+    }
 
 
 def test_resolve_returns_bound_function():
     assert resolve_diff("psr") is deriv.psr
     assert resolve_diff("auto") is deriv.auto
+
+
+def test_resolve_rejects_non_fn_gradient():
+    # ad/qng 已注册可被 get_diff 发现，但 resolve_diff 只解析 fn_gradient
+    assert get_diff("ad") is not None
+    assert get_diff("qng") is not None
+    for name in ("ad", "qng", "bdqng", "kqng", "dqng"):
+        with pytest.raises(ValueError):
+            resolve_diff(name)
 
 
 def test_resolve_unknown_raises_with_listing():

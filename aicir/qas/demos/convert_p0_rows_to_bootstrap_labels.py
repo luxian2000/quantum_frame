@@ -13,7 +13,7 @@ REPO = Path(__file__).resolve().parents[3]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+from aicir.qas.library.ansatz import SupernetAnsatzGene
 from aicir.qas.vqe_loop.benchmark_table import read_csv_rows, write_csv_rows
 from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS, LabelSource, LabelStatus
 from aicir.qas.vqe_loop.benchmark_table import as_float as _as_float

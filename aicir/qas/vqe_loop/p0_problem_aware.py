@@ -6,7 +6,7 @@ import random
 from itertools import combinations
 from typing import Mapping, Sequence
 
-from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+from aicir.qas.library.ansatz import SupernetAnsatzGene
 
 PauliTerm = tuple[float, str]
 

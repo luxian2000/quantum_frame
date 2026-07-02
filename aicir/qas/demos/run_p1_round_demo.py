@@ -21,7 +21,7 @@ REPO = Path(__file__).resolve().parents[3]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+from aicir.qas.library.ansatz import SupernetAnsatzGene
 from aicir.qas.vqe_loop.benchmark_table import architecture_key, resolve_p1_selector_fields
 from aicir.qas.vqe_loop.benchmark_table import read_csv_rows, write_csv_rows
 from aicir.qas.vqe_loop.graph_predictor import build_graph_predictor_evaluator

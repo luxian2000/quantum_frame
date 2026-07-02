@@ -4,7 +4,7 @@ import unittest
 
 class SupernetNativeE5Tests(unittest.TestCase):
     def test_supernet_native_module_exports_e5_evaluator_with_warm_start(self):
-        from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+        from aicir.qas.library.ansatz import SupernetAnsatzGene
         from aicir.qas.problems.hamiltonians import VQEProblem
         from aicir.qas.vqe_loop.p0_supernet_native import build_native_supernet_e5_evaluator
 

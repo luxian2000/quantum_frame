@@ -33,7 +33,7 @@ def test_supernet_construction_does_not_materialize_full_layout_space(monkeypatc
 
 
 def test_supernet_native_gene_round_trips_to_vqe_architecture():
-    from aicir.qas.primitives.ansatz import SupernetAnsatzGene, architecture_from_supernet_gene
+    from aicir.qas.library.ansatz import SupernetAnsatzGene, architecture_from_supernet_gene
 
     gene = SupernetAnsatzGene(
         n_qubits=3,
@@ -105,7 +105,7 @@ def test_supernet_native_rows_use_supernet_sampled_ranked_architectures(tmp_path
 
 
 def test_supernet_native_rows_select_by_finetuned_screening_energy(tmp_path, monkeypatch):
-    from aicir.qas.primitives.ansatz import architecture_from_supernet_gene
+    from aicir.qas.library.ansatz import architecture_from_supernet_gene
     from aicir.qas.vqe_loop import supernet_native
 
     class FakeLayer:

@@ -61,7 +61,7 @@ The new module imports:
 import json
 from typing import Any, Mapping, Sequence
 
-from aicir.qas.primitives.ansatz import OperatorSequenceAnsatzGene
+from aicir.qas.library.ansatz import OperatorSequenceAnsatzGene
 from aicir.qas.vqe_loop.hamiltonian_rows import row_hamiltonian_terms
 ```
 

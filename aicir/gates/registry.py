@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from .decompositions import decompose_cy, decompose_cz, decompose_swap
 from .spec import GateSpec
 
 _REGISTRY: dict[str, GateSpec] = {}
@@ -69,6 +70,72 @@ def canonical_gate_name(name: str) -> str:
     return spec.name if spec is not None else str(name)
 
 
+def gate_generator(name: str) -> str | None:
+    """返回门的 Pauli 生成元标签（``rx``->``"X"``、``rzz``->``"ZZ"`` 等）。
+
+    非（标准 Pauli）参数化旋转门、或未注册门返回 ``None``。供 QML 自省门类
+    能否使用解析参数移位，替代散落的硬编码门集。
+    """
+
+    spec = _LOOKUP.get(str(name))
+    return spec.generator if spec is not None else None
+
+
+def gate_shift_rule(name: str) -> str | None:
+    """返回该门的参数移位规则类别（``two_term``/``four_term``/``None``）。"""
+    spec = get_gate_spec(name)
+    return spec.shift_rule if spec is not None else None
+
+
+def parametric_pauli_gates() -> frozenset[str]:
+    """返回所有带 Pauli 生成元的门规范名集合（即解析参数移位适用门）。"""
+
+    return frozenset(spec.name for spec in _REGISTRY.values() if spec.generator is not None)
+
+
+def gate_decomposition(name: str):
+    """返回门的分解规则可调用；无规则或未注册门返回 ``None``。
+
+    规则签名见 :mod:`aicir.gates.decompositions`：
+    ``(qubits, controls, control_states, params) -> list[dict] | None``。
+    """
+
+    spec = _LOOKUP.get(str(name))
+    return spec.decomposition if spec is not None else None
+
+
+def set_gate_matrix(name: str, builder) -> None:
+    """为已注册门附加局部矩阵构造器（``GateSpec.matrix``）。
+
+    ``GateSpec`` 为冻结数据类，故经 ``replace`` 重注册。标准门的矩阵构造器
+    依赖 ``aicir.core.gates`` 的局部矩阵原语，于 core 导入时经此附加（避免
+    ``gates`` ↔ ``core`` 循环导入）。未注册门静默忽略。
+    """
+    from dataclasses import replace
+
+    spec = _REGISTRY.get(str(name))
+    if spec is None:
+        return
+    register_gate(replace(spec, matrix=builder), overwrite=True)
+
+
+def gate_matrix(name: str, params=(), backend=None):
+    """返回门的**局部**稠密幺正矩阵；无构造器或未注册门返回 ``None``。
+
+    ``params`` 为门参数（无参门忽略）；``backend`` 非空时返回后端张量。
+    构造器由 ``aicir.core.gates`` 在导入时附加，故首次调用前确保其已导入。
+    """
+    spec = _LOOKUP.get(str(name))
+    if spec is None or spec.matrix is None:
+        # 标准门构造器随 core.gates 导入附加；惰性触发一次以避免顺序坑。
+        import aicir.core.gates  # noqa: F401
+
+        spec = _LOOKUP.get(str(name))
+        if spec is None or spec.matrix is None:
+            return None
+    return spec.matrix(params, backend)
+
+
 # ---------------------------------------------------------------------------
 # aicir 内置门集（与 gate_to_matrix / QASM 导出表保持一致）
 # ---------------------------------------------------------------------------
@@ -83,23 +150,25 @@ _STANDARD_GATES = (
     # identity 允许整寄存器形式 {"type": "identity", "n_qubits": n}（QAS 动作空间），
     # 因此目标比特数可变。
     GateSpec("identity", None, 0, aliases=("I",), qasm_name="id", symbol="I"),
-    GateSpec("rx", 1, 1, qasm_name="rx", symbol="Rx"),
-    GateSpec("ry", 1, 1, qasm_name="ry", symbol="Ry"),
-    GateSpec("rz", 1, 1, qasm_name="rz", symbol="Rz"),
+    GateSpec("rx", 1, 1, qasm_name="rx", symbol="Rx", generator="X"),
+    GateSpec("ry", 1, 1, qasm_name="ry", symbol="Ry", generator="Y"),
+    GateSpec("rz", 1, 1, qasm_name="rz", symbol="Rz", generator="Z"),
     GateSpec("u2", 1, 2, qasm_name="u2", symbol="U2"),
     GateSpec("u3", 1, 3, qasm_name="u3", symbol="U3"),
     # num_qubits=None：cx/cnot 支持单目标或多目标（多目标等价于多个单目标 CX）。
-    GateSpec("cx", None, 0, aliases=("cnot",), controlled=True, qasm_name="cx", symbol="X"),
-    GateSpec("cy", 1, 0, controlled=True, qasm_name="cy", symbol="Y"),
-    GateSpec("cz", 1, 0, controlled=True, qasm_name="cz", symbol="Z"),
-    GateSpec("crx", 1, 1, controlled=True, qasm_name="crx", symbol="Rx"),
-    GateSpec("cry", 1, 1, controlled=True, qasm_name="cry", symbol="Ry"),
-    GateSpec("crz", 1, 1, controlled=True, qasm_name="crz", symbol="Rz"),
-    GateSpec("toffoli", 1, 0, aliases=("ccnot",), controlled=True, qasm_name="ccx", symbol="X"),
+    GateSpec("cx", None, 0, aliases=("cnot",), controlled=True, num_controls=1, qasm_name="cx", symbol="X"),
+    GateSpec("cy", 1, 0, controlled=True, num_controls=1, qasm_name="cy", symbol="Y", decomposition=decompose_cy),
+    GateSpec("cz", 1, 0, controlled=True, num_controls=1, qasm_name="cz", symbol="Z", decomposition=decompose_cz),
+    GateSpec("crx", 1, 1, controlled=True, num_controls=1, qasm_name="crx", symbol="Rx", generator="X"),
+    GateSpec("cry", 1, 1, controlled=True, num_controls=1, qasm_name="cry", symbol="Ry", generator="Y"),
+    GateSpec("crz", 1, 1, controlled=True, num_controls=1, qasm_name="crz", symbol="Rz", generator="Z"),
+    GateSpec("toffoli", 1, 0, aliases=("ccnot",), controlled=True, num_controls=2, qasm_name="ccx", symbol="X"),
     # 这些门在绘图中使用专门形状，不携带通用 symbol。
-    GateSpec("swap", 2, 0, qasm_name="swap"),
-    GateSpec("rzz", 2, 1, qasm_name="rzz"),
-    GateSpec("rxx", 2, 1, qasm_name="rxx"),
+    GateSpec("swap", 2, 0, qasm_name="swap", decomposition=decompose_swap),
+    GateSpec("rzz", 2, 1, qasm_name="rzz", generator="ZZ"),
+    GateSpec("rxx", 2, 1, qasm_name="rxx", generator="XX"),
+    GateSpec("single_excitation", 2, 1, aliases=("givens",), qasm_name=None, shift_rule="four_term"),
+    GateSpec("double_excitation", 4, 1, qasm_name=None, shift_rule="four_term"),
     # unitary 的矩阵经 "parameter" 携带，但绘图占位场景允许缺省，故参数个数可变。
     GateSpec("unitary", None, None, symbol="U"),
     GateSpec("measure", None, 0, aliases=("measurement",)),

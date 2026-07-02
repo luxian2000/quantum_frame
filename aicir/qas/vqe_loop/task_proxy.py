@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
-from aicir.qas.primitives.ansatz import OperatorSequenceAnsatzGene, SupernetAnsatzGene
+from aicir.qas.library.ansatz import OperatorSequenceAnsatzGene, SupernetAnsatzGene
 from aicir.qas.vqe_loop.benchmark_table import decoded_ansatz_gene_payload
 from aicir.qas.vqe_loop.benchmark_table import row_hamiltonian_terms
 

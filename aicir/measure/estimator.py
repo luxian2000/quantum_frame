@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 
 from ..backends.numpy_backend import NumpyBackend
-from ..operators import Hamiltonian
+from ..core.operators import Hamiltonian
 from ..core.circuit import Circuit, hadamard, rz
 from ..ir import circuit_gate_dicts
 from .measure import Measure

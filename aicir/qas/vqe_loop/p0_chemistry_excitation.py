@@ -7,7 +7,7 @@ import random
 from itertools import product
 from typing import Any, Sequence
 
-from aicir.qas.primitives.ansatz import ChemistryExcitationAnsatzGene, architecture_from_chemistry_excitation_gene
+from aicir.qas.library.ansatz import ChemistryExcitationAnsatzGene, architecture_from_chemistry_excitation_gene
 from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS, ZeroCostStatus
 
 

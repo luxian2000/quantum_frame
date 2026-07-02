@@ -11,6 +11,7 @@ from .diff import (
     select_diff,
     unregister_diff,
 )
+from .qfun import QFun, Expval, Probs, Sample, expval, probs, qfun, sample
 
 __all__ = [
     "auto",
@@ -33,4 +34,12 @@ __all__ = [
     "resolve_diff",
     "select_diff",
     "unregister_diff",
+    "QFun",
+    "qfun",
+    "Expval",
+    "Probs",
+    "Sample",
+    "expval",
+    "probs",
+    "sample",
 ]

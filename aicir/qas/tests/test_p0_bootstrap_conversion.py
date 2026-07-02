@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
-from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+from aicir.qas.library.ansatz import SupernetAnsatzGene
 from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS
 
 

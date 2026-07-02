@@ -1,13 +1,13 @@
 import numpy as np
 
 from aicir.core.circuit import Circuit
-from aicir.optimizer import optimize_circuit
 from aicir.transpile import (
     CancelInversePass,
     CommuteSingleQubitPass,
     MergeRotationsPass,
     PassManager,
-    default_optimization_pipeline,
+    optimize,
+    optimize_circuit,
 )
 
 
@@ -27,7 +27,7 @@ def test_pass_manager_runs_named_passes_to_fixed_point():
     assert out.n_qubits == circuit.n_qubits
 
 
-def test_default_optimization_pipeline_matches_legacy_optimize_circuit():
+def test_optimize_matches_optimize_circuit():
     circuit = Circuit(
         {"type": "pauli_x", "target_qubit": 1},
         {"type": "pauli_x", "target_qubit": 0},
@@ -38,7 +38,7 @@ def test_default_optimization_pipeline_matches_legacy_optimize_circuit():
         n_qubits=2,
     )
 
-    via_pipeline = default_optimization_pipeline().run(circuit)
+    via_pipeline = optimize(circuit)
     via_legacy = optimize_circuit(circuit)
 
     assert via_pipeline.gates == via_legacy.gates

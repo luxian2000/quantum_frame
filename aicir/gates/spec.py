@@ -9,6 +9,7 @@ QASM 名称只在此注册一次，供 `Operation` 构造期校验与 `ValidateP
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any, Callable
 
 
 @dataclass(frozen=True)
@@ -24,9 +25,24 @@ class GateSpec:
       ``None`` 表示可变（如 ``unitary`` 的矩阵参数在占位场景可缺省）。
     - ``aliases``：等价的 ``type`` 写法（如 ``"X"``、``"cnot"``）。
     - ``controlled``：是否必须携带至少一个控制位。
+    - ``num_controls``：控制位数量；``controlled == (num_controls > 0)``。
     - ``qasm_name``：OpenQASM 导出名；``None`` 表示暂未约定。
     - ``symbol``：ASCII/绘图显示符号（受控门为目标位符号）；``None``
       表示特殊绘制（swap/rzz/rxx/measure）或退回通用 fallback。
+    - ``generator``：单参数旋转门的 Pauli 生成元标签（``U = exp(-i θ G / 2)``），
+      如 ``rx`` 为 ``"X"``、``rzz`` 为 ``"ZZ"``；受控旋转记其目标位生成元。
+      ``None`` 表示非（标准 Pauli）参数化旋转。供 QML 自省能否用解析参数移位。
+    - ``shift_rule``：参数移位规则类别（``"two_term"`` / ``"four_term"``）；
+      ``None`` 表示未指定（标准 Pauli 旋转走默认两项规则）。供后续按门选择移位规则。
+    - ``decomposition``：把该门分解到更基础门集的规则，签名
+      ``(qubits, controls, control_states, params) -> list[dict] | None``
+      （返回 ``None`` 表示当前入参形态不适用，如多控制位）。供 ``transpile``
+      的 ``DecomposePass`` 驱动；``None`` 表示无内置分解规则。
+    - ``matrix``：构造该门**局部**稠密幺正矩阵的后端感知可调用，签名
+      ``(params, backend) -> 局部矩阵``，作用于 ``num_qubits`` 个目标比特
+      （比特顺序 = 门的比特列表顺序；无参门忽略 ``params``）。供
+      ``gate_to_matrix`` 对未硬编码的自定义门回退构造矩阵，及 ``gate_matrix``
+      访问器读取；``None`` 表示无局部矩阵（如受控门、``measure``/``reset``）。
     """
 
     name: str
@@ -34,8 +50,13 @@ class GateSpec:
     num_params: int | None
     aliases: tuple[str, ...] = ()
     controlled: bool = False
+    num_controls: int = 0
     qasm_name: str | None = None
     symbol: str | None = None
+    generator: str | None = None
+    shift_rule: str | None = None
+    decomposition: Callable[..., Any] | None = None
+    matrix: Callable[..., Any] | None = None
 
     def __post_init__(self) -> None:
         name = str(self.name).strip()
@@ -45,5 +66,9 @@ class GateSpec:
             raise ValueError("num_qubits must be non-negative or None")
         if self.num_params is not None and int(self.num_params) < 0:
             raise ValueError("num_params must be non-negative or None")
+        if int(self.num_controls) < 0:
+            raise ValueError("num_controls must be non-negative")
+        if self.shift_rule is not None and self.shift_rule not in ("two_term", "four_term"):
+            raise ValueError("shift_rule must be 'two_term', 'four_term', or None")
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "aliases", tuple(str(alias) for alias in self.aliases))

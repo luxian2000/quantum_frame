@@ -26,6 +26,22 @@ class HardwareProfile:
     gate_durations: Dict[str, float] = field(default_factory=dict)
     max_depth: Optional[int] = None
 
+    @classmethod
+    def from_target(cls, target, **overrides) -> "HardwareProfile":
+        """Build a profile from a :class:`~aicir.devices.Target` (NEXT.md §3).
+
+        ``native_gates`` come from ``target.basis_gates`` (empty/unrestricted
+        targets fall back to :data:`DEFAULT_NATIVE_GATES`); ``coupling_map``
+        from ``target.coupling_map`` (a fully-connected target maps to an empty
+        coupling map). Any field can be overridden via keyword.
+        """
+
+        native = tuple(target.basis_gates) or DEFAULT_NATIVE_GATES
+        coupling = tuple(target.coupling_map) if target.coupling_map else ()
+        params = {"native_gates": native, "coupling_map": coupling}
+        params.update(overrides)
+        return cls(**params)
+
 
 def native_depth_twoq_efficiency(
     circuit: Circuit,

@@ -77,7 +77,7 @@ class AdaptVQEExplicitSeedExportTests(unittest.TestCase):
 
     def test_operator_sequence_seed_row_uses_selected_adapt_paulis(self):
         from aicir.qas.demos.export_adaptvqe_explicit_seed import build_operator_sequence_seed_row
-        from aicir.qas.primitives.ansatz import OperatorSequenceAnsatzGene
+        from aicir.qas.library.ansatz import OperatorSequenceAnsatzGene
 
         row = build_operator_sequence_seed_row(
             selected_paulis=("XI", "YY"),
