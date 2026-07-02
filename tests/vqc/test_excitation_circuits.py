@@ -84,30 +84,61 @@ def test_nonadjacent_single_excitation_matches_expm_generator(theta):
     assert np.allclose(got, phase * ref, atol=1e-8)
 
 
-def test_nonadjacent_double_excitation_matches_qiskit_ucc():
-    pytest.importorskip("qiskit_nature")
-    from qiskit.quantum_info import Operator
-    from qiskit_nature.second_q.circuit.library import UCC
-    from qiskit_nature.second_q.mappers import JordanWignerMapper
+def _ladder_op(n, k, dagger=False):
+    """JW fermionic ladder operator a_k（或 a_k^dagger）在 n qubit 空间的矩阵。
 
-    # 2 空间轨道、2 电子 → 4 qubit JW；取其唯一 double 激发做对照
-    ucc = UCC(
-        num_spatial_orbitals=2,
-        num_particles=(1, 1),
-        excitations="d",
-        qubit_mapper=JordanWignerMapper(),
-    )
-    theta = 0.37
-    # Qiskit UCC 的旋转角约定是 cos(theta)/sin(theta)（无 1/2 因子），而 aicir 既有
-    # double_excitation gate 是 cos(theta/2)/sin(theta/2)；为让同一个 theta 原样喂给
-    # 生产代码（不做任何算术），这里只在构造 oracle 侧用 theta/2 绑定 UCC 参数——
-    # 这是 oracle 的角度换算，不是对 double_excitation_ops 输入参数的算术。
-    bound = ucc.assign_parameters([theta / 2])
-    ref = Operator(bound).data
+    约定与 ``_single_excitation_generator`` 一致：qubit 0 是 Kron 乘积中最左（最高位）
+    的因子；mode k 左侧（index < k）的 qubit 贡献 Z 串，右侧贡献 I，自身贡献
+    |0><1|（湮灭，把占据 |1> 打到空 |0>）或其共轭转置（产生）。
+    """
+    sigma_minus = np.array([[0, 1], [0, 0]], dtype=complex)  # |0><1|, 湮灭 a_k
+    op = sigma_minus.conj().T if dagger else sigma_minus
+    out = np.array([[1]], dtype=complex)
+    for j in range(n):
+        if j < k:
+            out = np.kron(out, _PAULI["Z"])
+        elif j == k:
+            out = np.kron(out, op)
+        else:
+            out = np.kron(out, _PAULI["I"])
+    return out
 
-    # aicir 对应的 double 激发 orbital 索引（与 UCC 的 JW 约定对齐）
-    ops = double_excitation_ops(theta, 0, 1, 2, 3)
-    got = _circuit_unitary(ops, 4)
-    phase = np.vdot(ref.reshape(-1), got.reshape(-1))
-    phase /= abs(phase)
-    assert np.allclose(got, phase * ref, atol=1e-7)
+
+def _double_excitation_generator(n, p, q, r, s):
+    # T = (1/2)(a_p^dagger a_q^dagger a_r a_s - h.c.)（反厄米，exp(theta*T) 为酉矩阵）。
+    # 1/2 因子与 _single_excitation_generator 的 0.25j 前因子同一约定：既有
+    # single/double_excitation gate 都用 cos(theta/2)/sin(theta/2)（半角）参数化，
+    # 生成元里预先烤入这个 1/2，好让 oracle 侧直接用 expm(theta*T)（不额外对 theta
+    # 做 /2 的算术），theta 原样对照生产代码的输入。
+    ap_dag = _ladder_op(n, p, dagger=True)
+    aq_dag = _ladder_op(n, q, dagger=True)
+    ar = _ladder_op(n, r, dagger=False)
+    as_ = _ladder_op(n, s, dagger=False)
+    term = ap_dag @ aq_dag @ ar @ as_
+    return 0.5 * (term - term.conj().T)
+
+
+@pytest.mark.parametrize(
+    "n,p,q,r,s",
+    [
+        (4, 0, 1, 2, 3),  # 相邻（沿用旧配置，保底不回归）
+        (6, 0, 1, 3, 5),  # 非相邻，真正跑 fSWAP 网络
+        (8, 0, 2, 3, 7),  # 非相邻，跨度更大
+    ],
+)
+@pytest.mark.parametrize("theta", [0.3, -0.7])
+def test_nonadjacent_double_excitation_matches_jw_generator(n, p, q, r, s, theta):
+    from scipy.linalg import expm
+
+    got = _circuit_unitary(double_excitation_ops(theta, p, q, r, s), n)
+    gen = _double_excitation_generator(n, p, q, r, s)
+
+    ok = False
+    for sign in (1.0, -1.0):
+        ref = expm(sign * theta * gen)
+        phase = np.vdot(ref.reshape(-1), got.reshape(-1))
+        phase /= abs(phase)
+        if np.allclose(got, phase * ref, atol=1e-8):
+            ok = True
+            break
+    assert ok, f"double_excitation_ops({theta}, {p}, {q}, {r}, {s}) 与 JW 生成元 oracle 不符（两种 theta 符号均不匹配）"
