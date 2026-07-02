@@ -61,6 +61,9 @@ def contract(tensors, indices, open_indices, backend):
     tens = list(tensors)
     idx = [tuple(t) for t in indices]
     for step in _contraction_path(idx, open_indices):
+        if len(step) < 2:
+            # opt_einsum 对无需收缩的单张量网络返回 (0,) —— 无操作步，跳过
+            continue
         i, j = step[0], step[1]
         t, ids = _pair_contract(tens[i], idx[i], tens[j], idx[j], backend)
         for k in sorted((i, j), reverse=True):
