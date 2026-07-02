@@ -38,6 +38,9 @@ class MoleculeHamiltonian:
     geometry: str
     source: str
     description: str = ""
+    n_electrons: int | None = None
+    hf_occupation: tuple[int, ...] | None = None
+    excitations: tuple[tuple[str, tuple[int, ...]], ...] | None = None
 
     def to_hamiltonian(self) -> Hamiltonian:
         """Build a fresh :class:`Hamiltonian` instance from the preset terms."""
