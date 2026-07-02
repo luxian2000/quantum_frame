@@ -122,7 +122,7 @@ class Measure:
     def run(self, circuit, shots=1, measure_qubits=(), snap=None,
             sm="avg", seed=None, *,
             initial_state=None, initial_density_matrix=None,
-            observables=None, return_state=True) -> Result:
+            observables=None, return_state=True, method="statevector") -> Result:
         """统一测量入口。
 
         参数:
@@ -141,6 +141,7 @@ class Measure:
                                      与 initial_state 互斥）
             observables:             可观测量字典 {name: operator_matrix}
             return_state:            是否在结果中附带 state / final_state
+            method:                  "statevector"（默认，逐门态矢量演化）或 "tensor"（张量网络求末态后复用既有测量机制；仅纯态、无噪声）
         """
         if not hasattr(circuit, "n_qubits"):
             raise TypeError("circuit 需要具备 n_qubits 属性")
@@ -148,6 +149,23 @@ class Measure:
         if n <= 0:
             raise ValueError("n_qubits 必须为正整数")
         backend = self._resolve_backend(circuit)
+
+        if method not in ("statevector", "tensor"):
+            raise ValueError(f"method 必须是 statevector/tensor，收到 {method!r}")
+        if method == "tensor":
+            if getattr(circuit, "noise_model", None) is not None:
+                raise ValueError("method='tensor' 仅支持纯态，无法用于含噪线路")
+            if any(_is_measure(g) for g in circuit_instructions(circuit)):
+                raise ValueError("method='tensor' 不支持线路内嵌 measure 标记")
+            from ..simulator import tn_statevector
+            psi = tn_statevector(circuit, backend=backend)
+            from ..core.circuit import Circuit as _Circuit
+            stripped = _Circuit(n_qubits=n)
+            return self.run(
+                stripped, shots=shots, measure_qubits=measure_qubits, snap=snap,
+                sm=sm, seed=seed, initial_state=psi, observables=observables,
+                return_state=return_state, method="statevector",
+            )
 
         norm_shots = self._validate_shots(shots)             # None=exact
         exact = norm_shots is None

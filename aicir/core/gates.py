@@ -1121,6 +1121,37 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
     return _expand_local_matrix_to_full(local, axes, int(cir_qubits), backend=backend)
 
 
+def gate_tensors(gate, backend):
+    """把门转为张量列表 ``[(matrix, axes), ...]``（TN 构建单一来源）。
+
+    - 多目标受控门（``cx([t1,t2],[c])`` 等）展开为逐目标项；
+    - ``identity``/``measure`` 返回 ``[]``（不产生节点）；
+    - ``unitary`` 自定义门用其参数矩阵；其余走 ``_gate_local_matrix``；
+    - 无法局部展开的门（未注册/含未绑定参数）抛 ``ValueError``。
+    ``matrix`` 为 ``2^k×2^k`` 后端张量，``axes`` 为其作用比特轴序（controls+targets）。
+    """
+    gate = normalize_gate(gate)
+    subgates = _multi_target_subgates(gate)
+    if subgates is not None:
+        result = []
+        for subgate in subgates:
+            result.extend(gate_tensors(subgate, backend))
+        return result
+
+    gate_type = canonical_gate_name(gate["type"])
+    if gate_type in ("identity", "measure"):
+        return []
+
+    if gate_type == "unitary":
+        matrix = _unitary_parameter_matrix(gate.get("parameter"), backend)
+        return [(matrix, _local_target_qubits(gate))]
+
+    local, axes, _ = _gate_local_matrix(gate, gate_type, backend)
+    if local is None:
+        raise ValueError(f"门 {gate_type!r} 无法转为张量（未注册/含未绑定参数/measure）")
+    return [(local, list(axes))]
+
+
 # ---------------------------------------------------------------------------
 # GateSpec.matrix 局部矩阵构造器（NEXT.md §7）。复用上面的局部矩阵原语，于本
 # 模块导入时附加到注册表（避免 gates ↔ core 循环导入）。仅不受控门有局部矩阵；

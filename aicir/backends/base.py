@@ -200,6 +200,23 @@ class Backend(ABC):
             实数标量张量
         """
 
+    # ──────────────────────── 张量网络收缩原语 ──────────────────────
+    def tensordot(self, a, b, axes):
+        """沿 axes=(list_a, list_b) 收缩两张量；轴序同 numpy.tensordot。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 tensordot")
+
+    def transpose(self, a, axes):
+        """按 axes 置换张量轴。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 transpose")
+
+    def reshape(self, a, shape):
+        """把张量变形为 shape。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 reshape")
+
+    def conj(self, a):
+        """逐元素复共轭。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 conj")
+
     # ──────────────────────────── 便利方法（非抽象）────────────────────
 
     def tensor_product(self, *matrices):

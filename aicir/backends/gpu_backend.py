@@ -90,6 +90,18 @@ class GPUBackend(Backend):
     def real(self, tensor):
         return torch.real(tensor)
 
+    def tensordot(self, a, b, axes):
+        return torch.tensordot(a, b, dims=(list(axes[0]), list(axes[1])))
+
+    def transpose(self, a, axes):
+        return a.permute(*[int(x) for x in axes])
+
+    def reshape(self, a, shape):
+        return a.reshape(tuple(int(s) for s in shape))
+
+    def conj(self, a):
+        return torch.conj(a)
+
     def abs_sq(self, tensor):
         return torch.abs(tensor) ** 2
 
