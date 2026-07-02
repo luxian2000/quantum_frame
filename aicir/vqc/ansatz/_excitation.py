@@ -53,14 +53,10 @@ def double_excitation_ops(param, p: int, q: int, r: int, s: int) -> list:
     把四个 orbital 用 fSWAP 网络聚到相邻位 (p, p+1, p+2, p+3)，施加既有
     ``double_excitation`` gate，再还原。
 
-    喂给 gate 的 qubit 顺序：``double_excitation(param, p, p+2, p+1, p+3)`` ——
-    即 (p, r, q, s) 而非字面上的 (p, q, r, s)。已用酉矩阵等价测试守住（对照
-    Qiskit Nature ``UCC`` 的 double 激发算符，全局相位内相等）：既有
-    ``double_excitation`` gate 的内部 4-qubit 基约定是把前两个参数位、后两个
-    参数位分别看作一对占据轨道（即在 (a,b,c,d) 参数序下混合 |a=b=1,c=d=0> 与
-    |a=b=0,c=d=1>），因此要把物理上配对的 (p,r) 与 (q,s) —— 对应 JW 编号下
-    两个电子分别从 p→r、q→s 激发时保持占据数配对的轨道组合 —— 分别放在
-    gate 参数的前两位、后两位。
+    喂给 gate 的 qubit 顺序是字面上的 ``double_excitation(param, p, p+1, p+2, p+3)``
+    ——即 (p, q, r, s) 原样传入，不做重排。已用独立从零构造的 Jordan-Wigner
+    生成元 expm oracle（见 ``tests/vqc/test_excitation_circuits.py``）核对，覆盖
+    非相邻 orbital 配置，在全局相位与 theta 符号约定内与该顺序一致。
     """
 
     if not (p < q < r < s):
@@ -70,7 +66,7 @@ def double_excitation_ops(param, p: int, q: int, r: int, s: int) -> list:
     _bring_adjacent(ops, q, p + 1)
     _bring_adjacent(ops, r, p + 2)
     _bring_adjacent(ops, s, p + 3)
-    ops.append(double_excitation(param, p, p + 2, p + 1, p + 3))
+    ops.append(double_excitation(param, p, p + 1, p + 2, p + 3))
     _undo_adjacent(ops, p + 3, s)
     _undo_adjacent(ops, p + 2, r)
     _undo_adjacent(ops, p + 1, q)
