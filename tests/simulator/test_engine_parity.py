@@ -52,6 +52,31 @@ def test_partial_amplitude_requires_exactly_one_mode():
         partial_amplitude(c, open_qubits=[0], bitstrings=["00"], backend=bk)
 
 
+def test_greedy_path_matches_reference(monkeypatch):
+    # 强制走内置贪心路径（模拟未装 opt_einsum），验证与既有态矢量引擎一致
+    import sys
+
+    def _no_opt_einsum(indices, open_indices):
+        raise ImportError("forced greedy")
+
+    # 在 sys.modules 中找到或加载 aicir.simulator.contract 模块（文件级别）
+    if "aicir.simulator.contract" in sys.modules:
+        contract_module = sys.modules["aicir.simulator.contract"]
+    else:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "aicir.simulator.contract", "aicir/simulator/contract.py"
+        )
+        contract_module = importlib.util.module_from_spec(spec)
+        sys.modules["aicir.simulator.contract"] = contract_module
+        spec.loader.exec_module(contract_module)
+
+    monkeypatch.setattr(contract_module, "_opt_einsum_path", _no_opt_einsum)
+    bk = NumpyBackend()
+    c = _demo_circuit()
+    assert np.allclose(tn_statevector(c, backend=bk).to_numpy(), _ref_state(c, bk), atol=1e-5)
+
+
 def test_tn_statevector_matches_reference_gpu():
     pytest.importorskip("torch")
     from aicir.backends import GPUBackend
