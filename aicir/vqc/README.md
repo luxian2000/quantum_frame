@@ -41,6 +41,8 @@
 | `power_law_couplings` | `ansatz/hea_ti.py` | `np.ndarray` | 生成 `J_ij = J0 / |i-j|^alpha` trapped-ion 耦合 |
 | `trapped_ion_hamiltonian` | `ansatz/hea_ti.py` | `np.ndarray` | 构造 TFIM 或 XY 全局哈密顿量 |
 | `global_evolution_unitary` | `ansatz/hea_ti.py` | `np.ndarray` | 构造 `exp(-i H t)` 全局演化矩阵 |
+| `uccsd` | `ansatz/uccsd.py` | `Circuit` | UCCSD 化学 ansatz，吃纯数据（HF 占据 + 激发列表），与 `aicir.chemistry` 解耦 |
+| `uccsd_parameter_count` | `ansatz/uccsd.py` | `int` | 计算 UCCSD 参数个数（激发数 × reps） |
 
 ---
 
