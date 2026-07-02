@@ -27,10 +27,12 @@ torch = ["torch"]
 viz = ["matplotlib"]
 # 科学计算（部分优化器 / 经典优化层）
 sci = ["scipy"]
+# 电子结构流水线（build_molecule；pyscf 为重编译依赖，单列）
+chem = ["qiskit-nature", "pyscf"]
 # 全部可选运行时依赖
-all = ["torch", "matplotlib", "scipy"]
+all = ["torch", "matplotlib", "scipy", "qiskit-nature", "pyscf"]
 # 开发与测试
-dev = ["pytest", "torch", "matplotlib", "scipy"]
+dev = ["pytest", "torch", "matplotlib", "scipy", "qiskit-nature", "pyscf"]
 
 [tool.setuptools.dynamic]
 version = { attr = "aicir.__version__" }

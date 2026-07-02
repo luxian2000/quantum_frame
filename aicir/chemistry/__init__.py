@@ -21,6 +21,7 @@ from .molecules import (
     molecule_matrix,
     register_molecule,
 )
+from .pipeline import build_molecule
 
 __all__ = [
     "MoleculeHamiltonian",
@@ -39,4 +40,5 @@ __all__ = [
     "iter_molecules",
     "molecule_hamiltonian",
     "molecule_matrix",
+    "build_molecule",
 ]
