@@ -1,4 +1,4 @@
-﻿"""Demo: score and rank a library of candidate QAS architectures.
+"""Demo: score and rank a library of candidate QAS architectures.
 
 Run from the repository root:
     C:/ProgramData/anaconda3/python.exe aicir/qas/demos/architecture_scoring_demo.py

@@ -1,0 +1,14 @@
+{
+  "E1": {
+    "upfront_cost": 0,
+    "per_arch_cost": 1
+  },
+  "E2": {
+    "upfront_cost": 0,
+    "per_arch_cost": 5
+  },
+  "E5": {
+    "upfront_cost": 100,
+    "per_arch_cost": 2
+  }
+}

@@ -8,7 +8,7 @@ warm-start parameters, best traces, retry status, and backend/dtype metadata.
 from __future__ import annotations
 
 import argparse
-import csv
+import hashlib
 import json
 import os
 import sys
@@ -22,13 +22,11 @@ import numpy as np
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from aicir.qas.library.ansatz import (
-    HEAMask,
-    LayerwiseAnsatzGene,
-    architecture_from_layerwise_gene,
-    architecture_from_hea_mask,
-)
+from aicir.qas.library.ansatz import HEAMask, architecture_from_hea_mask
 from aicir.qas.core.backend_utils import resolve_qas_backend
+from aicir.qas.vqe_loop.benchmark_table import architecture_from_candidate_row
+from aicir.qas.vqe_loop.benchmark_table import read_csv_rows, write_csv_rows
+from aicir.qas.vqe_loop.benchmark_table import problem_from_row_terms, row_hamiltonian_terms
 from aicir.qas.vqe_loop.fair_vqe import (
     fair_vqe_final_maxfev,
     optimize_vqe_energy,
@@ -36,30 +34,15 @@ from aicir.qas.vqe_loop.fair_vqe import (
 from aicir.metrics.circuit_structure import parameter_count
 from aicir.qas.problems.hamiltonians import (
     VQEProblem,
-    exact_ground_energy,
     tfim_chain_demo_problem,
 )
-from aicir.qas.vqe_loop.protocol import (
+from aicir.qas.vqe_loop.benchmark_table import (
     BENCHMARK_TABLE_FIELDS,
     LabelStatus,
     next_label_status_after_failure,
+    load_fair_label_protocol,
 )
-from aicir.qas.vqe_loop.geometry import parse_pauli_hamiltonian_terms
 
-
-def _read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8-sig") as handle:
-        return list(csv.DictReader(handle))
-
-
-def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(BENCHMARK_TABLE_FIELDS)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row.get(field, "") for field in fieldnames})
 
 
 def _load_warm_start_vector(
@@ -145,7 +128,7 @@ def _mask_from_row(row: dict[str, str]) -> HEAMask:
 def _architecture_from_row(row: dict[str, str]):
     raw_gene = row.get("ansatz_gene", "")
     if raw_gene and str(raw_gene).strip() not in {"", '""', "null"}:
-        return architecture_from_layerwise_gene(LayerwiseAnsatzGene.from_jsonable(raw_gene))
+        return architecture_from_candidate_row(row)
     return architecture_from_hea_mask(_mask_from_row(row))
 
 
@@ -160,37 +143,35 @@ def _tfim_problem_from_protocol(n_qubits: int, protocol: dict[str, Any]):
     )
 
 
-def _load_literal_hamiltonian_terms(row: dict[str, Any]) -> tuple[tuple[float, str], ...]:
-    raw = row.get("hamiltonian_terms", "")
-    if raw is None or str(raw).strip() == "":
-        return ()
-    try:
-        loaded = json.loads(str(raw))
-    except json.JSONDecodeError as exc:
-        raise ValueError("hamiltonian_terms must be a JSON list of Pauli terms") from exc
-    terms = parse_pauli_hamiltonian_terms(loaded)
-    if not terms:
-        raise ValueError("hamiltonian_terms must contain at least one Pauli term")
-    return terms
-
-
 def _problem_from_row_or_protocol(row: dict[str, Any], *, n_qubits: int, protocol: dict[str, Any]) -> VQEProblem:
-    terms = _load_literal_hamiltonian_terms(row)
+    terms = row_hamiltonian_terms(row)
     if not terms:
         return _tfim_problem_from_protocol(n_qubits, protocol)
+    return problem_from_row_terms(row, n_qubits=int(n_qubits), default_name_prefix="custom_pauli")
 
-    widths = {len(pauli) for _coeff, pauli in terms}
-    if widths != {int(n_qubits)}:
-        raise ValueError(
-            f"hamiltonian_terms width must match queue n_qubits={int(n_qubits)}; "
-            f"found widths={sorted(widths)}"
-        )
-    return VQEProblem(
-        name=str(row.get("hamiltonian_id") or f"custom_pauli_{int(n_qubits)}q"),
-        n_qubits=int(n_qubits),
-        hamiltonian=terms,
-        reference_energy=exact_ground_energy(terms),
-    )
+
+def _architecture_seed_key(row: dict[str, Any]) -> str:
+    for field in ("canonical_arch_hash", "ansatz_gene", "architecture_id"):
+        value = str(row.get(field, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _label_seed_for_row(
+    *,
+    base_seed: int,
+    row_index: int,
+    row: dict[str, Any],
+    seed_index_offset: int = 0,
+    seed_by_architecture_id: bool = False,
+) -> int:
+    if seed_by_architecture_id:
+        key = _architecture_seed_key(row)
+        if key:
+            digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+            return int(base_seed) + int(digest[:12], 16) % 1_000_000_000
+    return int(base_seed) + (int(seed_index_offset) + int(row_index)) * 1000
 
 
 def _label_row(
@@ -281,7 +262,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run fair VQE labels for a Stage-1.5 queue")
     parser.add_argument("--queue", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--protocol", default="aicir/qas/vqe_loop/fair_label_protocol.json")
+    parser.add_argument("--protocol", default="default")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument(
@@ -289,6 +270,11 @@ def main() -> None:
         type=int,
         default=0,
         help="Offset added to the queue row index when deriving per-row VQE seeds; used by sharded runners.",
+    )
+    parser.add_argument(
+        "--seed-by-architecture-id",
+        action="store_true",
+        help="Derive per-row seeds from architecture identity instead of queue row index.",
     )
     parser.add_argument("--n-seeds", type=int, default=3)
     parser.add_argument("--success-delta-ref", type=float, default=0.02)
@@ -299,8 +285,8 @@ def main() -> None:
     args = parser.parse_args()
 
     queue_path = Path(args.queue)
-    rows = _read_csv(queue_path)
-    protocol = _load_protocol(Path(args.protocol))
+    rows = read_csv_rows(queue_path)
+    protocol = load_fair_label_protocol(args.protocol)
     _validate_queue_protocol_versions(rows, str(protocol["protocol_version"]))
     completed = 0
     for index, row in enumerate(rows):
@@ -315,12 +301,18 @@ def main() -> None:
             completed += 1
             continue
         row["label_status"] = LabelStatus.RUNNING.value
-        _write_csv(Path(args.output), rows)
+        write_csv_rows(Path(args.output), rows, fieldnames=BENCHMARK_TABLE_FIELDS)
         try:
             rows[index] = _label_row(
                 row,
                 protocol=protocol,
-                seed=int(args.seed) + (int(args.seed_index_offset) + index) * 1000,
+                seed=_label_seed_for_row(
+                    base_seed=int(args.seed),
+                    row_index=index,
+                    row=row,
+                    seed_index_offset=int(args.seed_index_offset),
+                    seed_by_architecture_id=bool(args.seed_by_architecture_id),
+                ),
                 n_seeds=int(args.n_seeds),
                 success_delta_ref=float(args.success_delta_ref),
                 max_evals_override=args.max_evals,
@@ -335,11 +327,13 @@ def main() -> None:
             row["failure_reason"] = type(exc).__name__
             row["last_error_digest"] = traceback.format_exc()[-4000:]
         completed += 1
-        _write_csv(Path(args.output), rows)
+        write_csv_rows(Path(args.output), rows, fieldnames=BENCHMARK_TABLE_FIELDS)
 
-    _write_csv(Path(args.output), rows)
+    write_csv_rows(Path(args.output), rows, fieldnames=BENCHMARK_TABLE_FIELDS)
     print(json.dumps({"rows": len(rows), "attempted": completed, "output": str(args.output)}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     main()
+
+

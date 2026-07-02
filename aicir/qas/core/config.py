@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable
 
 QASMethod = str
 
-# 非规范名的等价写法 → 规范方法名。规范名本身（``_FACTORIES`` 的键）无需登记。
+# 非规范名的等价写法 -> 规范方法名。规范名本身（``_FACTORIES`` 的键）无需登记。
 _ALIASES = {
     "vqa": "supernet",
     "vqa_qas": "supernet",
@@ -23,6 +24,8 @@ _ALIASES = {
     "quantum_darts": "qdrats",
     "differentiable_qas": "dqas",
     "differentiable_quantum_architecture_search": "dqas",
+    "vqe_qas": "vqe_loop",
+    "vqe_closed_loop": "vqe_loop",
 }
 
 
@@ -106,6 +109,21 @@ def dqas(**kwargs: Any) -> Any:
     return _build(DQASConfig, kwargs)
 
 
+def vqe_loop(**kwargs: Any) -> Any:
+    """Build a ``vqe_loop`` config with optional field overrides."""
+
+    from ..vqe_loop import P0BootstrapConfig
+
+    values = dict(kwargs)
+    if "output_dir" not in values:
+        values["output_dir"] = Path("outputs") / "qas_vqe_loop"
+    elif isinstance(values["output_dir"], str):
+        values["output_dir"] = Path(values["output_dir"])
+    if isinstance(values.get("protocol"), str):
+        values["protocol"] = Path(values["protocol"])
+    return _build(P0BootstrapConfig, values)
+
+
 def adam_spsa(**kwargs: Any) -> Any:
     """Build the nested Adam-SPSA config used by ``CRLQAS``."""
 
@@ -158,7 +176,7 @@ ppo = ppo_rb
 ppr = ppr_dql
 crl = crlqas
 
-# 规范方法名 → 配置工厂。方法集合的单一来源（``method_names`` 由此派生）。
+# 规范方法名 -> 配置工厂。方法集合的单一来源（``method_names`` 由此派生）。
 _FACTORIES = {
     "supernet": supernet,
     "supernet_classification": supernet_classification,
@@ -168,6 +186,7 @@ _FACTORIES = {
     "crlqas": crlqas,
     "qdrats": qdrats,
     "dqas": dqas,
+    "vqe_loop": vqe_loop,
 }
 
 __all__ = [
@@ -187,4 +206,5 @@ __all__ = [
     "supernet",
     "supernet_classification",
     "supernet_h2",
+    "vqe_loop",
 ]

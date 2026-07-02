@@ -56,8 +56,9 @@
 | `"crlqas"`             | `hamiltonian`                              | `config`                               | `CRLQASResult`     |
 | `"qdrats"`             | `hamiltonian`                              | `config`                               | `QDRATSResult`     |
 | `"dqas"`               | `hamiltonian`                              | `config`                               | `DQASResult`       |
+| `"vqe_loop"`           | `config`                                   | 无                                     | `P0BootstrapResult` |
 
-方法名大小写不敏感，也支持常见别名，例如 `"h2"`/`"h2_vqe"`（→ `supernet_h2`）、`"ppr"`（→ `ppr_dql`）、`"crl"`（→ `crlqas`）、`"ppo"`（→ `ppo_rb`）、`"differentiable_qas"`（→ `dqas`）。
+方法名大小写不敏感，也支持常见别名，例如 `"h2"`/`"h2_vqe"`（→ `supernet_h2`）、`"ppr"`（→ `ppr_dql`）、`"crl"`（→ `crlqas`）、`"ppo"`（→ `ppo_rb`）、`"differentiable_qas"`（→ `dqas`）、`"vqe_qas"`/`"vqe_closed_loop"`（→ `vqe_loop`）。
 
 示例：
 
@@ -82,6 +83,7 @@ result = run("supernet", config=cfg)
 - `config.crlqas(...)`：CRLQAS 超参数配置；`adam_spsa` 可传字典，例如 `config.crlqas(adam_spsa={"iterations": 10})`
 - `config.qdrats(...)`：QDRATS 超参数与搜索门池配置；`gate_pool="generic"` 或 `"excitation"`
 - `config.dqas(...)`：DQAS 超参数与搜索门池配置；`gate_pool` 可传 `"generic"` 或显式门名序列
+- `config.vqe_loop(...)`：VQE-QAS P0 bootstrap + fair-label 主线配置，支持 chemistry excitation pool、zero-cost 状态和统一 benchmark table 输出
 
 底层专用接口仍然保留，适合需要直接控制某个算法实现的用户：
 
@@ -93,6 +95,7 @@ result = run("supernet", config=cfg)
 - `train_crlqas(hamiltonian, config=None)` / `crlqas(...)`
 - `train_qdrats(hamiltonian, config=None)` / `qdrats(...)`
 - `train_dqas(hamiltonian, config=None)` / `dqas(...)`
+- `run_vqe_qas_closed_loop(config)` / `run_p0_bootstrap_fair(config)`
 
 可通过以下方式导入：
 
@@ -100,7 +103,27 @@ result = run("supernet", config=cfg)
 from aicir.qas import config, run
 ```
 
-### 2.1 DQAS/QDRATS 搜索门池配置
+### 2.1 VQE-loop 统一入口
+
+`vqe_loop` 是 VQE-QAS 的 P0 bootstrap + fair-label 主线入口。cheap evaluator 只用于筛选候选结构，最终比较仍以 fair label 的 `fair_best_energy` 为主指标。
+
+```python
+from aicir.qas import config, run
+
+cfg = config.vqe_loop(
+    output_dir="outputs/lih_vqe_loop_smoke",
+    n_qubits=4,
+    use_chemistry_excitation_pool=True,
+    active_electrons=2,
+    active_spatial_orbitals=2,
+    chemistry_excitation_count=8,
+    initial_labels=4,
+    max_evals=20,
+)
+
+result = run("vqe_loop", config=cfg)
+```
+### 2.2 DQAS/QDRATS 搜索门池配置
 
 `qdrats` 和 `dqas` 都通过配置对象声明搜索门池，但两者的结构语义不同：
 
@@ -151,7 +174,7 @@ result = run("dqas", hamiltonian=hamiltonian, config=cfg)
 
 DQAS 当前支持的通用门名为 `identity`、`rx`、`ry`、`rz`、`rzryrz`、`cx`。`gate_pool="generic"` 等价于 `("identity", "rzryrz", "cx")`，其中 `cx` 默认展开为所有有向非自环连接；传 `two_qubit_pairs=((control, target), ...)` 可限制 CNOT 搜索连接。`gate_pool="excitation"` 需要传 `single_excitations` 和/或 `double_excitations`，可选 `hf_occupied_qubits`。为了保证 sampled index 可复现，推荐用 tuple/list 表达门池；`pool={...}` 也可作为别名传入，但会按固定门序规范化。旧字段 `operation_pool` 仍作为兼容别名保留。
 
-### 2.2 SearchStrategy 协议与策略注册表（模块化进行中）
+### 2.3 SearchStrategy 协议与策略注册表（模块化进行中）
 
 `run(method, ...)` 的方法分发正从 `runner` 的 `_Spec` 分发表迁移为**策略注册表**，与
 `aicir.qml.diff`（`DiffMethod`）、`aicir.gates`（`GateSpec`）同一习惯：
@@ -346,7 +369,7 @@ result = supernet_qas(
 示例（自定义哈密顿量，CPU）：
 
 ```python
-from aicir.operators import Hamiltonian
+from aicir.core.operators import Hamiltonian
 from aicir.qas import supernet_qas
 
 ham = Hamiltonian(n_qubits=6, terms=[("IIIIII", -4.524), ("IIIIIZ", 0.515), ...])
@@ -432,7 +455,7 @@ python -m aicir.qas.vqe_loop.shard_scheduler \
 - `--backend npu` / `--dtype complex64`：使用 Ascend NPU 后端。若要做 CPU smoke，可改为 `--backend numpy --dtype complex128`。
 - `--work-dir`：保存每个 shard 的临时 queue、临时 label CSV 和最终 summary。
 
-分片器会把原始 queue 连续切块，并给底层 `python -m aicir.qas.vqe_loop.labeling` 传入 `--seed-index-offset`，因此同一全局队列行在单进程或多分片运行时使用一致的 seed 派生规则。最终输出仍是一个 benchmark table CSV，可继续用于 oracle calibration、Stage-2 next-batch planning 和标签回流。
+分片器会把原始 queue 连续切块，并给底层 `python -m aicir.qas.vqe_loop.fair_labeling` 传入 `--seed-index-offset`，因此同一全局队列行在单进程或多分片运行时使用一致的 seed 派生规则。最终输出仍是一个 benchmark table CSV，可继续用于 oracle calibration、Stage-2 next-batch planning 和标签回流。
 
 ### 3.8 supernet 单次搜索的多 NPU 分片（safe / aggressive）
 
@@ -591,7 +614,7 @@ print(result.best_circuit.show())
 ### 4.4 最小示例（哈密顿量能量）
 
 ```python
-from aicir.operators import Hamiltonian
+from aicir.core.operators import Hamiltonian
 from aicir.qas import MOGVQEConfig, block_hardware_efficient_ansatz, run_mog_vqe
 
 ham = Hamiltonian(n_qubits=2, terms=[("ZZ", -1.0), ("XI", 0.2)])
@@ -890,7 +913,7 @@ print(circuit.show())
 ### 7.3 最小示例（H2）
 
 ```python
-from aicir.operators import Hamiltonian
+from aicir.core.operators import Hamiltonian
 from aicir.qas import config, run
 
 h2 = Hamiltonian([

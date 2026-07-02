@@ -1,4 +1,4 @@
-"""Quantum architecture search and state-synthesis utilities."""
+﻿"""Quantum architecture search and state-synthesis utilities."""
 
 from __future__ import annotations
 
@@ -87,6 +87,7 @@ from ..noise import (
 )
 from ..noise.metrics import ion_trap_error_budget_proxy
 from .core import config
+from .core.runner import QASRunConfig, available_qas_methods, default_qas_config, run
 
 _OPTIONAL_RL_EXPORTS: list[str] = []
 try:
@@ -95,7 +96,6 @@ try:
     from .algorithms.pprdql import PPRDQLConfig, PPRDQLPolicy, PPRDQLResult, ppr_dql_state_to_circuit, train_ppr_dql
     from .algorithms.pporb import PPORollbackConfig, ppo_rb_qas
     from .algorithms.qdrats import QDRATSConfig, QDRATSResult, QuantumDARTS, qdrats, train_qdrats
-    from .core.runner import QASRunConfig, available_qas_methods, default_qas_config, run
     from .algorithms.supernet import (
         Architecture,
         LayerArchitecture,
@@ -127,21 +127,17 @@ else:
             "PPORollbackConfig",
             "QDRATSConfig",
             "QDRATSResult",
-            "QASRunConfig",
             "QuantumDARTS",
             "Supernet",
             "SupernetConfig",
             "SupernetResult",
-            "available_qas_methods",
             "classification_supernet",
             "crlqas",
             "dqas",
-            "default_qas_config",
             "h2_vqe_supernet",
             "ppr_dql_state_to_circuit",
             "ppo_rb_qas",
             "qdrats",
-            "run",
             "supernet_qas",
             "train_crlqas",
             "train_dqas",
@@ -177,6 +173,7 @@ __all__ = [
     "NoiseAdaptiveQAS",
     "NoiseSensitivityResult",
     "NoisyQASEnv",
+    "QASRunConfig",
     "QASState",
     "RewardComposer",
     "RewardWeights",
@@ -198,7 +195,9 @@ __all__ = [
     "block_hardware_efficient_ansatz",
     "common_architecture_names",
     "config",
+    "available_qas_methods",
     "comparative_expressibility",
+    "default_qas_config",
     "count_cnot_gates",
     "evaluate_architectures",
     "evaluate_h2_energy",
@@ -225,6 +224,7 @@ __all__ = [
     "pareto_front",
     "resolve_qas_backend",
     "backend_runtime_metadata",
+    "run",
     "run_mog_vqe",
     "run_vqe_qas_closed_loop",
     "sample_layerwise_genes",
