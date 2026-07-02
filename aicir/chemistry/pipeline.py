@@ -83,7 +83,7 @@ def build_molecule(
     if mapping_key in ("jordan_wigner", "jw"):
         n_electrons = sum(problem.num_particles)
         hf_occupation = _jw_hf_occupation(problem, n_qubits)
-        excitations = _jw_excitations(problem)
+        excitations = _jw_excitations(problem, n_qubits)
 
     return MoleculeHamiltonian(
         name=name,
@@ -109,24 +109,27 @@ def _sparse_pauli_to_terms(qubit_op):
     """
 
     out = []
-    for label, coeff in sorted(qubit_op.to_list()):
+    for label, coeff in sorted(qubit_op.to_list(), key=lambda t: t[0]):
         out.append((complex(coeff), label))
     return tuple(out)
 
 
 def _jw_hf_occupation(problem, n_qubits):
-    """JW 下 HF 占据 bitstring，元组下标即 qubit 序号（与 ``_sparse_pauli_to_terms`` 同一比特序）。"""
+    """JW 下 HF 占据 bitstring，元组下标即 aicir 比特序号（与 ``_sparse_pauli_to_terms`` 同一比特序）。"""
 
     from qiskit_nature.second_q.circuit.library import HartreeFock
     from qiskit_nature.second_q.mappers import JordanWignerMapper
 
     hf = HartreeFock(problem.num_spatial_orbitals, problem.num_particles, JordanWignerMapper())
-    # JW 下自旋轨道 i 一一映射到 qubit i（电路上对占据轨道施 X）；
-    # HartreeFock._bitstr[i] 即 qubit i 是否占据。
-    return tuple(int(bit) for bit in hf._bitstr)
+    # HartreeFock._bitstr[i] 是 Qiskit 自旋轨道序（qubit i，label 最右字符）下的占据情况；
+    # 而 aicir 的比特序是 leftmost=qubit0=MSB，terms 里的 Pauli label 仍保持 Qiskit
+    # 原序未翻转（为复现预置），因此元数据须显式按 n-1-k 反转，才能与 terms 的比特
+    # 对齐——否则用 hf_occupation 摆 HF 态、算 ⟨HF|H|HF⟩ 会对错 qubit 施加 X 门。
+    qiskit_bits = [int(bit) for bit in hf._bitstr]
+    return tuple(qiskit_bits[n_qubits - 1 - i] for i in range(n_qubits))
 
 
-def _jw_excitations(problem):
+def _jw_excitations(problem, n_qubits):
     """singles+doubles 费米子激发 → aicir qubit 索引元组。"""
 
     from qiskit_nature.second_q.circuit.library.ansatzes.utils import (
@@ -139,6 +142,9 @@ def _jw_excitations(problem):
             order, problem.num_spatial_orbitals, problem.num_particles
         )
         for occ, vir in raw:
-            idx = tuple(int(i) for i in (*occ, *vir))
+            # 同 _jw_hf_occupation：Qiskit 自旋轨道索引 k 需按 n_qubits-1-k 映射为
+            # aicir 比特序号，才能与（未翻转的）terms 对齐；元组内顺序无关紧要，
+            # uccsd 会自行排序。
+            idx = tuple(n_qubits - 1 - int(i) for i in (*occ, *vir))
             out.append((kind, idx))
     return tuple(out)
