@@ -314,7 +314,7 @@ def test_run_experiment_requires_configured_proxy_evaluators(tmp_path):
 
 
 def test_light_vqe_registry_runs_e1_e2_and_fair_with_configured_budgets(tmp_path):
-    from aicir.qas.primitives.ansatz import LayerwiseAnsatzGene
+    from aicir.qas.library.ansatz import LayerwiseAnsatzGene
     from aicir.qas.problems.hamiltonians import VQEProblem
     from aicir.qas.vqe_loop.cheap_eval_experiment import (
         CheapEvalExperimentConfig,
@@ -405,7 +405,7 @@ def test_light_vqe_registry_runs_e1_e2_and_fair_with_configured_budgets(tmp_path
 
 
 def test_light_vqe_registry_uses_same_proxy_seed_set_for_e1_and_e2(tmp_path):
-    from aicir.qas.primitives.ansatz import LayerwiseAnsatzGene
+    from aicir.qas.library.ansatz import LayerwiseAnsatzGene
     from aicir.qas.problems.hamiltonians import VQEProblem
     from aicir.qas.vqe_loop.cheap_eval_experiment import (
         CheapEvalExperimentConfig,
@@ -477,7 +477,7 @@ def test_light_vqe_registry_uses_same_proxy_seed_set_for_e1_and_e2(tmp_path):
 
 
 def test_light_vqe_registry_can_build_problem_from_literal_row_terms(tmp_path):
-    from aicir.qas.primitives.ansatz import LayerwiseAnsatzGene
+    from aicir.qas.library.ansatz import LayerwiseAnsatzGene
     from aicir.qas.vqe_loop.cheap_eval_experiment import (
         CheapEvalExperimentConfig,
         build_light_vqe_evaluator_registry,
@@ -538,7 +538,7 @@ def test_light_vqe_registry_can_build_problem_from_literal_row_terms(tmp_path):
 
 
 def test_light_vqe_registry_reuses_cached_architecture_and_problem(tmp_path):
-    from aicir.qas.primitives.ansatz import LayerwiseAnsatzGene
+    from aicir.qas.library.ansatz import LayerwiseAnsatzGene
     from aicir.qas.problems.hamiltonians import VQEProblem
     from aicir.qas.vqe_loop.cheap_eval_experiment import (
         CheapEvalExperimentConfig,
@@ -604,7 +604,7 @@ def test_light_vqe_registry_reuses_cached_architecture_and_problem(tmp_path):
 
 
 def test_light_vqe_registry_passes_initial_parameters_for_warm_start(tmp_path):
-    from aicir.qas.primitives.ansatz import LayerwiseAnsatzGene
+    from aicir.qas.library.ansatz import LayerwiseAnsatzGene
     from aicir.qas.problems.hamiltonians import VQEProblem
     from aicir.qas.vqe_loop.cheap_eval_experiment import (
         CheapEvalExperimentConfig,
@@ -671,7 +671,7 @@ def test_light_vqe_registry_passes_initial_parameters_for_warm_start(tmp_path):
 
 
 def test_light_vqe_registry_uses_row_reference_energy_without_diagonalizing(tmp_path):
-    from aicir.qas.primitives.ansatz import LayerwiseAnsatzGene
+    from aicir.qas.library.ansatz import LayerwiseAnsatzGene
     from aicir.qas.vqe_loop import cheap_eval_experiment as experiment
 
     gene = LayerwiseAnsatzGene(
@@ -729,7 +729,7 @@ def test_light_vqe_registry_uses_row_reference_energy_without_diagonalizing(tmp_
 
 
 def test_supernet_e5_evaluator_scores_supernet_native_gene_with_cached_supernet():
-    from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+    from aicir.qas.library.ansatz import SupernetAnsatzGene
     from aicir.qas.problems.hamiltonians import VQEProblem
     from aicir.qas.vqe_loop.p0_supernet_native import build_native_supernet_e5_evaluator
 
@@ -818,7 +818,7 @@ def test_supernet_e5_evaluator_scores_supernet_native_gene_with_cached_supernet(
 
 
 def test_supernet_e5_evaluator_does_not_build_architecture_spec_for_counts():
-    from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+    from aicir.qas.library.ansatz import SupernetAnsatzGene
     from aicir.qas.problems.hamiltonians import VQEProblem
     from aicir.qas.vqe_loop import cheap_eval_experiment as experiment
 
@@ -872,7 +872,7 @@ def test_supernet_e5_evaluator_does_not_build_architecture_spec_for_counts():
 
 
 def test_supernet_e5_evaluator_uses_rank_score_when_finetune_disabled():
-    from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+    from aicir.qas.library.ansatz import SupernetAnsatzGene
     from aicir.qas.problems.hamiltonians import VQEProblem
     from aicir.qas.vqe_loop.p0_supernet_native import build_native_supernet_e5_evaluator
 
@@ -929,7 +929,7 @@ def test_supernet_e5_evaluator_uses_rank_score_when_finetune_disabled():
 
 
 def test_supernet_e5_evaluator_exposes_shared_parameter_warm_start():
-    from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+    from aicir.qas.library.ansatz import SupernetAnsatzGene
     from aicir.qas.problems.hamiltonians import VQEProblem
     from aicir.qas.vqe_loop.p0_supernet_native import build_native_supernet_e5_evaluator
 
@@ -995,7 +995,7 @@ def test_supernet_e5_evaluator_exposes_shared_parameter_warm_start():
 
 
 def test_supernet_e5_evaluator_rejects_non_supernet_gene():
-    from aicir.qas.primitives.ansatz import LayerwiseAnsatzGene
+    from aicir.qas.library.ansatz import LayerwiseAnsatzGene
     from aicir.qas.problems.hamiltonians import VQEProblem
     from aicir.qas.vqe_loop.p0_supernet_native import build_native_supernet_e5_evaluator
 

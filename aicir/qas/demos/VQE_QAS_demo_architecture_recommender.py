@@ -27,9 +27,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from aicir.chemistry.spec import generate_hamiltonian, load_hamiltonian_input
-from aicir.qas.primitives.ansatz import SupernetAnsatzGene, architecture_from_supernet_gene
+from aicir.qas.library.ansatz import SupernetAnsatzGene, architecture_from_supernet_gene
 from aicir.qas.problems.hamiltonians import VQEProblem, exact_ground_energy
-from aicir.qas.primitives.backend_utils import resolve_qas_backend
+from aicir.qas.core.backend_utils import resolve_qas_backend
 from aicir.qas.vqe_loop import ClosedLoopConfig, run_vqe_qas_closed_loop
 from aicir.qas.vqe_loop.fair_vqe import optimize_vqe_energy
 

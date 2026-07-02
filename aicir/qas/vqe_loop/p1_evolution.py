@@ -22,7 +22,7 @@ import random
 import re
 from typing import Any, Callable, Mapping, Sequence
 
-from aicir.qas.primitives.ansatz import ChemistryExcitationAnsatzGene, OperatorSequenceAnsatzGene, SupernetAnsatzGene
+from aicir.qas.library.ansatz import ChemistryExcitationAnsatzGene, OperatorSequenceAnsatzGene, SupernetAnsatzGene
 from aicir.qas.vqe_loop.benchmark_table import decoded_ansatz_gene_payload
 from aicir.qas.vqe_loop.benchmark_table import row_hamiltonian_terms
 from aicir.qas.vqe_loop.benchmark_table import as_float as _as_float
@@ -97,7 +97,7 @@ def _finite_difference_operator_growth_score(
     prefix_parameters: Sequence[float] | None = None,
     epsilon: float = 0.05,
 ) -> float:
-    from aicir.qas.primitives.ansatz import architecture_from_operator_sequence_gene
+    from aicir.qas.library.ansatz import architecture_from_operator_sequence_gene
     from aicir.qas.problems.hamiltonians import VQEProblem
     from aicir.qas.vqe_loop.fair_vqe import evaluate_vqe_energy
 
@@ -268,7 +268,7 @@ def _child_architecture_id(parent_id: str, mutation_type: str, gene: MutableGene
 
 
 def _architecture_metadata(gene: MutableGene) -> dict[str, str]:
-    from aicir.qas.primitives.ansatz import (
+    from aicir.qas.library.ansatz import (
         architecture_from_chemistry_excitation_gene,
         architecture_from_operator_sequence_gene,
         architecture_from_supernet_gene,

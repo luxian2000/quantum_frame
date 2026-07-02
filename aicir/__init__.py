@@ -37,7 +37,7 @@ else:
         ]
     )
 
-from .operators import Hamiltonian, PauliOp, PauliString
+from .core.operators import Hamiltonian, PauliOp, PauliString
 
 _export(
     [
@@ -100,6 +100,9 @@ try:
         reset,
         rxx,
         rzz,
+        single_excitation,
+        givens,
+        double_excitation,
         rx,
         ry,
         rz,
@@ -148,6 +151,9 @@ else:
             "pauli_z",
             "rzz",
             "rxx",
+            "single_excitation",
+            "givens",
+            "double_excitation",
             "ms_gate",
             "molmer_sorensen",
             "hadamard",
@@ -221,6 +227,7 @@ for _module_name in [
     "primitives",
     "qas",
     "qml",
+    "qrc",
     "transpile",
     "universal",
     "visual",

@@ -1,4 +1,4 @@
-"""Quantum architecture search and state-synthesis utilities."""
+﻿"""Quantum architecture search and state-synthesis utilities."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from .core._types import (
 from .library.architectures import build_common_architectures, common_architecture_names
 from .core.architecture_search import ArchitectureSearch, NoiseAdaptiveQAS
 from .core.evaluator import ArchitectureEvaluator, evaluate_architectures, metric_catalog
-from .algorithms.MoG_VQE import (
+from .algorithms.mogvqe import (
     MOGVQEBlock,
     MOGVQECandidate,
     MOGVQEConfig,
@@ -30,19 +30,15 @@ from .algorithms.MoG_VQE import (
 )
 from .core.reward import RewardComposer, RewardWeights
 from .core.search_env import NoisyQASEnv, QASState
-from .primitives.ansatz import (
-    ExplicitGateAnsatzGene,
+from .library.ansatz import (
     HEAMask,
     LayerwiseAnsatzGene,
-    OperatorSequenceAnsatzGene,
-    architecture_from_explicit_gate_gene,
     architecture_from_hea_mask,
     architecture_from_layerwise_gene,
-    architecture_from_operator_sequence_gene,
     enumerate_hea_masks,
     sample_layerwise_genes,
 )
-from .primitives.backend_utils import backend_runtime_metadata, resolve_qas_backend
+from .core.backend_utils import backend_runtime_metadata, resolve_qas_backend
 from .vqe_loop.fair_vqe import (
     THETA_INIT_RANDOM_UNIFORM_PI,
     THETA_INIT_ZERO_DIAGNOSTIC,
@@ -95,9 +91,11 @@ from .core.runner import QASRunConfig, available_qas_methods, default_qas_config
 
 _OPTIONAL_RL_EXPORTS: list[str] = []
 try:
-    from .algorithms.CRLQAS import AdamSPSAConfig, CRLQASConfig, CRLQASResult, crlqas, train_crlqas
-    from .algorithms.PPR_DQL import PPRDQLConfig, PPRDQLPolicy, PPRDQLResult, ppr_dql_state_to_circuit, train_ppr_dql
-    from .algorithms.PPO_RB import PPORollbackConfig, ppo_rb_qas
+    from .algorithms.crlqas import AdamSPSAConfig, CRLQASConfig, CRLQASResult, crlqas, train_crlqas
+    from .algorithms.dqas import DQASConfig, DQASResult, DifferentiableQAS, dqas, train_dqas
+    from .algorithms.pprdql import PPRDQLConfig, PPRDQLPolicy, PPRDQLResult, ppr_dql_state_to_circuit, train_ppr_dql
+    from .algorithms.pporb import PPORollbackConfig, ppo_rb_qas
+    from .algorithms.qdrats import QDRATSConfig, QDRATSResult, QuantumDARTS, qdrats, train_qdrats
     from .algorithms.supernet import (
         Architecture,
         LayerArchitecture,
@@ -119,25 +117,32 @@ else:
             "Architecture",
             "CRLQASConfig",
             "CRLQASResult",
+            "DQASConfig",
+            "DQASResult",
+            "DifferentiableQAS",
             "LayerArchitecture",
             "PPRDQLConfig",
             "PPRDQLPolicy",
             "PPRDQLResult",
             "PPORollbackConfig",
-            "QASRunConfig",
+            "QDRATSConfig",
+            "QDRATSResult",
+            "QuantumDARTS",
             "Supernet",
             "SupernetConfig",
             "SupernetResult",
-            "available_qas_methods",
             "classification_supernet",
             "crlqas",
+            "dqas",
             "h2_vqe_supernet",
             "ppr_dql_state_to_circuit",
             "ppo_rb_qas",
-            "run",
+            "qdrats",
             "supernet_qas",
             "train_crlqas",
+            "train_dqas",
             "train_ppr_dql",
+            "train_qdrats",
             "train_supernet",
         ]
     )
@@ -168,7 +173,7 @@ __all__ = [
     "NoiseAdaptiveQAS",
     "NoiseSensitivityResult",
     "NoisyQASEnv",
-    "OperatorSequenceAnsatzGene",
+    "QASRunConfig",
     "QASState",
     "RewardComposer",
     "RewardWeights",
@@ -184,18 +189,16 @@ __all__ = [
     "VQEProblem",
     "VQEOptimizationResult",
     "architecture_from_hea_mask",
-    "architecture_from_explicit_gate_gene",
     "architecture_from_layerwise_gene",
-    "architecture_from_operator_sequence_gene",
     "adaptive_fair_n_starts",
-    "available_qas_methods",
     "build_common_architectures",
     "block_hardware_efficient_ansatz",
     "common_architecture_names",
     "config",
+    "available_qas_methods",
     "comparative_expressibility",
-    "count_cnot_gates",
     "default_qas_config",
+    "count_cnot_gates",
     "evaluate_architectures",
     "evaluate_h2_energy",
     "evaluate_vqe_energy",
@@ -220,14 +223,13 @@ __all__ = [
     "optimize_vqe_energy",
     "pareto_front",
     "resolve_qas_backend",
-    "run",
     "backend_runtime_metadata",
+    "run",
     "run_mog_vqe",
     "run_vqe_qas_closed_loop",
     "sample_layerwise_genes",
     "stamp_literal_hamiltonian_terms",
     "LayerwiseAnsatzGene",
-    "ExplicitGateAnsatzGene",
     "tfim_chain_demo_problem",
     "tfim_chain_hamiltonian",
     "fair_vqe_final_maxfev",

@@ -155,7 +155,7 @@ Expected before cleanup: any remaining old imports are listed.
 Use these replacements:
 
 ```text
-aicir.qas.vqe_loop.labeling -> aicir.qas.vqe_loop.fair_labeling
+aicir.qas.vqe_loop.fair_labeling -> aicir.qas.vqe_loop.fair_labeling
 aicir.qas.vqe_loop.vqe_qas_loop -> aicir.qas.vqe_loop.p0_bootstrap_fair
 aicir.qas.vqe_loop.chemistry_excitation -> aicir.qas.vqe_loop.p0_chemistry_excitation
 aicir.qas.vqe_loop.supernet_native -> aicir.qas.vqe_loop.p0_supernet_native
@@ -164,7 +164,7 @@ aicir.qas.vqe_loop.supernet_native -> aicir.qas.vqe_loop.p0_supernet_native
 Also update `python -m` strings:
 
 ```text
-aicir.qas.vqe_loop.labeling -> aicir.qas.vqe_loop.fair_labeling
+aicir.qas.vqe_loop.fair_labeling -> aicir.qas.vqe_loop.fair_labeling
 ```
 
 - [ ] **Step 3: Re-scan for old imports**

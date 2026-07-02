@@ -9,7 +9,7 @@ sys.path.insert(0, str(ROOT))
 
 class ExplicitGateAnsatzTests(unittest.TestCase):
     def test_explicit_gate_gene_round_trips_and_builds_architecture(self):
-        from aicir.qas.primitives.ansatz import (
+        from aicir.qas.library.ansatz import (
             ExplicitGateAnsatzGene,
             architecture_from_explicit_gate_gene,
         )
@@ -60,7 +60,7 @@ class ExplicitGateAnsatzTests(unittest.TestCase):
 
 class OperatorSequenceAnsatzTests(unittest.TestCase):
     def test_operator_sequence_gene_round_trips_and_builds_one_parameter_per_operator(self):
-        from aicir.qas.primitives.ansatz import (
+        from aicir.qas.library.ansatz import (
             OperatorSequenceAnsatzGene,
             architecture_from_operator_sequence_gene,
         )

@@ -46,7 +46,16 @@ def _tiny_ppr_config():
 
 
 def test_available_qas_methods_contains_public_names():
-    assert available_qas_methods() == ("supernet", "supernet_classification", "supernet_h2", "ppo_rb", "ppr_dql", "crlqas")
+    assert available_qas_methods() == (
+        "supernet",
+        "supernet_classification",
+        "supernet_h2",
+        "ppo_rb",
+        "ppr_dql",
+        "crlqas",
+        "qdrats",
+        "dqas",
+    )
 
 
 def test_config_factory_uses_method_names_without_config_class_imports():

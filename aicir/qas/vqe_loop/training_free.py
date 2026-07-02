@@ -18,7 +18,7 @@ from aicir.metrics.circuit_structure import (
 from aicir.metrics.hardware import native_depth_twoq_efficiency
 from aicir.metrics.trainability import structure_proxy
 from aicir.qas.core.reward import RewardWeights
-from aicir.qas.primitives.ansatz import SupernetAnsatzGene, architecture_from_supernet_gene
+from aicir.qas.library.ansatz import SupernetAnsatzGene, architecture_from_supernet_gene
 from aicir.qas.vqe_loop.benchmark_table import decoded_ansatz_gene_payload
 from aicir.qas.vqe_loop.benchmark_table import ZeroCostStatus
 

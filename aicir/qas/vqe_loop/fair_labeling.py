@@ -22,8 +22,8 @@ import numpy as np
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from aicir.qas.primitives.ansatz import HEAMask, architecture_from_hea_mask
-from aicir.qas.primitives.backend_utils import resolve_qas_backend
+from aicir.qas.library.ansatz import HEAMask, architecture_from_hea_mask
+from aicir.qas.core.backend_utils import resolve_qas_backend
 from aicir.qas.vqe_loop.benchmark_table import architecture_from_candidate_row
 from aicir.qas.vqe_loop.benchmark_table import read_csv_rows, write_csv_rows
 from aicir.qas.vqe_loop.benchmark_table import problem_from_row_terms, row_hamiltonian_terms

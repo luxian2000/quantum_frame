@@ -14,7 +14,7 @@ from typing import Any, Callable
 import numpy as np
 
 from ..backends.numpy_backend import NumpyBackend
-from ..operators import Hamiltonian
+from ..core.operators import Hamiltonian
 from ..core.circuit import Circuit
 from ..ir import circuit_gate_dicts
 from ..measure import Measure
@@ -106,11 +106,12 @@ class BasicVQE:
 
     def __init__(
         self,
-        hamiltonian: np.ndarray | Hamiltonian,
+        hamiltonian: np.ndarray | Hamiltonian | None = None,
         n_qubits: int | None = None,
         depth: int = 1,
         seed: int | None = None,
         *,
+        cost: Any = None,
         ansatz: Circuit | Callable[[np.ndarray], Circuit] | None = None,
         n_params: int | None = None,
         parameter_shape: tuple[int, ...] | None = None,
@@ -123,7 +124,23 @@ class BasicVQE:
         initial_density_matrix: Any = None,
         observable_name: str = "energy",
         energy_estimator: str | Any = "exact",
+        target: Any = None,
     ) -> None:
+        self.cost = cost
+        if cost is not None:
+            self._init_cost_mode(
+                cost,
+                seed=seed,
+                n_params=n_params,
+                parameter_shape=parameter_shape,
+                backend=backend,
+                optimizer=optimizer,
+                shots=shots,
+                observable_name=observable_name,
+            )
+            return
+        if hamiltonian is None:
+            raise ValueError("BasicVQE 需要 hamiltonian 或 cost")
         self.backend = backend if backend is not None else NumpyBackend()
         self.observable = hamiltonian
         ham, inferred = self._coerce_hamiltonian(hamiltonian, self.backend)
@@ -145,6 +162,16 @@ class BasicVQE:
         self.initial_density_matrix = initial_density_matrix
         self.observable_name = str(observable_name)
         self.energy_estimator = self._resolve_energy_estimator(energy_estimator)
+        # Target 接入（NEXT.md §3/§4）：未显式注入 estimator 时，按设备能力经
+        # estimator_for_target 选择并注入 primitives（statevector/shots/noisy），
+        # 使能量求值走 Estimator（phase-1 item 4）。显式注入的 estimator 优先。
+        self.target = target
+        if target is not None and self._uses_exact_energy_estimator():
+            from ..primitives import estimator_for_target
+
+            self.energy_estimator = estimator_for_target(
+                target, backend=self.backend, noise_model=noise_model, shots=shots
+            )
         if ansatz is None and not self._uses_exact_energy_estimator():
             raise ValueError("non-exact energy_estimator requires a Circuit or callable ansatz")
 
@@ -152,6 +179,50 @@ class BasicVQE:
         self._last_circuit: Circuit | None = None
         self._last_measurement: Any = None
         self._last_estimator_result: Any = None
+        self._default_est: Any = None
+        self._rng = np.random.default_rng(seed)
+
+    def _init_cost_mode(
+        self,
+        cost: Any,
+        *,
+        seed: int | None,
+        n_params: int | None,
+        parameter_shape: tuple[int, ...] | None,
+        backend: Any,
+        optimizer: Any,
+        shots: int | None,
+        observable_name: str,
+    ) -> None:
+        """cost 模式：直接用外部 qfun 作代价函数，旁路 ansatz/hamiltonian 编排。"""
+
+        if getattr(cost, "_multi", False):
+            raise ValueError("BasicVQE 的 cost 必须是单观测量 qfun（多观测量无标量能量）")
+        if not callable(cost) or not hasattr(cost, "grad"):
+            raise TypeError("cost 必须是可调用且带 .grad 的对象（如 qfun）")
+        if n_params is None and parameter_shape is None:
+            raise ValueError("cost 模式需要 n_params 或 parameter_shape")
+
+        self.backend = backend if backend is not None else getattr(cost, "_backend", NumpyBackend())
+        self.observable = getattr(cost, "observable", None)
+        self.hamiltonian = None
+        self.n_qubits = None
+        self.depth = 1
+        self.ansatz = None
+        self.optimizer = optimizer
+        self.shots = shots
+        self.noise_model = None
+        self.use_density_matrix = False
+        self.initial_state = None
+        self.initial_density_matrix = None
+        self.observable_name = str(observable_name)
+        self.energy_estimator = "exact"
+        self._parameter_shape = (
+            tuple(int(d) for d in parameter_shape) if parameter_shape is not None else (int(n_params),)
+        )
+        self._last_circuit = None
+        self._last_measurement = None
+        self._last_estimator_result = None
         self._rng = np.random.default_rng(seed)
 
     def _resolve_energy_estimator(self, energy_estimator: str | Any) -> str | Any:
@@ -255,7 +326,9 @@ class BasicVQE:
             raise ValueError(f"Expected {expected} parameter value(s), got {theta.size}")
         return theta.reshape(self._parameter_shape)
 
-    def ansatz_state(self, params: np.ndarray) -> np.ndarray:
+    def ansatz_state(self, params: np.ndarray) -> np.ndarray | None:
+        if self.cost is not None:
+            return None
         if self.ansatz is not None:
             _, measurement = self._measure_circuit_exact(params, return_state=True)
             # 取测量前的完整末态；shots>0 时 final_state 已是坍缩/约化后的态
@@ -340,9 +413,35 @@ class BasicVQE:
         self._last_measurement = measurement
         return float(measurement.expectation_values[self.observable_name]), measurement
 
+    def _needs_measure_path(self, *, return_state: bool) -> bool:
+        """非精确-态向量场景退回 Measure：return_state、shots、噪声/密度矩阵，或自定义
+        初始态。这些 primitives 默认路径不覆盖（仍可经注入或 ``target=`` 走 primitives）。"""
+        return (
+            return_state
+            or self.shots is not None
+            or self.noise_model is not None
+            or self.use_density_matrix
+            or self.initial_state is not None
+            or self.initial_density_matrix is not None
+        )
+
+    def _default_estimator(self) -> Any:
+        """默认（未显式注入 estimator、|0⟩ 起点精确态向量）的 StatevectorEstimator，缓存。"""
+        if self._default_est is None:
+            from ..primitives import StatevectorEstimator
+
+            self._default_est = StatevectorEstimator(self.backend)
+        return self._default_est
+
     def _evaluate_circuit(self, params: np.ndarray, *, return_state: bool) -> tuple[float, Any]:
         if self._uses_exact_energy_estimator():
-            return self._measure_circuit_exact(params, return_state=return_state)
+            # 默认精确路径经 StatevectorEstimator primitive（phase-1 item 4）；
+            # shots/噪声/初始态等退回 Measure。显式注入的 estimator 走下方统一路径。
+            if self._needs_measure_path(return_state=return_state):
+                return self._measure_circuit_exact(params, return_state=return_state)
+            estimator = self._default_estimator()
+        else:
+            estimator = self.energy_estimator
 
         circuit = self.bind_ansatz(params)
         estimate_kwargs: dict[str, Any] = {
@@ -354,7 +453,7 @@ class BasicVQE:
         if self.shots is not None:
             estimate_kwargs["shots"] = self.shots
 
-        estimator_result = self.energy_estimator.estimate(circuit, self.observable, **estimate_kwargs)
+        estimator_result = estimator.estimate(circuit, self.observable, **estimate_kwargs)
         self._last_circuit = circuit
         self._last_estimator_result = estimator_result
         if return_state:
@@ -364,6 +463,8 @@ class BasicVQE:
         return float(estimator_result.energy), estimator_result
 
     def energy(self, params: np.ndarray) -> float:
+        if self.cost is not None:
+            return float(self.cost(self._normalize_params(params)))
         if self.ansatz is not None:
             value, _ = self._evaluate_circuit(params, return_state=False)
             return value
@@ -375,6 +476,8 @@ class BasicVQE:
 
     def parameter_shift_gradient(self, params: np.ndarray) -> np.ndarray:
         params = self._normalize_params(params)
+        if self.cost is not None:
+            return np.asarray(self.cost.grad(params), dtype=float).reshape(params.shape)
         return psr(self.energy, params)
 
     def run(
@@ -425,7 +528,7 @@ class BasicVQE:
             measurement_result=final_measurement,
             estimator_result=self._last_estimator_result,
             metadata={
-                "mode": "circuit" if self.ansatz is not None else "legacy_dense",
+                "mode": "qfun" if self.cost is not None else ("circuit" if self.ansatz is not None else "legacy_dense"),
                 "backend": getattr(self.backend, "name", None),
                 "shots": self.shots,
                 "noise_model": type(self.noise_model).__name__ if self.noise_model is not None else None,
@@ -469,7 +572,7 @@ class BasicVQE:
             estimator_result=self._last_estimator_result,
             optimizer_result=opt_result,
             metadata={
-                "mode": "circuit" if self.ansatz is not None else "legacy_dense",
+                "mode": "qfun" if self.cost is not None else ("circuit" if self.ansatz is not None else "legacy_dense"),
                 "backend": getattr(self.backend, "name", None),
                 "optimizer": type(optimizer).__name__,
                 "shots": self.shots,

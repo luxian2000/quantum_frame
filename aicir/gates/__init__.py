@@ -7,9 +7,15 @@ NEXT.md 第 7 节的第一片落地：门的目标比特数、参数个数、别
 
 from .registry import (
     canonical_gate_name,
+    gate_decomposition,
+    gate_generator,
+    gate_matrix,
+    gate_shift_rule,
     get_gate_spec,
+    parametric_pauli_gates,
     register_gate,
     registered_gate_names,
+    set_gate_matrix,
     unregister_gate,
 )
 from .spec import GateSpec
@@ -17,8 +23,14 @@ from .spec import GateSpec
 __all__ = [
     "GateSpec",
     "canonical_gate_name",
+    "gate_decomposition",
+    "gate_generator",
+    "gate_matrix",
+    "gate_shift_rule",
     "get_gate_spec",
+    "parametric_pauli_gates",
     "register_gate",
     "registered_gate_names",
+    "set_gate_matrix",
     "unregister_gate",
 ]

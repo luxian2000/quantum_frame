@@ -31,35 +31,40 @@ class QASRunConfig:
 
 @dataclass(frozen=True)
 class _Spec:
-    """Single method dispatch spec with lazy algorithm loading."""
+    """单个方法的分发规格：懒加载底层算法 + 需要的请求字段。
+
+    - ``loader``：返回底层 train/搜索函数（懒导入，避免顶层 Torch 依赖）。
+    - ``params``：透传给底层函数的 :class:`QASRunConfig` 字段名（同名映射）。
+    - ``required``：调用前必须非 ``None`` 的字段名。
+    """
 
     loader: Callable[[], Callable[..., Any]]
     params: tuple[str, ...]
     required: tuple[str, ...] = ()
 
 
-def _load(module: str, name: str, *, package: str = "..algorithms") -> Callable[[], Callable[..., Any]]:
+def _load(module: str, name: str) -> Callable[[], Callable[..., Any]]:
     def loader() -> Callable[..., Any]:
         import importlib
 
-        target = package if module == "" else f"{package}.{module}"
-        return getattr(importlib.import_module(target, __package__), name)
+        return getattr(importlib.import_module(f"..algorithms.{module}", __package__), name)
 
     return loader
 
 
+# 方法名 → 分发规格。``run`` 完全由此表驱动，无 if 链。
 _TABLE: dict[str, _Spec] = {
     "supernet": _Spec(_load("supernet", "train_supernet"), ("objective", "config", "dataset", "hamiltonian")),
     "supernet_classification": _Spec(_load("supernet", "classification_supernet"), ("config",)),
     "supernet_h2": _Spec(_load("supernet", "h2_vqe_supernet"), ("config",)),
     "ppo_rb": _Spec(
-        _load("PPO_RB", "ppo_rb_qas"),
+        _load("pporb", "ppo_rb_qas"),
         ("target_density_matrix", "epsilon", "config"),
         ("target_density_matrix", "epsilon"),
     ),
-    "ppr_dql": _Spec(_load("PPR_DQL", "train_ppr_dql"), ("target_state", "config", "policy_library"), ("target_state",)),
-    "crlqas": _Spec(_load("CRLQAS", "train_crlqas"), ("hamiltonian", "config"), ("hamiltonian",)),
-    "vqe_loop": _Spec(_load("", "run_vqe_qas_closed_loop", package="..vqe_loop"), ("config",), ("config",)),
+    "ppr_dql": _Spec(_load("pprdql", "train_ppr_dql"), ("target_state", "config", "policy_library"), ("target_state",)),
+    "crlqas": _Spec(_load("crlqas", "train_crlqas"), ("hamiltonian", "config"), ("hamiltonian",)),
+    "qdrats": _Spec(_load("qdrats", "train_qdrats"), ("hamiltonian", "config"), ("hamiltonian",)),
 }
 
 
@@ -84,12 +89,19 @@ def run(request: QASRunConfig | QASMethod, **kwargs: Any) -> Any:
 
     Examples:
         ``run("supernet", config=config.supernet(...))``
-        ``run("vqe_loop", config=config.vqe_loop(...))``
         ``run(QASRunConfig(method="ppr_dql", target_state=state))``
     """
 
     run_config = _as_run_config(request, kwargs)
     method = qas_config.canonical_method(run_config.method)
+
+    # 先查策略注册表（README §2.1）：命中则走 strategy.run，未命中回落到旧分发表。
+    from .strategies import get_strategy
+
+    strategy = get_strategy(method)
+    if strategy is not None:
+        return strategy.run(run_config)
+
     spec = _TABLE.get(method)
     if spec is None:
         raise ValueError(f"Unsupported QAS method: {run_config.method!r}")
@@ -110,6 +122,9 @@ def _as_run_config(request: QASRunConfig | QASMethod, kwargs: dict[str, Any]) ->
         return request
     return QASRunConfig(method=request, **kwargs)
 
+
+# import 副作用：注册内置策略（当前仅 supernet）。轻量，不在 import 期触 torch。
+from . import strategies as _strategies  # noqa: E402,F401
 
 __all__ = [
     "QASRunConfig",

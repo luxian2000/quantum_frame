@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable
 from typing import Any
 
@@ -9,6 +10,9 @@ import numpy as np
 
 from ...core.circuit import Circuit
 from ...ir import instruction_to_gate_dict
+
+_DEFAULT_MAX_ROUNDS = 64
+_DEFAULT_MAX_REORDER_HOPS = 8
 
 
 def _gate_family_from_name(name: str) -> str | None:
@@ -122,6 +126,26 @@ def _is_close_to_zero(value: Any) -> bool:
         return False
 
 
+def _excitation_key(gate: dict[str, Any]) -> tuple[str, tuple[int, ...]] | None:
+    """返回 excitation 门的 (类型, 操作数) 键；非 excitation 返回 ``None``。
+
+    ``single_excitation``/``double_excitation`` 是固定生成元的旋转门，角度可加
+    （``G(θ1)·G(θ2)=G(θ1+θ2)``），故同类型、同操作数（同顺序）的相邻门可合并。
+    """
+    gtype = gate.get("type")
+    if gtype == "single_excitation":
+        a, b = gate.get("qubit_1"), gate.get("qubit_2")
+        if a is None or b is None:
+            return None
+        return ("single_excitation", (int(a), int(b)))
+    if gtype == "double_excitation":
+        qubits = gate.get("qubits")
+        if qubits is None:
+            return None
+        return ("double_excitation", tuple(int(q) for q in qubits))
+    return None
+
+
 def _try_merge_rotation_at(gates: list[dict[str, Any]], index: int, gate: dict[str, Any]) -> bool:
     prev = gates[index]
     gf = _gate_family_from_name(gate.get("type", ""))
@@ -133,6 +157,18 @@ def _try_merge_rotation_at(gates: list[dict[str, Any]], index: int, gate: dict[s
         and not (prev.get("control_qubits") or [])
         and not (gate.get("control_qubits") or [])
     ):
+        try:
+            merged_param = prev.get("parameter", 0.0) + gate.get("parameter", 0.0)
+        except TypeError:
+            return False
+        if _is_close_to_zero(merged_param):
+            del gates[index]
+        else:
+            prev["parameter"] = merged_param
+        return True
+
+    exc_key = _excitation_key(gate)
+    if exc_key is not None and exc_key == _excitation_key(prev):
         try:
             merged_param = prev.get("parameter", 0.0) + gate.get("parameter", 0.0)
         except TypeError:
@@ -184,6 +220,30 @@ def _copy_gate(gate: dict[str, Any]) -> dict[str, Any]:
     return dict(instruction_to_gate_dict(gate))
 
 
+_QUBIT_INT_FIELDS = ("target_qubit", "qubit_1", "qubit_2")
+_QUBIT_LIST_FIELDS = ("qubits", "targets", "control_qubits")
+
+
+def remap_gate(gate: dict[str, Any], mapping) -> dict[str, Any]:
+    """返回 ``gate`` 的副本，把其中所有比特下标按 ``mapping`` 重映射。
+
+    ``mapping`` 可为 ``dict`` 或可调用对象（``old -> new``）。覆盖
+    ``target_qubit``/``qubit_1``/``qubit_2`` 单值字段与 ``qubits``/
+    ``targets``/``control_qubits`` 列表字段；其余字段原样保留。
+    """
+
+    fn = mapping.__getitem__ if hasattr(mapping, "__getitem__") else mapping
+    out = _copy_gate(gate)
+    for key in _QUBIT_INT_FIELDS:
+        if out.get(key) is not None:
+            out[key] = int(fn(int(out[key])))
+    for key in _QUBIT_LIST_FIELDS:
+        value = out.get(key)
+        if value is not None:
+            out[key] = [int(fn(int(q))) for q in value]
+    return out
+
+
 def circuit_from_gates(circuit: Circuit, gates: Iterable[dict[str, Any]]) -> Circuit:
     return Circuit(
         *[_copy_gate(gate) for gate in gates],
@@ -225,3 +285,42 @@ def commute_single_qubit_gates(
             continue
         out.append(gate)
     return out
+
+
+def _optimize_gate_dict_list(
+    gates: Iterable[dict[str, Any]], *, max_reorder_hops: int = _DEFAULT_MAX_REORDER_HOPS
+) -> list[dict[str, Any]]:
+    """单趟交错执行 commute/cancel/merge 规则。"""
+
+    out: list[dict[str, Any]] = []
+    for g in gates:
+        gate = copy.deepcopy(g)
+        if _is_single_qubit_gate(gate) and _consume_single_qubit_gate_by_lookback(
+            out, gate, max_reorder_hops=max_reorder_hops
+        ):
+            continue
+        if out and _try_consume_against_gate_at(out, len(out) - 1, gate):
+            continue
+        out.append(gate)
+    return out
+
+
+def optimize_gates(
+    gates: Iterable[dict[str, Any]],
+    *,
+    max_rounds: int = _DEFAULT_MAX_ROUNDS,
+    max_reorder_hops: int = _DEFAULT_MAX_REORDER_HOPS,
+) -> list[dict[str, Any]]:
+    """对门字典列表反复应用本地化简规则，直到不动点。
+
+    本地化简规则的单一来源；``optimize_basic`` 的 dict/dag 路径与
+    transpile 的 pass 流水线都从这里取规则。
+    """
+
+    current = [instruction_to_gate_dict(gate) for gate in copy.deepcopy(list(gates))]
+    for _ in range(max_rounds):
+        nxt = _optimize_gate_dict_list(current, max_reorder_hops=max_reorder_hops)
+        if nxt == current:
+            return nxt
+        current = nxt
+    return current

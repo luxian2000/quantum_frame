@@ -4,6 +4,11 @@ import unittest
 
 import numpy as np
 
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None
+
 from aicir import Circuit, Parameter, cnot, crx, cry, crz, hadamard, ms_gate, rx, rxx, rzz, swap, toffoli, u2, u3
 from aicir.core.io.json_io import (
     circuit_from_json,
@@ -62,6 +67,7 @@ class TestJsonQasmIO(unittest.TestCase):
         self.assertEqual(rebuilt.gates[1]["parameter"].dtype, matrix.dtype)
         np.testing.assert_allclose(rebuilt.gates[1]["parameter"], matrix)
 
+    @unittest.skipIf(torch is None, "torch not installed")
     def test_json_serializes_torch_tensor_parameters_as_numeric_values(self):
         circ = Circuit(rx(torch.tensor(np.pi / 7), 0), u3(0.1, torch.tensor(0.2), 0.3, 0), n_qubits=1)
 

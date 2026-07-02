@@ -22,10 +22,10 @@ A from-scratch quantum circuit simulator and quantum-algorithm framework for Pyt
 
 
 - **Unified quantum state** — `State` class handles pure states (amplitude vector) and mixed states (density matrix) with a consistent API
-- **Rich gate library** — single-qubit, rotation, controlled, multi-target, and multi-control gates; typed `Operation` IR with construction-time validation
+- **Rich gate library** — single-qubit, rotation, controlled, multi-target, multi-control, and particle-conserving excitation gates (`single_excitation`/Givens, `double_excitation`); typed `Operation` IR with construction-time validation
 - **Flexible measurement** — in-circuit Pauli projection, terminal readout, shot sampling, exact mode, state snapshots, and partial traces
 - **Variational algorithms** — `BasicVQE`, `run_vqe`, QAOA, VQD, SSVQE with built-in ansatz templates (HEA, trapped-ion HEA-TI)
-- **QML gradients** — parameter-shift (`psr`, `spsr`, `multipsr`), finite-difference, SPSA, quantum natural gradient, and PyTorch `autograd`
+- **QML gradients** — parameter-shift (`psr`, `spsr`, `multipsr`, four-term `psr4` for excitation gates), finite-difference, SPSA, quantum natural gradient, and PyTorch `autograd`
 - **Quantum architecture search** — weight-shared supernet, CRLQAS, PPR\_DQL, PPO\_RB (requires PyTorch)
 - **Noise simulation** — depolarizing, bit/phase flip, amplitude damping, ion-trap noise via density-matrix evolution
 - **OpenQASM I/O** — round-trip import/export for OpenQASM 2.0 and 3.0; Qiskit, PennyLane, and WuYue interop
@@ -160,6 +160,7 @@ from aicir import (
     cx, cnot, cy, cz,
     crx, cry, crz,
     swap, rzz, rxx, ms_gate,
+    single_excitation, double_excitation,  # 粒子数守恒激发门（givens 为 single_excitation 别名）
     toffoli, ccnot,
     u2, u3,
     measure,     # 线路内联合 Pauli 投影测量标记，返回 Measurement
@@ -201,9 +202,9 @@ from aicir import (
 from aicir.qml import psr, spsr, multipsr
 
 # 线路编译与优化 pass pipeline
-from aicir.transpile import PassManager, default_optimization_pipeline
+from aicir.transpile import PassManager, optimize, optimize_basic, optimize_circuit
 
-# 门元信息注册表（GateSpec）
+# 门元信息注册表（GateSpec：num_qubits/num_params/num_controls/generator/decomposition）
 from aicir.gates import GateSpec, get_gate_spec, register_gate, canonical_gate_name
 
 # Sampler / Estimator primitives（统一执行入口）
@@ -368,8 +369,8 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 | `rz(θ, q)`               | 角度, target_qubit               | Rz 旋转门       |
 | `u2(φ, λ, q)`           | phi, lambda, target_qubit        | U2 门           |
 | `u3(θ, φ, λ, q)`       | theta, phi, lambda, target_qubit | U3 通用单比特门 |
-| `cx(t, [c])`              | target, control_list             | CNOT（控制-X）  |
-| `cnot(t, [c])`            | target, control_list             | 同 cx           |
+| `cx(t, [c])`              | target（单个或列表）, control_list | CNOT（控制-X）；目标支持单个或多个（多目标等价于多个单目标 CX） |
+| `cnot(t, [c])`            | target（单个或列表）, control_list | 同 cx           |
 | `cy(t, [c])`              | target, control_list             | 控制-Y          |
 | `cz(t, [c])`              | target, control_list             | 控制-Z          |
 | `crx(θ, t, [c])`         | 角度, target, control_list       | 受控 Rx         |
@@ -379,6 +380,9 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 | `rzz(θ, q1, q2)`         | 角度, qubit_1, qubit_2           | ZZ 旋转门       |
 | `rxx(θ, q1, q2)`         | 角度, qubit_1, qubit_2           | XX 旋转门       |
 | `ms_gate(θ, q1, q2)`     | 角度, qubit_1, qubit_2           | `rxx` 的别名  |
+| `single_excitation(θ, q1, q2)` | 角度, qubit_1, qubit_2     | 粒子数守恒 Givens 单激发门 |
+| `givens(θ, q1, q2)`      | 角度, qubit_1, qubit_2           | `single_excitation` 的别名 |
+| `double_excitation(θ, q1, q2, q3, q4)` | 角度, 四个 qubit  | 粒子数守恒双激发门（耦合 \|0011⟩↔\|1100⟩） |
 | `toffoli(t, [c0,c1,...])` | target, control_list             | 多控制 X 门     |
 | `ccnot(t, [c0,c1,...])`   | target, control_list             | 同 toffoli      |
 | `measure(q...)`           | qubit list                       | 线路内测量标记  |
@@ -415,7 +419,7 @@ print(U.shape)   # (4, 4)
 
 ```python
 import math
-from aicir import Circuit, rx, ry, u2, u3, crx, rzz, rxx, swap, toffoli
+from aicir import Circuit, rx, ry, u2, u3, crx, rzz, rxx, swap, toffoli, single_excitation, double_excitation
 
 cir = Circuit(
     rx(math.pi / 2, 0),              # Rx(π/2) 作用在 qubit 0
@@ -427,7 +431,20 @@ cir = Circuit(
     rxx(math.pi / 3, 0, 1),          # RXX / Mølmer-Sørensen 作用在 qubit0 和 qubit1
     swap(0, 1),                      # SWAP qubit0 和 qubit1
     toffoli(2, [0, 1]),              # Toffoli，控制=[0,1]，目标=qubit2
+    single_excitation(0.3, 0, 1),    # 粒子数守恒 Givens 单激发，qubit0/qubit1
     n_qubits=3,
+)
+```
+
+`double_excitation(θ, q1, q2, q3, q4)`（4 比特、粒子数守恒、耦合 |0011⟩↔|1100⟩）同样可直接构造，配合 HF 参考态做化学 VQE：
+
+```python
+from aicir import Circuit, double_excitation, pauli_x
+
+cir = Circuit(
+    pauli_x(1), pauli_x(3),          # 制备 HF 行列式 |0101⟩
+    double_excitation(0.2, 0, 2, 1, 3),  # 双激发耦合 |0101⟩↔|1010⟩
+    n_qubits=4,
 )
 ```
 
@@ -1061,11 +1078,11 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 | `aicir/gates`             | [`aicir/gates/README.md`](aicir/gates/README.md)                         | GateSpec 门元信息注册表：目标比特数/参数个数/别名/QASM 名/绘图符号的单一来源。             |
 | `aicir/metrics`           | [`aicir/metrics/README.md`](aicir/metrics/README.md)                     | 任务无关的量子线路评分指标，供 QAS、VQE ansatz 筛选等架构层任务复用。                      |
 | `aicir/optimization/qubo` | [`aicir/optimization/qubo/README.md`](aicir/optimization/qubo/README.md) | QUBO 建模、Ising/Hamiltonian 转换、BasicQAOA 矩阵入口与结果解码。                          |
-| `aicir/optimizer`         | [`aicir/optimizer/README.md`](aicir/optimizer/README.md)                 | `aicir.optimizer.circuit` 的线路化简、旋转门合并和固定点优化策略。                       |
+| `aicir/optimizer`         | [`aicir/optimizer/README.md`](aicir/optimizer/README.md)                 | VQE/VQA 经典参数优化器（`Adam`/`SPSA`/`minimize` 等）；线路结构优化已迁至 `aicir.transpile`。 |
 | `aicir/primitives`        | [`aicir/primitives/README.md`](aicir/primitives/README.md)               | Sampler/Estimator primitives 统一执行入口与 `SampleResult`/`EstimateResult` 结果对象。 |
 | `aicir/qas`               | [`aicir/qas/README.md`](aicir/qas/README.md)                             | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。                                    |
 | `aicir/qml`               | [`aicir/qml/README.md`](aicir/qml/README.md)                             | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。                   |
-| `aicir/transpile`         | [`aicir/transpile/README.md`](aicir/transpile/README.md)                 | 线路编译与优化流水线，包含 `PassManager` 和本地线路化简 pass。                           |
+| `aicir/transpile`         | [`aicir/transpile/README.md`](aicir/transpile/README.md)                 | 线路编译与优化流水线：`PassManager`、`optimize` 入口、多格式 `optimize_basic`/`optimize_circuit` 与本地化简 pass。 |
 | `aicir/visual`           | [`aicir/visual/README.md`](aicir/visual/README.md)                     | 线路图、态向量/概率分布、密度矩阵热力图，以及 QAS / metrics 结果可视化。 |
 | `aicir/vqc`               | [`aicir/vqc/README.md`](aicir/vqc/README.md)                             | VQE、QAOA、VQD、SSVQE 等基础变分算法实现，以及可复用的参数化线路 ansatz 模板。             |
 | `demos`                   | [`demos/README.md`](demos/README.md)                                     | 演示 `aicir.visual` 模块的示例脚本，涵盖线路、态向量、密度矩阵和 QAS 结果可视化。        |

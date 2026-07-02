@@ -143,6 +143,212 @@ class _NpuExpectationFn(torch.autograd.Function):
         return grad_state, None
 
 
+def _pauli_signs_npu(basis_indices: torch.Tensor, sign_mask: int) -> torch.Tensor | None:
+    """(-1)^{popcount(basis_index & sign_mask)}，float32，NPU 安全。"""
+    if not sign_mask:
+        return None
+    parity = torch.zeros_like(basis_indices, dtype=torch.bool)
+    mask, bit = int(sign_mask), 0
+    while mask:
+        if mask & 1:
+            parity = torch.logical_xor(parity, ((basis_indices >> bit) & 1).bool())
+        mask >>= 1
+        bit += 1
+    ones = torch.ones_like(basis_indices, dtype=torch.float32)
+    return torch.where(parity, -ones, ones)
+
+
+def _pauli_apply_npu(
+    state_re: torch.Tensor,
+    state_im: torch.Tensor,
+    basis_indices: torch.Tensor,
+    flip_mask: int,
+    sign_mask: int,
+    y_phase: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """计算 (P_k |ψ⟩) 的实/虚部（全程 float32，无 complex64 节点）。"""
+    if flip_mask:
+        idx = torch.bitwise_xor(basis_indices, flip_mask)
+        mr, mi = state_re.index_select(0, idx), state_im.index_select(0, idx)
+    else:
+        mr, mi = state_re, state_im
+    if sign_mask:
+        s = _pauli_signs_npu(basis_indices, sign_mask)
+        mr, mi = mr * s, mi * s
+    # 乘以 i^y_phase
+    if y_phase == 0:
+        return mr, mi
+    if y_phase == 1:   # ×i
+        return -mi, mr
+    if y_phase == 2:   # ×(−1)
+        return -mr, -mi
+    return mi, -mr     # ×(−i)
+
+
+class _NpuHamiltonianExpectationFn(torch.autograd.Function):
+    """Re⟨ψ|H|ψ⟩（Pauli 字符串求和 Hamiltonian）的 NPU 安全自动微分包装。
+
+    核心思路：state 在自动微分图中只出现一次（作为本 Function 的输入），
+    1313 次 Pauli 项的梯度累加全部在本 Function 的 backward 内以 float32 完成，
+    最终一次性组装成 complex64 梯度返回——没有跨 autograd 节点的 complex64 add，
+    彻底绕开 Ascend 缺失的 aclnnAdd(DT_COMPLEX64)。
+
+    backward 公式：grad_state = 2 · go · (H |ψ⟩)，其中
+        (H|ψ⟩)[m] = Σ_k c_k (P_k|ψ⟩)[m]
+    实/虚部分别在 float32 累加。
+    """
+
+    @staticmethod
+    def forward(ctx, state, basis_indices, pauli_cache):
+        ctx.save_for_backward(state, basis_indices)
+        ctx.pauli_cache = pauli_cache
+        s_re = torch.real(state)
+        s_im = torch.imag(state)
+        energy = torch.zeros((), dtype=torch.float32, device=state.device)
+        for flip_mask, sign_mask, y_phase, c_re, c_im in pauli_cache:
+            if flip_mask:
+                idx = torch.bitwise_xor(basis_indices, flip_mask)
+                m_re = s_re.index_select(0, idx)
+                m_im = s_im.index_select(0, idx)
+            else:
+                m_re, m_im = s_re, s_im
+            ov_re = m_re * s_re + m_im * s_im
+            ov_im = m_re * s_im - m_im * s_re
+            if sign_mask:
+                sg = _pauli_signs_npu(basis_indices, sign_mask)
+                ov_re, ov_im = ov_re * sg, ov_im * sg
+            if y_phase == 0:
+                t_re, t_im = ov_re.sum(), ov_im.sum()
+            elif y_phase == 1:
+                t_re, t_im = -ov_im.sum(), ov_re.sum()
+            elif y_phase == 2:
+                t_re, t_im = -ov_re.sum(), -ov_im.sum()
+            else:
+                t_re, t_im = ov_im.sum(), -ov_re.sum()
+            energy = energy + c_re * t_re - c_im * t_im
+        return energy
+
+    @staticmethod
+    def backward(ctx, go):
+        state, basis_indices = ctx.saved_tensors
+        s_re = torch.real(state)
+        s_im = torch.imag(state)
+        dim = state.numel()
+        dev = state.device
+        g_re = torch.zeros(dim, dtype=torch.float32, device=dev)
+        g_im = torch.zeros(dim, dtype=torch.float32, device=dev)
+        go2 = go * 2.0  # d(Re⟨ψ|H|ψ⟩)/dψ = 2·Re(H|ψ⟩), PyTorch 复数梯度惯例
+        for flip_mask, sign_mask, y_phase, c_re, c_im in ctx.pauli_cache:
+            pk_re, pk_im = _pauli_apply_npu(s_re, s_im, basis_indices, flip_mask, sign_mask, y_phase)
+            ck_pk_re = c_re * pk_re - c_im * pk_im
+            ck_pk_im = c_re * pk_im + c_im * pk_re
+            g_re = g_re + go2 * ck_pk_re   # float32 累加，无 complex64 add
+            g_im = g_im + go2 * ck_pk_im
+        # 一次性组装 complex64——不是累加，是赋值
+        return torch.complex(g_re, g_im).reshape(state.shape), None, None
+
+
+class _NpuLocalGateApplyFn(torch.autograd.Function):
+    """局部量子门（gather→matmul→scatter）的 NPU 自动微分安全包装。
+
+    ``_apply_local_matrix_to_state_flat`` 对 NPU 复数态做：
+        gathered = complex(real(flat)[idx], imag(flat)[idx])  # flat 用两次
+        updated  = matmul(local_matrix, gathered)
+        out_re[idx] = real(updated)                          # updated 用两次
+        out_im[idx] = imag(updated)
+
+    flat 和 updated 各在图中出现两次（.real + .imag），backward 需对 complex64
+    张量累加两次梯度 → aclnnAdd(DT_COMPLEX64) 报错。
+
+    本 Function 将整个流程包成一次原子操作：flat 和 local_matrix 各只出现一次，
+    所有 gather/matmul/scatter 全程以 float32 实/虚部拆解完成，backward 最后
+    一次性组装 complex64 梯度——无跨节点的 complex64 累加。
+    """
+
+    @staticmethod
+    def _mat_re_im(local_matrix):
+        """拆分门矩阵实/虚部；实数门（如 RY/H/X）矩阵本身是 float32，虚部为 0。"""
+        if torch.is_complex(local_matrix):
+            return torch.real(local_matrix), torch.imag(local_matrix)
+        return local_matrix, None
+
+    @staticmethod
+    def forward(ctx, flat, local_matrix, indices):
+        # flat: (dim,) complex64; local_matrix: (k,k) complex64 或实数 float32; indices: (k, base) long
+        ctx.save_for_backward(flat, local_matrix, indices)
+        idx = indices.reshape(-1)
+
+        s_re = torch.real(flat)
+        s_im = torch.imag(flat)
+        g_re = s_re[idx].reshape(indices.shape)
+        g_im = s_im[idx].reshape(indices.shape)
+
+        m_re, m_im = _NpuLocalGateApplyFn._mat_re_im(local_matrix)
+        if m_im is None:
+            upd_re = torch.matmul(m_re, g_re)
+            upd_im = torch.matmul(m_re, g_im)
+        else:
+            upd_re = torch.matmul(m_re, g_re) - torch.matmul(m_im, g_im)
+            upd_im = torch.matmul(m_re, g_im) + torch.matmul(m_im, g_re)
+
+        dim = flat.shape[0]
+        out_re = torch.empty(dim, dtype=torch.float32, device=flat.device)
+        out_im = torch.empty(dim, dtype=torch.float32, device=flat.device)
+        out_re[idx] = upd_re.reshape(-1)
+        out_im[idx] = upd_im.reshape(-1)
+        return torch.complex(out_re, out_im)
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        flat, local_matrix, indices = ctx.saved_tensors
+        idx = indices.reshape(-1)
+
+        # grad_out 是 complex64，但 .real/.imag 是 float32 提取（在 backward 内，无追踪）
+        grad_upd_re = torch.real(grad_out)[idx].reshape(indices.shape)
+        grad_upd_im = torch.imag(grad_out)[idx].reshape(indices.shape)
+
+        # 重新 gather 用于 grad_local 计算（saved flat，不追踪）
+        s_re = torch.real(flat)
+        s_im = torch.imag(flat)
+        g_re = s_re[idx].reshape(indices.shape)
+        g_im = s_im[idx].reshape(indices.shape)
+
+        m_re, m_im = _NpuLocalGateApplyFn._mat_re_im(local_matrix)
+
+        # ∂L/∂m_re = grad_upd_re @ g_re^T + grad_upd_im @ g_im^T
+        # ∂L/∂m_im = −grad_upd_re @ g_im^T + grad_upd_im @ g_re^T
+        grad_m_re = (
+            torch.matmul(grad_upd_re, g_re.t()) + torch.matmul(grad_upd_im, g_im.t())
+        )
+        if m_im is None:
+            # 实数门：梯度也为实数（虚部分量不存在）
+            grad_local = grad_m_re
+            grad_g_re = torch.matmul(m_re.t(), grad_upd_re)
+            grad_g_im = torch.matmul(m_re.t(), grad_upd_im)
+        else:
+            grad_m_im = (
+                -torch.matmul(grad_upd_re, g_im.t()) + torch.matmul(grad_upd_im, g_re.t())
+            )
+            grad_local = torch.complex(grad_m_re, grad_m_im)  # 一次构造，非累加
+
+            # ∂L/∂g_re = m_re^T @ grad_upd_re + m_im^T @ grad_upd_im
+            # ∂L/∂g_im = −m_im^T @ grad_upd_re + m_re^T @ grad_upd_im
+            grad_g_re = torch.matmul(m_re.t(), grad_upd_re) + torch.matmul(m_im.t(), grad_upd_im)
+            grad_g_im = (
+                torch.matmul(-m_im.t(), grad_upd_re) + torch.matmul(m_re.t(), grad_upd_im)
+            )
+
+        # scatter 回 flat 空间（float32 scatter_add，无 complex64 add）
+        dim = flat.shape[0]
+        grad_flat_re = torch.zeros(dim, dtype=torch.float32, device=flat.device)
+        grad_flat_im = torch.zeros(dim, dtype=torch.float32, device=flat.device)
+        grad_flat_re.scatter_add_(0, idx, grad_g_re.reshape(-1))
+        grad_flat_im.scatter_add_(0, idx, grad_g_im.reshape(-1))
+
+        grad_flat = torch.complex(grad_flat_re, grad_flat_im)  # 一次构造，非累加
+        return grad_flat, grad_local, None  # indices 无梯度
+
+
 class NPUBackend(GPUBackend):
     """NPU-first backend for Ascend devices, compatible with GPUBackend API."""
 
@@ -164,6 +370,9 @@ class NPUBackend(GPUBackend):
         self._fallback_to_cpu = bool(fallback_to_cpu)
         self._runtime_context = None
         self._local_matrix_cache = {}
+        # 能力 sheet 派生的执行参数；裸构造保持现状安全默认（见 NPUBackend.caps）。
+        self._max_qubits: int | None = None
+        self._needs_real_imag: bool = True
 
     @classmethod
     def from_distributed_env(
@@ -212,6 +421,35 @@ class NPUBackend(GPUBackend):
             process_group_backend=pg_backend,
         )
         return backend
+
+    @classmethod
+    def caps(cls, capabilities, *, device=None, dtype=None, fallback_to_cpu: bool = True):
+        """从 ``npu_probe`` 的能力 sheet 构造后端。
+
+        显式注入：读 ``capabilities``（``NpuCapabilities``）填充执行参数
+        （``max_qubits`` 用于 sizing guard，``needs_real_imag_decomp`` 备用），
+        本身不探测。``device`` 缺省取 ``capabilities.device``。
+        """
+        backend = cls(
+            dtype=dtype,
+            device=device if device is not None else capabilities.device,
+            fallback_to_cpu=fallback_to_cpu,
+        )
+        backend._max_qubits = capabilities.max_qubits
+        backend._needs_real_imag = bool(capabilities.needs_real_imag_decomp)
+        return backend
+
+    def ensure_capacity(self, n_qubits: int) -> None:
+        """单设备容量预检：``n_qubits`` 超过能力 sheet 的 ``max_qubits`` 时抛错。
+
+        ``max_qubits`` 为 ``None``（裸构造或无内存数据）时不守卫。防止超容分配
+        触发 OOM/SIGKILL。
+        """
+        if self._max_qubits is not None and int(n_qubits) > self._max_qubits:
+            raise ValueError(
+                f"n_qubits={n_qubits} 超过该 NPU 单设备容量 max_qubits={self._max_qubits}"
+                f"（2^n complex64 态向量放不下）"
+            )
 
     @property
     def distributed_initialized(self) -> bool:
@@ -423,6 +661,20 @@ class NPUBackend(GPUBackend):
         """
         return self.matmul(local_matrix, state_block)
 
+    def apply_flat_gate(
+        self,
+        flat: "torch.Tensor",
+        local_matrix: "torch.Tensor",
+        indices: "torch.Tensor",
+    ) -> "torch.Tensor":
+        """局部量子门 gather→matmul→scatter 的 NPU autograd 安全路径。
+
+        替代 _apply_local_matrix_to_state_flat 中的 npu_complex 分支：
+        flat 和 local_matrix 各只作为图的一条输入边，backward 全程 float32，
+        消除 aclnnAdd(DT_COMPLEX64) 错误。
+        """
+        return _NpuLocalGateApplyFn.apply(flat, local_matrix, indices)
+
     def eye(self, dim: int):
         """NPU workaround: build complex identity from real eye when complex eye kernel is unsupported."""
         if getattr(self._device, "type", None) == "npu" and self._dtype in (torch.complex64, torch.complex128):
@@ -434,6 +686,7 @@ class NPUBackend(GPUBackend):
 
     def zeros_state(self, n_qubits: int):
         """NPU workaround: avoid complex in-place write path when initializing |0...0>."""
+        self.ensure_capacity(n_qubits)
         if getattr(self._device, "type", None) == "npu" and self._dtype in (torch.complex64, torch.complex128):
             dim = 1 << n_qubits
             real_dtype = torch.float32 if self._dtype == torch.complex64 else torch.float64
@@ -552,6 +805,19 @@ class NPUBackend(GPUBackend):
                 probs = probs / total
             return probs
         return super().measure_probs(state)
+
+    def hamiltonian_expectation_pauli(
+        self,
+        state: torch.Tensor,
+        basis_indices: torch.Tensor,
+        pauli_cache: list,
+    ) -> torch.Tensor:
+        """Re⟨ψ|H|ψ⟩（Pauli 项列表形式 Hamiltonian），NPU autodiff 安全。
+
+        用 _NpuHamiltonianExpectationFn 包装，使 state 在图中只出现一次，
+        避免 1313 次 complex64 梯度累加（aclnnAdd 缺失）。
+        """
+        return _NpuHamiltonianExpectationFn.apply(state.reshape(-1), basis_indices, pauli_cache)
 
     @property
     def runtime_context(self):

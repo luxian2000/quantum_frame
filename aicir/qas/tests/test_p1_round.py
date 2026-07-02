@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
-from aicir.qas.primitives.ansatz import OperatorSequenceAnsatzGene, SupernetAnsatzGene
+from aicir.qas.library.ansatz import OperatorSequenceAnsatzGene, SupernetAnsatzGene
 
 
 def make_gene(layers=2):

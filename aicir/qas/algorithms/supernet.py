@@ -41,9 +41,21 @@ import torch
 
 from ...backends.gpu_backend import GPUBackend
 from ...backends.npu_backend import NPUBackend
-from ...operators import Hamiltonian
-from ...core.circuit import Circuit, cx, hadamard, rx, ry, rz, rzz
+from ...core.operators import Hamiltonian
+from ...core.circuit import (
+    Circuit,
+    cx,
+    double_excitation,
+    hadamard,
+    pauli_x,
+    rx,
+    ry,
+    rz,
+    rzz,
+    single_excitation,
+)
 from ...core.gates import apply_gate_to_state, gate_to_matrix
+from ...gates import canonical_gate_name, get_gate_spec
 from ...ir import circuit_instructions
 from ...qml.deriv import psr
 from ..core.sharding import (
@@ -68,65 +80,116 @@ ParameterKey = tuple[str, int, int, tuple[str, ...], int, str, int]
 _NO_TWO_QUBIT = "none"
 
 
-@dataclass(frozen=True)
-class GateSpec:
-    """Builder + arity metadata for one searchable gate.
+# 可搜索的门 token：搜索空间字母表（SupernetConfig 公开面），非门定义。
+_SINGLE_QUBIT_TOKENS = ("i", "h", "rx", "ry", "rz")
+_TWO_QUBIT_TOKENS = ("cx", "rzz", "single_excitation")
+_FOUR_QUBIT_TOKENS = ("double_excitation",)
 
-    ``n_params`` is the number of trainable angles the gate owns: 0 for fixed
-    gates (the identity placeholder ``i`` and ``cx``) and 1 for the rotations
-    ``rx/ry/rz`` and the parameterized two-qubit ``rzz``. ``builder`` turns a
-    parameter list plus a qubit tuple into an aicir gate dict, or returns
-    ``None`` for a no-op (used by ``i`` so that no gate is emitted at all).
-    """
-
-    name: str
-    n_params: int
-    arity: int
-    builder: Callable[[Sequence[Any], Sequence[int]], dict[str, Any] | None]
-
-
-# Scoped single-qubit gate set: identity placeholder + the three Pauli rotations.
-_SINGLE_QUBIT_GATES: dict[str, GateSpec] = {
-    "i": GateSpec("i", 0, 1, lambda params, qubits: None),
-    "h": GateSpec("h", 0, 1, lambda params, qubits: hadamard(int(qubits[0]))),
-    "rx": GateSpec("rx", 1, 1, lambda params, qubits: rx(params[0], target_qubit=int(qubits[0]))),
-    "ry": GateSpec("ry", 1, 1, lambda params, qubits: ry(params[0], target_qubit=int(qubits[0]))),
-    "rz": GateSpec("rz", 1, 1, lambda params, qubits: rz(params[0], target_qubit=int(qubits[0]))),
+# 搜索 token → aicir 规范门名。"i" 表示"该槽不放门"，故不在表内。
+_TOKEN_CANONICAL: dict[str, str] = {
+    "h": "hadamard",
+    "rx": "rx",
+    "ry": "ry",
+    "rz": "rz",
+    "cx": "cx",
+    "rzz": "rzz",
+    "single_excitation": "single_excitation",
+    "givens": "single_excitation",
+    "double_excitation": "double_excitation",
 }
 
-# Scoped two-qubit gate set: fixed CNOT entangler + trainable ZZ rotation.
-_TWO_QUBIT_GATES: dict[str, GateSpec] = {
-    "cx": GateSpec(
-        "cx",
-        0,
-        2,
-        lambda params, qubits: cx(target_qubit=int(qubits[1]), control_qubits=[int(qubits[0])]),
-    ),
-    "rzz": GateSpec(
-        "rzz",
-        1,
-        2,
-        lambda params, qubits: rzz(params[0], qubit_1=int(qubits[0]), qubit_2=int(qubits[1])),
-    ),
-}
+# 单比特旋转 token → aicir.core 工厂；门语义全部来自 aicir，本模块不定义门。
+_SINGLE_ROTATION_FACTORY = {"rx": rx, "ry": ry, "rz": rz}
+
+
+def _token_n_params(token: str) -> int:
+    """该 token 的可训练角度数；取自 aicir.gates 注册表（"i" 无门、0 个）。"""
+    if token == "i":
+        return 0
+    return int(get_gate_spec(_TOKEN_CANONICAL[token]).num_params)
+
+
+def _build_single_gate(token: str, params: Sequence[Any], qubit: int) -> dict[str, Any] | None:
+    """构造单比特门（经 aicir.core 工厂）；"i" 不放门，返回 None。"""
+    if token == "i":
+        return None
+    canonical = _TOKEN_CANONICAL[token]
+    if canonical == "hadamard":
+        return hadamard(int(qubit))
+    return _SINGLE_ROTATION_FACTORY[canonical](params[0], target_qubit=int(qubit))
+
+
+def _build_two_qubit_gate(
+    token: str, params: Sequence[Any], control: int, target: int
+) -> dict[str, Any]:
+    """构造双比特门（经 aicir.core 工厂）；控制/目标拆分由注册表 num_controls 驱动。"""
+    canonical = _TOKEN_CANONICAL[token]
+    if canonical == "single_excitation":
+        return single_excitation(params[0], qubit_1=int(control), qubit_2=int(target))
+    n_controls = int(get_gate_spec(canonical).num_controls)
+    ordered = (int(control), int(target))
+    controls = ordered[:n_controls]
+    targets = ordered[n_controls:]
+    if canonical == "cx":
+        return cx(target_qubit=targets[0], control_qubits=list(controls))
+    return rzz(params[0], qubit_1=targets[0], qubit_2=targets[1])
+
+
+def _build_four_qubit_gate(
+    token: str, params: Sequence[Any], q0: int, q1: int, q2: int, q3: int
+) -> dict[str, Any]:
+    canonical = _TOKEN_CANONICAL[token]
+    if canonical == "double_excitation":
+        return double_excitation(params[0], int(q0), int(q1), int(q2), int(q3))
+    raise ValueError(f"unsupported four-qubit supernet token {token!r}")
 
 
 def _normalize_single_gate(name: str) -> str:
     gate = str(name).strip().lower()
-    if gate not in _SINGLE_QUBIT_GATES:
+    if gate not in _SINGLE_QUBIT_TOKENS:
         raise ValueError(
-            f"supernet single-qubit gates are {tuple(_SINGLE_QUBIT_GATES)}; got {name!r}"
+            f"supernet single-qubit gates are {tuple(_SINGLE_QUBIT_TOKENS)}; got {name!r}"
+        )
+    if gate != "i" and get_gate_spec(_TOKEN_CANONICAL[gate]) is None:
+        raise ValueError(
+            f"supernet single-qubit token {name!r} maps to an unregistered aicir gate"
         )
     return gate
 
 
 def _normalize_two_qubit_gate(name: str) -> str:
     gate = str(name).strip().lower()
-    if gate not in _TWO_QUBIT_GATES:
+    gate = _TOKEN_CANONICAL.get(gate, canonical_gate_name(gate))
+    if gate not in _TWO_QUBIT_TOKENS:
         raise ValueError(
-            f"supernet two-qubit gates are {tuple(_TWO_QUBIT_GATES)}; got {name!r}"
+            f"supernet two-qubit gates are {tuple(_TWO_QUBIT_TOKENS)}; got {name!r}"
+        )
+    if get_gate_spec(_TOKEN_CANONICAL[gate]) is None:
+        raise ValueError(
+            f"supernet two-qubit token {name!r} maps to an unregistered aicir gate"
         )
     return gate
+
+
+def _normalize_four_qubit_gate(name: str) -> str:
+    gate = str(name).strip().lower()
+    gate = _TOKEN_CANONICAL.get(gate, canonical_gate_name(gate))
+    if gate not in _FOUR_QUBIT_TOKENS:
+        raise ValueError(
+            f"supernet four-qubit gates are {tuple(_FOUR_QUBIT_TOKENS)}; got {name!r}"
+        )
+    if get_gate_spec(_TOKEN_CANONICAL[gate]) is None:
+        raise ValueError(
+            f"supernet four-qubit token {name!r} maps to an unregistered aicir gate"
+        )
+    return gate
+
+
+def _normalize_four_qubit_choice(value: Any) -> str:
+    name = str(value).strip().lower()
+    if name in ("", _NO_TWO_QUBIT, "i", "identity"):
+        return _NO_TWO_QUBIT
+    return _normalize_four_qubit_gate(name)
 
 
 def _normalize_two_qubit_choice(value: Any) -> str:
@@ -159,8 +222,12 @@ class SupernetConfig:
     single_qubit_gates: tuple[str, ...] = ("i", "h", "rx", "ry", "rz")
     two_qubit_gates: tuple[str, ...] = ("cx", "rzz")
     two_qubit_pairs: tuple[tuple[int, int], ...] = ((0, 1), (0, 2), (1, 2))
+    four_qubit_gates: tuple[str, ...] = ()
+    four_qubit_groups: tuple[tuple[int, int, int, int], ...] = ()
+    hf_occupied_qubits: tuple[int, ...] = ()
     search_single_qubit_gates: bool = True
     search_two_qubit_gates: bool = True
+    search_four_qubit_gates: bool = True
     supernet_num: int = 1
     supernet_steps: int = 100
     ranking_num: int = 50
@@ -184,12 +251,15 @@ class SupernetConfig:
 class LayerArchitecture:
     single_qubit_gates: tuple[str, ...]
     two_qubit_choices: tuple[str, ...]
+    four_qubit_choices: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         single = tuple(_normalize_single_gate(gate) for gate in self.single_qubit_gates)
         choices = tuple(_normalize_two_qubit_choice(choice) for choice in self.two_qubit_choices)
+        four_choices = tuple(_normalize_four_qubit_choice(choice) for choice in self.four_qubit_choices)
         object.__setattr__(self, "single_qubit_gates", single)
         object.__setattr__(self, "two_qubit_choices", choices)
+        object.__setattr__(self, "four_qubit_choices", four_choices)
 
     @property
     def two_qubit_mask(self) -> tuple[bool, ...]:
@@ -265,7 +335,13 @@ class Supernet:
         config = config or SupernetConfig()
         normalized_single = tuple(_normalize_single_gate(gate) for gate in config.single_qubit_gates)
         normalized_two = tuple(_normalize_two_qubit_gate(gate) for gate in config.two_qubit_gates)
-        config = replace(config, single_qubit_gates=normalized_single, two_qubit_gates=normalized_two)
+        normalized_four = tuple(_normalize_four_qubit_gate(gate) for gate in config.four_qubit_gates)
+        config = replace(
+            config,
+            single_qubit_gates=normalized_single,
+            two_qubit_gates=normalized_two,
+            four_qubit_gates=normalized_four,
+        )
         self.config = config
         self._validate_config()
 
@@ -280,6 +356,7 @@ class Supernet:
         # Index alphabet for the per-pair two-qubit choice: "none" first so the
         # absent option keeps index 0, then the configured two-qubit gates.
         self._two_qubit_choice_alphabet: tuple[str, ...] = (_NO_TWO_QUBIT,) + tuple(config.two_qubit_gates)
+        self._four_qubit_choice_alphabet: tuple[str, ...] = (_NO_TWO_QUBIT,) + tuple(config.four_qubit_gates)
         self._readout_index_cache: dict[int, torch.Tensor] = {}
         self._hamiltonian_cache: dict[int, torch.Tensor] = {}
         self._basis_index_cache: dict[int, torch.Tensor] = {}
@@ -326,7 +403,18 @@ class Supernet:
             if not (0 <= int(control) < cfg.n_qubits and 0 <= int(target) < cfg.n_qubits):
                 raise ValueError("two_qubit_pairs contain a qubit outside [0, n_qubits)")
             if int(control) == int(target):
-                raise ValueError("CNOT control and target must be different")
+                raise ValueError("two_qubit_pairs entries must use two different qubits")
+        for group in cfg.four_qubit_groups:
+            if len(group) != 4:
+                raise ValueError("four_qubit_groups entries must contain exactly four qubits")
+            qubits = tuple(int(q) for q in group)
+            if any(q < 0 or q >= cfg.n_qubits for q in qubits):
+                raise ValueError("four_qubit_groups contain a qubit outside [0, n_qubits)")
+            if len(set(qubits)) != 4:
+                raise ValueError("four_qubit_groups entries must not repeat qubits")
+        for qubit in cfg.hf_occupied_qubits:
+            if not (0 <= int(qubit) < cfg.n_qubits):
+                raise ValueError("hf_occupied_qubits contain a qubit outside [0, n_qubits)")
 
     def _new_shared_parameter(self) -> torch.nn.Parameter:
         value = float(self._np_rng.uniform(-0.05, 0.05))
@@ -363,8 +451,7 @@ class Supernet:
             for layer_id, layer in enumerate(architecture.layers):
                 single_layout = tuple(_normalize_single_gate(g) for g in layer.single_qubit_gates)
                 for qubit_id, gate_type in enumerate(single_layout):
-                    spec = _SINGLE_QUBIT_GATES[gate_type]
-                    for param_index in range(spec.n_params):
+                    for param_index in range(_token_n_params(gate_type)):
                         key = self.single_parameter_key(
                             supernet_id, layer_id, single_layout, qubit_id, gate_type, param_index
                         )
@@ -373,10 +460,18 @@ class Supernet:
                 for pair_index, choice in enumerate(two_layout):
                     if choice == _NO_TWO_QUBIT:
                         continue
-                    spec = _TWO_QUBIT_GATES[choice]
-                    for param_index in range(spec.n_params):
+                    for param_index in range(_token_n_params(choice)):
                         key = self.two_qubit_parameter_key(
                             supernet_id, layer_id, two_layout, pair_index, choice, param_index
+                        )
+                        self._shared_param(key, supernet_id)
+                four_layout = tuple(_normalize_four_qubit_choice(c) for c in layer.four_qubit_choices)
+                for group_index, choice in enumerate(four_layout):
+                    if choice == _NO_TWO_QUBIT:
+                        continue
+                    for param_index in range(_token_n_params(choice)):
+                        key = self.four_qubit_parameter_key(
+                            supernet_id, layer_id, four_layout, group_index, choice, param_index
                         )
                         self._shared_param(key, supernet_id)
 
@@ -418,6 +513,25 @@ class Supernet:
             int(param_index),
         )
 
+    def four_qubit_parameter_key(
+        self,
+        supernet_id: int,
+        layer_id: int,
+        four_qubit_layout: Sequence[str],
+        group_index: int,
+        gate_type: str,
+        param_index: int = 0,
+    ) -> ParameterKey:
+        return (
+            "fq",
+            int(supernet_id),
+            int(layer_id),
+            tuple(_normalize_four_qubit_choice(choice) for choice in four_qubit_layout),
+            int(group_index),
+            _normalize_four_qubit_gate(gate_type),
+            int(param_index),
+        )
+
     def layer_search_space_size(self) -> int:
         cfg = self.config
         single = len(cfg.single_qubit_gates) ** cfg.n_qubits if cfg.search_single_qubit_gates else 1
@@ -428,7 +542,14 @@ class Supernet:
             two = len(self._two_qubit_choice_alphabet) ** width
         else:
             two = 1
-        return single * two
+        four_width = len(cfg.four_qubit_groups)
+        if four_width == 0:
+            four = 1
+        elif cfg.search_four_qubit_gates:
+            four = len(self._four_qubit_choice_alphabet) ** four_width
+        else:
+            four = 1
+        return single * two * four
 
     def logical_search_space_size(self) -> int:
         return self.layer_search_space_size() ** self.config.layers
@@ -446,8 +567,10 @@ class Supernet:
         cfg = self.config
         layers: list[LayerArchitecture] = []
         width = len(cfg.two_qubit_pairs)
+        four_width = len(cfg.four_qubit_groups)
         n_single = len(cfg.single_qubit_gates) ** cfg.n_qubits
         n_two = len(self._two_qubit_choice_alphabet) ** width if width else 1
+        n_four = len(self._four_qubit_choice_alphabet) ** four_width if four_width else 1
         for _ in range(cfg.layers):
             if cfg.search_single_qubit_gates:
                 single_layout = self._decode_layout(
@@ -467,7 +590,18 @@ class Supernet:
                 self._rng.randrange(1)  # 匹配旧 choice([fixed]) 的 rng 消耗
                 fixed = cfg.two_qubit_gates[0] if cfg.two_qubit_gates else _NO_TWO_QUBIT
                 two_layout = tuple(fixed for _ in range(width))
-            layers.append(LayerArchitecture(single_layout, two_layout))
+            if four_width == 0:
+                self._rng.randrange(1)
+                four_layout: tuple[str, ...] = ()
+            elif cfg.search_four_qubit_gates:
+                four_layout = self._decode_layout(
+                    self._rng.randrange(n_four), self._four_qubit_choice_alphabet, four_width
+                )
+            else:
+                self._rng.randrange(1)
+                fixed_four = cfg.four_qubit_gates[0] if cfg.four_qubit_gates else _NO_TWO_QUBIT
+                four_layout = tuple(fixed_four for _ in range(four_width))
+            layers.append(LayerArchitecture(single_layout, two_layout, four_layout))
         return Architecture(tuple(layers))
 
     def encode_architecture(self, architecture: Architecture) -> tuple[tuple[int, ...], ...]:
@@ -481,11 +615,19 @@ class Supernet:
                 self._two_qubit_choice_alphabet.index(_normalize_two_qubit_choice(choice))
                 for choice in layer.two_qubit_choices
             )
-            encoded.append(single_indices + two_indices)
+            four_indices = tuple(
+                self._four_qubit_choice_alphabet.index(_normalize_four_qubit_choice(choice))
+                for choice in layer.four_qubit_choices
+            )
+            encoded.append(single_indices + two_indices + four_indices)
         return tuple(encoded)
 
     def decode_architecture(self, indices: Sequence[Sequence[int]] | Sequence[int]) -> Architecture:
-        width = self.config.n_qubits + len(self.config.two_qubit_pairs)
+        width = (
+            self.config.n_qubits
+            + len(self.config.two_qubit_pairs)
+            + len(self.config.four_qubit_groups)
+        )
         if len(indices) == self.config.layers and all(hasattr(item, "__len__") for item in indices):
             layer_indices = [tuple(int(v) for v in item) for item in indices]  # type: ignore[arg-type]
         else:
@@ -499,8 +641,10 @@ class Supernet:
             if len(raw) != width:
                 raise ValueError("layer architecture index list has the wrong length")
             single = tuple(self.config.single_qubit_gates[int(idx)] for idx in raw[: self.config.n_qubits])
-            choices = tuple(self._two_qubit_choice_alphabet[int(v)] for v in raw[self.config.n_qubits :])
-            layers.append(LayerArchitecture(single, choices))
+            two_end = self.config.n_qubits + len(self.config.two_qubit_pairs)
+            choices = tuple(self._two_qubit_choice_alphabet[int(v)] for v in raw[self.config.n_qubits : two_end])
+            four_choices = tuple(self._four_qubit_choice_alphabet[int(v)] for v in raw[two_end:])
+            layers.append(LayerArchitecture(single, choices, four_choices))
         return Architecture(tuple(layers))
 
     def cnot_count(self, architecture: Architecture) -> int:
@@ -510,10 +654,24 @@ class Supernet:
         )
 
     def two_qubit_count(self, architecture: Architecture) -> int:
-        """Number of two-qubit gates of any type (``cx`` and ``rzz``)."""
+        """Number of searched two-qubit gates, including single excitations."""
         return sum(
             1 for layer in architecture.layers for choice in layer.two_qubit_choices if choice != _NO_TWO_QUBIT
         )
+
+    def four_qubit_count(self, architecture: Architecture) -> int:
+        return sum(
+            1 for layer in architecture.layers for choice in layer.four_qubit_choices if choice != _NO_TWO_QUBIT
+        )
+
+    def excitation_count(self, architecture: Architecture) -> int:
+        singles = sum(
+            1
+            for layer in architecture.layers
+            for choice in layer.two_qubit_choices
+            if _normalize_two_qubit_choice(choice) == "single_excitation"
+        )
+        return singles + self.four_qubit_count(architecture)
 
     def build_circuit(
         self,
@@ -524,7 +682,10 @@ class Supernet:
         if len(architecture.layers) != self.config.layers:
             raise ValueError("architecture layer count does not match config.layers")
 
-        gates: list[dict[str, Any]] = []
+        gates: list[dict[str, Any]] = [
+            pauli_x(int(qubit)).to_dict()
+            for qubit in self.config.hf_occupied_qubits
+        ]
         active_keys: list[ParameterKey] = []
         active_tensors: list[torch.Tensor] = []
 
@@ -533,12 +694,13 @@ class Supernet:
                 raise ValueError("single_qubit_gates length does not match n_qubits")
             if len(layer.two_qubit_choices) != len(self.config.two_qubit_pairs):
                 raise ValueError("two_qubit_choices length does not match two_qubit_pairs")
+            if len(layer.four_qubit_choices) != len(self.config.four_qubit_groups):
+                raise ValueError("four_qubit_choices length does not match four_qubit_groups")
 
             single_layout = tuple(_normalize_single_gate(gate) for gate in layer.single_qubit_gates)
             for qubit_id, gate_type in enumerate(single_layout):
-                spec = _SINGLE_QUBIT_GATES[gate_type]
                 params: list[torch.Tensor | float] = []
-                for param_index in range(spec.n_params):
+                for param_index in range(_token_n_params(gate_type)):
                     key = self.single_parameter_key(
                         supernet_id, layer_id, single_layout, qubit_id, gate_type, param_index
                     )
@@ -547,7 +709,7 @@ class Supernet:
                     active_keys.append(key)
                     if isinstance(theta, torch.Tensor):
                         active_tensors.append(theta)
-                gate = spec.builder(params, (qubit_id,))
+                gate = _build_single_gate(gate_type, params, qubit_id)
                 if gate is not None:
                     gates.append(gate)
 
@@ -555,10 +717,9 @@ class Supernet:
             for pair_index, choice in enumerate(two_layout):
                 if choice == _NO_TWO_QUBIT:
                     continue
-                spec = _TWO_QUBIT_GATES[choice]
                 control, target = self.config.two_qubit_pairs[pair_index]
                 params = []
-                for param_index in range(spec.n_params):
+                for param_index in range(_token_n_params(choice)):
                     key = self.two_qubit_parameter_key(
                         supernet_id, layer_id, two_layout, pair_index, choice, param_index
                     )
@@ -567,7 +728,26 @@ class Supernet:
                     active_keys.append(key)
                     if isinstance(theta, torch.Tensor):
                         active_tensors.append(theta)
-                gate = spec.builder(params, (int(control), int(target)))
+                gate = _build_two_qubit_gate(choice, params, control, target)
+                if gate is not None:
+                    gates.append(gate)
+
+            four_layout = tuple(_normalize_four_qubit_choice(choice) for choice in layer.four_qubit_choices)
+            for group_index, choice in enumerate(four_layout):
+                if choice == _NO_TWO_QUBIT:
+                    continue
+                q0, q1, q2, q3 = self.config.four_qubit_groups[group_index]
+                params = []
+                for param_index in range(_token_n_params(choice)):
+                    key = self.four_qubit_parameter_key(
+                        supernet_id, layer_id, four_layout, group_index, choice, param_index
+                    )
+                    theta = self._shared_param(key, supernet_id) if parameters is None else parameters[key]
+                    params.append(theta)
+                    active_keys.append(key)
+                    if isinstance(theta, torch.Tensor):
+                        active_tensors.append(theta)
+                gate = _build_four_qubit_gate(choice, params, q0, q1, q2, q3)
                 if gate is not None:
                     gates.append(gate)
 
@@ -1041,6 +1221,8 @@ class Supernet:
                     "active_parameter_count": len(active_keys),
                     "cnot_count": self.cnot_count(architecture),
                     "two_qubit_count": self.two_qubit_count(architecture),
+                    "four_qubit_count": self.four_qubit_count(architecture),
+                    "excitation_count": self.excitation_count(architecture),
                 })
                 continue
             architecture = self.sample_architecture()
@@ -1108,6 +1290,8 @@ class Supernet:
                 "active_parameter_count": len(active_keys),
                 "cnot_count": self.cnot_count(architecture),
                 "two_qubit_count": self.two_qubit_count(architecture),
+                "four_qubit_count": self.four_qubit_count(architecture),
+                "excitation_count": self.excitation_count(architecture),
             }
             if self.config.track_best_validation and self.config.task.lower() in {"classification", "binary_classification"}:
                 record.update(self._track_validation_best(architecture, selected_id, objective, dataset, hamiltonian))
@@ -1165,6 +1349,8 @@ class Supernet:
                     "candidate_losses": losses,
                     "cnot_count": self.cnot_count(architecture),
                     "two_qubit_count": self.two_qubit_count(architecture),
+                    "four_qubit_count": self.four_qubit_count(architecture),
+                    "excitation_count": self.excitation_count(architecture),
                 }
             )
 
@@ -1275,6 +1461,8 @@ class Supernet:
             "selected_ansatz": architecture,
             "selected_cnot_count": self.cnot_count(architecture),
             "selected_two_qubit_count": self.two_qubit_count(architecture),
+            "selected_four_qubit_count": self.four_qubit_count(architecture),
+            "selected_excitation_count": self.excitation_count(architecture),
             "selected_circuit_ascii": _circuit_diagram(circuit),
             "fine_tuned_parameters": {
                 "|".join(str(part) for part in key): _float_value(value)
@@ -1321,19 +1509,27 @@ class Supernet:
         return metrics
 
     def _run_fixed_h2_vqe_baseline(self, hamiltonian: Any) -> float:
-        # Conventional fixed VQE reference (Fig. 3a): every configured rotation
-        # type on every qubit, then one fixed CNOT entangler per pair. The gate
-        # specs carry arity, so multi-/zero-parameter gates are sized correctly.
+        # 固定参考线路（Fig. 3a）：每层对每个量子比特施加所有已配置的单比特旋转类型，
+        # 再对每对量子比特施加一个固定纠缠门。门参数数及语义全部来自 aicir.gates 注册表。
         single_types = tuple(dict.fromkeys(self.config.single_qubit_gates))
         if self.config.two_qubit_gates:
             entangler = "cx" if "cx" in self.config.two_qubit_gates else self.config.two_qubit_gates[0]
-            entangler_spec: GateSpec | None = _TWO_QUBIT_GATES[entangler]
+            entangler_n_params = _token_n_params(entangler)
         else:
-            entangler_spec = None
+            entangler = None
+            entangler_n_params = 0
+        if self.config.four_qubit_gates:
+            four_entangler = self.config.four_qubit_gates[0]
+            four_entangler_n_params = _token_n_params(four_entangler)
+        else:
+            four_entangler = None
+            four_entangler_n_params = 0
 
-        per_layer = sum(_SINGLE_QUBIT_GATES[g].n_params for g in single_types) * self.config.n_qubits
-        if entangler_spec is not None:
-            per_layer += entangler_spec.n_params * len(self.config.two_qubit_pairs)
+        per_layer = sum(_token_n_params(g) for g in single_types) * self.config.n_qubits
+        if entangler is not None:
+            per_layer += entangler_n_params * len(self.config.two_qubit_pairs)
+        if four_entangler is not None:
+            per_layer += four_entangler_n_params * len(self.config.four_qubit_groups)
         total = per_layer * self.config.layers
 
         parameters = [self._new_shared_parameter() for _ in range(total)]
@@ -1342,22 +1538,34 @@ class Supernet:
         best_energy = math.inf
 
         def energy_closure() -> torch.Tensor:
-            gates: list[dict[str, Any]] = []
+            gates: list[dict[str, Any]] = [
+                pauli_x(int(qubit)).to_dict()
+                for qubit in self.config.hf_occupied_qubits
+            ]
             cursor = 0
             for _ in range(self.config.layers):
                 for qubit in range(self.config.n_qubits):
                     for gate_type in single_types:
-                        spec = _SINGLE_QUBIT_GATES[gate_type]
-                        slot = parameters[cursor : cursor + spec.n_params]
-                        cursor += spec.n_params
-                        gate = spec.builder(slot, (qubit,))
+                        n = _token_n_params(gate_type)
+                        slot = parameters[cursor : cursor + n]
+                        cursor += n
+                        gate = _build_single_gate(gate_type, slot, qubit)
                         if gate is not None:
                             gates.append(gate)
-                if entangler_spec is not None:
+                if entangler is not None:
                     for control, target in self.config.two_qubit_pairs:
-                        slot = parameters[cursor : cursor + entangler_spec.n_params]
-                        cursor += entangler_spec.n_params
-                        gate = entangler_spec.builder(slot, (int(control), int(target)))
+                        slot = parameters[cursor : cursor + entangler_n_params]
+                        cursor += entangler_n_params
+                        gate = _build_two_qubit_gate(entangler, slot, int(control), int(target))
+                        if gate is not None:
+                            gates.append(gate)
+                if four_entangler is not None:
+                    for q0, q1, q2, q3 in self.config.four_qubit_groups:
+                        slot = parameters[cursor : cursor + four_entangler_n_params]
+                        cursor += four_entangler_n_params
+                        gate = _build_four_qubit_gate(
+                            four_entangler, slot, int(q0), int(q1), int(q2), int(q3)
+                        )
                         if gate is not None:
                             gates.append(gate)
             state = self._simulate_gates(gates)
@@ -1711,6 +1919,9 @@ def supernet_qas(
     single_qubit_gates: tuple[str, ...] = ("i", "h", "rx", "ry", "rz"),
     two_qubit_gates: tuple[str, ...] = ("cx", "rzz"),
     two_qubit_pairs: tuple[tuple[int, int], ...] | None = None,
+    four_qubit_gates: tuple[str, ...] = (),
+    four_qubit_groups: tuple[tuple[int, int, int, int], ...] = (),
+    hf_occupied_qubits: tuple[int, ...] = (),
     learning_rate: float = 0.1,
     finetune_learning_rate: float = 0.05,
     seed: int = 2,
@@ -1743,6 +1954,9 @@ def supernet_qas(
         single_qubit_gates: Single-qubit gate pool searched per site.
         two_qubit_gates: Two-qubit gate pool (e.g. ``cx``/``rzz``).
         two_qubit_pairs: Entangler connectivity; nearest + next-nearest by default.
+        four_qubit_gates: Four-qubit gate pool, currently used for ``double_excitation``.
+        four_qubit_groups: Qubit quadruples searched by four-qubit gates.
+        hf_occupied_qubits: Qubits flipped before the searched ansatz to prepare HF.
         learning_rate: Adam learning rate for the supernet phase.
         finetune_learning_rate: Adam learning rate for fine-tuning.
         seed: Random seed.
@@ -1773,6 +1987,9 @@ def supernet_qas(
         single_qubit_gates=single_qubit_gates,
         two_qubit_gates=two_qubit_gates,
         two_qubit_pairs=two_qubit_pairs,
+        four_qubit_gates=four_qubit_gates,
+        four_qubit_groups=four_qubit_groups,
+        hf_occupied_qubits=hf_occupied_qubits,
         supernet_num=supernet_num,
         supernet_steps=supernet_steps,
         ranking_num=ranking_num,

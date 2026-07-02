@@ -16,3 +16,4 @@ dist/
 
 # 误入的 JS 残留
 node_modules/
+demos/BeH2/output.txt

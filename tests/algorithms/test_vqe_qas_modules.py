@@ -4,7 +4,7 @@ import math
 import csv
 
 from aicir.metrics.circuit_structure import entanglement_coverage_score, structural_expressibility_proxy_score
-from aicir.qas.primitives.ansatz import (
+from aicir.qas.library.ansatz import (
     HEAMask,
     LayerwiseAnsatzGene,
     architecture_from_hea_mask,
@@ -12,7 +12,7 @@ from aicir.qas.primitives.ansatz import (
     enumerate_hea_masks,
     sample_layerwise_genes,
 )
-from aicir.qas.primitives.backend_utils import backend_runtime_metadata, resolve_qas_backend
+from aicir.qas.core.backend_utils import backend_runtime_metadata, resolve_qas_backend
 from aicir.qas.vqe_loop.fair_vqe import evaluate_vqe_energy, optimize_vqe_energy
 from aicir.qas.problems.hamiltonians import VQEProblem, tfim_chain_hamiltonian
 

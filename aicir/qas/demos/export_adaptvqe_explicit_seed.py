@@ -18,7 +18,7 @@ from time import perf_counter
 from typing import Any, Iterable, Sequence
 
 from aicir.ir import circuit_gate_dicts
-from aicir.qas.primitives.ansatz import (
+from aicir.qas.library.ansatz import (
     ExplicitGateAnsatzGene,
     OperatorSequenceAnsatzGene,
     architecture_from_explicit_gate_gene,

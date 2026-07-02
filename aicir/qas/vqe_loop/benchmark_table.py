@@ -17,9 +17,9 @@ from math import ceil
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from aicir.operators import Hamiltonian
+from aicir.core.operators import Hamiltonian
 from aicir.qas.core._types import ArchitectureSpec
-from aicir.qas.primitives.ansatz import (
+from aicir.qas.library.ansatz import (
     ChemistryExcitationAnsatzGene,
     ExplicitGateAnsatzGene,
     LayerwiseAnsatzGene,

@@ -7,7 +7,7 @@ selection, literal-Hamiltonian labels, supernet sidecars, and sharded runners.
 import json
 from pathlib import Path
 
-from aicir.qas.vqe_loop.protocol import (
+from aicir.qas.vqe_loop.benchmark_table import (
     BENCHMARK_TABLE_FIELDS,
     LabelSource,
     LabelStatus,
@@ -45,7 +45,7 @@ from aicir.qas.vqe_loop.next_batch import (
     _queue_row,
 )
 from aicir.qas.vqe_loop.supernet_screening import _screening_sidecar_record
-from aicir.qas.vqe_loop.labeling import (
+from aicir.qas.vqe_loop.fair_labeling import (
     _architecture_from_row,
     _label_row,
     _load_warm_start_vector,
@@ -54,12 +54,12 @@ from aicir.qas.vqe_loop.labeling import (
     _problem_from_row_or_protocol,
     _validate_queue_protocol_versions,
 )
-from aicir.qas.vqe_loop.sharding import (
+from aicir.qas.vqe_loop.shard_scheduler import (
     _contiguous_shards,
     _shard_environment,
 )
 from aicir.qas.vqe_loop.sidecars import build_sidecar_records
-from aicir.qas.primitives.ansatz import (
+from aicir.qas.library.ansatz import (
     HEAMask,
     LayerwiseAnsatzGene,
     architecture_from_layerwise_gene,

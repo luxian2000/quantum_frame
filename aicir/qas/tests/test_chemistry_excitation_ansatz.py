@@ -23,7 +23,7 @@ class ChemistryExcitationAnsatzTests(unittest.TestCase):
         self.assertEqual(doubles, ((1, 4, 2, 5), (0, 3, 2, 5)))
 
     def test_chemistry_excitation_gene_round_trips_and_builds_architecture(self):
-        from aicir.qas.primitives.ansatz import (
+        from aicir.qas.library.ansatz import (
             ChemistryExcitationAnsatzGene,
             architecture_from_chemistry_excitation_gene,
         )
