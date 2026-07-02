@@ -1,0 +1,40 @@
+{
+  "scenario": "LiH STO-3G Jordan-Wigner ground-state search",
+  "problem": "Recommend better VQE/QAS ansatz candidates before spending fair-VQE labels.",
+  "molecular_spec": {
+    "molecule": "LiH",
+    "distance": 1.5,
+    "basis": "sto3g",
+    "mapping": "jordan_wigner",
+    "driver": "pyscf",
+    "estimated_n_qubits": 12,
+    "estimated_terms": 631
+  },
+  "hamiltonian_file": "aicir/qas/.codex_lih_rounds_analysis/lih_jw_sto3g_r15_terms.json",
+  "current_architecture": {
+    "name": "hea_mask_L2_ry_rz_cx_linear_ry",
+    "layers": 2,
+    "rotation_block": "ry_rz",
+    "entangler": "cx",
+    "entangle_pattern": "linear",
+    "n_params": 72,
+    "two_q_count": 22,
+    "fair_best_energy": -7.597667217255
+  },
+  "top_k": 2,
+  "run_search": true,
+  "output_dir": "outputs/architecture_recommender_lih_supernet_demo",
+  "search": {
+    "rounds": 1,
+    "k_min": 2,
+    "supernet_native_count": 2,
+    "supernet_native_layers": 2,
+    "supernet_native_supernet_num": 1,
+    "supernet_native_steps": 8,
+    "supernet_native_ranking_num": 8,
+    "supernet_native_finetune_steps": 2,
+    "max_evals": 20,
+    "backend": "numpy",
+    "dtype": "complex128"
+  }
+}

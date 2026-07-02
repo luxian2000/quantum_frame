@@ -243,6 +243,14 @@ def _normalized_control_data(gate):
     return controls, control_states
 
 
+def _pair_qubits_from_gate(gate):
+    if "qubit_1" in gate and "qubit_2" in gate:
+        return [int(gate["qubit_1"]), int(gate["qubit_2"])]
+    qubits = list(gate.get("qubits", ()))
+    if len(qubits) != 2:
+        raise ValueError("two-qubit gate requires qubit_1/qubit_2 or two qubits")
+    return [int(qubits[0]), int(qubits[1])]
+
 def _cx(target_qubit, control_qubits, control_states):
     return _controlled_from_base(_pauli_x(), target_qubit, control_qubits, control_states)
 
@@ -305,6 +313,31 @@ def _u3(theta, phi, lam, target_qubit=0):
 def _u2(phi, lam, target_qubit=0):
     return _u3(math.pi / 2.0, phi, lam, target_qubit)
 
+
+def _single_excitation(theta, qubit_1=0, qubit_2=1):
+    _ = (qubit_1, qubit_2)
+    t = float(theta)
+    c = math.cos(t / 2.0)
+    s = math.sin(t / 2.0)
+    matrix = np.eye(4, dtype=_CDTYPE)
+    matrix[1, 1] = c
+    matrix[1, 2] = -s
+    matrix[2, 1] = s
+    matrix[2, 2] = c
+    return matrix
+
+
+def _double_excitation(theta, q1=0, q2=1, q3=2, q4=3):
+    _ = (q1, q2, q3, q4)
+    t = float(theta)
+    c = math.cos(t / 2.0)
+    s = math.sin(t / 2.0)
+    matrix = np.eye(16, dtype=_CDTYPE)
+    matrix[3, 3] = c
+    matrix[3, 12] = -s
+    matrix[12, 3] = s
+    matrix[12, 12] = c
+    return matrix
 
 def _rzz(theta, qubit_1=0, qubit_2=1):
     _ = (qubit_1, qubit_2)
@@ -499,6 +532,13 @@ def _single_qubit_base_for_gate_backend(gate, backend):
 
     return _single_qubit_base_for_gate(gate)
 
+
+def _single_excitation_backend(theta, backend):
+    return backend.cast(_single_excitation(theta))
+
+
+def _double_excitation_backend(theta, backend):
+    return backend.cast(_double_excitation(theta))
 
 def _rzz_backend(theta, backend):
     if not _contains_torch_tensor(theta):
@@ -1026,7 +1066,7 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
         return _apply_local_matrix_to_state(
             state,
             _cast_local_matrix(backend, local, cache_key=cache_key),
-            [gate["qubit_1"], gate["qubit_2"]],
+            _pair_qubits_from_gate(gate),
             n_qubits,
             backend,
         )
@@ -1038,7 +1078,31 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
         return _apply_local_matrix_to_state(
             state,
             _cast_local_matrix(backend, local, cache_key=cache_key),
-            [gate["qubit_1"], gate["qubit_2"]],
+            _pair_qubits_from_gate(gate),
+            n_qubits,
+            backend,
+        )
+
+    if gate_type == "single_excitation":
+        parameter = gate.get("parameter")
+        local = _single_excitation_backend(parameter, backend)
+        cache_key = None if _contains_torch_tensor(parameter) else (gate_type, _parameter_cache_key(parameter))
+        return _apply_local_matrix_to_state(
+            state,
+            _cast_local_matrix(backend, local, cache_key=cache_key),
+            _pair_qubits_from_gate(gate),
+            n_qubits,
+            backend,
+        )
+
+    if gate_type == "double_excitation":
+        parameter = gate.get("parameter")
+        local = _double_excitation_backend(parameter, backend)
+        cache_key = None if _contains_torch_tensor(parameter) else (gate_type, _parameter_cache_key(parameter))
+        return _apply_local_matrix_to_state(
+            state,
+            _cast_local_matrix(backend, local, cache_key=cache_key),
+            list(gate["qubits"]),
             n_qubits,
             backend,
         )
@@ -1161,7 +1225,19 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
             local = _rzz(gate_parameter) if gate_type == "rzz" else _rxx(gate_parameter)
             return _expand_local_matrix_to_full(
                 local,
-                [gate["qubit_1"], gate["qubit_2"]],
+                _pair_qubits_from_gate(gate),
+                int(cir_qubits),
+            )
+        elif gate_type == "single_excitation":
+            return _expand_local_matrix_to_full(
+                _single_excitation(gate_parameter),
+                _pair_qubits_from_gate(gate),
+                int(cir_qubits),
+            )
+        elif gate_type == "double_excitation":
+            return _expand_local_matrix_to_full(
+                _double_excitation(gate_parameter),
+                list(gate["qubits"]),
                 int(cir_qubits),
             )
         else:
@@ -1259,7 +1335,21 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
             local = _rzz_backend(gate_parameter, backend) if gate_type == "rzz" else _rxx_backend(gate_parameter, backend)
             return _expand_local_matrix_to_full(
                 local,
-                [gate["qubit_1"], gate["qubit_2"]],
+                _pair_qubits_from_gate(gate),
+                int(cir_qubits),
+                backend=backend,
+            )
+        elif gate_type == "single_excitation":
+            return _expand_local_matrix_to_full(
+                _single_excitation_backend(gate_parameter, backend),
+                _pair_qubits_from_gate(gate),
+                int(cir_qubits),
+                backend=backend,
+            )
+        elif gate_type == "double_excitation":
+            return _expand_local_matrix_to_full(
+                _double_excitation_backend(gate_parameter, backend),
+                list(gate["qubits"]),
                 int(cir_qubits),
                 backend=backend,
             )

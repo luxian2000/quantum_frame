@@ -18,7 +18,7 @@ Hamiltonian 输入已经从手写 `--hamiltonian-id` 迁移到规范化输入：
 
 | 子项目 README | 说明 |
 | --- | --- |
-| `vqe_loop/README.md` | VQE-QAS 闭环入口、fair-label 协议、trust-region geometry、Stage-2 next-batch、oracle calibration、多 NPU 分片和 Hamiltonian 输入格式。 |
+| `vqe_loop/README.md` | VQE-QAS 闭环入口、fair-label 协议、trust-region geometry、P1/Stage-2 planning、多 NPU 分片和 Hamiltonian 输入格式。 |
 
 目前 `qas/` 下只有 `vqe_loop/` 维护独立子 README；其他子目录的使用说明集中在本文件中。
 
@@ -33,7 +33,7 @@ Hamiltonian 输入已经从手写 `--hamiltonian-id` 迁移到规范化输入：
 | `problems/` | 无 | VQE/QAS 问题和 Hamiltonian 构造。 |
 | `demos/` | 无 | 旧版或研究型演示脚本；新闭环优先使用 `vqe_loop/` 包入口。 |
 | `tests/` | 无 | QAS 相关测试和 smoke checks。 |
-| `vqe_loop/` | `vqe_loop/README.md` | VQE-QAS 闭环，包括一键入口、fair-label 协议、trust-region geometry、Stage-2 selection/search、fair VQE、oracle calibration 和多 NPU 分片。 |
+| `vqe_loop/` | `vqe_loop/README.md` | VQE-QAS 闭环，包括一键入口、fair-label 协议、trust-region geometry、P1/Stage-2 planning、fair VQE 和多 NPU 分片。 |
 
 ## 1. 已提供能力
 
@@ -375,7 +375,7 @@ python -m aicir.qas.vqe_loop.sharding \
 - `--backend npu` / `--dtype complex64`：使用 Ascend NPU 后端。若要做 CPU smoke，可改为 `--backend numpy --dtype complex128`。
 - `--work-dir`：保存每个 shard 的临时 queue、临时 label CSV 和最终 summary。
 
-分片器会把原始 queue 连续切块，并给底层 `python -m aicir.qas.vqe_loop.labeling` 传入 `--seed-index-offset`，因此同一全局队列行在单进程或多分片运行时使用一致的 seed 派生规则。最终输出仍是一个 benchmark table CSV，可继续用于 oracle calibration、Stage-2 next-batch planning 和标签回流。
+分片器会把原始 queue 连续切块，并给底层 `python -m aicir.qas.vqe_loop.labeling` 传入 `--seed-index-offset`，因此同一全局队列行在单进程或多分片运行时使用一致的 seed 派生规则。最终输出仍是一个 benchmark table CSV，可继续用于 oracle reliability feedback、Stage-2/P1 planning 和标签回流。
 
 ## 4. MoG_VQE：基于 NSGA-II 的多目标遗传 VQE 拓扑搜索
 
@@ -798,3 +798,4 @@ print(result.circuit.show())
 python aicir/qas/demos/PPR_DQL_demo_ghz3.py
 python aicir/qas/demos/CRLQAS_demo_h2.py
 ```
+

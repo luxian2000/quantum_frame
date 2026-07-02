@@ -1,0 +1,33 @@
+{
+  "scenario": "H2 STO-3G Jordan-Wigner L4 supernet search",
+  "problem": "Run vqe-loop supernet with L4 only and print a random/cheap-ranked architecture plus the fair-VQE optimized best architecture.",
+  "hamiltonian": {
+    "preset": "h2_sto3g_jw_r0735_4q"
+  },
+  "current_architecture": {
+    "name": "hea_mask_L1_ry_cx_linear",
+    "layers": 1,
+    "rotation_block": "ry",
+    "entangler": "cx",
+    "entangle_pattern": "linear",
+    "n_params": 4,
+    "two_q_count": 3
+  },
+  "top_k": 2,
+  "run_search": true,
+  "search": {
+    "supernet_native_layers_list": [4],
+    "supernet_native_count": 3,
+    "supernet_native_supernet_num": 1,
+    "supernet_native_steps": 120,
+    "supernet_native_ranking_num": 40,
+    "supernet_native_finetune_steps": 100,
+    "rounds": 1,
+    "k_min": 3,
+    "n_seeds": 1,
+    "max_evals": 100,
+    "backend": "numpy",
+    "dtype": "complex128"
+  },
+  "output_dir": "outputs/architecture_recommender_h2_supernet_demo_L4_only"
+}

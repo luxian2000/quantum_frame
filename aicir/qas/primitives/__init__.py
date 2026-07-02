@@ -5,11 +5,17 @@ algorithm demos without owning a complete workflow.
 """
 
 from .ansatz import (
+    ChemistryExcitationAnsatzGene,
+    ExplicitGateAnsatzGene,
     HEAMask,
     LayerwiseAnsatzGene,
+    OperatorSequenceAnsatzGene,
     SupernetAnsatzGene,
+    architecture_from_chemistry_excitation_gene,
+    architecture_from_explicit_gate_gene,
     architecture_from_hea_mask,
     architecture_from_layerwise_gene,
+    architecture_from_operator_sequence_gene,
     architecture_from_supernet_gene,
     enumerate_hea_masks,
     sample_layerwise_genes,
@@ -17,14 +23,22 @@ from .ansatz import (
 from .backend_utils import backend_runtime_metadata, resolve_qas_backend
 
 __all__ = [
+    "ChemistryExcitationAnsatzGene",
+    "ExplicitGateAnsatzGene",
     "HEAMask",
     "LayerwiseAnsatzGene",
+    "OperatorSequenceAnsatzGene",
     "SupernetAnsatzGene",
+    "architecture_from_chemistry_excitation_gene",
+    "architecture_from_explicit_gate_gene",
     "architecture_from_hea_mask",
     "architecture_from_layerwise_gene",
+    "architecture_from_operator_sequence_gene",
     "architecture_from_supernet_gene",
     "backend_runtime_metadata",
     "enumerate_hea_masks",
     "resolve_qas_backend",
     "sample_layerwise_genes",
 ]
+
+

@@ -1,7 +1,7 @@
 """Command-line entry for the VQE-QAS closed loop.
 
 Run with ``python -m aicir.qas.vqe_loop``.  The command is intentionally a thin
-front door over ``run_vqe_qas_closed_loop``: all workflow logic stays in the
+front door over ``run_p0_bootstrap_fair``: all workflow logic stays in the
 service modules so API and CLI runs share the same path.
 """
 
@@ -14,7 +14,7 @@ import re
 from typing import Any
 
 from aicir.chemistry.spec import GeneratedHamiltonian, load_hamiltonian_input
-from .vqe_qas_loop import ClosedLoopConfig, run_vqe_qas_closed_loop
+from .p0_bootstrap_fair import P0BootstrapConfig, run_p0_bootstrap_fair
 
 
 def _load_generated_hamiltonian(path: str | None) -> GeneratedHamiltonian | None:
@@ -86,12 +86,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--supernet-native-finetune-steps", type=int, default=0)
     parser.add_argument("--supernet-native-seed", type=int, default=11)
     parser.add_argument("--supernet-native-device", default="cpu")
+    parser.add_argument("--use-chemistry-excitation-pool", action="store_true")
+    parser.add_argument("--active-electrons", type=int, default=None)
+    parser.add_argument("--active-spatial-orbitals", type=int, default=None)
+    parser.add_argument("--chemistry-excitation-count", type=int, default=0)
+    parser.add_argument("--chemistry-excitation-max-excitations", type=int, default=4)
+    parser.add_argument("--chemistry-excitation-seed", type=int, default=17)
+    parser.add_argument("--disable-p0-zero-cost", dest="enable_p0_zero_cost", action="store_false")
+    parser.set_defaults(enable_p0_zero_cost=True)
     parser.add_argument("--label-seed", type=int, default=5200)
     parser.add_argument("--n-seeds", type=int, default=1)
     parser.add_argument("--max-evals", type=int, default=100)
     parser.add_argument("--backend", default="npu")
     parser.add_argument("--dtype", default="complex64")
-    parser.add_argument("--protocol", default="aicir/qas/vqe_loop/fair_label_protocol.json")
+    parser.add_argument("--protocol", default="default")
     parser.add_argument("--no-layerwise", action="store_true")
     parser.add_argument("--layerwise-count", default="auto")
     parser.add_argument("--layerwise-layers", type=int, default=3)
@@ -103,7 +111,7 @@ def main(argv: list[str] | None = None) -> None:
     hamiltonian_path = args.hamiltonian or args.hamiltonian_input
     generated = _load_generated_hamiltonian(hamiltonian_path)
     n_qubits = _infer_n_qubits(generated, args.n_qubits)
-    config = ClosedLoopConfig(
+    config = P0BootstrapConfig(
         output_dir=Path(args.output_dir or _default_output_dir(hamiltonian_path, n_qubits)),
         n_qubits=n_qubits,
         hamiltonian_terms=generated.terms if generated is not None else None,
@@ -133,6 +141,13 @@ def main(argv: list[str] | None = None) -> None:
         supernet_native_finetune_steps=int(args.supernet_native_finetune_steps),
         supernet_native_seed=int(args.supernet_native_seed),
         supernet_native_device=str(args.supernet_native_device),
+        use_chemistry_excitation_pool=bool(args.use_chemistry_excitation_pool),
+        active_electrons=args.active_electrons,
+        active_spatial_orbitals=args.active_spatial_orbitals,
+        chemistry_excitation_count=int(args.chemistry_excitation_count),
+        chemistry_excitation_max_excitations=int(args.chemistry_excitation_max_excitations),
+        chemistry_excitation_seed=int(args.chemistry_excitation_seed),
+        enable_p0_zero_cost=bool(args.enable_p0_zero_cost),
         label_seed=int(args.label_seed),
         n_seeds=int(args.n_seeds),
         max_evals=int(args.max_evals),
@@ -143,9 +158,10 @@ def main(argv: list[str] | None = None) -> None:
         layerwise_count=_auto_int(args.layerwise_count),
         layerwise_layers=int(args.layerwise_layers),
     )
-    result = run_vqe_qas_closed_loop(config)
+    result = run_p0_bootstrap_fair(config)
     print(json.dumps({key: str(value) for key, value in result.__dict__.items()}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
     main()
+
