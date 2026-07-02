@@ -199,6 +199,211 @@ class SupernetAnsatzGene:
         return f"supernet_native_L{self.layers}_{digest}"
 
 
+@dataclass(frozen=True)
+class ChemistryExcitationAnsatzGene:
+    """Chemistry-preserving HF plus excitation sequence ansatz gene."""
+
+    n_qubits: int
+    hf_occupied_qubits: tuple[int, ...]
+    excitations: tuple[dict[str, Any], ...]
+    active_electrons: int | None = None
+    active_spatial_orbitals: int | None = None
+    name: str = "chemistry_excitation"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "n_qubits", int(self.n_qubits))
+        if self.n_qubits < 1:
+            raise ValueError("ChemistryExcitationAnsatzGene requires at least one qubit")
+        occupied = tuple(int(qubit) for qubit in self.hf_occupied_qubits)
+        if len(set(occupied)) != len(occupied):
+            raise ValueError("hf_occupied_qubits contains duplicate qubits")
+        for qubit in occupied:
+            if not (0 <= qubit < self.n_qubits):
+                raise ValueError("hf_occupied_qubits contains a qubit outside [0, n_qubits)")
+        normalized: list[dict[str, Any]] = []
+        for excitation in self.excitations:
+            if not isinstance(excitation, dict):
+                raise ValueError("chemistry excitations must be JSON objects")
+            gate_type = str(excitation.get("type", "")).strip().lower()
+            qubits = tuple(int(qubit) for qubit in excitation.get("qubits", ()))
+            expected_width = 2 if gate_type == "single_excitation" else 4 if gate_type == "double_excitation" else 0
+            if expected_width == 0:
+                raise ValueError(f"unsupported chemistry excitation type: {gate_type!r}")
+            if len(qubits) != expected_width:
+                raise ValueError(f"{gate_type} requires {expected_width} qubits")
+            if len(set(qubits)) != len(qubits):
+                raise ValueError(f"{gate_type} cannot repeat qubits")
+            for qubit in qubits:
+                if not (0 <= qubit < self.n_qubits):
+                    raise ValueError(f"{gate_type} contains a qubit outside [0, n_qubits)")
+            normalized.append({"type": gate_type, "qubits": list(qubits)})
+        object.__setattr__(self, "hf_occupied_qubits", occupied)
+        object.__setattr__(self, "excitations", tuple(normalized))
+        object.__setattr__(self, "name", str(self.name or "chemistry_excitation"))
+        if self.active_electrons is not None:
+            object.__setattr__(self, "active_electrons", int(self.active_electrons))
+        if self.active_spatial_orbitals is not None:
+            object.__setattr__(self, "active_spatial_orbitals", int(self.active_spatial_orbitals))
+
+    @property
+    def layers(self) -> int:
+        return len(self.excitations)
+
+    def to_jsonable(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "kind": "chemistry_excitation",
+            "n_qubits": self.n_qubits,
+            "hf_occupied_qubits": list(self.hf_occupied_qubits),
+            "excitations": [dict(excitation) for excitation in self.excitations],
+            "name": self.name,
+        }
+        if self.active_electrons is not None:
+            payload["active_electrons"] = int(self.active_electrons)
+        if self.active_spatial_orbitals is not None:
+            payload["active_spatial_orbitals"] = int(self.active_spatial_orbitals)
+        return payload
+
+    @classmethod
+    def from_jsonable(cls, raw: Any) -> "ChemistryExcitationAnsatzGene":
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        if not isinstance(raw, dict):
+            raise ValueError("chemistry excitation ansatz gene must be a JSON object")
+        if str(raw.get("kind", "chemistry_excitation")).lower() != "chemistry_excitation":
+            raise ValueError("chemistry excitation ansatz gene kind must be 'chemistry_excitation'")
+        return cls(
+            n_qubits=int(raw["n_qubits"]),
+            hf_occupied_qubits=tuple(int(qubit) for qubit in raw.get("hf_occupied_qubits", ())),
+            excitations=tuple(dict(excitation) for excitation in raw.get("excitations", ())),
+            active_electrons=None if raw.get("active_electrons") is None else int(raw.get("active_electrons")),
+            active_spatial_orbitals=None
+            if raw.get("active_spatial_orbitals") is None
+            else int(raw.get("active_spatial_orbitals")),
+            name=str(raw.get("name", "chemistry_excitation")),
+        )
+
+    def label(self) -> str:
+        payload = json.dumps(self.to_jsonable(), ensure_ascii=False, sort_keys=True)
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+        return f"chemistry_excitation_L{self.layers}_{digest}"
+
+@dataclass(frozen=True)
+class ExplicitGateAnsatzGene:
+    """Task-agnostic ansatz gene storing an already decomposed gate sequence.
+
+    This is the bridge format for external architecture generators such as
+    ADAPT-VQE.  It deliberately stores gates in the same dictionary format used
+    by :class:`ArchitectureSpec` so fair labeling can evaluate the circuit
+    without forcing it into a layerwise or supernet template.
+    """
+
+    n_qubits: int
+    gates: tuple[dict[str, Any], ...]
+    name: str = "explicit_gate_sequence"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "n_qubits", int(self.n_qubits))
+        if self.n_qubits < 1:
+            raise ValueError("ExplicitGateAnsatzGene requires at least one qubit")
+        copied_gates: list[dict[str, Any]] = []
+        for gate in self.gates:
+            if not isinstance(gate, dict):
+                raise ValueError("explicit gate entries must be JSON objects")
+            if not str(gate.get("type", "")).strip():
+                raise ValueError("explicit gate entries require a non-empty type")
+            copied_gates.append(json.loads(json.dumps(gate)))
+        object.__setattr__(self, "gates", tuple(copied_gates))
+        object.__setattr__(self, "name", str(self.name or "explicit_gate_sequence"))
+
+    def to_jsonable(self) -> dict[str, Any]:
+        return {
+            "kind": "explicit_gate_sequence",
+            "n_qubits": self.n_qubits,
+            "gates": [dict(gate) for gate in self.gates],
+            "name": self.name,
+        }
+
+    @classmethod
+    def from_jsonable(cls, raw: Any) -> "ExplicitGateAnsatzGene":
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        if not isinstance(raw, dict):
+            raise ValueError("explicit gate ansatz gene must be a JSON object")
+        if str(raw.get("kind", "explicit_gate_sequence")).lower() != "explicit_gate_sequence":
+            raise ValueError("explicit gate ansatz gene kind must be 'explicit_gate_sequence'")
+        return cls(
+            n_qubits=int(raw["n_qubits"]),
+            gates=tuple(dict(gate) for gate in raw.get("gates", ())),
+            name=str(raw.get("name", "explicit_gate_sequence")),
+        )
+
+    def label(self) -> str:
+        payload = json.dumps(self.to_jsonable(), ensure_ascii=False, sort_keys=True)
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+        return f"explicit_gate_sequence_{digest}"
+
+
+@dataclass(frozen=True)
+class OperatorSequenceAnsatzGene:
+    """ADAPT-style variable-length ansatz represented as Pauli evolutions.
+
+    Each entry in ``operators`` is a Pauli string over ``I/X/Y/Z`` and maps to
+    one trainable Pauli-evolution angle in the generated architecture.
+    """
+
+    n_qubits: int
+    operators: tuple[str, ...]
+    name: str = "operator_sequence"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "n_qubits", int(self.n_qubits))
+        if self.n_qubits < 1:
+            raise ValueError("OperatorSequenceAnsatzGene requires at least one qubit")
+        normalized: list[str] = []
+        for operator in self.operators:
+            pauli = str(operator).strip().upper()
+            if len(pauli) != self.n_qubits:
+                raise ValueError("operator Pauli string width must match n_qubits")
+            if any(symbol not in {"I", "X", "Y", "Z"} for symbol in pauli):
+                raise ValueError(f"unsupported Pauli symbol in operator: {operator!r}")
+            if all(symbol == "I" for symbol in pauli):
+                raise ValueError("operator sequence cannot contain the identity-only Pauli string")
+            normalized.append(pauli)
+        object.__setattr__(self, "operators", tuple(normalized))
+        object.__setattr__(self, "name", str(self.name or "operator_sequence"))
+
+    @property
+    def layers(self) -> int:
+        return len(self.operators)
+
+    def to_jsonable(self) -> dict[str, Any]:
+        return {
+            "kind": "operator_sequence",
+            "n_qubits": self.n_qubits,
+            "operators": list(self.operators),
+            "name": self.name,
+        }
+
+    @classmethod
+    def from_jsonable(cls, raw: Any) -> "OperatorSequenceAnsatzGene":
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        if not isinstance(raw, dict):
+            raise ValueError("operator sequence ansatz gene must be a JSON object")
+        if str(raw.get("kind", "operator_sequence")).lower() != "operator_sequence":
+            raise ValueError("operator sequence ansatz gene kind must be 'operator_sequence'")
+        return cls(
+            n_qubits=int(raw["n_qubits"]),
+            operators=tuple(str(operator) for operator in raw.get("operators", ())),
+            name=str(raw.get("name", "operator_sequence")),
+        )
+
+    def label(self) -> str:
+        payload = json.dumps(self.to_jsonable(), ensure_ascii=False, sort_keys=True)
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+        return f"operator_sequence_L{self.layers}_{digest}"
+
+
 def enumerate_hea_masks(n_qubits: int = 2) -> List[HEAMask]:
     masks = []
     for layers in LAYER_CHOICES:
@@ -404,6 +609,134 @@ def architecture_from_supernet_gene(
     )
 
 
+def architecture_from_chemistry_excitation_gene(
+    gene: ChemistryExcitationAnsatzGene,
+    backend: Optional[NumpyBackend] = None,
+) -> ArchitectureSpec:
+    gates: List[Dict[str, Any]] = []
+    cursor = [0]
+    for qubit in gene.hf_occupied_qubits:
+        gates.append({"type": "pauli_x", "target_qubit": int(qubit)})
+    for excitation in gene.excitations:
+        cursor[0] += 1
+        gate_type = str(excitation["type"])
+        qubits = [int(qubit) for qubit in excitation["qubits"]]
+        if gate_type == "single_excitation":
+            gates.append(
+                {
+                    "type": "single_excitation",
+                    "qubit_1": qubits[0],
+                    "qubit_2": qubits[1],
+                    "qubits": qubits,
+                    "parameter": 0.071 * cursor[0],
+                }
+            )
+        elif gate_type == "double_excitation":
+            gates.append(
+                {
+                    "type": "double_excitation",
+                    "qubits": qubits,
+                    "parameter": 0.071 * cursor[0],
+                }
+            )
+        else:
+            raise ValueError(f"unsupported chemistry excitation type: {gate_type!r}")
+    return ArchitectureSpec.from_gates(
+        name=gene.label(),
+        gates=gates,
+        n_qubits=gene.n_qubits,
+        backend=backend,
+        description="Hartree-Fock initialized chemistry excitation ansatz gene.",
+        tags=["VQE", "chemistry-excitation"],
+        metadata={
+            "ansatz_gene": gene.to_jsonable(),
+            "family": "chemistry_excitation",
+            "layers": gene.layers,
+            "topology": "chemistry_excitation_pool",
+            "hf_occupied_qubits": list(gene.hf_occupied_qubits),
+            "active_electrons": gene.active_electrons,
+            "active_spatial_orbitals": gene.active_spatial_orbitals,
+        },
+    )
+
+def architecture_from_explicit_gate_gene(
+    gene: ExplicitGateAnsatzGene,
+    backend: Optional[NumpyBackend] = None,
+) -> ArchitectureSpec:
+    return ArchitectureSpec.from_gates(
+        name=gene.label(),
+        gates=gene.gates,
+        n_qubits=gene.n_qubits,
+        backend=backend,
+        description="Explicit gate-sequence ansatz gene.",
+        tags=["QAS", "explicit-gate-sequence"],
+        metadata={
+            "ansatz_gene": gene.to_jsonable(),
+            "family": "explicit_gate_sequence",
+            "topology": "explicit",
+        },
+    )
+
+
+def _append_cx(gates: List[Dict[str, Any]], control: int, target: int) -> None:
+    gates.append({"type": "cx", "target_qubit": target, "control_qubits": [control], "control_states": [1]})
+
+
+def _append_pauli_basis_forward(gates: List[Dict[str, Any]], symbol: str, qubit: int) -> None:
+    if symbol == "X":
+        gates.append({"type": "h", "target_qubit": qubit})
+    elif symbol == "Y":
+        gates.extend({"type": "s_gate", "target_qubit": qubit} for _ in range(3))
+        gates.append({"type": "h", "target_qubit": qubit})
+
+
+def _append_pauli_basis_inverse(gates: List[Dict[str, Any]], symbol: str, qubit: int) -> None:
+    if symbol == "X":
+        gates.append({"type": "h", "target_qubit": qubit})
+    elif symbol == "Y":
+        gates.append({"type": "h", "target_qubit": qubit})
+        gates.append({"type": "s_gate", "target_qubit": qubit})
+
+
+def _append_pauli_evolution(gates: List[Dict[str, Any]], pauli: str, theta: float) -> None:
+    active = [(index, symbol) for index, symbol in enumerate(pauli) if symbol != "I"]
+    if not active:
+        return
+    for qubit, symbol in active:
+        _append_pauli_basis_forward(gates, symbol, qubit)
+    pivot = active[-1][0]
+    for qubit, _symbol in active[:-1]:
+        _append_cx(gates, qubit, pivot)
+    gates.append({"type": "rz", "target_qubit": pivot, "parameter": float(theta)})
+    for qubit, _symbol in reversed(active[:-1]):
+        _append_cx(gates, qubit, pivot)
+    for qubit, symbol in reversed(active):
+        _append_pauli_basis_inverse(gates, symbol, qubit)
+
+
+def architecture_from_operator_sequence_gene(
+    gene: OperatorSequenceAnsatzGene,
+    backend: Optional[NumpyBackend] = None,
+) -> ArchitectureSpec:
+    gates: List[Dict[str, Any]] = []
+    for index, pauli in enumerate(gene.operators, start=1):
+        _append_pauli_evolution(gates, pauli, 0.071 * index)
+    return ArchitectureSpec.from_gates(
+        name=gene.label(),
+        gates=gates,
+        n_qubits=gene.n_qubits,
+        backend=backend,
+        description="Variable-length ADAPT-style Pauli operator-sequence ansatz gene.",
+        tags=["QAS", "operator-sequence", "ADAPT-style"],
+        metadata={
+            "ansatz_gene": gene.to_jsonable(),
+            "family": "operator_sequence",
+            "layers": gene.layers,
+            "topology": "pauli_operator_sequence",
+        },
+    )
+
+
 def architecture_from_hea_mask(mask: HEAMask, backend: Optional[NumpyBackend] = None) -> ArchitectureSpec:
     gates: List[Dict[str, Any]] = []
     cursor = [0]
@@ -426,17 +759,26 @@ def architecture_from_hea_mask(mask: HEAMask, backend: Optional[NumpyBackend] = 
 __all__ = [
     "ENTANGLERS",
     "ENTANGLE_PATTERNS",
+    "ChemistryExcitationAnsatzGene",
+    "ExplicitGateAnsatzGene",
     "FINAL_ROTATIONS",
     "HEAMask",
     "LAYERWISE_SINGLE_BLOCKS",
     "LAYERWISE_TWO_QUBIT_GATES",
     "LAYER_CHOICES",
     "LayerwiseAnsatzGene",
+    "OperatorSequenceAnsatzGene",
     "SupernetAnsatzGene",
     "ROTATION_BLOCKS",
+    "architecture_from_chemistry_excitation_gene",
+    "architecture_from_explicit_gate_gene",
     "architecture_from_hea_mask",
     "architecture_from_layerwise_gene",
+    "architecture_from_operator_sequence_gene",
     "architecture_from_supernet_gene",
     "enumerate_hea_masks",
     "sample_layerwise_genes",
 ]
+
+
+

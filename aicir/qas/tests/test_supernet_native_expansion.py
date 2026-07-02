@@ -3,7 +3,33 @@ import json
 import sys
 import types
 
-from aicir.qas.vqe_loop.protocol import BENCHMARK_TABLE_FIELDS
+from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS
+
+
+def test_supernet_construction_does_not_materialize_full_layout_space(monkeypatch):
+    import aicir.qas.algorithms.supernet as supernet_module
+
+    def fail_product(*_args, **_kwargs):
+        raise AssertionError("supernet must sample layouts lazily, not materialize product()")
+
+    if hasattr(supernet_module, "product"):
+        monkeypatch.setattr(supernet_module, "product", fail_product)
+
+    config = supernet_module.SupernetConfig(
+        n_qubits=10,
+        layers=2,
+        supernet_num=1,
+        supernet_steps=0,
+        ranking_num=1,
+        finetune_steps=0,
+        device="cpu",
+    )
+    supernet = supernet_module.Supernet(config)
+
+    architecture = supernet.sample_architecture()
+
+    assert len(architecture.layers) == 2
+    assert len(architecture.layers[0].single_qubit_gates) == 10
 
 
 def test_supernet_native_gene_round_trips_to_vqe_architecture():
@@ -29,7 +55,7 @@ def test_supernet_native_gene_round_trips_to_vqe_architecture():
 
 
 def test_supernet_native_rows_use_supernet_sampled_ranked_architectures(tmp_path):
-    from aicir.qas.vqe_loop.supernet_native import build_supernet_native_rows
+    from aicir.qas.vqe_loop.p0_supernet_native import build_supernet_native_rows
 
     terms = [
         (-1.0, "ZI"),
@@ -58,6 +84,7 @@ def test_supernet_native_rows_use_supernet_sampled_ranked_architectures(tmp_path
     for row in rows:
         assert row["architecture_id"].startswith("2q_supernet_native_")
         assert row["family"] == "supernet_native"
+        assert row["source"] == "trackB_supernet"
         assert row["hamiltonian_id"] == "toy_2q"
         assert row["hamiltonian_class"] == "pauli_terms"
         assert row["supernet_rank_score"] != ""
@@ -69,138 +96,118 @@ def test_supernet_native_rows_use_supernet_sampled_ranked_architectures(tmp_path
         assert len(params) == int(row["n_params"])
         assert row["screening_energy_is_final_label"] == "false"
         assert row["supernet_warm_start_status"] == "ready"
+        assert row["expressibility_score"] not in {"", None}
+        assert row["trainability_score"] not in {"", None}
+        assert row["entanglement_score"] not in {"", None}
+        assert row["zero_cost_feature_score"] not in {"", None}
         payload = json.loads(row["ansatz_gene"])
         assert payload["kind"] == "supernet_native"
 
 
-def test_supernet_native_defaults_are_local_for_nine_qubits():
-    from aicir.qas.vqe_loop.supernet_native import _default_single_qubit_gates, _default_two_qubit_pairs
+def test_supernet_native_rows_select_by_finetuned_screening_energy(tmp_path, monkeypatch):
+    from aicir.qas.primitives.ansatz import architecture_from_supernet_gene
+    from aicir.qas.vqe_loop import supernet_native
 
-    assert _default_single_qubit_gates(9) == ("ry", "rz")
-    assert _default_two_qubit_pairs(9) == tuple((index, index + 1) for index in range(8))
+    class FakeLayer:
+        def __init__(self, single_qubit_gates, two_qubit_choices):
+            self.single_qubit_gates = tuple(single_qubit_gates)
+            self.two_qubit_choices = tuple(two_qubit_choices)
 
+    class FakeArchitecture:
+        def __init__(self, label, single_gate):
+            self.label = label
+            self.layers = (FakeLayer((single_gate, single_gate), ("cx",)),)
 
-def test_next_batch_writes_supernet_native_warm_start_refs(tmp_path, monkeypatch):
-    from aicir.qas.vqe_loop import next_batch
+    class FakeSupernetConfig:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
 
-    candidates_path = tmp_path / "candidates.csv"
-    benchmark_path = tmp_path / "benchmark.csv"
-    queue_path = tmp_path / "round1_queue.csv"
-    summary_path = tmp_path / "round1_summary.json"
+    class FakeSupernet:
+        def __init__(self, config):
+            self.config = config
+            self.architectures = [
+                FakeArchitecture("cheap_rank_winner", "ry"),
+                FakeArchitecture("finetune_winner", "rz"),
+            ]
 
-    with candidates_path.open("w", newline="", encoding="utf-8") as handle:
-        csv.DictWriter(handle, fieldnames=list(BENCHMARK_TABLE_FIELDS)).writeheader()
+        def optimize_supernet(self, *_args, **_kwargs):
+            return None
 
-    benchmark_row = {field: "" for field in BENCHMARK_TABLE_FIELDS}
-    benchmark_row.update(
-        {
-            "architecture_id": "initial_best",
-            "canonical_arch_hash": "initial_best",
-            "protocol_version": "fair_vqe_protocol_v2",
-            "source": "initial_train",
-            "label_status": "completed",
-            "n_qubits": "2",
-            "hamiltonian_id": "toy_2q",
-            "hamiltonian_class": "pauli_terms",
-            "family": "layerwise_gene",
-            "depth_group": "L1",
-            "entangler_type": "cx",
-            "topology": "linear",
-            "n_params": "1",
-            "two_q_count": "1",
-            "hamiltonian_coverage": "1.000000",
-            "hamiltonian_coverage_features": "1.000000",
-            "hamiltonian_terms": json.dumps([[-1.0, "ZI"], [-0.5, "IZ"]]),
-            "fair_best_energy": "-1.000000",
-        }
-    )
-    with benchmark_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(BENCHMARK_TABLE_FIELDS))
-        writer.writeheader()
-        writer.writerow(benchmark_row)
+        def encode_architecture(self, architecture):
+            return ((0 if architecture.label == "cheap_rank_winner" else 1,),)
 
-    def fake_build_supernet_native_rows(**kwargs):
-        assert kwargs["finetune_steps"] == 3
-        params_dir = kwargs["params_dir"]
-        assert params_dir == queue_path.parent
-        (params_dir / "supernet_params.json").write_text("[0.125]\n", encoding="utf-8")
-        row = {field: "" for field in BENCHMARK_TABLE_FIELDS}
-        row.update(
-            {
-                "architecture_id": "2q_supernet_native_fake",
-                "canonical_arch_hash": "fake_supernet_gene",
-                "n_qubits": "2",
-                "hamiltonian_id": "toy_2q",
-                "hamiltonian_class": "pauli_terms",
-                "family": "supernet_native",
-                "depth_group": "L1",
-                "entangler_type": "mixed_supernet",
-                "topology": "supernet_pairs",
-                "n_params": "1",
-                "two_q_count": "1",
-                "hamiltonian_coverage": "1.000000",
-                "hamiltonian_coverage_features": "1.000000",
-                "zero_cost_status": "pass",
-                "ansatz_gene": json.dumps({"kind": "supernet_native"}),
-                "supernet_rank_score": "-0.900000",
-                "supernet_init_params_ref": "supernet_params.json",
-                "screening_energy": "-0.950000",
-                "screening_energy_is_final_label": "false",
-                "supernet_warm_start_status": "ready",
-            }
-        )
-        return [row], {"enabled": True, "generated_rows": 1, "warm_start_params_written": 1}
+        def rank_architectures(self, *_args, **_kwargs):
+            return [
+                {
+                    "architecture": self.architectures[0],
+                    "architecture_indices": self.encode_architecture(self.architectures[0]),
+                    "selected_supernet_id": 0,
+                    "score": -0.10,
+                    "two_qubit_count": 1,
+                },
+                {
+                    "architecture": self.architectures[1],
+                    "architecture_indices": self.encode_architecture(self.architectures[1]),
+                    "selected_supernet_id": 0,
+                    "score": 0.20,
+                    "two_qubit_count": 1,
+                },
+            ]
 
-    fake_module = types.ModuleType("aicir.qas.vqe_loop.supernet_native")
-    fake_module.build_supernet_native_rows = fake_build_supernet_native_rows
-    monkeypatch.setitem(sys.modules, "aicir.qas.vqe_loop.supernet_native", fake_module)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "next_batch",
-            "--candidates",
-            str(candidates_path),
-            "--benchmark-table",
-            str(benchmark_path),
-            "--output",
-            str(queue_path),
-            "--summary",
-            str(summary_path),
-            "--batch-id",
-            "round1",
-            "--local",
-            "0",
-            "--boundary",
-            "0",
-            "--sparse",
-            "1",
-            "--control",
-            "0",
-            "--supernet-native-count",
-            "1",
-            "--supernet-native-finetune-steps",
-            "3",
-        ],
+        def finetune_architecture(self, architecture, *_args, **_kwargs):
+            gene = supernet_native.gene_from_supernet_architecture(
+                architecture,
+                n_qubits=2,
+                two_qubit_pairs=((0, 1),),
+            )
+            circuit = architecture_from_supernet_gene(gene).circuit
+            energy = -0.20 if architecture.label == "cheap_rank_winner" else -1.50
+            return circuit, [], {}, energy
+
+    fake_module = types.ModuleType("aicir.qas.algorithms.supernet")
+    fake_module.Supernet = FakeSupernet
+    fake_module.SupernetConfig = FakeSupernetConfig
+    monkeypatch.setitem(sys.modules, "aicir.qas.algorithms.supernet", fake_module)
+
+    rows, summary = supernet_native.build_supernet_native_rows(
+        hamiltonian_terms=[(-1.0, "ZI"), (-0.5, "IZ")],
+        hamiltonian_id="toy_2q",
+        hamiltonian_class="pauli_terms",
+        count=1,
+        layers=1,
+        supernet_num=1,
+        supernet_steps=1,
+        ranking_num=2,
+        finetune_steps=1,
+        seed=7,
+        device="cpu",
+        params_dir=tmp_path,
     )
 
-    next_batch.main()
+    selected_gene = json.loads(rows[0]["ansatz_gene"])
+    assert selected_gene["single_qubit_layers"] == [["rz", "rz"]]
+    assert rows[0]["screening_energy"] == "-1.500000000000"
+    assert summary["screened_candidate_count"] == 2
+    random_baseline = summary["random_baseline_row"]
+    assert random_baseline["screening_energy"] == "-0.200000000000"
+    assert random_baseline["supernet_rank_score"] == "-0.100000000000"
+    assert random_baseline["supernet_warm_start_status"] == "ready"
 
-    with queue_path.open(newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
-    assert rows[0]["source"] == "trackB_supernet"
-    assert rows[0]["supernet_init_params_ref"] == "supernet_params.json"
-    assert rows[0]["screening_energy_is_final_label"] == "false"
-    assert rows[0]["supernet_warm_start_status"] == "ready"
-    assert (queue_path.parent / rows[0]["supernet_init_params_ref"]).exists()
 
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    assert summary["source_counts"] == {"trackB_supernet": 1}
-    assert summary["supernet_native"]["warm_start_params_written"] == 1
+def test_supernet_native_defaults_mirror_supernet_for_nine_qubits():
+    from aicir.qas.vqe_loop.p0_supernet_native import _default_single_qubit_gates, _default_two_qubit_pairs
+
+    assert _default_single_qubit_gates(9) == ("i", "h", "rx", "ry", "rz")
+    assert _default_two_qubit_pairs(9) == tuple(
+        (left, right)
+        for left in range(9)
+        for right in range(left + 1, 9)
+        if right - left <= 2
+    )
 
 
 def test_supernet_bootstrap_queue_records_top_candidates_for_oracle(tmp_path, monkeypatch):
-    from aicir.qas.vqe_loop.vqe_qas_loop import ClosedLoopConfig, write_supernet_bootstrap_queue
+    from aicir.qas.vqe_loop.p0_bootstrap_fair import ClosedLoopConfig, write_supernet_bootstrap_queue
 
     def fake_build_supernet_native_rows(**kwargs):
         assert kwargs["hamiltonian_terms"] == [(-1.0, "ZI"), (-0.5, "IZ")]
@@ -235,9 +242,9 @@ def test_supernet_bootstrap_queue_records_top_candidates_for_oracle(tmp_path, mo
         )
         return [row], {"enabled": True, "generated_rows": 1, "warm_start_params_written": 1}
 
-    fake_module = types.ModuleType("aicir.qas.vqe_loop.supernet_native")
+    fake_module = types.ModuleType("aicir.qas.vqe_loop.p0_supernet_native")
     fake_module.build_supernet_native_rows = fake_build_supernet_native_rows
-    monkeypatch.setitem(sys.modules, "aicir.qas.vqe_loop.supernet_native", fake_module)
+    monkeypatch.setitem(sys.modules, "aicir.qas.vqe_loop.p0_supernet_native", fake_module)
 
     config = ClosedLoopConfig(
         output_dir=tmp_path,
@@ -280,38 +287,164 @@ def test_supernet_bootstrap_queue_records_top_candidates_for_oracle(tmp_path, mo
     assert json.loads(summary_path.read_text(encoding="utf-8"))["mode"] == "supernet_native_bootstrap"
 
 
-def test_trackb_supernet_completed_label_is_preferred_boundary_anchor():
-    from aicir.qas.vqe_loop.geometry import CandidateRecord
-    from aicir.qas.vqe_loop.next_batch import _priority_boundary_anchors
-    from aicir.qas.vqe_loop.protocol import LabelSource
+def test_supernet_bootstrap_closed_loop_runs_p0_fair_only(tmp_path, monkeypatch):
+    from aicir.qas.vqe_loop.p0_bootstrap_fair import ClosedLoopConfig, run_vqe_qas_closed_loop
 
-    def record(architecture_id, source):
-        return CandidateRecord(
-            architecture_id=architecture_id,
-            canonical_arch_hash=architecture_id,
-            family="layerwise_gene",
-            entangler_type="mixed",
-            topology="linear",
-            depth_group="L1",
-            n_params=2.0,
-            two_q_count=1.0,
-            hamiltonian_id="toy",
-            hamiltonian_class="pauli_terms",
-            hamiltonian_coverage=1.0,
-            metadata={"source": source, "n_qubits": 2},
+    def fake_build_supernet_native_rows(**kwargs):
+        params_dir = kwargs["params_dir"]
+        (params_dir / "bootstrap_params.json").write_text("[0.25]\n", encoding="utf-8")
+        row = {field: "" for field in BENCHMARK_TABLE_FIELDS}
+        row.update(
+            {
+                "architecture_id": "2q_supernet_native_bootstrap",
+                "canonical_arch_hash": "bootstrap_gene",
+                "n_qubits": "2",
+                "hamiltonian_id": "toy_ising",
+                "hamiltonian_class": "ising",
+                "family": "supernet_native",
+                "depth_group": "L1",
+                "entangler_type": "mixed_supernet",
+                "topology": "supernet_pairs",
+                "n_params": "1",
+                "two_q_count": "1",
+                "zero_cost_status": "pass",
+                "ansatz_gene": json.dumps({"kind": "supernet_native"}),
+                "supernet_init_params_ref": "bootstrap_params.json",
+                "screening_energy_is_final_label": "false",
+            }
+        )
+        return [row], {"enabled": True, "generated_rows": 1, "warm_start_params_written": 1}
+
+    def fake_run_module(module, args, *, cwd):
+        assert module == "aicir.qas.vqe_loop.fair_labeling"
+        output = Path(args[args.index("--output") + 1])
+        output.write_text(
+            "architecture_id,label_status,protocol_version,fair_best_energy,source\n"
+            "2q_supernet_native_bootstrap,completed,fair_vqe_protocol_v2,-1.0,trackB_supernet\n",
+            encoding="utf-8",
         )
 
-    supernet = record("supernet_top", LabelSource.TRACKB_SUPERNET.value)
-    initial = record("initial_best", LabelSource.INITIAL_TRAIN.value)
-    boundary = record("boundary_best", LabelSource.TRACKB_BOUNDARY.value)
+    fake_module = types.ModuleType("aicir.qas.vqe_loop.p0_supernet_native")
+    fake_module.build_supernet_native_rows = fake_build_supernet_native_rows
+    monkeypatch.setitem(sys.modules, "aicir.qas.vqe_loop.p0_supernet_native", fake_module)
+    monkeypatch.setattr("aicir.qas.vqe_loop.p0_bootstrap_fair._run_module", fake_run_module)
 
-    anchors = _priority_boundary_anchors(
-        [
-            (boundary, -2.0),
-            (initial, -1.0),
-            (supernet, -1.5),
-        ],
-        limit=2,
+    result = run_vqe_qas_closed_loop(
+        ClosedLoopConfig(
+            output_dir=tmp_path,
+            n_qubits=2,
+            hamiltonian_terms=[(-1.0, "ZI"), (-0.5, "IZ")],
+            hamiltonian_id="toy_ising",
+            hamiltonian_class="ising",
+            initial_labels=0,
+            rounds=0,
+            supernet_native_count=1,
+        )
     )
 
-    assert [anchor.architecture_id for anchor in anchors] == ["supernet_top", "initial_best"]
+    assert result.initial_queue.exists()
+    assert result.final_benchmark_table.exists()
+    summary = json.loads((tmp_path / "closed_loop_summary.json").read_text(encoding="utf-8"))
+    assert summary["mode"] == "p0_bootstrap_fair_only"
+    assert summary["final_best_energy"] == -1.0
+
+def test_supernet_bootstrap_count_covers_k_min_when_rounds_need_oracle():
+    from aicir.qas.vqe_loop.p0_bootstrap_fair import (
+        ClosedLoopConfig,
+        ClosedLoopResolvedDefaults,
+        effective_supernet_bootstrap_count,
+    )
+
+    config = ClosedLoopConfig(
+        output_dir="unused",
+        n_qubits=9,
+        hamiltonian_terms=[(-1.0, "ZI")],
+        initial_labels=0,
+        rounds=1,
+        k_min=3,
+        supernet_native_count=1,
+    )
+    resolved = ClosedLoopResolvedDefaults(
+        initial_labels=0,
+        rounds=1,
+        local=3,
+        boundary=2,
+        sparse=2,
+        control=1,
+    )
+
+    assert effective_supernet_bootstrap_count(config, resolved) == 3
+
+
+def test_closed_loop_uses_k_min_sized_supernet_bootstrap(tmp_path, monkeypatch):
+    from aicir.qas.vqe_loop import vqe_qas_loop
+    from aicir.qas.vqe_loop.p0_bootstrap_fair import ClosedLoopConfig
+
+    observed_counts = []
+
+    def fake_build_supernet_native_rows(**kwargs):
+        observed_counts.append(kwargs["count"])
+        rows = []
+        params_dir = kwargs["params_dir"]
+        for index in range(int(kwargs["count"])):
+            params_name = f"bootstrap_params_{index}.json"
+            (params_dir / params_name).write_text("[0.25]\n", encoding="utf-8")
+            row = {field: "" for field in BENCHMARK_TABLE_FIELDS}
+            row.update(
+                {
+                    "architecture_id": f"2q_supernet_native_bootstrap_{index}",
+                    "canonical_arch_hash": f"bootstrap_gene_{index}",
+                    "n_qubits": "2",
+                    "hamiltonian_id": "toy_ising",
+                    "hamiltonian_class": "ising",
+                    "family": "supernet_native",
+                    "depth_group": "L1",
+                    "entangler_type": "mixed_supernet",
+                    "topology": "supernet_pairs",
+                    "n_params": "1",
+                    "two_q_count": "1",
+                    "hamiltonian_coverage": "1.000000",
+                    "hamiltonian_coverage_features": "1.000000",
+                    "zero_cost_status": "pass",
+                    "ansatz_gene": json.dumps({"kind": "supernet_native"}),
+                    "supernet_rank_score": f"{index:.6f}",
+                    "supernet_init_params_ref": params_name,
+                    "screening_energy": f"{index:.6f}",
+                    "screening_energy_is_final_label": "false",
+                    "supernet_warm_start_status": "ready",
+                }
+            )
+            rows.append(row)
+        return rows, {"enabled": True, "generated_rows": len(rows), "warm_start_params_written": len(rows)}
+
+    fake_module = types.ModuleType("aicir.qas.vqe_loop.p0_supernet_native")
+    fake_module.build_supernet_native_rows = fake_build_supernet_native_rows
+    monkeypatch.setitem(sys.modules, "aicir.qas.vqe_loop.p0_supernet_native", fake_module)
+
+    config = ClosedLoopConfig(
+        output_dir=tmp_path,
+        n_qubits=2,
+        hamiltonian_terms=[(-1.0, "ZI"), (-0.5, "IZ")],
+        hamiltonian_id="toy_ising",
+        hamiltonian_class="ising",
+        initial_labels=0,
+        rounds=1,
+        k_min=3,
+        supernet_native_count=1,
+    )
+    resolved = vqe_qas_loop.resolve_closed_loop_defaults(
+        n_qubits=config.n_qubits,
+        initial_labels=config.initial_labels,
+        rounds=config.rounds,
+    )
+    config = vqe_qas_loop.replace(
+        config,
+        supernet_native_count=vqe_qas_loop.effective_supernet_bootstrap_count(config, resolved),
+    )
+
+    vqe_qas_loop.write_supernet_bootstrap_queue(config, output_dir=tmp_path)
+
+    assert observed_counts[0] == 3
+    summary = json.loads((tmp_path / "supernet_bootstrap_plan_summary.json").read_text(encoding="utf-8"))
+    assert summary["planned_total"] == 3
+

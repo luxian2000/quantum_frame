@@ -668,3 +668,354 @@ def test_light_vqe_registry_passes_initial_parameters_for_warm_start(tmp_path):
     )
 
     assert initial_parameters_seen == [[0.125, 0.25], [0.125, 0.25]]
+
+
+def test_light_vqe_registry_uses_row_reference_energy_without_diagonalizing(tmp_path):
+    from aicir.qas.primitives.ansatz import LayerwiseAnsatzGene
+    from aicir.qas.vqe_loop import cheap_eval_experiment as experiment
+
+    gene = LayerwiseAnsatzGene(
+        n_qubits=2,
+        single_blocks=("ry", "ry"),
+        edge_entanglers=(("none",),),
+        entangle_pattern="linear",
+    )
+    seen_reference_energies = []
+
+    class FakeResult:
+        energy = -0.5
+        best_parameters = []
+        evaluations = 1
+        metadata = {"nfev": 1}
+
+    def fake_optimizer(_architecture, problem, **_kwargs):
+        seen_reference_energies.append(problem.reference_energy)
+        return FakeResult()
+
+    original_exact = experiment.exact_ground_energy
+    experiment.exact_ground_energy = lambda _terms: (_ for _ in ()).throw(RuntimeError("unexpected exact solve"))
+    try:
+        registry, fair_runner = experiment.build_light_vqe_evaluator_registry(
+            problem=None,
+            e1_max_evals=1,
+            e2_max_evals=2,
+            fair_max_evals=3,
+            optimizer=fake_optimizer,
+        )
+        experiment.run_experiment(
+            experiment.CheapEvalExperimentConfig(
+                benchmark_set=("row_problem",),
+                depths=(1,),
+                n_architectures=1,
+                proxy_fields=("E1",),
+            ),
+            tmp_path / "rows.csv",
+            evaluator_registry={"E1": registry["E1"]},
+            architecture_sampler=lambda _config: (
+                {
+                    "architecture_id": "arch_row_problem",
+                    "ansatz_gene": json.dumps(gene.to_jsonable()),
+                    "n_qubits": 2,
+                    "hamiltonian_terms": json.dumps([[-1.0, "ZI"]]),
+                    "reference_energy": "-1.25",
+                },
+            ),
+            fair_vqe_runner=fair_runner,
+        )
+    finally:
+        experiment.exact_ground_energy = original_exact
+
+    assert seen_reference_energies == [-1.25, -1.25]
+
+
+def test_supernet_e5_evaluator_scores_supernet_native_gene_with_cached_supernet():
+    from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+    from aicir.qas.problems.hamiltonians import VQEProblem
+    from aicir.qas.vqe_loop.p0_supernet_native import build_native_supernet_e5_evaluator
+
+    problem = VQEProblem(
+        name="two_qubit_z",
+        n_qubits=2,
+        hamiltonian=((-1.0, "ZI"),),
+        reference_energy=-1.0,
+    )
+    gene = SupernetAnsatzGene(
+        n_qubits=2,
+        single_qubit_layers=(("ry", "h"),),
+        two_qubit_layers=(("cx",),),
+        two_qubit_pairs=((0, 1),),
+    )
+    calls = {"factory": 0, "optimize": 0, "rank": 0, "finetune": 0}
+
+    class FakeSupernet:
+        def __init__(self, config):
+            calls["factory"] += 1
+            self.config = config
+
+        def optimize_supernet(self, objective=None, dataset=None, hamiltonian=None):
+            calls["optimize"] += 1
+            assert objective is None
+            assert dataset is None
+            assert hamiltonian.n_qubits == 2
+            return []
+
+        def rank_architectures(self, objective=None, dataset=None, hamiltonian=None, *, candidates=None, split="train"):
+            calls["rank"] += 1
+            assert objective is None
+            assert dataset is None
+            assert split == "train"
+            assert hamiltonian.n_qubits == 2
+            assert len(candidates) == 1
+            assert candidates[0].layers[0].single_qubit_gates == ("ry", "h")
+            assert candidates[0].layers[0].two_qubit_choices == ("cx",)
+            return [
+                {
+                    "candidate_index": 0,
+                    "architecture": candidates[0],
+                    "selected_supernet_id": 1,
+                    "score": -1.25,
+                    "candidate_losses": [-1.0, -1.25],
+                    "two_qubit_count": 1,
+                    "cnot_count": 1,
+                }
+            ]
+
+        def finetune_architecture(self, architecture, supernet_id, objective=None, dataset=None, hamiltonian=None):
+            calls["finetune"] += 1
+            assert architecture.layers[0].single_qubit_gates == ("ry", "h")
+            assert supernet_id == 1
+            assert objective is None
+            assert dataset is None
+            assert hamiltonian.n_qubits == 2
+            return None, {}, [], -1.5
+
+    evaluator = build_native_supernet_e5_evaluator(
+        problem=problem,
+        supernet_num=2,
+        supernet_steps=3,
+        finetune_steps=5,
+        seed=7,
+        supernet_factory=FakeSupernet,
+    )
+    row = {
+        "architecture_id": "arch_a",
+        "ansatz_gene": json.dumps(gene.to_jsonable()),
+        "n_qubits": 2,
+    }
+
+    first = evaluator(row)
+    second = evaluator(dict(row))
+
+    assert first["E5"] == -1.5
+    assert first["E5_mean"] == -1.125
+    assert first["E5_min"] == -1.25
+    assert first["E5_std"] == 0.125
+    assert first["two_q_count"] == 1
+    assert first["n_qubits"] == 2
+    assert first["exposure_count"] == 2
+    assert second["E5"] == -1.5
+    assert calls == {"factory": 1, "optimize": 1, "rank": 2, "finetune": 2}
+
+
+def test_supernet_e5_evaluator_does_not_build_architecture_spec_for_counts():
+    from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+    from aicir.qas.problems.hamiltonians import VQEProblem
+    from aicir.qas.vqe_loop import cheap_eval_experiment as experiment
+
+    problem = VQEProblem(
+        name="two_qubit_z",
+        n_qubits=2,
+        hamiltonian=((-1.0, "ZI"),),
+        reference_energy=-1.0,
+    )
+    gene = SupernetAnsatzGene(
+        n_qubits=2,
+        single_qubit_layers=(("ry", "rz"), ("h", "i")),
+        two_qubit_layers=(("rzz",), ("cx",)),
+        two_qubit_pairs=((0, 1),),
+    )
+
+    class FakeSupernet:
+        def __init__(self, _config):
+            pass
+
+        def optimize_supernet(self, **_kwargs):
+            return []
+
+        def rank_architectures(self, **kwargs):
+            return [
+                {
+                    "candidate_index": 0,
+                    "architecture": kwargs["candidates"][0],
+                    "selected_supernet_id": 0,
+                    "score": -0.5,
+                    "candidate_losses": [-0.5],
+                }
+            ]
+
+    original_builder = experiment.architecture_from_supernet_gene
+    experiment.architecture_from_supernet_gene = lambda _gene: (_ for _ in ()).throw(
+        RuntimeError("unexpected ArchitectureSpec build")
+    )
+    try:
+        evaluator = experiment.build_native_supernet_e5_evaluator(
+            problem=problem,
+            finetune_steps=0,
+            supernet_factory=FakeSupernet,
+        )
+        result = evaluator({"ansatz_gene": json.dumps(gene.to_jsonable()), "n_qubits": 2})
+    finally:
+        experiment.architecture_from_supernet_gene = original_builder
+
+    assert result["n_params"] == 3
+    assert result["two_q_count"] == 2
+
+
+def test_supernet_e5_evaluator_uses_rank_score_when_finetune_disabled():
+    from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+    from aicir.qas.problems.hamiltonians import VQEProblem
+    from aicir.qas.vqe_loop.p0_supernet_native import build_native_supernet_e5_evaluator
+
+    problem = VQEProblem(
+        name="two_qubit_z",
+        n_qubits=2,
+        hamiltonian=((-1.0, "ZI"),),
+        reference_energy=-1.0,
+    )
+    gene = SupernetAnsatzGene(
+        n_qubits=2,
+        single_qubit_layers=(("ry", "rz"),),
+        two_qubit_layers=(("none",),),
+        two_qubit_pairs=((0, 1),),
+    )
+    finetune_calls = []
+
+    class FakeSupernet:
+        def __init__(self, _config):
+            pass
+
+        def optimize_supernet(self, **_kwargs):
+            return []
+
+        def rank_architectures(self, **kwargs):
+            candidate = kwargs["candidates"][0]
+            return [
+                {
+                    "candidate_index": 0,
+                    "architecture": candidate,
+                    "selected_supernet_id": 0,
+                    "score": -0.75,
+                    "candidate_losses": [-0.75],
+                    "two_qubit_count": 0,
+                }
+            ]
+
+        def finetune_architecture(self, *_args, **_kwargs):
+            finetune_calls.append("called")
+            return None, {}, [], -1.0
+
+    evaluator = build_native_supernet_e5_evaluator(
+        problem=problem,
+        finetune_steps=0,
+        supernet_factory=FakeSupernet,
+    )
+
+    result = evaluator({"ansatz_gene": json.dumps(gene.to_jsonable()), "n_qubits": 2})
+
+    assert result["E5"] == -0.75
+    assert result["E5_mean"] == -0.75
+    assert result["E5_std"] == 0.0
+    assert finetune_calls == []
+
+
+def test_supernet_e5_evaluator_exposes_shared_parameter_warm_start():
+    from aicir.qas.primitives.ansatz import SupernetAnsatzGene
+    from aicir.qas.problems.hamiltonians import VQEProblem
+    from aicir.qas.vqe_loop.p0_supernet_native import build_native_supernet_e5_evaluator
+
+    problem = VQEProblem(
+        name="two_qubit_z",
+        n_qubits=2,
+        hamiltonian=((-1.0, "ZI"),),
+        reference_energy=-1.0,
+    )
+    gene = SupernetAnsatzGene(
+        n_qubits=2,
+        single_qubit_layers=(("ry", "rz"),),
+        two_qubit_layers=(("rzz",),),
+        two_qubit_pairs=((0, 1),),
+    )
+    calls = {"optimize": 0, "rank": 0, "build": 0}
+
+    class FakeCircuit:
+        gates = [
+            {"name": "ry", "parameter": 0.1},
+            {"name": "rz", "parameter": 0.2},
+            {"name": "rzz", "parameter": 0.3},
+        ]
+
+    class FakeSupernet:
+        def __init__(self, _config):
+            pass
+
+        def optimize_supernet(self, **_kwargs):
+            calls["optimize"] += 1
+            return []
+
+        def rank_architectures(self, **kwargs):
+            calls["rank"] += 1
+            return [
+                {
+                    "candidate_index": 0,
+                    "architecture": kwargs["candidates"][0],
+                    "selected_supernet_id": 1,
+                    "score": -0.75,
+                    "candidate_losses": [-0.5, -0.75],
+                }
+            ]
+
+        def build_circuit(self, architecture, supernet_id=0, parameters=None):
+            calls["build"] += 1
+            assert architecture.layers[0].single_qubit_gates == ("ry", "rz")
+            assert supernet_id == 1
+            assert parameters is None
+            return FakeCircuit(), [], []
+
+    evaluator = build_native_supernet_e5_evaluator(
+        problem=problem,
+        supernet_num=2,
+        supernet_steps=3,
+        finetune_steps=0,
+        supernet_factory=FakeSupernet,
+    )
+    warm_start = evaluator.warm_start_parameters({"ansatz_gene": json.dumps(gene.to_jsonable()), "n_qubits": 2})
+
+    assert warm_start == [0.1, 0.2, 0.3]
+    assert calls == {"optimize": 1, "rank": 1, "build": 1}
+
+
+def test_supernet_e5_evaluator_rejects_non_supernet_gene():
+    from aicir.qas.primitives.ansatz import LayerwiseAnsatzGene
+    from aicir.qas.problems.hamiltonians import VQEProblem
+    from aicir.qas.vqe_loop.p0_supernet_native import build_native_supernet_e5_evaluator
+
+    problem = VQEProblem(
+        name="two_qubit_z",
+        n_qubits=2,
+        hamiltonian=((-1.0, "ZI"),),
+        reference_energy=-1.0,
+    )
+    gene = LayerwiseAnsatzGene(
+        n_qubits=2,
+        single_blocks=("ry", "ry"),
+        edge_entanglers=(("cx",),),
+    )
+    evaluator = build_native_supernet_e5_evaluator(problem=problem, supernet_factory=lambda _config: None)
+
+    try:
+        evaluator({"ansatz_gene": json.dumps(gene.to_jsonable()), "n_qubits": 2})
+    except ValueError as exc:
+        assert "supernet_native" in str(exc)
+    else:
+        raise AssertionError("E5 native evaluator must reject non-supernet genes")
+

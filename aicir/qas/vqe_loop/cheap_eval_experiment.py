@@ -17,20 +17,26 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from aicir.qas.core._types import ArchitectureSpec
-from aicir.qas.primitives.ansatz import (
-    LayerwiseAnsatzGene,
-    SupernetAnsatzGene,
-    architecture_from_layerwise_gene,
-    architecture_from_supernet_gene,
-)
-from aicir.qas.problems.hamiltonians import VQEProblem, exact_ground_energy
+
+from aicir.qas.problems.hamiltonians import VQEProblem
+from aicir.qas.vqe_loop.benchmark_table import architecture_from_candidate_row
 from aicir.qas.vqe_loop.fair_vqe import VQEOptimizationResult, optimize_vqe_energy
-from aicir.qas.vqe_loop.geometry import parse_pauli_hamiltonian_terms
+from aicir.qas.vqe_loop.benchmark_table import problem_from_row_terms
+from aicir.qas.vqe_loop.benchmark_table import is_empty as _is_empty
+from aicir.qas.vqe_loop.p0_supernet_native import (
+    _hamiltonian_terms_from_candidate_row as _hamiltonian_terms_from_experiment_row,
+    _mean_min_std,
+    _supernet_architecture_from_gene,
+    _supernet_gene_from_candidate_row as _supernet_gene_from_experiment_row,
+    _supernet_gene_static_counts,
+    build_native_supernet_e5_evaluator,
+)
 
 
 EXPERIMENT_FIELDS: tuple[str, ...] = (
     "problem_id",
     "hamiltonian_class",
+    "reference_energy",
     "sampling_mode",
     "depth",
     "architecture_id",
@@ -110,10 +116,7 @@ EvaluatorRegistry = Mapping[str, Callable[[Mapping[str, Any]], Mapping[str, Any]
 FairVqeRunner = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 VQEOptimizer = Callable[..., VQEOptimizationResult]
 InitialParametersProvider = Sequence[float] | Callable[[Mapping[str, Any]], Sequence[float] | None] | None
-
-
-def _is_empty(value: Any) -> bool:
-    return value is None or value == ""
+SupernetFactory = Callable[[Any], Any]
 
 
 def _set_if_empty(row: dict[str, Any], key: str, value: Any) -> None:
@@ -141,55 +144,12 @@ def _merge_evaluator_result(row: dict[str, Any], field: str, result: Mapping[str
 
 
 def _architecture_from_experiment_row(row: Mapping[str, Any]) -> ArchitectureSpec:
-    cached = row.get("_cached_architecture")
-    if isinstance(cached, ArchitectureSpec):
-        return cached
-    raw_gene = row.get("ansatz_gene", "")
-    if raw_gene is None or str(raw_gene).strip() in {"", '""', "null"}:
-        raise ValueError("experiment row requires ansatz_gene for real VQE evaluation")
-    parsed = json.loads(raw_gene) if isinstance(raw_gene, str) else raw_gene
-    if isinstance(parsed, str):
-        parsed = json.loads(parsed)
-    if not isinstance(parsed, Mapping):
-        raise ValueError("ansatz_gene must decode to a JSON object")
-    if str(parsed.get("kind", "")).lower() == "supernet_native":
-        architecture = architecture_from_supernet_gene(SupernetAnsatzGene.from_jsonable(parsed))
-    else:
-        architecture = architecture_from_layerwise_gene(LayerwiseAnsatzGene.from_jsonable(parsed))
-    if isinstance(row, dict):
-        row["_cached_architecture"] = architecture
-    return architecture
-
-
-def _problem_from_experiment_row(row: Mapping[str, Any], default_problem: VQEProblem | None) -> VQEProblem:
-    cached = row.get("_cached_problem")
-    if isinstance(cached, VQEProblem):
-        return cached
-    raw_terms = row.get("hamiltonian_terms", "")
-    if raw_terms is None or str(raw_terms).strip() == "":
-        if default_problem is None:
-            raise ValueError("experiment row requires hamiltonian_terms when no default problem is provided")
-        if isinstance(row, dict):
-            row["_cached_problem"] = default_problem
-        return default_problem
-    loaded = json.loads(str(raw_terms))
-    terms = parse_pauli_hamiltonian_terms(loaded)
-    if not terms:
-        raise ValueError("hamiltonian_terms must contain at least one Pauli term")
-    widths = {len(pauli) for _coeff, pauli in terms}
-    n_qubits = int(row.get("n_qubits") or max(widths))
-    if widths != {n_qubits}:
-        raise ValueError(f"hamiltonian_terms width must match n_qubits={n_qubits}; found widths={sorted(widths)}")
-    problem = VQEProblem(
-        name=str(row.get("hamiltonian_id") or f"row_pauli_{n_qubits}q"),
-        n_qubits=n_qubits,
-        hamiltonian=terms,
-        reference_energy=exact_ground_energy(terms),
-    )
-    if isinstance(row, dict):
-        row["_cached_problem"] = problem
-    return problem
-
+    try:
+        return architecture_from_candidate_row(row)
+    except ValueError as exc:
+        if "requires ansatz_gene" in str(exc):
+            raise ValueError("experiment row requires ansatz_gene for real VQE evaluation") from exc
+        raise
 
 def _row_order_seed_offset(row: Mapping[str, Any]) -> int:
     try:
@@ -224,7 +184,7 @@ def _run_vqe_proxy(
     initial_parameters: InitialParametersProvider = None,
 ) -> dict[str, Any]:
     architecture = _architecture_from_experiment_row(row)
-    resolved_problem = _problem_from_experiment_row(row, problem)
+    resolved_problem = problem_from_row_terms(row, default_problem=problem)
     order_offset = _row_order_seed_offset(row)
     offsets = tuple(int(offset) for offset in seed_offsets) or (0,)
     results = []
@@ -320,6 +280,7 @@ def build_light_vqe_evaluator_registry(
         )
 
     return {"E1": e1, "E2": e2}, fair
+
 
 
 def run_experiment(
@@ -431,3 +392,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+

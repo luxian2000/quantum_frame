@@ -30,6 +30,8 @@ TWO_QUBIT_GATE_TYPES = {
     "ccnot",
     "rzz",
     "rxx",
+    "single_excitation",
+    "double_excitation",
 }
 
 
@@ -96,3 +98,5 @@ def assign_ranks(scores: Iterable[RankedScore]) -> List[RankedScore]:
     for rank, score in enumerate(ranked, start=1):
         score.rank = rank
     return ranked
+
+

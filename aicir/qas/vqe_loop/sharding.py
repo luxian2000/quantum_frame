@@ -1,6 +1,6 @@
 """Run a fair-label queue as independent contiguous shards.
 
-This scheduler wraps ``python -m aicir.qas.vqe_loop.labeling`` for multi-NPU nodes.  It
+This scheduler wraps ``python -m aicir.qas.vqe_loop.fair_labeling`` for multi-NPU nodes.  It
 keeps each VQE task independent, assigns ``LOCAL_RANK`` per shard, preserves
 global seed offsets, and merges shard CSVs back into one label table.
 """
@@ -8,7 +8,6 @@ global seed offsets, and merges shard CSVs back into one label table.
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import subprocess
@@ -18,22 +17,9 @@ from typing import Any, Mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from aicir.qas.vqe_loop.protocol import BENCHMARK_TABLE_FIELDS
+from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS
+from aicir.qas.vqe_loop.benchmark_table import read_csv_rows, write_csv_rows
 
-
-def _read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8-sig") as handle:
-        return list(csv.DictReader(handle))
-
-
-def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(BENCHMARK_TABLE_FIELDS)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row.get(field, "") for field in fieldnames})
 
 
 def _contiguous_shards(n_rows: int, num_shards: int) -> list[tuple[int, int]]:
@@ -76,7 +62,7 @@ def _runner_command(args: argparse.Namespace, shard_queue: Path, shard_output: P
     command = [
         str(args.python),
         "-m",
-        "aicir.qas.vqe_loop.labeling",
+        "aicir.qas.vqe_loop.fair_labeling",
         "--queue",
         str(shard_queue),
         "--output",
@@ -109,13 +95,13 @@ def run_sharded_labels(args: argparse.Namespace) -> dict[str, Any]:
     work_dir = Path(args.work_dir) if args.work_dir else output_path.with_suffix("")
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = _read_csv(queue_path)
+    rows = read_csv_rows(queue_path)
     bounds = _contiguous_shards(len(rows), int(args.num_shards))
     processes: list[tuple[int, int, int, Path, Path, subprocess.Popen[str]]] = []
     for shard_index, (start, end) in enumerate(bounds):
         shard_queue = work_dir / f"{output_path.stem}.shard{shard_index:02d}of{len(bounds):02d}.queue.csv"
         shard_output = work_dir / f"{output_path.stem}.shard{shard_index:02d}of{len(bounds):02d}.csv"
-        _write_csv(shard_queue, rows[start:end])
+        write_csv_rows(shard_queue, rows[start:end], fieldnames=BENCHMARK_TABLE_FIELDS)
         command = _runner_command(args, shard_queue, shard_output, start)
         env = _shard_environment(
             os.environ,
@@ -138,8 +124,8 @@ def run_sharded_labels(args: argparse.Namespace) -> dict[str, Any]:
 
     merged: list[dict[str, str]] = []
     for _shard_index, _start, _end, _shard_queue, shard_output, _process in processes:
-        merged.extend(_read_csv(shard_output))
-    _write_csv(output_path, merged)
+        merged.extend(read_csv_rows(shard_output))
+    write_csv_rows(output_path, merged, fieldnames=BENCHMARK_TABLE_FIELDS)
 
     summary = {
         "queue": str(queue_path),
@@ -176,7 +162,7 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--work-dir", default=None)
     parser.add_argument("--summary", default=None)
-    parser.add_argument("--protocol", default="aicir/qas/vqe_loop/fair_label_protocol.json")
+    parser.add_argument("--protocol", default="default")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--num-shards", type=int, default=4)
     parser.add_argument("--device-offset", type=int, default=0)

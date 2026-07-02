@@ -6,10 +6,10 @@ from typing import Any, Callable
 
 QASMethod = str
 
-_PUBLIC_METHODS = ("supernet", "supernet_classification", "supernet_h2", "ppo_rb", "ppr_dql", "crlqas")
+_PUBLIC_METHODS = ("supernet", "supernet_classification", "supernet_h2", "ppo_rb", "ppr_dql", "crlqas", "vqe_loop")
 
 _METHOD_ALIASES = {
-    # supernet (formerly VQA_QAS) — keep the old strings working for run().
+    # supernet (formerly VQA_QAS): keep the old strings working for run().
     "supernet": "supernet",
     "vqa": "supernet",
     "vqa_qas": "supernet",
@@ -26,6 +26,10 @@ _METHOD_ALIASES = {
     "ppr_dql": "ppr_dql",
     "crl": "crlqas",
     "crlqas": "crlqas",
+    "closed_loop": "vqe_loop",
+    "vqe_qas": "vqe_loop",
+    "vqe_qas_loop": "vqe_loop",
+    "vqe_loop": "vqe_loop",
 }
 
 
@@ -93,6 +97,21 @@ def crlqas(**kwargs: Any) -> Any:
     return _build(CRLQASConfig, values)
 
 
+def vqe_loop(**kwargs: Any) -> Any:
+    """Build a ``vqe_loop`` closed-loop config with optional field overrides."""
+
+    from pathlib import Path
+
+    from ..vqe_loop import ClosedLoopConfig
+
+    values = dict(kwargs)
+    if "output_dir" in values:
+        values["output_dir"] = Path(values["output_dir"])
+    if "protocol" in values:
+        values["protocol"] = Path(values["protocol"])
+    return _build(ClosedLoopConfig, values)
+
+
 def adam_spsa(**kwargs: Any) -> Any:
     """Build the nested Adam-SPSA config used by ``CRLQAS``."""
 
@@ -150,6 +169,7 @@ _FACTORIES = {
     "ppo_rb": ppo_rb,
     "ppr_dql": ppr_dql,
     "crlqas": crlqas,
+    "vqe_loop": vqe_loop,
 }
 
 __all__ = [
@@ -167,4 +187,5 @@ __all__ = [
     "supernet",
     "supernet_classification",
     "supernet_h2",
+    "vqe_loop",
 ]
