@@ -248,6 +248,65 @@ class _NpuHamiltonianExpectationFn(torch.autograd.Function):
         return torch.complex(g_re, g_im).reshape(state.shape), None, None
 
 
+class _NpuTransposeFn(torch.autograd.Function):
+    """轴置换的 NPU 自动微分安全包装。
+
+    直接对复数张量 ``a`` 取 ``real(a)``/``imag(a)`` 会让 ``a`` 在追踪图中出现两次
+    （两个消费者），backward 需把两支梯度合并回同一个 complex64 张量——这正是
+    aclnnAdd(DT_COMPLEX64) 报错的触发条件。用本 Function 把整个置换包成一个原子
+    节点，``a`` 在图中只作为单条输入边出现，backward 内部的 real/imag 运算不追踪，
+    故不产生任何跨节点的 complex64 梯度累加。
+    """
+
+    @staticmethod
+    def forward(ctx, a, axes):
+        ctx.axes = list(axes)
+        real = torch.real(a).permute(*ctx.axes)
+        imag = torch.imag(a).permute(*ctx.axes)
+        return torch.complex(real, imag)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        inv = [0] * len(ctx.axes)
+        for i, ax in enumerate(ctx.axes):
+            inv[ax] = i
+        grad_real = torch.real(grad_output).permute(*inv)
+        grad_imag = torch.imag(grad_output).permute(*inv)
+        return torch.complex(grad_real, grad_imag), None
+
+
+class _NpuReshapeFn(torch.autograd.Function):
+    """变形的 NPU 自动微分安全包装（原理同 ``_NpuTransposeFn``）。"""
+
+    @staticmethod
+    def forward(ctx, a, shape):
+        ctx.orig_shape = a.shape
+        real = torch.real(a).reshape(shape)
+        imag = torch.imag(a).reshape(shape)
+        return torch.complex(real, imag)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_real = torch.real(grad_output).reshape(ctx.orig_shape)
+        grad_imag = torch.imag(grad_output).reshape(ctx.orig_shape)
+        return torch.complex(grad_real, grad_imag), None
+
+
+class _NpuConjFn(torch.autograd.Function):
+    """复共轭的 NPU 自动微分安全包装（原理同 ``_NpuTransposeFn``）。
+
+    ``y = conj(x)`` 的 PyTorch 梯度约定为 ``grad_x = conj(grad_y)``。
+    """
+
+    @staticmethod
+    def forward(ctx, a):
+        return torch.complex(torch.real(a), -torch.imag(a))
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return torch.complex(torch.real(grad_output), -torch.imag(grad_output))
+
+
 class _NpuLocalGateApplyFn(torch.autograd.Function):
     """局部量子门（gather→matmul→scatter）的 NPU 自动微分安全包装。
 
@@ -719,18 +778,18 @@ class NPUBackend(GPUBackend):
     def transpose(self, a, axes):
         if self._is_npu_complex(a):
             perm = [int(x) for x in axes]
-            return torch.complex(torch.real(a).permute(*perm), torch.imag(a).permute(*perm))
+            return _NpuTransposeFn.apply(a, perm)
         return super().transpose(a, axes)
 
     def reshape(self, a, shape):
         shape = tuple(int(s) for s in shape)
         if self._is_npu_complex(a):
-            return torch.complex(torch.real(a).reshape(shape), torch.imag(a).reshape(shape))
+            return _NpuReshapeFn.apply(a, shape)
         return super().reshape(a, shape)
 
     def conj(self, a):
         if self._is_npu_complex(a):
-            return torch.complex(torch.real(a), -torch.imag(a))
+            return _NpuConjFn.apply(a)
         return super().conj(a)
 
     def dagger(self, matrix):
