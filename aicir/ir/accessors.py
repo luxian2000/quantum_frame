@@ -46,7 +46,7 @@ def instruction_params(instruction: CircuitInstruction | Mapping[str, Any]) -> t
     """Return instruction parameters as a tuple."""
 
     inst = as_instruction(instruction)
-    if isinstance(inst, Measurement):
+    if isinstance(inst, (Measurement, ControlFlow)):
         return ()
     return inst.params
 
@@ -66,6 +66,8 @@ def instruction_qubits(instruction: CircuitInstruction | Mapping[str, Any]) -> t
     """Return the explicit target/readout qubits carried by an instruction."""
 
     inst = as_instruction(instruction)
+    if isinstance(inst, ControlFlow):
+        return ()
     return inst.qubits
 
 
@@ -73,7 +75,7 @@ def instruction_controls(instruction: CircuitInstruction | Mapping[str, Any]) ->
     """Return control qubits for operations; measurements have no controls."""
 
     inst = as_instruction(instruction)
-    if isinstance(inst, Measurement):
+    if isinstance(inst, (Measurement, ControlFlow)):
         return ()
     return inst.controls
 
@@ -82,7 +84,7 @@ def instruction_control_states(instruction: CircuitInstruction | Mapping[str, An
     """Return control states, defaulting omitted controls to state 1."""
 
     inst = as_instruction(instruction)
-    if isinstance(inst, Measurement):
+    if isinstance(inst, (Measurement, ControlFlow)):
         return ()
     if inst.control_states:
         return inst.control_states
