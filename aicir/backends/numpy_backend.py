@@ -96,6 +96,12 @@ class NumpyBackend(Backend):
     def conj(self, a):
         return np.conj(np.asarray(a))
 
+    def take(self, a, axis, index):
+        return np.take(np.asarray(a), int(index), axis=int(axis))
+
+    def add(self, a, b):
+        return np.asarray(a) + np.asarray(b)
+
     def abs_sq(self, tensor):
         return np.abs(tensor) ** 2
 

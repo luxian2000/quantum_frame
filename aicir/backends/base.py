@@ -217,6 +217,14 @@ class Backend(ABC):
         """逐元素复共轭。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现 conj")
 
+    def take(self, a, axis, index):
+        """沿 axis 取下标 index（该轴消失），用于张量网络切片固定指标。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 take")
+
+    def add(self, a, b):
+        """逐元素相加，用于切片收缩结果累加。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 add")
+
     # ──────────────────────────── 便利方法（非抽象）────────────────────
 
     def tensor_product(self, *matrices):
