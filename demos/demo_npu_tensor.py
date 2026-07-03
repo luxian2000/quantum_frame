@@ -62,7 +62,17 @@ def run_checks(allow_cpu_fallback: bool = False) -> bool:
     except ImportError:
         print("[check ] torch 缺失，跳过可微检查")
 
-    passed = ok_sv and ok_single and ok_partial and ok_grad
+    # 4) 切片收缩 parity（cotengra 装了才跑）
+    ok_slice = True
+    try:
+        import cotengra  # noqa: F401
+        sliced = tn_statevector(c, backend=bk, optimize="cotengra", memory_limit=4)
+        ok_slice = np.allclose(sliced.to_numpy(), ref, atol=1e-3)
+        print(f"[check ] sliced contraction: {'OK' if ok_slice else 'MISMATCH'}")
+    except ImportError:
+        print("[check ] sliced contraction: SKIP (cotengra 未安装)")
+
+    passed = ok_sv and ok_single and ok_partial and ok_grad and ok_slice
     print(f"[result] {'ALL PASSED' if passed else 'FAILED'}")
     return passed
 
