@@ -19,6 +19,7 @@ import numpy as np
 
 from ..core.state import State
 from ..ir import (
+    ControlFlow,
     circuit_instructions,
     has_circuit_instructions,
     instruction_name,
@@ -37,6 +38,14 @@ def _is_measure(g) -> bool:
 def _is_reset(g) -> bool:
     """判断操作是否为线路内嵌 reset 标记。"""
     return instruction_name(g).lower() == "reset"
+
+
+def _needs_trajectory(circuit) -> bool:
+    """判断电路是否必须走逐轨迹执行（含 in-circuit measure 或控制流指令）。"""
+    for g in circuit_instructions(circuit):
+        if isinstance(g, ControlFlow) or _is_measure(g):
+            return True
+    return False
 
 
 class Measure:
@@ -205,7 +214,7 @@ class Measure:
                 return initial_state
             return State(initial_state, n, backend)
 
-        has_incircuit = any(True for g in circuit_instructions(circuit) if _is_measure(g)) if n_ops else False
+        has_incircuit = _needs_trajectory(circuit) if n_ops else False
         M = 1 if exact else norm_shots
 
         rng = np.random.default_rng(seed_seq)
@@ -237,6 +246,7 @@ class Measure:
     def _build_result(self, trajectories, n, backend, norm_shots, exact, specs,
                       terminal_qubits, do_terminal, observables, return_state,
                       *, noise_model=None, initial_density_matrix=None) -> Result:
+        classical_trajectories = [dict(getattr(tr, "classical", {}) or {}) for tr in trajectories]
         """把轨迹集合按 shots 语义折叠成 Result。"""
         if exact or norm_shots == 1:
             tr = trajectories[0]
@@ -301,4 +311,5 @@ class Measure:
             expectation_values=exp_vals, expectation_variances=exp_vars,
             snapshot_states=snap_states,
             metadata=meta,
+            classical_trajectories=classical_trajectories,
         )
