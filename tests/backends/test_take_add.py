@@ -41,3 +41,36 @@ def test_base_take_add_not_implemented():
     assert "NotImplementedError" in src
     src = inspect.getsource(base_mod.Backend.add)
     assert "NotImplementedError" in src
+
+
+def test_npu_take_fn_forward_backward_matches_native():
+    torch = pytest.importorskip("torch")
+    from aicir.backends.npu_backend import _NpuTakeFn
+
+    a = torch.randn(2, 3, 4, dtype=torch.complex64, requires_grad=True)
+    ref_in = a.detach().clone().requires_grad_(True)
+
+    out = _NpuTakeFn.apply(a, 1, 2)
+    ref = ref_in.select(1, 2)
+    assert torch.allclose(out, ref, atol=1e-5)
+    out.real.sum().backward()
+    ref.real.sum().backward()
+    assert torch.allclose(a.grad, ref_in.grad, atol=1e-5)
+
+
+def test_npu_add_fn_forward_backward_matches_native():
+    torch = pytest.importorskip("torch")
+    from aicir.backends.npu_backend import _NpuAddFn
+
+    a = torch.randn(5, dtype=torch.complex64, requires_grad=True)
+    b = torch.randn(5, dtype=torch.complex64, requires_grad=True)
+    ra = a.detach().clone().requires_grad_(True)
+    rb = b.detach().clone().requires_grad_(True)
+
+    out = _NpuAddFn.apply(a, b)
+    ref = ra + rb
+    assert torch.allclose(out, ref, atol=1e-5)
+    out.real.sum().backward()
+    ref.real.sum().backward()
+    assert torch.allclose(a.grad, ra.grad, atol=1e-5)
+    assert torch.allclose(b.grad, rb.grad, atol=1e-5)
