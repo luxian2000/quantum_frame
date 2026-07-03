@@ -102,6 +102,12 @@ class GPUBackend(Backend):
     def conj(self, a):
         return torch.conj(a)
 
+    def take(self, a, axis, index):
+        return torch.select(a, int(axis), int(index))
+
+    def add(self, a, b):
+        return a + b
+
     def abs_sq(self, tensor):
         return torch.abs(tensor) ** 2
 
