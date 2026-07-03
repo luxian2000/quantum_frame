@@ -11,7 +11,7 @@
 ```python
 import torch
 from aicir import Circuit, Hamiltonian, ry
-from aicir.qml import qfun, TorchLayer
+from aicir.qml import qfun, QLayer
 
 @qfun(observable=Hamiltonian([("Z", 1.0)]))
 def cost(theta):
@@ -19,7 +19,7 @@ def cost(theta):
     c.append(ry(theta[0], 0))
     return c
 
-model = torch.nn.Sequential(torch.nn.Linear(4, 1), TorchLayer(cost, n_weights=0))
+model = torch.nn.Sequential(torch.nn.Linear(4, 1), QLayer(cost, n_weights=0))
 ```
 """
 
@@ -64,7 +64,7 @@ class _QFunApply(torch.autograd.Function):
         return grad_params, None
 
 
-class TorchLayer(torch.nn.Module):
+class QLayer(torch.nn.Module):
     """把 ``QFun`` 封装成可嵌入 PyTorch 的量子层。
 
     Args:
@@ -92,7 +92,7 @@ class TorchLayer(torch.nn.Module):
     ) -> None:
         super().__init__()
         if not isinstance(qfun, QFun):
-            raise TypeError("TorchLayer 需要一个 aicir.qml.QFun 实例")
+            raise TypeError("QLayer 需要一个 aicir.qml.QFun 实例")
         if int(n_weights) < 0:
             raise ValueError("n_weights 不能为负")
         self.qfun = qfun
@@ -112,7 +112,7 @@ class TorchLayer(torch.nn.Module):
         w = self.weights
         if inputs is None:
             if self.n_weights == 0:
-                raise ValueError("n_weights=0 的 TorchLayer 需要提供 inputs")
+                raise ValueError("n_weights=0 的 QLayer 需要提供 inputs")
             return self._run(w)
 
         x = inputs if torch.is_tensor(inputs) else torch.as_tensor(inputs)
