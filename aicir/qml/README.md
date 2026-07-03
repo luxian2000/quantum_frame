@@ -1090,18 +1090,18 @@ BasicQAOA(cost=cost, p=1).run(max_iters=200, lr=0.3, init_params=np.array([0.1, 
 
 ---
 
-## 17. PyTorch 量子层 `TorchLayer`（`aicir.qml.torch_layer`）
+## 17. PyTorch 量子层 `QLayer`（`aicir.qml.qlayer`）
 
-`TorchLayer` 把一个 `QFun` 封装成 `torch.nn.Module`，可**一行嵌入经典 PyTorch 网络**做混合训练（需 `torch`；无 torch 时 `aicir.qml.TorchLayer is None`）。
+`QLayer` 把一个 `QFun` 封装成 `torch.nn.Module`，可**一行嵌入经典 PyTorch 网络**做混合训练（需 `torch`；无 torch 时 `aicir.qml.QLayer is None`）。
 
 它不重写梯度：前向调用 `qfun(params)` 取期望值，反向调用 `qfun.grad(params)` 取参数移位 Jacobian 并接入 torch autograd。因此该层与 `QFun` 的后端解耦——`device="numpy"/"gpu"/"npu"` 皆可用，梯度方法仍走 §15 注册表这一单一真源。经典输入与可训练权重经 `torch.cat` 拼成单个参数向量喂给 `qfun`（`cat` 可微，故梯度同时回流到**前置经典层的输入**与**本层权重**）。
 
-> 说明：`QFun.__call__` 返回主机标量，故量子部分的数值仍经 numpy 往返；`TorchLayer` 的价值在于把量子层无缝接入 torch 计算图，底层模拟仍由 `QFun` 的后端（含 NPU/GPU）执行。
+> 说明：`QFun.__call__` 返回主机标量，故量子部分的数值仍经 numpy 往返；`QLayer` 的价值在于把量子层无缝接入 torch 计算图，底层模拟仍由 `QFun` 的后端（含 NPU/GPU）执行。
 
 ### 构造与前向
 
 ```python
-TorchLayer(qfun, n_weights, *, init=None, dtype=torch.float32)
+QLayer(qfun, n_weights, *, init=None, dtype=torch.float32)
 ```
 
 | 参数        | 说明                                                                     |
@@ -1118,7 +1118,7 @@ TorchLayer(qfun, n_weights, *, init=None, dtype=torch.float32)
 ```python
 import numpy as np, torch
 from aicir import Circuit, Hamiltonian, ry
-from aicir.qml import qfun, TorchLayer
+from aicir.qml import qfun, QLayer
 
 @qfun(observable=Hamiltonian([("Z", 1.0)]))     # <Z> = cos(theta)
 def cost(theta):
@@ -1126,7 +1126,7 @@ def cost(theta):
     c.append(ry(theta[0], 0))
     return c
 
-layer = TorchLayer(cost, n_weights=1, init=np.array([0.3]))
+layer = QLayer(cost, n_weights=1, init=np.array([0.3]))
 opt = torch.optim.SGD(layer.parameters(), lr=0.3)
 for _ in range(50):
     opt.zero_grad()
@@ -1141,7 +1141,7 @@ for _ in range(50):
 # Linear 输出作为量子层输入，梯度回流到 Linear.weight 与量子权重
 model = torch.nn.Sequential(
     torch.nn.Linear(4, 1),
-    TorchLayer(cost, n_weights=0),   # 全部参数来自输入
+    QLayer(cost, n_weights=0),   # 全部参数来自输入
 )
 y = model(torch.randn(8, 4))         # 批量前向 → (8,)
 ```

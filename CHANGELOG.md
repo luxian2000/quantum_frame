@@ -27,12 +27,12 @@
   `tests/vqc/test_excitation_circuits.py`（JW 生成元 expm oracle，覆盖交错角色配对）、
   以及端到端集成测试 `tests/vqc/test_uccsd_vqe_integration.py`（`build_molecule` →
   `uccsd` → `BasicVQE`，H2 收敛到基态能量，VQE 能量与精确对角化基态相差 ~1e-7）。
-- **`aicir.qml.TorchLayer`：把 `QFun` 封装成 `torch.nn.Module` 量子层，可一行嵌入
+- **`aicir.qml.QLayer`：把 `QFun` 封装成 `torch.nn.Module` 量子层，可一行嵌入
   PyTorch 混合网络。** 前向调用 `qfun(params)`、反向调用 `qfun.grad(params)`（参数移位
   Jacobian）接入 torch autograd，与 `QFun` 后端解耦（`device="numpy"/"gpu"/"npu"` 皆可），
   梯度方法仍走 `aicir.qml.diff` 注册表单一真源。经典输入与可训练权重经 `torch.cat` 拼成
   单参数向量喂给 `qfun`，梯度同时回流到前置经典层与本层权重；支持批量输入与多观测量输出。
-  `torch` 为可选依赖，缺失时 `aicir.qml.TorchLayer is None`。配套 `tests/qml/test_torch_layer.py`
+  `torch` 为可选依赖，缺失时 `aicir.qml.QLayer is None`。配套 `tests/qml/test_qlayer.py`
   与 `aicir/qml/README.md` §17。
 - **`aicir.simulator` 精确张量网络模拟引擎：`tn_statevector` / `single_amplitude` /
   `partial_amplitude` / `tn_expectation`，并为 `Measure.run` 增加 `method="tensor"`。**
