@@ -307,6 +307,41 @@ class _NpuConjFn(torch.autograd.Function):
         return torch.complex(torch.real(grad_output), -torch.imag(grad_output))
 
 
+class _NpuTakeFn(torch.autograd.Function):
+    """切片取指标的 NPU 自动微分安全包装（原理同 ``_NpuTransposeFn``）。"""
+
+    @staticmethod
+    def forward(ctx, a, axis, index):
+        ctx.axis = int(axis)
+        ctx.index = int(index)
+        ctx.in_shape = a.shape
+        real = torch.real(a).select(ctx.axis, ctx.index)
+        imag = torch.imag(a).select(ctx.axis, ctx.index)
+        return torch.complex(real, imag)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        gr = torch.zeros(ctx.in_shape, dtype=grad_output.real.dtype, device=grad_output.device)
+        gi = torch.zeros(ctx.in_shape, dtype=grad_output.real.dtype, device=grad_output.device)
+        gr.select(ctx.axis, ctx.index).copy_(torch.real(grad_output))
+        gi.select(ctx.axis, ctx.index).copy_(torch.imag(grad_output))
+        return torch.complex(gr, gi), None, None
+
+
+class _NpuAddFn(torch.autograd.Function):
+    """复数相加的 NPU 自动微分安全包装（规避 aclnnAdd DT_COMPLEX64）。"""
+
+    @staticmethod
+    def forward(ctx, a, b):
+        real = torch.real(a) + torch.real(b)
+        imag = torch.imag(a) + torch.imag(b)
+        return torch.complex(real, imag)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output, grad_output
+
+
 class _NpuLocalGateApplyFn(torch.autograd.Function):
     """局部量子门（gather→matmul→scatter）的 NPU 自动微分安全包装。
 
@@ -791,6 +826,16 @@ class NPUBackend(GPUBackend):
         if self._is_npu_complex(a):
             return _NpuConjFn.apply(a)
         return super().conj(a)
+
+    def take(self, a, axis, index):
+        if self._is_npu_complex(a):
+            return _NpuTakeFn.apply(a, int(axis), int(index))
+        return super().take(a, axis, index)
+
+    def add(self, a, b):
+        if self._is_npu_complex(a) or self._is_npu_complex(b):
+            return _NpuAddFn.apply(a, b)
+        return super().add(a, b)
 
     def dagger(self, matrix):
         """NPU workaround: conjugate transpose via real/imag split (avoids torch.conj on complex64)."""
