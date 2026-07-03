@@ -68,10 +68,29 @@
 
 ---
 
-## 4. 收缩路径与可选依赖
+## 4. 收缩路径、切片与可选依赖
 
-- 缩并路径优先使用 [`opt_einsum`](https://github.com/dgasmith/opt_einsum)（若已安装）寻找较优的收缩顺序；未安装时回退到内置的贪心策略，不影响结果正确性，只影响大电路下的耗时/峰值内存。
-- `opt_einsum` 不是硬依赖，`aicir` 核心功能不要求安装它。
+### 路径选择策略
+
+**`optimize` 参数**（默认 `"auto"`）控制收缩路径寻优来源：
+
+- **`optimize="auto"`**（默认）：网络规模较大（≥24 张量）且已安装 [`cotengra`](https://github.com/jcmgray/cotengra) 时使用 `HyperOptimizer`；否则优先使用 [`opt_einsum`](https://github.com/dgasmith/opt_einsum)（若已安装）的 `opt_path`，最后回退到内置贪心策略。三种路径均保证结果正确性，仅影响耗时与峰值内存。
+  
+- **`optimize="cotengra"|"opt_einsum"|"greedy"`**：显式指定路径来源，对应库缺失时抛 `ImportError`。
+
+  - `"cotengra"`：需 `pip install -e ".[tn]"`（安装 `cotengra` 与 `opt_einsum` 依赖）；性能最优但耗时。
+  - `"opt_einsum"`：需 `opt_einsum` 包（核心 `aicir` 安装已含）。
+  - `"greedy"`：内置实现，无额外依赖。
+
+### 切片与内存限制
+
+**`memory_limit` 参数**（单位：中间张量最大元素数，默认 `None` 不切片）：
+
+- 设定后，`optimize="cotengra"` 或 `optimize="auto"`（满足条件使用 cotengra）会触发 cotengra 的切片规划，返回形如 `(contraction_path, slices_dict)` 的结果。
+- **执行侧**：对每个切片按 `slices_dict` 逐一固定开放指标（通过后端原语 `backend.take`），再经标准的成对 `tensordot` 收缩完成该切片，最后用 `backend.add` 累加所有切片结果。
+- **开放指标也可被切片**：当输出张量（或中间张量）超过内存预算时，output indices 也会被纳入切片维度；执行仍走后端原语，通过一次性的 one-hot 置位与累加完整重建（`一次性 one-hot 放置累加`），与处理通常切片指标相同。
+- **可微性保留**：执行侧采用 `backend.tensordot`、`backend.take`、`backend.add` 这些后端抽象原语，因此 Torch autograd 与 NPU 上可微性（包括复数分解）完全保留，求和操作保持梯度。
+- **限制**：`memory_limit` 与 `optimize="opt_einsum"` 或 `"greedy"` 组合抛 `ValueError`（这两个路径不支持切片规划）。需 `pip install -e ".[tn]"`。
 
 ---
 

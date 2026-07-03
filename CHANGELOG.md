@@ -4,6 +4,10 @@
 
 ## 2026-07-03
 
+### Added
+
+- **`aicir.simulator` 接入 cotengra（新 `tn` extra）**：`optimize="auto"|"cotengra"|"opt_einsum"|"greedy"` 选择收缩路径来源；`memory_limit=` 设定中间张量内存预算后由 cotengra 规划切片，执行侧逐切片固定指标（新 backend 原语 `take`）、同一 pairwise `tensordot` 收缩、`add` 累加——NPU 复数分解与 torch autograd 全程保留（`_NpuTakeFn`/`_NpuAddFn` 规避 aclnnAdd DT_COMPLEX64）。四个公共函数（`tn_statevector`/`single_amplitude`/`partial_amplitude`/`tn_expectation`）透传两参数。
+
 ### Changed
 
 - **Breaking:** `aicir.vqc.ansatz` moved to `aicir.ansatze` (top-level package). `hea`/`hea_parameter_count`/`hea_ti`/`hea_ti_parameter_count`/`uccsd`/`uccsd_parameter_count`/`entangling_edges`/`hardware_efficient_ansatz`/`power_law_couplings` now import from `aicir.ansatze`, not `aicir.vqc.ansatz`. `aicir.vqc` no longer re-exports `ansatz`. Reason: ansatz has no dependency on `vqc` and is already consumed by `aicir.qas`, `aicir.optimization.qubo`, and `aicir.chemistry` (via decoupled data) — nesting it under `vqc` implied a coupling that didn't exist. No backward-compatible alias (see CLAUDE.md's "old long aliases are intentionally not kept" convention).
