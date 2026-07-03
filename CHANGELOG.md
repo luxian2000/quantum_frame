@@ -2,6 +2,12 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-03
+
+### Changed
+
+- **Breaking:** `aicir.vqc.ansatz` moved to `aicir.ansatze` (top-level package). `hea`/`hea_parameter_count`/`hea_ti`/`hea_ti_parameter_count`/`uccsd`/`uccsd_parameter_count`/`entangling_edges`/`hardware_efficient_ansatz`/`power_law_couplings` now import from `aicir.ansatze`, not `aicir.vqc.ansatz`. `aicir.vqc` no longer re-exports `ansatz`. Reason: ansatz has no dependency on `vqc` and is already consumed by `aicir.qas`, `aicir.optimization.qubo`, and `aicir.chemistry` (via decoupled data) — nesting it under `vqc` implied a coupling that didn't exist. No backward-compatible alias (see CLAUDE.md's "old long aliases are intentionally not kept" convention).
+
 ## 2026-07-02
 
 ### Added
