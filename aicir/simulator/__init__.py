@@ -29,35 +29,36 @@ def _parse_bits(bitstring, n):
     return bits
 
 
-def _statevector_tensor(circuit, backend):
+def _statevector_tensor(circuit, backend, *, optimize="auto", memory_limit=None):
     n = int(circuit.n_qubits)
     tensors, indices, open_idx = build_network(circuit, backend, output_spec=[None] * n)
-    result = contract(tensors, indices, open_idx, backend)
+    result = contract(tensors, indices, open_idx, backend, optimize=optimize, memory_limit=memory_limit)
     return backend.reshape(result, (1 << n, 1))
 
 
-def tn_statevector(circuit, *, backend=None):
-    """经张量网络收缩求整段末态，返回 State（向量形态）。"""
+def tn_statevector(circuit, *, backend=None, optimize="auto", memory_limit=None):
+    """经张量网络收缩求整段末态，返回 State（向量形态）。支持 cotengra 切片优化。"""
     backend = _resolve_backend(circuit, backend)
-    data = _statevector_tensor(circuit, backend)
+    data = _statevector_tensor(circuit, backend, optimize=optimize, memory_limit=memory_limit)
     return State(data, int(circuit.n_qubits), backend)
 
 
-def single_amplitude(circuit, bitstring, *, backend=None):
-    """求单个基态振幅 ⟨bitstring|U|0⟩（标量收缩，不构造全态矢量）。"""
+def single_amplitude(circuit, bitstring, *, backend=None, optimize="auto", memory_limit=None):
+    """求单个基态振幅 ⟨bitstring|U|0⟩（标量收缩，不构造全态矢量）。支持 cotengra 切片优化。"""
     backend = _resolve_backend(circuit, backend)
     n = int(circuit.n_qubits)
     bits = _parse_bits(bitstring, n)
     tensors, indices, open_idx = build_network(circuit, backend, output_spec=bits)
-    result = contract(tensors, indices, open_idx, backend)
+    result = contract(tensors, indices, open_idx, backend, optimize=optimize, memory_limit=memory_limit)
     return complex(np.asarray(backend.to_numpy(result)).reshape(()))
 
 
-def partial_amplitude(circuit, *, open_qubits=None, bitstrings=None, backend=None):
+def partial_amplitude(circuit, *, open_qubits=None, bitstrings=None, backend=None, optimize="auto", memory_limit=None):
     """求部分振幅。二选一：
     - open_qubits=[...]：这些比特开放、其余输出固定 |0>，返回按开放比特升序（首个为 MSB）
       排列的 2^len 振幅向量；
     - bitstrings=[...]：枚举给定基态，返回其振幅数组。
+    支持 cotengra 切片优化。
     """
     if (open_qubits is None) == (bitstrings is None):
         raise ValueError("open_qubits 与 bitstrings 必须且只能提供其一")
@@ -67,15 +68,15 @@ def partial_amplitude(circuit, *, open_qubits=None, bitstrings=None, backend=Non
         openset = {int(q) for q in open_qubits}
         spec = [None if q in openset else 0 for q in range(n)]
         tensors, indices, open_idx = build_network(circuit, backend, output_spec=spec)
-        result = contract(tensors, indices, open_idx, backend)
+        result = contract(tensors, indices, open_idx, backend, optimize=optimize, memory_limit=memory_limit)
         return np.asarray(backend.to_numpy(result)).reshape(-1)
-    return np.array([single_amplitude(circuit, b, backend=backend) for b in bitstrings])
+    return np.array([single_amplitude(circuit, b, backend=backend, optimize=optimize, memory_limit=memory_limit) for b in bitstrings])
 
 
-def tn_expectation(circuit, observable, *, backend=None):
-    """经张量网络收缩求期望值 ⟨ψ|O|ψ⟩。torch/NPU 后端上对参数门可微。"""
+def tn_expectation(circuit, observable, *, backend=None, optimize="auto", memory_limit=None):
+    """经张量网络收缩求期望值 ⟨ψ|O|ψ⟩。torch/NPU 后端上对参数门可微。支持 cotengra 切片优化。"""
     backend = _resolve_backend(circuit, backend)
-    psi = _statevector_tensor(circuit, backend)
+    psi = _statevector_tensor(circuit, backend, optimize=optimize, memory_limit=memory_limit)
     if hasattr(observable, "to_matrix"):
         operator = observable.to_matrix(backend)
     else:
