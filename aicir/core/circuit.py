@@ -731,19 +731,54 @@ def u2(phi, lam, target_qubit=0):
     return Operation("u2", qubits=(target_qubit,), params=(phi, lam))
 
 
-def measure(qubits=None, *, basis="Z", id=None):
-    """线路内联合 Pauli 投影测量标记（非破坏性，保留比特）。
+def measure(qubits=None, *, basis="Z", id=None, creg=None, cbits=None):
+    """线路内投影测量标记。
+
+    无经典目标（creg/cbits 均 None）：联合 Pauli 投影，保留比特（原行为）。
+    有经典目标：per-qubit Z 基投影，比特 |0>->0 / |1>->1 写入指定经典位。
+      creg=ClassicalRegister：按序写入 0..k-1 号位（len(qubits)<=len(creg)）。
+      cbits=[Bit, ...]：显式指定每比特写入的位（len==len(qubits)，须同一寄存器）。
 
     measure(0)                  # 单比特 Z 测量
     measure(0, basis="X")       # 单比特 X 测量
     measure([0, 1], basis="X")  # 联合 X⊗X 投影测量
     measure([0, 1, 2], id="m0") # 联合测量 + 结果标识符
     measure()                   # 空 = 运行时读取全部比特
+    measure([0, 1], creg=c)     # 将结果写入寄存器 c 的前 2 位
+    measure([0, 1], cbits=[c[1], c[0]])  # 将 q0 结果写入 c[1]，q1 结果写入 c[0]
 
     qubits 为单个 int 或比特下标列表；多个比特须用列表（measure(0, 1) 不再支持）。
     basis 默认 "Z"（X/Y/Z）；id 可选、用于 result.output("m0")。
     """
-    return Measurement(_normalize_marker_qubits(qubits), basis=basis, id=id)
+    qs = _normalize_marker_qubits(qubits)
+    if creg is None and cbits is None:
+        return Measurement(qs, basis=basis, id=id)
+
+    from .classical import Bit, ClassicalRegister
+    if creg is not None and cbits is not None:
+        raise ValueError("creg 与 cbits 互斥，只能提供其一")
+    if str(basis).strip().upper() != "Z":
+        raise ValueError("有经典目标的 measure 仅支持 Z 基")
+
+    if creg is not None:
+        if not isinstance(creg, ClassicalRegister):
+            raise ValueError("creg 必须是 ClassicalRegister")
+        if len(qs) > len(creg):
+            raise ValueError(f"比特数 {len(qs)} 超过寄存器位数 {len(creg)}")
+        reg_name = creg.name
+        clbits = tuple(range(len(qs)))
+    else:
+        bits = list(cbits)
+        if len(bits) != len(qs):
+            raise ValueError(f"cbits 数 {len(bits)} 与比特数 {len(qs)} 不符")
+        names = {b.register_name for b in bits}
+        if len(names) != 1:
+            raise ValueError("cbits 必须属于同一寄存器")
+        reg_name = names.pop()
+        clbits = tuple(b.index for b in bits)
+
+    return Measurement(qs, basis="Z", id=id, classical_bits=clbits,
+                       metadata={"classical_register": reg_name})
 
 
 def _normalize_marker_qubits(qubits):
