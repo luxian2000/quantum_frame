@@ -81,6 +81,7 @@ try:
     from .core import (
         Circuit,
         Parameter,
+        ClassicalRegister,
         ccnot,
         cnot,
         circuit,
@@ -145,6 +146,7 @@ else:
             "BatchSV",
             "Circuit",
             "Parameter",
+            "ClassicalRegister",
             "circuit",
             "pauli_x",
             "pauli_y",

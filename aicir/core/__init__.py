@@ -35,6 +35,7 @@ from .circuit import (
 )
 from .state import State
 from .batch import BatchSV
+from .classical import ClassicalRegister, Bit, Condition
 from .io.json_io import circuit_from_json, circuit_to_json, load_circuit_json, save_circuit_json
 from .io.qasm import (
     circuit_from_qasm,
@@ -57,6 +58,9 @@ __all__ = [
     "Parameter",
     "State",
     "BatchSV",
+    "ClassicalRegister",
+    "Bit",
+    "Condition",
     "circuit",
     "pauli_x",
     "pauli_y",
