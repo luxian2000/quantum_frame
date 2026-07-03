@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from aicir import Circuit
-from aicir.vqc.ansatz import uccsd, uccsd_parameter_count
+from aicir.ansatze import uccsd, uccsd_parameter_count
 
 _EXC = (("single", (0, 2)), ("single", (1, 3)), ("double", (0, 1, 2, 3)))
 

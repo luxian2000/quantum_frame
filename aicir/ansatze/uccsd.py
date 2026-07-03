@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from ...core.circuit import Circuit, Parameter, pauli_x
+from ..core.circuit import Circuit, Parameter, pauli_x
 from ._excitation import double_excitation_ops, single_excitation_ops
 
 

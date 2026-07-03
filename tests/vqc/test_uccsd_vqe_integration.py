@@ -22,7 +22,7 @@ from aicir import NumpyBackend
 from aicir.chemistry import build_molecule
 from aicir.optimizer import GD
 from aicir.vqc import BasicVQE
-from aicir.vqc.ansatz import uccsd, uccsd_parameter_count
+from aicir.ansatze import uccsd, uccsd_parameter_count
 
 
 def test_uccsd_vqe_reaches_h2_ground_energy():
