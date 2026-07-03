@@ -3,7 +3,7 @@
 `aicir.chemistry` 提供两条互补的路径：
 
 - **固定预置**（本 README 第 2 节）：小型、零额外依赖的分子 qubit Hamiltonian，主要用于 VQE 示例、单元测试和算法原型验证。系数预先算好、写死在 `molecules/` 模块里。
-- **`build_molecule` 现算流水线**（第 3 节）：给定任意分子几何、基组、映射方式，现场调用 Qiskit Nature（内部驱动 PySCF）算出 qubit Hamiltonian，并在 Jordan-Wigner 映射下附带 HF 占据/激发元数据，可直接桥接 `aicir.vqc.ansatz.uccsd`。这条路径需要可选依赖，见第 3 节的 `chem` extra。
+- **`build_molecule` 现算流水线**（第 3 节）：给定任意分子几何、基组、映射方式，现场调用 Qiskit Nature（内部驱动 PySCF）算出 qubit Hamiltonian，并在 Jordan-Wigner 映射下附带 HF 占据/激发元数据，可直接桥接 `aicir.ansatze.uccsd`。这条路径需要可选依赖，见第 3 节的 `chem` extra。
 
 两条路径并列：预置覆盖“常用小分子、免安装、免计算”场景；流水线覆盖“任意分子、需要现算”场景。
 
@@ -77,7 +77,7 @@ hamiltonian = mol.to_hamiltonian()
 
 ```python
 from aicir.chemistry import build_molecule
-from aicir.vqc.ansatz import uccsd
+from aicir.ansatze import uccsd
 
 mol = build_molecule("H 0 0 0; H 0 0 0.735", basis="sto-3g", mapping="jordan_wigner")
 ansatz = uccsd(mol.n_qubits, mol.hf_occupation, mol.excitations)
@@ -116,7 +116,7 @@ from aicir import NumpyBackend
 from aicir.chemistry import molecule_hamiltonian
 from aicir.optimizer import GD
 from aicir.vqc import BasicVQE
-from aicir.vqc.ansatz import hea
+from aicir.ansatze import hea
 
 hamiltonian = molecule_hamiltonian("h2")
 ansatz = hea(hamiltonian.n_qubits, layers=1)

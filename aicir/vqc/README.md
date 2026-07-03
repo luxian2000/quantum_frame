@@ -186,7 +186,7 @@ hardware_efficient_ansatz(
 ```python
 import numpy as np
 from aicir import NumpyBackend
-from aicir.vqc.ansatz import hea, hea_parameter_count
+from aicir.ansatze import hea, hea_parameter_count
 
 n_qubits = 4
 layers = 2
@@ -268,7 +268,7 @@ global exp(-i H_XY t_d)
 ```python
 import numpy as np
 from aicir import NumpyBackend
-from aicir.vqc.ansatz import hea_ti, hea_ti_parameter_count
+from aicir.ansatze import hea_ti, hea_ti_parameter_count
 
 n_qubits = 4
 layers = 3
@@ -285,7 +285,7 @@ unitary = bound.unitary(backend=NumpyBackend())
 
 ```python
 import numpy as np
-from aicir.vqc.ansatz import hea_ti, hea_ti_parameter_count
+from aicir.ansatze import hea_ti, hea_ti_parameter_count
 
 n_qubits = 6
 layers = 5
@@ -303,7 +303,7 @@ circuit = hea_ti(
 ### 示例：自定义 trapped-ion 耦合
 
 ```python
-from aicir.vqc.ansatz import hea_ti, power_law_couplings
+from aicir.ansatze import hea_ti, power_law_couplings
 
 couplings = power_law_couplings(5, j0=1.0, alpha=1.2)
 circuit = hea_ti(
@@ -325,7 +325,7 @@ circuit = hea_ti(
 import numpy as np
 from aicir import NumpyBackend
 from aicir.qml import ad
-from aicir.vqc.ansatz import hea
+from aicir.ansatze import hea
 
 backend = NumpyBackend()
 circuit = hea(2, layers=1)

@@ -3,7 +3,7 @@ import pytest
 
 from aicir import Circuit, NumpyBackend
 from aicir.core.gates import gate_to_matrix
-from aicir.vqc.ansatz._excitation import (
+from aicir.ansatze._excitation import (
     double_excitation_ops,
     fswap_ops,
     single_excitation_ops,

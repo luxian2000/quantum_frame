@@ -25,7 +25,7 @@ from aicir.chemistry import get_molecule, molecule_hamiltonian, molecule_matrix
 from aicir.measure import hamiltonian_pauli_terms
 from aicir.optimizer import COBYLA, SPSA, Adam
 from aicir.vqc import BasicVQE
-from aicir.vqc.ansatz import hea
+from aicir.ansatze import hea
 
 
 @dataclass(frozen=True)

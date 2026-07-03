@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from aicir import NumpyBackend
-from aicir.vqc.ansatz import entangling_edges, hea, hea_parameter_count, hardware_efficient_ansatz
+from aicir.ansatze import entangling_edges, hea, hea_parameter_count, hardware_efficient_ansatz
 
 
 def test_default_hea_returns_symbolic_circuit_with_expected_layout():
