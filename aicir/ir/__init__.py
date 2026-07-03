@@ -15,12 +15,14 @@ from .accessors import (
     instruction_to_gate_dict,
 )
 from .circuit_ir import CircuitIR
+from .control_flow import ControlFlow
 from .measurement import Measurement
 from .observable import Observable
 from .operation import Operation, normalize_gate
 
 __all__ = [
     "CircuitIR",
+    "ControlFlow",
     "Measurement",
     "Observable",
     "Operation",

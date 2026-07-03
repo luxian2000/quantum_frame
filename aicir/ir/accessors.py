@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .circuit_ir import CircuitIR, CircuitInstruction
+from .control_flow import ControlFlow
 from .measurement import Measurement
 from .operation import Operation
 
@@ -18,19 +19,24 @@ from .operation import Operation
 def as_instruction(value: CircuitInstruction | Mapping[str, Any]) -> CircuitInstruction:
     """Normalize a typed instruction or old gate mapping to typed IR."""
 
-    if isinstance(value, (Operation, Measurement)):
+    if isinstance(value, (Operation, Measurement, ControlFlow)):
         return value
     if isinstance(value, Mapping):
-        if str(value.get("type", "")).lower() in {"measure", "measurement", "reset"}:
+        t = str(value.get("type", "")).lower()
+        if t in {"if", "while"}:
+            return ControlFlow.from_dict(value)
+        if t in {"measure", "measurement", "reset"}:
             return Measurement.from_dict(value)
         return Operation.from_dict(value)
-    raise TypeError("instruction must be Operation, Measurement, or a gate mapping")
+    raise TypeError("instruction must be Operation, Measurement, ControlFlow, or a gate mapping")
 
 
 def instruction_name(instruction: CircuitInstruction | Mapping[str, Any]) -> str:
     """Return the operation or measurement type name."""
 
     inst = as_instruction(instruction)
+    if isinstance(inst, ControlFlow):
+        return inst.name
     if isinstance(inst, Measurement):
         return inst.measurement_type
     return inst.name
