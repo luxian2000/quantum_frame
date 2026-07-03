@@ -243,10 +243,11 @@ def normalize_gate(gate: Operation | Mapping[str, Any]) -> dict[str, Any]:
 
     if isinstance(gate, Operation):
         return gate.to_dict()
+    from .control_flow import ControlFlow
     from .measurement import Measurement
 
-    if isinstance(gate, Measurement):
+    if isinstance(gate, (Measurement, ControlFlow)):
         return gate.to_dict()
     if isinstance(gate, Mapping):
         return dict(gate)
-    raise TypeError("gate must be an Operation, Measurement, or mapping")
+    raise TypeError("gate must be an Operation, Measurement, ControlFlow, or mapping")

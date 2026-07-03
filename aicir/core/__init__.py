@@ -11,6 +11,7 @@ from .circuit import (
     cy,
     cz,
     hadamard,
+    if_,
     measure,
     molmer_sorensen,
     ms_gate,
@@ -32,6 +33,7 @@ from .circuit import (
     toffoli,
     u2,
     u3,
+    while_,
 )
 from .state import State
 from .batch import BatchSV
@@ -69,6 +71,8 @@ __all__ = [
     "hadamard",
     "measure",
     "reset",
+    "if_",
+    "while_",
     "molmer_sorensen",
     "ms_gate",
     "rx",

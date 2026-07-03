@@ -127,6 +127,9 @@ def _measure_gate_qubits(gate):
 def _required_n_qubits_from_gate(gate):
     gate_type = canonical_gate_name(gate["type"])
 
+    if gate_type in {"if", "while"}:
+        return int(gate["n_qubits"])
+
     if gate_type in {"measure", "reset"}:
         measured = _measure_gate_qubits(gate)
         # An empty measure()/reset() (all qubits) imposes no lower bound; the
@@ -184,6 +187,16 @@ def _infer_n_qubits_from_gates(gates):
     if not gates:
         raise ValueError("未提供 n_qubits 且没有输入量子门，无法自动推断总量子比特数")
     return max(_required_n_qubits_from_gate(gate) for gate in gates)
+
+
+def _check_control_flow_nqubits(gate, parent_n_qubits):
+    """控制流指令的 n_qubits 必须与所属父线路一致，否则在装配时报错。"""
+    gate_type = canonical_gate_name(gate["type"])
+    if gate_type in {"if", "while"} and int(gate["n_qubits"]) != int(parent_n_qubits):
+        raise ValueError(
+            f"控制流 {gate_type} 的 body n_qubits={gate['n_qubits']} 与父线路 "
+            f"n_qubits={parent_n_qubits} 不一致"
+        )
 
 
 def _single_gate_symbol(gate_type):
@@ -442,6 +455,8 @@ class Circuit:
     def __init__(self, *gates, n_qubits=None, backend=None):
         self.gates = [normalize_gate(gate) for gate in gates]
         self.n_qubits = _infer_n_qubits_from_gates(self.gates) if n_qubits is None else n_qubits
+        for gate in self.gates:
+            _check_control_flow_nqubits(gate, self.n_qubits)
         self._backend = backend
 
     @property
@@ -467,11 +482,16 @@ class Circuit:
         return Circuit(*self.gates, *other.gates, n_qubits=self.n_qubits, backend=backend)
 
     def append(self, gate):
-        self.gates.append(normalize_gate(gate))
+        normalized = normalize_gate(gate)
+        _check_control_flow_nqubits(normalized, self.n_qubits)
+        self.gates.append(normalized)
         return self
 
     def extend(self, *gates):
-        self.gates.extend(normalize_gate(gate) for gate in gates)
+        normalized = [normalize_gate(gate) for gate in gates]
+        for gate in normalized:
+            _check_control_flow_nqubits(gate, self.n_qubits)
+        self.gates.extend(normalized)
         return self
 
     @property
@@ -802,6 +822,25 @@ def reset(qubits=None):
     return Measurement(_normalize_marker_qubits(qubits), measurement_type="reset")
 
 
+def if_(condition, body, else_body=None):
+    """条件执行 body（可选 else_body），依据测量写入的经典寄存器。"""
+    from ..ir.control_flow import ControlFlow
+    n = int(body.n_qubits)
+    if else_body is not None and int(else_body.n_qubits) != n:
+        raise ValueError("else_body 的 n_qubits 必须与 body 一致")
+    return ControlFlow("if", condition, list(body.gates), n,
+                        else_gates=(None if else_body is None else list(else_body.gates)))
+
+
+def while_(condition, body, *, max_iterations):
+    """条件循环执行 body，最多 max_iterations 次；超限仍满足条件抛 RuntimeError。"""
+    from ..ir.control_flow import ControlFlow
+    if int(max_iterations) <= 0:
+        raise ValueError("max_iterations 必须为正")
+    return ControlFlow("while", condition, list(body.gates), int(body.n_qubits),
+                        max_iterations=int(max_iterations))
+
+
 __all__ = [
     "Circuit",
     "Parameter",
@@ -833,4 +872,6 @@ __all__ = [
     "u2",
     "measure",
     "reset",
+    "if_",
+    "while_",
 ]
