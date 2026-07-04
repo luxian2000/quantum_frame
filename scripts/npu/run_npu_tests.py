@@ -87,7 +87,7 @@ SUITES: dict[str, Suite] = {
             "tests/circuit/test_state_unified.py",
             "tests/circuit/test_circuit_backend_unitary.py",
             "tests/circuit/test_typed_ir_internal_migration.py",
-            "tests/circuit/test_typed_gates_api.py",
+            "tests/circuit/test_circuit_typed_gates_api.py",
             "tests/measure/test_measure.py",
             "tests/measure/test_unified_run.py",
             "tests/measure/test_estimator.py",
