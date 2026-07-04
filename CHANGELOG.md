@@ -7,6 +7,7 @@
 ### Added
 
 - **`aicir.simulator` 接入 cotengra（新 `tn` extra）**：`optimize="auto"|"cotengra"|"opt_einsum"|"greedy"` 选择收缩路径来源；`memory_limit=` 设定中间张量内存预算后由 cotengra 规划切片，执行侧逐切片固定指标（新 backend 原语 `take`）、同一 pairwise `tensordot` 收缩、`add` 累加——NPU 复数分解与 torch autograd 全程保留（`_NpuTakeFn`/`_NpuAddFn` 规避 aclnnAdd DT_COMPLEX64）。四个公共函数（`tn_statevector`/`single_amplitude`/`partial_amplitude`/`tn_expectation`）透传两参数。
+- **经典控制流（if/while）：`ClassicalRegister`/`Bit`/`Condition`（`aicir.core.classical`）+ `measure(..., creg=/cbits=)` + `if_`/`while_`（`aicir.core.circuit`）。** `ClassicalRegister(size, name)` 的位（`reg[i]`）与整寄存器（`reg`）都支持 `==`/`!=` 构造 `Condition`；`measure(qubits, creg=reg)` 按序、`measure(qubits, cbits=[...])` 显式指定，把 Z 基投影结果写入经典位（有经典目标时仅支持 Z 基，`creg`/`cbits` 互斥）。`if_(condition, body, else_body=None)` 与 `while_(condition, body, *, max_iterations)`（`max_iterations` 必填，超限仍满足条件抛 `RuntimeError`）产出 `ControlFlow` 指令（`aicir.ir.control_flow`），`body`/`else_body` 的 `n_qubits` 须与外层一致。控制流只走 `Measure.run` 测量轨迹路径逐轨迹求值/递归执行；`Circuit.unitary()` 与张量网络引擎（`aicir.simulator`）遇到 `ControlFlow` 一律抛 `ValueError`，QASM3 导出推迟。`Result.classical_counts(reg)` 统计各轨迹末尾经典寄存器整数取值分布（LSB=`reg[0]`，从未写入的轨迹计 0）。含 `ControlFlow`/`Condition` 的电路 JSON 序列化往返后执行结果与原电路一致。
 
 ### Changed
 
