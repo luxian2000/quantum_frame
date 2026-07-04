@@ -281,15 +281,16 @@ class TestNPUBackend(unittest.TestCase):
         result = self._run_with_npu_forced(lambda: backend.trace(m))
         self.assertTrue(torch.allclose(result.unsqueeze(0), expected.unsqueeze(0), atol=1e-5))
 
-    def test_inner_product_workaround_matches_torch(self):
+    def test_inner_product_workaround_matches_numpy_reference(self):
         backend = NPUBackend(fallback_to_cpu=True)
         bra = torch.tensor([[1 + 1j], [0 - 1j]], dtype=torch.complex64)
         ket = torch.tensor([[0.5 + 0j], [1 - 0.5j]], dtype=torch.complex64)
-        b, k = bra.reshape(-1), ket.reshape(-1)
-        expected = torch.dot(torch.conj(b), k)
+        expected_np = np.vdot(
+            np.asarray(bra.detach().cpu().numpy()).reshape(-1),
+            np.asarray(ket.detach().cpu().numpy()).reshape(-1),
+        ).astype(np.complex64)
         result = self._run_with_npu_forced(lambda: backend.inner_product(bra, ket))
         actual_np = np.asarray(backend.to_numpy(result)).reshape(())
-        expected_np = np.asarray(expected.detach().cpu().numpy()).reshape(())
         self.assertTrue(
             np.allclose(actual_np, expected_np, atol=1e-5),
             f"actual={actual_np!r}, expected={expected_np!r}",
