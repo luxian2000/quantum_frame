@@ -98,6 +98,7 @@ def test_npu_runner_strict_dry_run_includes_real_npu_check():
 def test_npu_shell_entrypoints_exist_and_are_executable():
     for filename in (
         "run_all.sh",
+        "multi_card.sh",
         "smoke.sh",
         "backend.sh",
         "ops.sh",
@@ -114,6 +115,33 @@ def test_npu_shell_entrypoints_exist_and_are_executable():
         path = ROOT / "scripts" / "npu" / filename
         assert path.exists(), filename
         assert os.access(path, os.X_OK), filename
+
+
+def test_npu_multicard_dry_run_prints_torchrun_command():
+    script = ROOT / "scripts" / "npu" / "multi_card.sh"
+    result = subprocess.run(
+        [
+            str(script),
+            "--dry-run",
+            "--nproc-per-node",
+            "4",
+            "--devices",
+            "0,5,6,7",
+            "--section",
+            "collectives",
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ASCEND_RT_VISIBLE_DEVICES=0,5,6,7" in result.stdout
+    assert "-m torch.distributed.run" in result.stdout
+    assert "--nproc_per_node 4" in result.stdout
+    assert "scripts/npu/multi_card_probe.py" in result.stdout
+    assert "--section collectives" in result.stdout
 
 
 def test_npu_runner_suite_targets_exist():
@@ -141,3 +169,18 @@ def test_typed_ir_deriv_probe_help_lists_sections():
     assert result.returncode == 0, result.stderr
     assert "typed-ir" in result.stdout
     assert "deriv" in result.stdout
+
+
+def test_multi_card_probe_help_lists_sections():
+    probe = ROOT / "scripts" / "npu" / "multi_card_probe.py"
+    result = subprocess.run(
+        [sys.executable, str(probe), "--help"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "collectives" in result.stdout
+    assert "supernet" in result.stdout

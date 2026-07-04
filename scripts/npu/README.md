@@ -12,6 +12,7 @@ scripts/npu/deriv.sh --strict-npu
 scripts/npu/backend.sh --strict-npu
 scripts/npu/ops.sh --strict-npu
 scripts/npu/run_all.sh --strict-npu
+scripts/npu/multi_card.sh --nproc-per-node 4 --devices 0,5,6,7
 ```
 
 Use `--dry-run` to inspect commands without executing them:
@@ -39,6 +40,41 @@ scripts/npu/qml.sh --strict-npu --pytest-arg -vv --pytest-arg --tb=short
 - `tensor`: tensor network simulator and cotengra-facing paths.
 - `qas`: QAS/VQE workloads likely to stress NPU batch and gradient paths.
 - `demos`: demo and molecule smoke tests before long NPU jobs.
+
+## Multi-card NPU probe
+
+Use this after the single-card strict sweep passes. It launches
+`python -m torch.distributed.run` and initializes the process group through
+`NPUBackend.from_distributed_env(...)`. In strict mode the process group must be
+HCCL and every rank must resolve to an `npu` device.
+
+For a 4-card host whose physical NPU ids are non-contiguous, pass the visible
+device list explicitly:
+
+```sh
+scripts/npu/multi_card.sh \
+  --nproc-per-node 4 \
+  --devices 0,5,6,7 \
+  --section all
+```
+
+For a quick HCCL smoke before the heavier supernet probe:
+
+```sh
+scripts/npu/multi_card.sh --nproc-per-node 4 --devices 0,5,6,7 --section collectives
+```
+
+Use `--dry-run` to inspect the generated command. The probe sections are:
+
+- `collectives`: rank/device mapping, `shard_context`, object `all_gather`,
+  real-tensor `broadcast_parameters`, and real-tensor `all_reduce_mean`.
+- `typed-ir`: the typed IR hardware cases from `typed_ir_deriv_probe.py` on
+  every rank.
+- `deriv`: the typed deriv hardware cases from `typed_ir_deriv_probe.py` on
+  every rank.
+- `supernet`: small real multi-rank `supernet_qas` runs in both `safe` and
+  `aggressive` sharding modes, checking that final energies agree across ranks.
+- `all`: all sections above.
 
 ## Typed IR / deriv probe
 
