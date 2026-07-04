@@ -860,8 +860,8 @@ class NPUBackend(GPUBackend):
             k = ket.reshape(-1)
             br, bi = torch.real(b), torch.imag(b)
             kr, ki = torch.real(k), torch.imag(k)
-            real = torch.dot(br, kr) + torch.dot(bi, ki)
-            imag = torch.dot(br, ki) - torch.dot(bi, kr)
+            real = torch.sum(br * kr + bi * ki)
+            imag = torch.sum(br * ki - bi * kr)
             return torch.complex(real, imag)
         return super().inner_product(bra, ket)
 

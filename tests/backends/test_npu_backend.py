@@ -90,7 +90,13 @@ class TestNPUBackend(unittest.TestCase):
     def test_from_distributed_env(self):
         with mock.patch.dict(
             "os.environ",
-            {"WORLD_SIZE": "8", "RANK": "3", "LOCAL_RANK": "2"},
+            {
+                "WORLD_SIZE": "8",
+                "RANK": "3",
+                "LOCAL_RANK": "2",
+                "MASTER_ADDR": "",
+                "MASTER_PORT": "",
+            },
             clear=False,
         ):
             backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
@@ -116,9 +122,10 @@ class TestNPUBackend(unittest.TestCase):
                     with mock.patch("torch.distributed.init_process_group") as init_pg:
                         backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 
-        init_pg.assert_called_once_with(backend="gloo", rank=1, world_size=2)
+        expected_backend = "hccl" if getattr(backend._device, "type", None) == "npu" else "gloo"
+        init_pg.assert_called_once_with(backend=expected_backend, rank=1, world_size=2)
         self.assertTrue(backend.runtime_context.process_group_initialized)
-        self.assertEqual(backend.runtime_context.process_group_backend, "gloo")
+        self.assertEqual(backend.runtime_context.process_group_backend, expected_backend)
 
     def test_distributed_batch_helpers_partition_and_gather(self):
         backend = NPUBackend(fallback_to_cpu=True)
@@ -281,6 +288,20 @@ class TestNPUBackend(unittest.TestCase):
         b, k = bra.reshape(-1), ket.reshape(-1)
         expected = torch.dot(torch.conj(b), k)
         result = self._run_with_npu_forced(lambda: backend.inner_product(bra, ket))
+        self.assertTrue(torch.allclose(result.unsqueeze(0), expected.unsqueeze(0), atol=1e-5))
+
+    def test_inner_product_workaround_does_not_use_torch_dot(self):
+        backend = NPUBackend(fallback_to_cpu=True)
+        bra = torch.tensor([[1 + 1j], [0 - 1j]], dtype=torch.complex64)
+        ket = torch.tensor([[0.5 + 0j], [1 - 0.5j]], dtype=torch.complex64)
+
+        def fail_dot(*args, **kwargs):
+            raise RuntimeError("torch.dot is not NPU-safe for this workaround")
+
+        with mock.patch("torch.dot", side_effect=fail_dot):
+            result = self._run_with_npu_forced(lambda: backend.inner_product(bra, ket))
+
+        expected = torch.tensor(1 + 0.5j, dtype=torch.complex64)
         self.assertTrue(torch.allclose(result.unsqueeze(0), expected.unsqueeze(0), atol=1e-5))
 
     def test_partial_trace_workaround_matches_parent(self):
