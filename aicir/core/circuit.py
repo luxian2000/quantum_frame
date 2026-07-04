@@ -16,7 +16,7 @@ import sys
 import numpy as np
 
 from ..gates import canonical_gate_name, get_gate_spec
-from ..ir import CircuitIR, Measurement, Operation, normalize_gate
+from ..ir import CircuitIR, ControlFlow, Measurement, Operation, normalize_gate
 from .gates import gate_to_matrix, identity
 
 
@@ -540,6 +540,11 @@ class Circuit:
         if parameters:
             names = ", ".join(parameter.name for parameter in parameters)
             raise ValueError(f"Circuit has unbound parameter(s): {names}; call bind_parameters(...) first")
+
+        # 控制流检查：不能跳过，即使 ignore_nonunitary=True
+        for gate in self.gates:
+            if isinstance(gate, ControlFlow) or (isinstance(gate, Mapping) and str(gate.get("type", "")).lower() in {"if", "while"}):
+                raise ValueError("控制流指令无法表示为酉矩阵；请用 Measure.run 执行")
 
         backend = backend or self._backend
         if not self.gates:

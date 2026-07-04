@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import numpy as np
 
 from ..core.gates import gate_tensors
+from ..ir import ControlFlow
 
 
 def _basis_vector(bit: int):
@@ -38,6 +40,8 @@ def build_network(circuit, backend, *, input_bits=None, output_spec=None):
 
     # 门节点：matrix reshape 成 (2,)*k(out) + (2,)*k(in)
     for gate in circuit.gates:
+        if isinstance(gate, ControlFlow) or (isinstance(gate, Mapping) and str(gate.get("type", "")).lower() in {"if", "while"}):
+            raise ValueError("控制流指令不支持张量网络模拟；请用 Measure.run 执行")
         for matrix, axes in gate_tensors(gate, backend):
             k = len(axes)
             node = backend.reshape(backend.cast(matrix), (2,) * (2 * k))
