@@ -14,6 +14,7 @@
 ### Added
 
 - **typed IR 迁移的 NPU 回归脚本矩阵。** 新增/整理 `scripts/npu/{smoke,backend,ops,capacity,typed_ir,circuit,deriv,qml,tensor,qas,demos,run_all}.sh` 与统一 runner，支持 `--strict-npu`、`--fail-fast`、`--dry-run`、`--pytest-arg ...`。其中 `typed_ir_deriv_probe.sh --section all` 是轻量硬件探针：覆盖 `Circuit.gates` typed surface、legacy dict 互操作、JSON/QASM round-trip、metrics/transpile、typed `Observable`、`qml.auto`/`qml.ad`/`psr`/`fd` deriv 路径。
+- **多卡 NPU strict probe。** 新增 `scripts/npu/multi_card.sh`（包装 `python -m torch.distributed.run`）与 `multi_card_probe.py`：验证 HCCL 初始化、rank→NPU 绑定、`shard_context`、object `all_gather`、实数 NPU tensor 的 `broadcast_parameters`/`all_reduce_mean`，并在每个 rank 上跑 typed IR/deriv 小图与 supernet `safe`/`aggressive` 小规模多卡任务。支持 `--devices 0,5,6,7` 这类非连续物理 NPU ID。
 - **NPU suite 目标漂移守卫。** `tests/scripts/test_npu_test_runner.py` 现在校验每个 suite 的 pytest target 与 probe script 都真实存在，避免文件改名后 `run_all.sh` 在远端 NPU 跑到中后段才因 `file or directory not found` 失败。
 
 ### Fixed
@@ -27,6 +28,7 @@
 
 - 真实 Ascend NPU 上已完成单卡 strict sweep：`typed_ir_deriv_probe.sh --section all`、`typed_ir.sh --strict-npu --pytest-arg -q`、`deriv.sh --strict-npu --pytest-arg -q`、`backend.sh --strict-npu --pytest-arg -q`、`capacity.sh --strict-npu --pytest-arg -q` 均通过。
 - 真实 Ascend NPU 上 `scripts/npu/run_all.sh --strict-npu --fail-fast --pytest-arg -q --pytest-arg --durations=20` 已从 `smoke` 跑到 `demos` 全套完成，无 failure/error；覆盖 typed IR、Circuit.gates API、deriv、NPUBackend workaround、capacity/sharding、QML、tensor simulator、QAS 和 demos。当前结论是：typed `Circuit.gates` API 迁移在单卡真实 NPU 上通过全量 NPU 脚本验证；后续多卡代码仍应另跑 HCCL 多 NPU 场景。
+- 多卡验证入口已准备：建议先跑 `scripts/npu/multi_card.sh --nproc-per-node 4 --devices 0,5,6,7 --section collectives`，再跑 `scripts/npu/multi_card.sh --nproc-per-node 4 --devices 0,5,6,7 --section all`。真实 HCCL 多卡结果待远端执行日志确认。
 
 ## 2026-07-03
 
