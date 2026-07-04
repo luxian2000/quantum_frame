@@ -28,8 +28,8 @@
 ### Validation
 
 - 真实 Ascend NPU 上已完成单卡 strict sweep：`typed_ir_deriv_probe.sh --section all`、`typed_ir.sh --strict-npu --pytest-arg -q`、`deriv.sh --strict-npu --pytest-arg -q`、`backend.sh --strict-npu --pytest-arg -q`、`capacity.sh --strict-npu --pytest-arg -q` 均通过。
-- 真实 Ascend NPU 上 `scripts/npu/run_all.sh --strict-npu --fail-fast --pytest-arg -q --pytest-arg --durations=20` 已从 `smoke` 跑到 `demos` 全套完成，无 failure/error；覆盖 typed IR、Circuit.gates API、deriv、NPUBackend workaround、capacity/sharding、QML、tensor simulator、QAS 和 demos。当前结论是：typed `Circuit.gates` API 迁移在单卡真实 NPU 上通过全量 NPU 脚本验证；后续多卡代码仍应另跑 HCCL 多 NPU 场景。
-- 多卡验证入口已准备：建议先跑 `scripts/npu/multi_card.sh --nproc-per-node 4 --section collectives`，再跑 `scripts/npu/multi_card.sh --nproc-per-node 4 --section all`。真实 HCCL 多卡结果待远端执行日志确认。
+- 真实 Ascend NPU 上 `scripts/npu/run_all.sh --strict-npu --fail-fast --pytest-arg -q --pytest-arg --durations=20` 已从 `smoke` 跑到 `demos` 全套完成，无 failure/error；覆盖 typed IR、Circuit.gates API、deriv、NPUBackend workaround、capacity/sharding、QML、tensor simulator、QAS 和 demos。当前结论是：typed `Circuit.gates` API 迁移在单卡真实 NPU 上通过全量 NPU 脚本验证。
+- 真实 4 卡 Ascend NPU / HCCL 上已完成多卡 strict probe：`scripts/npu/multi_card.sh --nproc-per-node 4 --section collectives` 通过 rank→`npu:0..3` 绑定、HCCL 初始化、`shard_context`、object `all_gather`、实数 NPU tensor `broadcast_parameters` 与 `all_reduce_mean`；`scripts/npu/multi_card.sh --nproc-per-node 4 --section all` 进一步通过每 rank typed IR、deriv，以及 supernet `safe`/`aggressive` 小规模分片。supernet safe 四 rank 能量一致为 `-1.0197104215621948`，aggressive 四 rank 能量一致为 `-0.9999998211860657`。
 
 ## 2026-07-03
 
