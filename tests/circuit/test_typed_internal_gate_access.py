@@ -12,8 +12,6 @@ LEGACY_GATE_DICT_BOUNDARIES = {
     "aicir/ir/control_flow.py",
     "aicir/ir/measurement.py",
     "aicir/ir/operation.py",
-    # QAS action-space/search payloads are still mutable legacy DTOs.
-    "aicir/qas/algorithms/crlqas.py",
     # Legacy transpile APIs that explicitly operate on gate-dict lists.
     "aicir/transpile/passes/_local_rewrite.py",
     "aicir/transpile/rewrite.py",

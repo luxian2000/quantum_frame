@@ -70,7 +70,27 @@ def _expectation(theta_t, gate_fn, backend, psi, obs, path):
     else:
         psip = apply_gate_to_state(gate, psi, N_QUBITS, backend)
     psip = psip.reshape(-1, 1)
-    return (psip.conj().transpose(0, 1) @ obs @ psip).real.reshape(())
+    return backend.expectation_sv(psip, obs).reshape(())
+
+
+def test_expectation_helper_uses_backend_expectation_sv_for_backend_compatibility():
+    from aicir.backends.gpu_backend import GPUBackend
+
+    class RecordingBackend(GPUBackend):
+        def __init__(self):
+            super().__init__(device="cpu")
+            self.expectation_calls = 0
+
+        def expectation_sv(self, state, operator):
+            self.expectation_calls += 1
+            return super().expectation_sv(state, operator)
+
+    backend = RecordingBackend()
+    psi, obs = _fixtures(backend)
+
+    _expectation(torch.tensor(0.37), lambda th: rx(th, 0), backend, psi, obs, "local")
+
+    assert backend.expectation_calls == 1
 
 
 @pytest.mark.parametrize("path", ["matrix", "local"])
