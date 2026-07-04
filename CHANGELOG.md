@@ -22,6 +22,7 @@
 - **Ascend NPU complex64 限制导致的 typed-IR deriv/backend 问题。** 本轮迁移确认真实 NPU 上不能把 CPU/GPU 的任意 complex64 torch 图视为等价契约；`NPUBackend` 路径必须继续经 real/imag 分解或自定义 autograd，避免 `aclnnMatmul` / `aclnnInplaceAdd` / `aclnnAdd(DT_COMPLEX64)` 等不支持路径。相关说明已写入项目记忆/文档；真实 NPU deriv 以 `typed_ir_deriv_probe.sh --section deriv` 和 `scripts/npu/deriv.sh --strict-npu` 为准，通用 full-matrix complex autograd 仅保留 CPU/fallback 合同。
 - **`NPUBackend.inner_product` 的共轭内积语义。** 远端 NPU 测试暴露 `torch.dot(torch.conj(bra), ket)` 期望与 workaround 结果不一致；修正后 NPU-safe 路径按 `<bra|ket>` 语义计算，且测试避免把 unsupported `torch.dot` 当作真实 NPU workaround 的实现依赖。
 - **`gloo` 分布式测试遇到 NPU tensor。** `tests/test_supernet_sharding_dist.py` 是 CPU-gloo reproducibility 测试，但真实 NPU 环境下 supernet 参数/梯度会落在 `npu` tensor 上，直接 `dist.broadcast` / `dist.all_reduce` 触发 `RuntimeError: No backend type associated with device type npu`。`aicir.qas.core.sharding` 现仅在「非 CPU tensor + 非 HCCL process group」时 CPU staging 后 collective，再 copy 回原设备；真实多 NPU HCCL 路径仍走原生 NPU collective。
+- **非连续 Ascend NPU ID 的分布式设备映射。** 远端 4 卡机器暴露 `ASCEND_RT_VISIBLE_DEVICES=0,5,6,7` 时，旧 `NPUBackend.from_distributed_env()` 把 `LOCAL_RANK=1/2/3` 直接映射到 `npu:1/2/3`，触发 `Set visible device failed, invalid device=1/2/3`。现在会按 `LOCAL_RANK` 索引 `ASCEND_RT_VISIBLE_DEVICES` / `ASCEND_VISIBLE_DEVICES`，rank 1/2/3 分别使用 `npu:5/6/7`。
 - **NPU runner 文件名漂移。** `circuit` suite 中旧目标 `tests/circuit/test_typed_gates_api.py` 更新为实际文件 `tests/circuit/test_circuit_typed_gates_api.py`，并由 suite target 存在性测试防回退。
 
 ### Validation
