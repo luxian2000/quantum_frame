@@ -1,0 +1,120 @@
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+RUNNER = ROOT / "scripts" / "npu" / "run_npu_tests.py"
+
+
+def run_runner(*args):
+    return subprocess.run(
+        [sys.executable, str(RUNNER), *args],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def test_npu_runner_lists_layered_suites():
+    result = run_runner("--list")
+
+    assert result.returncode == 0, result.stderr
+    for suite in (
+        "smoke",
+        "backend",
+        "ops",
+        "capacity",
+        "typed_ir",
+        "circuit",
+        "deriv",
+        "qml",
+        "tensor",
+        "qas",
+        "demos",
+    ):
+        assert f"{suite}:" in result.stdout
+
+
+def test_npu_runner_dry_run_prints_selected_pytest_commands():
+    result = run_runner(
+        "--dry-run",
+        "--suite",
+        "smoke",
+        "--suite",
+        "qml",
+        "--pytest-arg",
+        "-q",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "-m pytest" in result.stdout
+    assert "tests/backends/test_npu_backend.py" in result.stdout
+    assert "tests/qml" in result.stdout
+    assert "-q" in result.stdout
+
+
+def test_npu_runner_dry_run_prints_typed_ir_and_deriv_probe_commands():
+    result = run_runner(
+        "--dry-run",
+        "--suite",
+        "typed_ir",
+        "--suite",
+        "deriv",
+        "--pytest-arg",
+        "-q",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "scripts/npu/typed_ir_deriv_probe.py" in result.stdout
+    assert "--section typed-ir" in result.stdout
+    assert "--section deriv" in result.stdout
+    assert "tests/circuit/test_typed_ir_internal_migration.py" in result.stdout
+    assert "tests/primitives/test_estimator_gradient.py" in result.stdout
+    assert "tests/qml" in result.stdout
+
+
+def test_npu_runner_strict_dry_run_includes_real_npu_check():
+    result = run_runner("--dry-run", "--strict-npu", "--suite", "smoke")
+
+    assert result.returncode == 0, result.stderr
+    assert "AICIR_REQUIRE_REAL_NPU=1" in result.stdout
+    assert "is_npu_available" in result.stdout
+
+
+def test_npu_shell_entrypoints_exist_and_are_executable():
+    for filename in (
+        "run_all.sh",
+        "smoke.sh",
+        "backend.sh",
+        "ops.sh",
+        "capacity.sh",
+        "typed_ir.sh",
+        "circuit.sh",
+        "deriv.sh",
+        "qml.sh",
+        "tensor.sh",
+        "qas.sh",
+        "demos.sh",
+        "typed_ir_deriv_probe.sh",
+    ):
+        path = ROOT / "scripts" / "npu" / filename
+        assert path.exists(), filename
+        assert os.access(path, os.X_OK), filename
+
+
+def test_typed_ir_deriv_probe_help_lists_sections():
+    probe = ROOT / "scripts" / "npu" / "typed_ir_deriv_probe.py"
+    result = subprocess.run(
+        [sys.executable, str(probe), "--help"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "typed-ir" in result.stdout
+    assert "deriv" in result.stdout
