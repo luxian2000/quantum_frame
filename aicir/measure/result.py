@@ -83,16 +83,15 @@ class Result:
     def classical_counts(self, reg) -> Dict[int, int]:
         """统计经典寄存器 reg 在各轨迹末尾的整数取值分布（LSB=bit0）。
 
-        reg 可以是 ClassicalRegister（读取其 .name/.size）或寄存器名字符串。
-        未写入该寄存器的轨迹按全 0 处理。
+        reg 可以是 ClassicalRegister（读取其 .name）或寄存器名字符串。
+        从未写入该寄存器的轨迹 → 空 dict。
         """
-        name = getattr(reg, "name", reg)
-        size = getattr(reg, "size", None)
+        name = reg if isinstance(reg, str) else reg.name
         counts: Dict[int, int] = {}
         for traj in self.classical_trajectories:
             bits = traj.get(name)
             if bits is None:
-                bits = [0] * (size if size is not None else 1)
+                continue
             value = sum(int(b) << i for i, b in enumerate(bits))
             counts[value] = counts.get(value, 0) + 1
         return counts
