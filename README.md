@@ -7,7 +7,7 @@
 - [1. 项目概览与安装](#1-项目概览与安装)
 - [2. 模块导入](#2-模块导入)
 - [3. 构建量子态](#3-构建量子态)
-- [4. 量子线路的搭建](#4-量子线路的搭建)
+- [4. 搭建量子线路](#4-搭建量子线路)
 - [5. 量子测量](#5-量子测量)
 - [6. 构建哈密顿量](#6-构建哈密顿量)
 - [7. 子包说明索引](#7-子包说明索引)
@@ -16,37 +16,37 @@
 
 ## 1. 项目概览与安装
 
-A from-scratch quantum circuit simulator and quantum-algorithm framework for Python. Supports state vectors, density matrices, noise models, variational algorithms (VQE/QAOA/VQD/SSVQE), quantum architecture search, QML gradients, and OpenQASM I/O — with pluggable backends for CPU, GPU, and Ascend NPU.
+`aicir` 是一个从零实现的 Python 量子线路模拟器与量子算法框架，支持态矢量、密度矩阵、噪声模型、变分算法（VQE/QAOA/VQD/SSVQE）、量子架构搜索、QML 梯度和 OpenQASM 输入输出，并提供可插拔的 CPU、GPU 与 Ascend NPU 后端。
 
-### 1.1 Features（功能特性）
+### 1.1 功能特性
 
 
-- **Unified quantum state** — `State` class handles pure states (amplitude vector) and mixed states (density matrix) with a consistent API
-- **Rich gate library** — single-qubit, rotation, controlled, multi-target, multi-control, and particle-conserving excitation gates (`single_excitation`/Givens, `double_excitation`); typed `Operation` IR with construction-time validation
-- **Flexible measurement** — in-circuit Pauli projection, terminal readout, shot sampling, exact mode, state snapshots, and partial traces
-- **Classical control flow** — measurement-fed `ClassicalRegister`, `measure(creg=)`, and `if_`/`while_` (with `else`) evaluated per shot on the measurement trajectory (see §5.13)
-- **Variational algorithms** — `BasicVQE`, `run_vqe`, QAOA, VQD, SSVQE with built-in ansatz templates (HEA, trapped-ion HEA-TI)
-- **QML gradients** — parameter-shift (`psr`, `spsr`, `multipsr`, four-term `psr4` for excitation gates), finite-difference, SPSA, quantum natural gradient, and PyTorch `autograd`
-- **Quantum architecture search** — weight-shared supernet, CRLQAS, PPR\_DQL, PPO\_RB (requires PyTorch)
-- **Noise simulation** — depolarizing, bit/phase flip, amplitude damping, ion-trap noise via density-matrix evolution
-- **OpenQASM I/O** — round-trip import/export for OpenQASM 2.0 and 3.0; Qiskit, PennyLane, and WuYue interop
-- **Pluggable backends** — `NumpyBackend` (CPU), `GPUBackend` (PyTorch / CUDA), `NPUBackend` (Ascend) — swap with one line
+- **统一量子态表示**：`State` 用同一套 API 表示纯态（振幅向量）和混合态（密度矩阵）。
+- **丰富的门库**：支持单比特门、旋转门、受控门、多目标门、多控制门，以及粒子数守恒激发门（`single_excitation`/Givens、`double_excitation`）；门构造时会做参数和比特数校验。
+- **灵活测量模型**：支持线路内 Pauli 投影测量、末端读出、shots 采样、精确模式、态快照和偏迹。
+- **经典控制流**：支持由测量结果驱动的 `ClassicalRegister`、`measure(creg=)`、`if_`/`while_`（含 `else`），按每条测量轨迹求值（见 §5.13）。
+- **变分算法**：内置 `BasicVQE`、`run_vqe`、QAOA、VQD、SSVQE，以及 HEA、离子阱 HEA-TI 等 ansatz 模板。
+- **QML 梯度**：支持参数移位（`psr`、`spsr`、`multipsr`，以及激发门四项参数移位 `psr4`）、有限差分、SPSA、量子自然梯度和 PyTorch `autograd`。
+- **量子架构搜索**：支持权重共享 supernet、CRLQAS、PPR\_DQL、PPO\_RB（需要 PyTorch）。
+- **噪声模拟**：通过密度矩阵演化支持退相干、比特/相位翻转、振幅阻尼和离子阱噪声。
+- **OpenQASM 输入输出**：支持 OpenQASM 2.0/3.0 导入导出，并提供 Qiskit、PennyLane、WuYue 互操作。
+- **可插拔后端**：`NumpyBackend`（CPU）、`GPUBackend`（PyTorch/CUDA）、`NPUBackend`（Ascend），只需替换一行即可切换。
 
-### 1.2 Installation（安装）
+### 1.2 安装
 
 
 ```bash
-# Core (NumPy only)
+# 核心功能（仅 NumPy）
 pip install aicir
 
-# With optional extras
-pip install "aicir[torch]"   # GPU/NPU backend + QAS
-pip install "aicir[viz]"     # Circuit visualization (matplotlib)
-pip install "aicir[sci]"     # Classical optimizers (scipy)
-pip install "aicir[all]"     # Everything above
+# 按需安装可选功能
+pip install "aicir[torch]"   # GPU/NPU 后端 + QAS
+pip install "aicir[viz]"     # 线路可视化（matplotlib）
+pip install "aicir[sci]"     # 经典优化器（scipy）
+pip install "aicir[all]"     # 上述全部功能
 ```
 
-Or install editable from source:
+也可以从源码安装为可编辑模式：
 
 ```bash
 git clone https://github.com/luxian2000/quantum_frame.git
@@ -54,9 +54,9 @@ cd quantum_frame
 pip install -e ".[all]"
 ```
 
-> `torch`, `matplotlib`, and `scipy` are optional. Core simulation works with NumPy alone.
+> `torch`、`matplotlib` 和 `scipy` 都是可选依赖。只安装 NumPy 时也可以使用核心模拟功能。
 
-### 1.3 Quick Start（快速上手）
+### 1.3 快速上手
 
 
 ```python
@@ -65,7 +65,7 @@ from aicir.core import State
 
 backend = NumpyBackend()
 
-# Build a Bell-state circuit
+# 构建 Bell 态线路
 cir = Circuit(
     hadamard(0),
     cnot(1, [0]),
@@ -73,68 +73,76 @@ cir = Circuit(
     backend=backend,
 )
 
-# Run with 1024 shots
+# 运行 1024 次采样
 result = Measure(backend).run(cir, shots=1024)
 print(result.counts)   # {'00': ~512, '11': ~512}
 
-# Or evolve a state directly
+# 也可以直接演化量子态
 psi = State.zero_state(2, backend)
 psi1 = psi.evolve(cir.unitary())
 print(psi1.ket)        # 1/√2|00> + 1/√2|11>
 ```
 
-### 1.4 Backends（后端）
+### 1.4 后端
 
 
-| Backend | Library | Device | Autograd |
+| 后端 | 底层库 | 设备 | 自动微分 |
 | --- | --- | --- | --- |
-| `NumpyBackend` | NumPy | CPU | No |
-| `GPUBackend` | PyTorch | CPU / CUDA | Yes |
-| `NPUBackend` | PyTorch + torch\_npu | Ascend NPU | Yes |
+| `NumpyBackend` | NumPy | CPU | 否 |
+| `GPUBackend` | PyTorch | CPU / CUDA | 是 |
+| `NPUBackend` | PyTorch + torch\_npu | Ascend NPU | 是 |
 
-Switch backends by changing one line — no other code changes needed:
+切换后端只需要替换一行，其余线路代码通常无需修改：
 
 ```python
 from aicir import GPUBackend, NPUBackend
 
 backend = GPUBackend(device="cuda:0")
-# or
+# 或
 backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 ```
 
-### 1.5 Project Structure（项目结构）
+### 1.5 项目结构
 
 
 ```text
 aicir/
-  backends/     # NumpyBackend, GPUBackend, NPUBackend
-  core/         # State, Circuit, gates, I/O
-  measure/      # Measure, Result, Estimator
-  vqc/          # VQE, QAOA, VQD, SSVQE, ansatz templates
-  qas/          # Quantum architecture search (requires torch)
-  qml/          # Gradient methods
-  noise/        # Noise channels and models
-  ir/           # Typed Operation IR
-  gates/        # GateSpec registry
-  transpile/    # Pass-manager pipeline
-  primitives/   # ShotSampler, StatevectorEstimator, ShotEstimator
-  optimizer/    # Classical optimizers (Adam, COBYLA, LBFGS, …)
-  chemistry/    # Preset qubit Hamiltonians (H2, H2-JW, H2-tapered)
-  encoder/      # AmplitudeEncoder, AngleEncoder, BasisEncoder
-  universal/    # Reusable primitives (QFT, …)
-  visual/       # Circuit visualization
-demos/          # Runnable end-to-end examples
-tests/          # pytest test suite
+  core/          # State、Circuit、Parameter、基础门构造函数、QASM/JSON I/O
+  ir/            # Operation、Measurement、ControlFlow、CircuitIR 等线路表示
+  gates/         # GateSpec 注册表、门矩阵与门元信息
+  backends/      # NumpyBackend、GPUBackend、NPUBackend、NPU 能力探测
+  measure/       # Measure、Result、PauliEstimator、测量轨迹与统计结果
+  primitives/    # Sampler / Estimator primitives
+  qml/           # 参数移位、有限差分、autograd、QNG 等梯度工具
+  ansatze/       # HEA、HEA-TI、UCCSD 等可复用 ansatz 模板
+  vqc/           # VQE、QAOA、VQD、SSVQE 等变分算法
+  qas/           # supernet、DQAS、CRLQAS、PPR_DQL、PPO_RB 等量子架构搜索
+  chemistry/     # 分子哈密顿量预置与可选电子结构计算接口
+  simulator/     # 态矢量 / 张量网络模拟入口
+  transpile/     # PassManager、线路优化与硬件约束变换
+  optimizer/     # 经典参数优化器（Adam、COBYLA、LBFGS、SPSA 等）
+  optimization/  # QUBO、Ising 映射等经典优化问题工具
+  noise/         # 噪声通道、噪声模型与开放系统演化
+  metrics/       # 线路表达能力、可训练性、硬件指标等
+  encoder/       # AmplitudeEncoder、AngleEncoder、BasisEncoder
+  devices/       # 设备/目标硬件能力描述
+  universal/     # QFT 等可复用量子线路模块
+  visual/        # 线路绘图与可视化
+  qrc/           # Quantum Reservoir Computing 预留接口
+  wireless/      # 无线/通信方向实验模块
+demos/          # 可直接运行的端到端示例
+scripts/        # NPU 验证、生成工具等脚本
+tests/          # pytest 测试套件
 ```
 
-### 1.6 Requirements（环境要求）
+### 1.6 环境要求
 
 
 - Python ≥ 3.11
-- NumPy (required)
-- PyTorch (optional — GPU/NPU backend, QAS, autograd)
-- matplotlib (optional — visualization)
-- scipy (optional — classical optimizers)
+- NumPy（必需）
+- PyTorch（可选：GPU/NPU 后端、QAS、自动微分）
+- matplotlib（可选：可视化）
+- scipy（可选：经典优化器）
 
 ---
 
@@ -356,7 +364,7 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 
 ---
 
-## 4. 量子线路的搭建
+## 4. 搭建量子线路
 
 ### 4.1 门构造函数速查
 
