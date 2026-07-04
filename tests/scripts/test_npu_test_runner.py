@@ -137,7 +137,9 @@ def test_npu_multicard_dry_run_prints_torchrun_command():
     )
 
     assert result.returncode == 0, result.stderr
-    assert "ASCEND_RT_VISIBLE_DEVICES=0,5,6,7" in result.stdout
+    assert "--devices is ignored" in result.stdout
+    assert "AICIR_NPU_DEVICES=0,5,6,7" not in result.stdout
+    assert "ASCEND_RT_VISIBLE_DEVICES=0,5,6,7" not in result.stdout
     assert "-m torch.distributed.run" in result.stdout
     assert "--nproc_per_node 4" in result.stdout
     assert "scripts/npu/multi_card_probe.py" in result.stdout

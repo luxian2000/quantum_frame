@@ -69,24 +69,6 @@ def _has_complete_distributed_env() -> bool:
     return all(os.environ.get(name) for name in ("MASTER_ADDR", "MASTER_PORT", "WORLD_SIZE", "RANK"))
 
 
-def _ascend_visible_devices() -> list[str]:
-    raw = os.environ.get("ASCEND_RT_VISIBLE_DEVICES") or os.environ.get("ASCEND_VISIBLE_DEVICES")
-    if raw is None:
-        return []
-    return [item.strip() for item in str(raw).split(",") if item.strip()]
-
-
-def _distributed_npu_device(local_rank: int) -> str:
-    visible = _ascend_visible_devices()
-    if not visible:
-        return f"npu:{int(local_rank)}"
-    if int(local_rank) >= len(visible):
-        raise ValueError(
-            f"LOCAL_RANK={local_rank} is outside ASCEND visible device list {visible!r}"
-        )
-    return f"npu:{visible[int(local_rank)]}"
-
-
 def _np_is_complex(x) -> bool:
     return isinstance(x, torch.Tensor) and torch.is_complex(x)
 
@@ -501,14 +483,13 @@ class NPUBackend(GPUBackend):
             WORLD_SIZE, RANK, LOCAL_RANK, MASTER_ADDR, MASTER_PORT
 
         Behavior:
-            - Preferred device is npu:{LOCAL_RANK}, or the corresponding
-              ASCEND_RT_VISIBLE_DEVICES entry when that list is set.
+            - Preferred device is npu:{LOCAL_RANK}
             - Falls back to CPU when NPU is unavailable and fallback_to_cpu=True
             - Initializes torch.distributed when WORLD_SIZE > 1 and torchrun-style
               rendezvous env variables are present.
         """
         ctx = npu_runtime_context_from_env()
-        backend = cls(dtype=dtype, device=_distributed_npu_device(ctx.local_rank), fallback_to_cpu=fallback_to_cpu)
+        backend = cls(dtype=dtype, device=f"npu:{ctx.local_rank}", fallback_to_cpu=fallback_to_cpu)
         pg_initialized = False
         pg_backend = None
 
