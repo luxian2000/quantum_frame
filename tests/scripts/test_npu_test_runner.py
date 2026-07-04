@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import subprocess
 import sys
@@ -6,6 +7,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts" / "npu" / "run_npu_tests.py"
+
+
+def load_runner_module():
+    spec = importlib.util.spec_from_file_location("run_npu_tests", RUNNER)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def run_runner(*args):
@@ -103,6 +114,18 @@ def test_npu_shell_entrypoints_exist_and_are_executable():
         path = ROOT / "scripts" / "npu" / filename
         assert path.exists(), filename
         assert os.access(path, os.X_OK), filename
+
+
+def test_npu_runner_suite_targets_exist():
+    runner = load_runner_module()
+
+    for suite in runner.SUITES.values():
+        for script in suite.scripts:
+            script_path = ROOT / script[0]
+            assert script_path.exists(), f"{suite.name}: {script[0]}"
+        for target in suite.targets:
+            target_path = ROOT / target.split("::", 1)[0]
+            assert target_path.exists(), f"{suite.name}: {target}"
 
 
 def test_typed_ir_deriv_probe_help_lists_sections():
