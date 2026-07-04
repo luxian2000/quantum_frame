@@ -28,6 +28,23 @@ def _dist_ready() -> bool:
     return bool(dist.is_available() and dist.is_initialized())
 
 
+def _dist_backend_name() -> str:
+    try:
+        return str(dist.get_backend()).lower()
+    except Exception:
+        return ""
+
+
+def _needs_cpu_collective(tensor: torch.Tensor) -> bool:
+    device_type = getattr(getattr(tensor, "device", None), "type", None)
+    return bool(device_type and device_type != "cpu" and _dist_backend_name() != "hccl")
+
+
+def _copy_back_(target: torch.Tensor, value: torch.Tensor) -> None:
+    with torch.no_grad():
+        target.copy_(value.to(device=target.device, dtype=target.dtype))
+
+
 def shard_context(backend: Any) -> ShardContext:
     """判定当前是否为分布式 NPU 运行，并返回 rank/world_size。"""
     if not isinstance(backend, NPUBackend) or not _dist_ready():
@@ -58,8 +75,14 @@ def all_reduce_mean(tensors: Sequence[torch.Tensor]) -> None:
         return
     world_size = dist.get_world_size()
     for tensor in tensors:
-        dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
-        tensor.div_(world_size)
+        if _needs_cpu_collective(tensor):
+            staged = tensor.detach().cpu()
+            dist.all_reduce(staged, op=dist.ReduceOp.SUM)
+            staged.div_(world_size)
+            _copy_back_(tensor, staged)
+        else:
+            dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+            tensor.div_(world_size)
 
 
 def broadcast_parameters(params: Mapping[Any, torch.Tensor], src: int = 0) -> None:
@@ -67,4 +90,9 @@ def broadcast_parameters(params: Mapping[Any, torch.Tensor], src: int = 0) -> No
     if not _dist_ready():
         return
     for _, tensor in sorted(params.items(), key=lambda item: str(item[0])):
-        dist.broadcast(tensor, src=src)
+        if _needs_cpu_collective(tensor):
+            staged = tensor.detach().cpu()
+            dist.broadcast(staged, src=src)
+            _copy_back_(tensor, staged)
+        else:
+            dist.broadcast(tensor, src=src)
