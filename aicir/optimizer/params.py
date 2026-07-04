@@ -500,6 +500,13 @@ class COBYLA(ScipyMinimize):
         super().__init__("COBYLA", constraints=constraints, options=options)
 
 
+class NelderMead(ScipyMinimize):
+    """Derivative-free Nelder-Mead simplex optimizer."""
+
+    def __init__(self, *, options: Mapping[str, Any] | None = None) -> None:
+        super().__init__("Nelder-Mead", options=options)
+
+
 class LBFGSB(ScipyMinimize):
     """L-BFGS-B optimizer with optional explicit gradient."""
 
@@ -560,6 +567,7 @@ __all__ = [
     "COBYLA",
     "GD",
     "LBFGSB",
+    "NelderMead",
     "OptimizationResult",
     "SPSA",
     "ScipyMinimize",
