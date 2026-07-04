@@ -24,6 +24,7 @@ A from-scratch quantum circuit simulator and quantum-algorithm framework for Pyt
 - **Unified quantum state** — `State` class handles pure states (amplitude vector) and mixed states (density matrix) with a consistent API
 - **Rich gate library** — single-qubit, rotation, controlled, multi-target, multi-control, and particle-conserving excitation gates (`single_excitation`/Givens, `double_excitation`); typed `Operation` IR with construction-time validation
 - **Flexible measurement** — in-circuit Pauli projection, terminal readout, shot sampling, exact mode, state snapshots, and partial traces
+- **Classical control flow** — measurement-fed `ClassicalRegister`, `measure(creg=)`, and `if_`/`while_` (with `else`) evaluated per shot on the measurement trajectory (see §5.13)
 - **Variational algorithms** — `BasicVQE`, `run_vqe`, QAOA, VQD, SSVQE with built-in ansatz templates (HEA, trapped-ion HEA-TI)
 - **QML gradients** — parameter-shift (`psr`, `spsr`, `multipsr`, four-term `psr4` for excitation gates), finite-difference, SPSA, quantum natural gradient, and PyTorch `autograd`
 - **Quantum architecture search** — weight-shared supernet, CRLQAS, PPR\_DQL, PPO\_RB (requires PyTorch)
@@ -171,6 +172,10 @@ from aicir import Circuit, CircuitIR, Measurement, Observable, Operation, Parame
 
 # 测量
 from aicir import Measure, Result
+
+# 经典控制流（测量反馈的 if/while）
+from aicir import ClassicalRegister, if_, while_
+# measure(qubits, creg=/cbits=) 从 aicir.core.circuit 取用
 
 # 哈密顿量
 from aicir import PauliOp, PauliString, Hamiltonian
@@ -940,6 +945,53 @@ noisy = ShotEstimator(shots=4096).run(Circuit(pauli_x(0), n_qubits=1), ham)
 | `shots∈{None,0}` 且显式 `measure_qubits` 非空 | `ValueError` |
 | `sm="shot"` 或 `"cond"` | `NotImplementedError`（待实现） |
 | 产生混合态但后端不支持密度矩阵 | `ValueError` |
+
+---
+
+### 5.13 经典控制流（if/while）
+
+依赖测量结果的经典控制流：把 Z 基测量写入**经典寄存器**，再用 `if_`/`while_` 按寄存器取值条件执行子线路。控制流是**每 shot 的运行时行为**，只在 `Measure.run` 的测量轨迹路径上执行——每条轨迹按自己的测量结果各自决定分支。
+
+```python
+import numpy as np
+from aicir import Circuit, Measure, NumpyBackend, ClassicalRegister, hadamard, pauli_x, if_, while_
+from aicir.core.circuit import measure
+
+# 经典寄存器：ClassicalRegister(size, name)，reg[0] 为 LSB
+c = ClassicalRegister(1, "c")
+
+# H(0) → 测 q0 写入 c[0] → 若 c[0]==1 则翻转 q1
+circ = Circuit(
+    hadamard(0),
+    measure(0, creg=c),                              # 每比特 Z 基投影，|0>→0 / |1>→1
+    if_(c[0] == 1, Circuit(pauli_x(1), n_qubits=2)),  # else_body=... 可选
+    n_qubits=2,
+)
+res = Measure(NumpyBackend()).run(circ, shots=400, seed=7, measure_qubits=[1])
+res.classical_counts(c)   # {0: ~200, 1: ~200}：c 的整数取值分布（LSB=c[0]）
+res.counts(-1)            # q1 末端读出与 c 完全关联（每 shot q1 == c[0]）
+```
+
+`while_` 必须提供 `max_iterations`；达上限仍满足条件时抛 `RuntimeError`（不静默截断）：
+
+```python
+r = ClassicalRegister(1, "r")
+body = Circuit(pauli_x(0), measure(0, creg=r), n_qubits=1)   # 循环体须刷新 r，否则条件不变
+loop = Circuit(
+    pauli_x(0), measure(0, creg=r),                          # r[0]=1
+    while_(r[0] == 1, body, max_iterations=5),               # 一步内收敛：X 后再测得 0
+    n_qubits=1,
+)
+Measure(NumpyBackend()).run(loop, shots=10).classical_counts(r)   # {0: 10}
+```
+
+要点：
+
+- **写经典位**：`measure(qubits, creg=reg)` 按序写 `reg` 的 0..k-1 位；`measure(qubits, cbits=[reg[i], ...])` 显式指定。有经典目标时仅支持 Z 基，`creg`/`cbits` 互斥。无经典目标时 `measure(...)` 保持原联合 Pauli 投影语义不变。
+- **条件**：`reg[i] == v`（位，`v∈{0,1}`）或 `reg == N`（整个寄存器整数值）；支持 `==` 与 `!=`。
+- **结构**：`if_(condition, body, else_body=None)`、`while_(condition, body, *, max_iterations)`；`body`/`else_body` 为 `Circuit`，`n_qubits` 须与外层一致，可任意嵌套（body 内可再含 measure→creg、`if_`/`while_`）。
+- **读出**：`Result.classical_counts(reg)` 给出各 shot 末尾寄存器整数值的分布（reg 可传名字或 `ClassicalRegister`；从未写入 → `{}`）。
+- **限制**：控制流只能经 `Measure.run` 执行；`Circuit.unitary()`、张量网络引擎（`aicir.simulator`）遇控制流一律抛 `ValueError`（语义上不可表示为酉矩阵）；QASM3 控制流导出暂未支持。含控制流+creg 的电路支持 JSON 往返（`circuit_to_json`/`circuit_from_json`），往返后执行结果一致。
 
 ---
 
