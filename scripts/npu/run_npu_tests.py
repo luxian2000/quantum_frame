@@ -19,6 +19,7 @@ class Suite:
     name: str
     description: str
     targets: tuple[str, ...]
+    scripts: tuple[tuple[str, ...], ...] = ()
 
 
 SUITES: dict[str, Suite] = {
@@ -64,6 +65,21 @@ SUITES: dict[str, Suite] = {
             "tests/test_supernet_sharding_dist.py",
         ),
     ),
+    "typed_ir": Suite(
+        name="typed_ir",
+        description="Typed CircuitIR/Operation/Measurement surface, interop, metrics, transpile, and NPU execution.",
+        targets=(
+            "tests/circuit/test_operation_ir.py",
+            "tests/circuit/test_typed_factories.py",
+            "tests/circuit/test_circuit_typed_gates_api.py",
+            "tests/circuit/test_typed_internal_gate_access.py",
+            "tests/circuit/test_typed_ir_internal_migration.py",
+            "tests/circuit/io/test_json_qasm_io.py",
+            "tests/circuit/io/test_wuyue_interop.py",
+            "tests/gates/test_matrix_dispatch_consistency.py",
+        ),
+        scripts=(("scripts/npu/typed_ir_deriv_probe.py", "--section", "typed-ir"),),
+    ),
     "circuit": Suite(
         name="circuit",
         description="Circuit execution, measurement, typed-gate API, and JSON/QASM interop around NPU paths.",
@@ -77,6 +93,23 @@ SUITES: dict[str, Suite] = {
             "tests/measure/test_estimator.py",
             "tests/circuit/io/test_json_qasm_io.py",
         ),
+    ),
+    "deriv": Suite(
+        name="deriv",
+        description="Typed IR derivative paths on NPU: ad, auto, psr/fd, gate matrix autograd, and estimator gradients.",
+        targets=(
+            "tests/qml",
+            "tests/primitives/test_estimator_gradient.py",
+            "tests/gates/test_matrix_autograd.py",
+            "tests/circuit/test_typed_ir_internal_migration.py::test_circuit_ir_is_accepted_by_measure_and_adjoint_gradient",
+            "tests/backends/test_npu_backend.py::TestNPUBackend::test_npu_complex_matmul_function_matches_native_gradient",
+            "tests/backends/test_npu_backend.py::TestNPUBackend::test_npu_real_complex_matmul_function_gradient",
+            "tests/backends/test_npu_backend.py::TestNPUBackend::test_npu_expectation_function_matches_native_gradient",
+            "tests/backends/test_npu_backend.py::TestNPUBackend::test_npu_circuit_energy_gradient_matches_gpu",
+            "tests/backends/test_npu_backend.py::TestNPUBackend::test_npu_circuit_backward_runs_without_complex_ops",
+            "tests/backends/test_npu_hamiltonian_grad.py",
+        ),
+        scripts=(("scripts/npu/typed_ir_deriv_probe.py", "--section", "deriv"),),
     ),
     "qml": Suite(
         name="qml",
@@ -161,6 +194,13 @@ def pytest_cmd(
     return cmd
 
 
+def script_cmd(python: str, script: tuple[str, ...], *, strict_npu: bool) -> list[str]:
+    cmd = [python, *script]
+    if not strict_npu:
+        cmd.append("--allow-cpu-fallback")
+    return cmd
+
+
 def selected_suites(names: list[str] | None) -> list[Suite]:
     if not names:
         names = list(DEFAULT_SUITES)
@@ -175,6 +215,8 @@ def print_suite_list() -> None:
     for name in DEFAULT_SUITES:
         suite = SUITES[name]
         print(f"{suite.name}: {suite.description}")
+        for script in suite.scripts:
+            print(f"  - python {quote_cmd(script)}")
         for target in suite.targets:
             print(f"  - {target}")
 
@@ -243,15 +285,16 @@ def main(argv: list[str] | None = None) -> int:
     commands: list[list[str]] = []
     if args.strict_npu:
         commands.append(npu_check_cmd(args.python))
-    commands.extend(
-        pytest_cmd(
-            args.python,
-            suite,
-            fail_fast=args.fail_fast,
-            pytest_args=tuple(args.pytest_arg),
+    for suite in suites:
+        commands.extend(script_cmd(args.python, script, strict_npu=args.strict_npu) for script in suite.scripts)
+        commands.append(
+            pytest_cmd(
+                args.python,
+                suite,
+                fail_fast=args.fail_fast,
+                pytest_args=tuple(args.pytest_arg),
+            )
         )
-        for suite in suites
-    )
 
     if args.dry_run:
         print(f"cd {shlex.quote(str(ROOT))}")

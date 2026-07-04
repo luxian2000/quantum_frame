@@ -7,6 +7,8 @@ Ascend/NPU machines.
 
 ```sh
 scripts/npu/smoke.sh --strict-npu
+scripts/npu/typed_ir.sh --strict-npu
+scripts/npu/deriv.sh --strict-npu
 scripts/npu/backend.sh --strict-npu
 scripts/npu/ops.sh --strict-npu
 scripts/npu/run_all.sh --strict-npu
@@ -30,11 +32,45 @@ scripts/npu/qml.sh --strict-npu --pytest-arg -vv --pytest-arg --tb=short
 - `backend`: complete NPUBackend behavior and distributed helpers.
 - `ops`: NPU-safe complex decompositions and gradient regressions.
 - `capacity`: capability probe, capacity guards, sharding helpers.
+- `typed_ir`: typed `CircuitIR`/`Operation`/`Measurement`, dict interop, JSON/QASM, metrics, transpile, and NPU execution.
 - `circuit`: circuit execution, measurement, typed gates, JSON/QASM I/O.
+- `deriv`: typed-IR derivative paths on NPU, with focus on `qml.ad`, direct `qml.auto`, `psr`/`fd`, matrix autograd, and estimator parameter binding.
 - `qml`: gradient, qlayer, parameter-shift, estimator paths.
 - `tensor`: tensor network simulator and cotengra-facing paths.
 - `qas`: QAS/VQE workloads likely to stress NPU batch and gradient paths.
 - `demos`: demo and molecule smoke tests before long NPU jobs.
+
+## Typed IR / deriv probe
+
+For a quick strict hardware probe without the larger pytest sweep:
+
+```sh
+scripts/npu/typed_ir_deriv_probe.sh --section typed-ir
+scripts/npu/typed_ir_deriv_probe.sh --section deriv
+scripts/npu/typed_ir_deriv_probe.sh --section all
+```
+
+The probe defaults to strict NPU. It fails before running cases when
+`is_npu_available()` is false or `NPUBackend` does not resolve to an `npu`
+device. Use `--allow-cpu-fallback` only for local development.
+
+`typed-ir` covers:
+
+- `Circuit.gates` returning typed `Operation` objects while `legacy_gates`
+  remains dict-compatible.
+- `CircuitIR` conversion, JSON/QASM round-trip, metrics, transpile, and direct
+  `gate_to_matrix(Operation, backend=NPUBackend)`.
+- `Measure.run` on typed IR, including statevector and density-matrix inputs.
+- Typed `Observable.hamiltonian(...)` with `qml.ad`.
+
+`deriv` covers:
+
+- Direct `qml.auto` on an NPU-backed typed `Operation` energy graph, compared
+  against `qml.psr`.
+- `qml.ad` on typed `CircuitIR`, compared against the analytic `RY` / `<Z>`
+  gradient.
+- `StatevectorEstimator.gradient(..., method="psr"|"fd")` over a typed-gate
+  parameter-binding template.
 
 Without `--strict-npu`, the suites still run in environments where current tests
 use CPU fallback or mocked NPU paths. With `--strict-npu`, the runner first
