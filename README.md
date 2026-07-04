@@ -151,8 +151,7 @@ from aicir import GPUBackend, NumpyBackend, NPUBackend
 # 量子态（规范路径）：统一的 State 类
 from aicir.core import State
 
-# 量子门（构造函数；签名与参数顺序不变，返回类型化 Operation，
-# 支持旧门字典的只读访问与 == 比较，见 4.1 节说明）
+# 量子门（推荐用这些构造函数搭建线路；参数顺序见第 4 节）
 from aicir import (
     pauli_x, pauli_y, pauli_z,
     hadamard,
@@ -167,7 +166,7 @@ from aicir import (
     measure,     # 线路内联合 Pauli 投影测量标记，返回 Measurement
 )
 
-# 电路、 typed IR 与参数占位符
+# 电路、门对象与参数占位符
 from aicir import Circuit, CircuitIR, Measurement, Observable, Operation, Parameter
 
 # 测量
@@ -393,19 +392,17 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 | `measure(q...)`           | qubit list                       | 线路内测量标记  |
 | `reset(q...)`             | qubit list                       | 测量后重置为零态 |
 
-`toffoli` / `ccnot` 的矩阵构造与逐门执行路径支持任意数量控制位，也支持门字典中的 `control_states`；导出为 OpenQASM `ccx` 时仍只适用于两个控制位。
+`toffoli` / `ccnot` 的矩阵构造与逐门执行路径支持任意数量控制位；导出为 OpenQASM `ccx` 时仍只适用于两个控制位。
 
-门构造函数的**签名与参数顺序与旧版完全一致**，但返回值已由裸门字典升级为类型化 `Operation`（`measure(...)` / `reset(...)` 返回 `Measurement`）：
+日常写线路时只需要记住三条：
 
-- **构造期校验**：量子比特下标、控制位/控制态长度，以及按 GateSpec 注册表检查目标比特数、参数个数与控制位要求（见 4.6 节），错误在调用处立即报出。
-- **旧字典只读兼容**：`gate["type"]`、`.get("parameter")`、`in`、`dict(gate)`、迭代等读取照常可用，且与旧门字典可直接 `==` 比较；写入（`gate[...] = ...`）会抛 `TypeError`（对象不可变）。
-- **`Circuit.gates` API 已升级**：`circuit.gates` 现在返回 typed instruction 列表（`Operation` / `Measurement` / `ControlFlow`），不是可变门字典列表。读旧键仍兼容，写入不兼容。
-- **旧字典互操作出口**：需要 JSON/QASM/legacy/WuYue/Qiskit/PennyLane 等门字典格式时，使用 `circuit.legacy_gates` 或 `circuit.to_gate_dicts()`；返回值是 detached dict，可安全修改。
-- **内部运行时 typed 化**：矩阵构造、测量轨迹、批量模拟、QML adjoint、metrics、visual、主要 transpile pass 与 QAS/VQE 绑定路径都消费 typed instruction/accessor。dict 只保留在 IR `to_dict/from_dict`、core IO/第三方互操作、legacy transpile rewrite API、CRLQAS action-space DTO 等明确边界。
+- **优先使用门构造函数**：`hadamard(0)`、`cnot(1, [0])`、`ry(theta, 0)` 这类写法最清楚，也会在构造时检查参数数量、目标比特和控制比特。
+- **显式写 `n_qubits`**：这样电路宽度一眼可见，不依赖自动推断，后续测量、绘图和导出也更稳。
+- **让 `Circuit` 管理门序列**：手写线路用 `Circuit(...)`；循环生成线路用 `append(...)` / `extend(...)`；参数化线路用 `Parameter` + `bind_parameters(...)`。
 
 ### 4.2 构建电路
 
-推荐的方式是在构造 `Circuit` 时直接传入门列表，并显式给出 `n_qubits`——这样电路宽度明确、不依赖自动推断，也不涉及后端继承等隐式行为：
+最推荐的写法是在构造 `Circuit` 时直接传入门列表，并显式给出 `n_qubits`。这适合绝大多数手写线路、demo、VQE/QAOA ansatz 和单元测试：
 
 ```python
 from aicir import Circuit, hadamard, cnot, rz
@@ -443,6 +440,31 @@ cir = Circuit(
 )
 ```
 
+如果线路由循环、搜索空间或配置生成，先创建空线路，再逐步追加门会更清楚：
+
+```python
+from aicir import Circuit, ry, rz, cnot
+
+cir = Circuit(n_qubits=4)
+
+for q in range(4):
+    cir.append(ry(0.1 * (q + 1), q))
+    cir.append(rz(0.2, q))
+
+for q in range(3):
+    cir.append(cnot(q + 1, [q]))
+```
+
+也可以一次性追加一组门：
+
+```python
+cir.extend(
+    ry(0.3, 0),
+    rz(-0.2, 1),
+    cnot(1, [0]),
+)
+```
+
 `double_excitation(θ, q1, q2, q3, q4)`（4 比特、粒子数守恒、耦合 |0011⟩↔|1100⟩）同样可直接构造，配合 HF 参考态做化学 VQE：
 
 ```python
@@ -455,7 +477,7 @@ cir = Circuit(
 )
 ```
 
-门构造函数返回的是 typed IR 对象（`Operation`，`measure(...)` 为 `Measurement`），也可以直接用 `Operation(...)` 显式构造，程序化生成线路时更方便：
+如果门名本身来自配置文件、搜索算法或外部数据，也可以直接用 `Operation(...)` 构造门对象；普通手写代码仍优先用上面的门函数：
 
 ```python
 from aicir import Circuit, Operation, Measurement
@@ -468,21 +490,28 @@ cir = Circuit(
 )
 ```
 
-`Circuit.gates` 与 `.operations` 现在都给出 typed instruction 视图；`aicir.ir` 另有 `Observable`/`CircuitIR` 用于可观测量与线路级 IR。需要旧门字典时不要读取或修改 `.gates`，改用：
+已有 QASM、Qiskit、PennyLane 或 WuYue 线路时，不需要手动重写门列表，直接用对应导入函数转换为 `Circuit`：
 
 ```python
-legacy = cir.to_gate_dicts()      # 推荐：函数语义最明确
-legacy = cir.legacy_gates         # 等价属性：兼容旧集成
-legacy[0]["parameter"] = 0.3      # 修改的是 detached dict，不影响 cir
+from aicir import circuit_from_qasm, from_qiskit, from_pennylane, from_wuyue
+
+cir = circuit_from_qasm("""
+OPENQASM 2.0;
+qreg q[1];
+h q[0];
+""")
+# cir = from_qiskit(qiskit_circuit)
+# cir = from_pennylane(pennylane_tape_or_qnode)
+# cir = from_wuyue(wuyue_circuit)
 ```
 
-已有代码迁移规则：
+使用建议：
 
-- 只读门名：`gate["type"]` 可继续工作，但新代码优先写 `gate.name`。
-- 比较旧门字典：`assert circuit.gates == [...]` 多数仍可因兼容 `==` 通过；更明确的断言应改为 `circuit.legacy_gates == [...]`。
-- 修改门参数：把 `copy.deepcopy(circuit.gates)` 改为 `circuit.to_gate_dicts()`，再修改 dict；typed gate 本身不可变。
-- 导出/序列化：统一使用 `to_gate_dicts()`，不要把 typed gate 直接交给 JSON。
-- 内部扩展：新模块不要用 `gate["type"]` / `gate.get(...)` 读业务字段，改用 `aicir.ir` 的 `instruction_name`、`instruction_qubits`、`instruction_controls`、`instruction_parameter` 等 accessor。
+- 手写小线路：`Circuit(gate1, gate2, ..., n_qubits=N)`。
+- 循环生成线路：`cir = Circuit(n_qubits=N)` 后配合 `append` / `extend`。
+- 变分线路模板：`Parameter` 作为角度占位符，训练或执行前 `bind_parameters(...)`。
+- 化学 ansatz：优先使用 `pauli_x` 制备 HF 参考态，再叠加 `single_excitation` / `double_excitation`。
+- 外部工具互操作：使用 `circuit_from_qasm` / `from_qiskit` / `from_pennylane` / `from_wuyue`。
 
 ### 4.3 让 Circuit 作用于 State
 
@@ -572,7 +601,7 @@ print(rho1.probabilities())   # [0.  0.5 0.5 0. ]
 
 ### 4.4 参数化量子线路
 
-`Parameter` 可作为旋转门参数的符号占位符，用于构建量子神经网络、VQE、QAOA 等可训练线路模板。模板电路在绑定参数前只保存 typed instruction，不会生成数值矩阵。
+`Parameter` 可作为旋转门参数的符号占位符，用于构建量子神经网络、VQE、QAOA 等可训练线路模板。模板电路在绑定参数前不会生成数值矩阵。
 
 ```python
 from aicir import Circuit, Parameter, rx, ry, crz, cnot
@@ -622,17 +651,17 @@ template.bind_parameters({"theta0": 0.2, "theta1": 0.5}, inplace=True)
 
 ### 4.5 自定义 unitary、identity 与 Torch 自动微分
 
-可以用门字典直接加入自定义酉矩阵：
+可以用 `Operation("unitary", ...)` 直接加入自定义酉矩阵：
 
 ```python
 import numpy as np
-from aicir import Circuit
+from aicir import Circuit, Operation
 
-custom = {
-    "type": "unitary",
-    "parameter": np.eye(4, dtype=np.complex64),
-    "n_qubits": 2,
-}
+custom = Operation(
+    "unitary",
+    qubits=(0, 1),
+    params=(np.eye(4, dtype=np.complex64),),
+)
 
 cir = Circuit(custom, n_qubits=3)
 U = cir.unitary()   # 自定义 2-qubit unitary 会扩展到 3-qubit 电路宽度
@@ -664,7 +693,7 @@ print(theta.grad)
 
 ### 4.6 GateSpec 门元信息注册表
 
-`aicir.gates` 是门元信息的单一来源：每个门的目标比特数、参数个数、别名、QASM 导出名和绘图符号只在注册表里登记一次，`Operation` 构造期校验、`transpile` 的 `ValidatePass`/`CanonicalizePass`、QASM 导出、矩阵路径与绘图都从这里读取。
+`aicir.gates` 是门元信息的单一来源：每个门的目标比特数、参数个数、别名、QASM 导出名和绘图符号只在注册表里登记一次。门构造、`transpile` 的 `ValidatePass`/`CanonicalizePass`、QASM 导出、矩阵路径与绘图都从这里读取。
 
 ```python
 from aicir.gates import GateSpec, get_gate_spec, register_gate, canonical_gate_name
