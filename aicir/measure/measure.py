@@ -87,7 +87,11 @@ class Measure:
                     raise ValueError(f"{instruction_name(gate)} 含越界比特 {q}（n={n}）")
             if len(set(qs)) != len(qs):
                 raise ValueError(f"{instruction_name(gate)} 含重复比特：{qs}")
-            if _is_measure(gate):
+            if _is_measure(gate) and gate.get("classical_register") is None:
+                # creg 目标的 measure（携带 classical_register）只做逐比特 Z 投影、
+                # 写入 trajectory 本地经典 store，不产生联合 Pauli 本征值，
+                # 不应注册为 MeasureSpec（否则 exact/shots=1 路径按 op_index 读
+                # tr.incircuit 时会 KeyError，因为 _exec_ops 从不为它写 incircuit）。
                 # circuit_instructions 返回类型化 Measurement 对象（非 dict），
                 # 须用 getattr 读取 id/basis，否则会被错误地默认。
                 mid = getattr(gate, "id", None)

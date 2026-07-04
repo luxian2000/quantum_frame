@@ -100,24 +100,31 @@ def _measure_into_creg(state, qubits, reg_name, clbits, classical, rng):
 
 
 def _exec_ops(ops, state, classical, backend, n, *, rng, noise_model,
-              snap_ops, incircuit, snaps, op_index_ref):
+              snap_ops, incircuit, snaps, top_level):
     """递归执行一段操作序列，处理控制流 / measure→creg / 酉门 / reset。
 
-    op_index_ref 是单元素可变列表，充当跨递归层级共享的顶层操作计数器：
-    body/else_body 内的操作不消耗顶层 op_index（snap_ops 语义只针对顶层线路）。
+    op_index 只在 top_level=True 时才有意义：它是顶层 circuit_instructions
+    的枚举下标（`enumerate`），与该操作内部（if/while body）实际执行了多少
+    子操作完全无关 —— 这样 body/else_body/while-body 中执行任意数量的子操作
+    都不会挪动其后顶层操作的编号。嵌套递归（top_level=False）不写
+    incircuit/snaps，也不使用/需要 op_index；creg 写入在任意深度都照常生效
+    （写入的是 classical store，不是按 op_index 记账的 incircuit/snaps）。
     """
-    for gate in circuit_instructions(ops):
+    instrs = circuit_instructions(ops)
+    iterator = enumerate(instrs) if top_level else ((None, gate) for gate in instrs)
+
+    for op_index, gate in iterator:
         if isinstance(gate, ControlFlow):
             cond = gate.condition
             if gate.name == "if":
                 if cond.evaluate(classical):
                     state = _exec_ops(gate.body, state, classical, backend, n,
-                                      rng=rng, noise_model=noise_model, snap_ops=set(),
-                                      incircuit=incircuit, snaps=snaps, op_index_ref=op_index_ref)
+                                      rng=rng, noise_model=noise_model, snap_ops=snap_ops,
+                                      incircuit=incircuit, snaps=snaps, top_level=False)
                 elif gate.else_gates is not None:
                     state = _exec_ops(gate.else_body, state, classical, backend, n,
-                                      rng=rng, noise_model=noise_model, snap_ops=set(),
-                                      incircuit=incircuit, snaps=snaps, op_index_ref=op_index_ref)
+                                      rng=rng, noise_model=noise_model, snap_ops=snap_ops,
+                                      incircuit=incircuit, snaps=snaps, top_level=False)
             else:  # while
                 iters = 0
                 while cond.evaluate(classical):
@@ -126,12 +133,12 @@ def _exec_ops(ops, state, classical, backend, n, *, rng, noise_model,
                         raise RuntimeError(
                             f"while 超过 max_iterations={gate.max_iterations} 仍满足条件")
                     state = _exec_ops(gate.body, state, classical, backend, n,
-                                      rng=rng, noise_model=noise_model, snap_ops=set(),
-                                      incircuit=incircuit, snaps=snaps, op_index_ref=op_index_ref)
-            op_index_ref[0] += 1
+                                      rng=rng, noise_model=noise_model, snap_ops=snap_ops,
+                                      incircuit=incircuit, snaps=snaps, top_level=False)
+            if top_level and op_index in snap_ops:
+                snaps[op_index] = state
             continue
 
-        op_index = op_index_ref[0]
         if _is_measure(gate):
             reg_name = gate.get("classical_register")
             if reg_name is not None:
@@ -142,15 +149,15 @@ def _exec_ops(ops, state, classical, backend, n, *, rng, noise_model,
                 qubits = _marker_qubits(gate, n)
                 basis = _gate_basis(gate)
                 state, lam = projector.measure_joint_pauli(state, qubits, basis, rng)
-                incircuit[op_index] = lam
+                if top_level:
+                    incircuit[op_index] = lam
         elif _is_reset(gate):
             state = projector.reset_channel(state, _marker_qubits(gate, n))
         else:
             state = _apply_unitary(gate, state, backend, n, noise_model)
 
-        if op_index in snap_ops:
+        if top_level and op_index in snap_ops:
             snaps[op_index] = state
-        op_index_ref[0] += 1
     return state
 
 
@@ -208,7 +215,7 @@ def run_trajectory(
 
     state = _exec_ops(circuit, init_state, classical, backend, n, rng=rng,
                       noise_model=noise_model, snap_ops=snap_ops, incircuit=incircuit,
-                      snaps=snaps, op_index_ref=[0])
+                      snaps=snaps, top_level=True)
 
     # 末端测量
     pre = state
