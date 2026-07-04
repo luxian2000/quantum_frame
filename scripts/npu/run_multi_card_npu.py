@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--devices",
         default=None,
-        help="Comma-separated physical NPU ids exported as ASCEND_RT_VISIBLE_DEVICES, e.g. 0,5,6,7.",
+        help="Deprecated compatibility option. Multi-card NPU follows BeH2 demo style and does not export ASCEND_RT_VISIBLE_DEVICES.",
     )
     parser.add_argument("--master-addr", default="127.0.0.1")
     parser.add_argument("--master-port", type=int, default=29623)
@@ -93,17 +93,20 @@ def main(argv: list[str] | None = None) -> int:
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    if devices:
-        env["ASCEND_RT_VISIBLE_DEVICES"] = ",".join(devices)
 
     cmd = build_command(args)
     if args.dry_run:
         print(f"cd {shlex.quote(str(ROOT))}")
         if devices:
-            print(f"ASCEND_RT_VISIBLE_DEVICES={env['ASCEND_RT_VISIBLE_DEVICES']}")
+            print("# --devices is ignored; use torchrun LOCAL_RANK -> npu:LOCAL_RANK like demos/BeH2")
         print(quote_cmd(cmd))
         return 0
 
+    if devices:
+        print(
+            "# --devices is ignored; using torchrun LOCAL_RANK -> npu:LOCAL_RANK like demos/BeH2",
+            flush=True,
+        )
     print(f"+ {quote_cmd(cmd)}", flush=True)
     completed = subprocess.run(cmd, cwd=ROOT, env=env)
     return completed.returncode

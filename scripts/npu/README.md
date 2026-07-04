@@ -12,7 +12,7 @@ scripts/npu/deriv.sh --strict-npu
 scripts/npu/backend.sh --strict-npu
 scripts/npu/ops.sh --strict-npu
 scripts/npu/run_all.sh --strict-npu
-scripts/npu/multi_card.sh --nproc-per-node 4 --devices 0,5,6,7
+scripts/npu/multi_card.sh --nproc-per-node 4
 ```
 
 Use `--dry-run` to inspect commands without executing them:
@@ -48,20 +48,22 @@ Use this after the single-card strict sweep passes. It launches
 `NPUBackend.from_distributed_env(...)`. In strict mode the process group must be
 HCCL and every rank must resolve to an `npu` device.
 
-For a 4-card host whose physical NPU ids are non-contiguous, pass the visible
-device list explicitly:
+For a 4-card host, use the same convention as `demos/BeH2/BeH2_npu.py`:
+`torchrun` sets `LOCAL_RANK=0..3`, and each rank binds to `npu:{LOCAL_RANK}`.
+Do not set `ASCEND_RT_VISIBLE_DEVICES=0,5,6,7` for this probe; on the tested
+Ascend runtime that makes `torch.npu.set_device(...)` reject both logical and
+physical ids.
 
 ```sh
 scripts/npu/multi_card.sh \
   --nproc-per-node 4 \
-  --devices 0,5,6,7 \
   --section all
 ```
 
 For a quick HCCL smoke before the heavier supernet probe:
 
 ```sh
-scripts/npu/multi_card.sh --nproc-per-node 4 --devices 0,5,6,7 --section collectives
+scripts/npu/multi_card.sh --nproc-per-node 4 --section collectives
 ```
 
 Use `--dry-run` to inspect the generated command. The probe sections are:

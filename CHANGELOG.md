@@ -14,7 +14,7 @@
 ### Added
 
 - **typed IR 迁移的 NPU 回归脚本矩阵。** 新增/整理 `scripts/npu/{smoke,backend,ops,capacity,typed_ir,circuit,deriv,qml,tensor,qas,demos,run_all}.sh` 与统一 runner，支持 `--strict-npu`、`--fail-fast`、`--dry-run`、`--pytest-arg ...`。其中 `typed_ir_deriv_probe.sh --section all` 是轻量硬件探针：覆盖 `Circuit.gates` typed surface、legacy dict 互操作、JSON/QASM round-trip、metrics/transpile、typed `Observable`、`qml.auto`/`qml.ad`/`psr`/`fd` deriv 路径。
-- **多卡 NPU strict probe。** 新增 `scripts/npu/multi_card.sh`（包装 `python -m torch.distributed.run`）与 `multi_card_probe.py`：验证 HCCL 初始化、rank→NPU 绑定、`shard_context`、object `all_gather`、实数 NPU tensor 的 `broadcast_parameters`/`all_reduce_mean`，并在每个 rank 上跑 typed IR/deriv 小图与 supernet `safe`/`aggressive` 小规模多卡任务。支持 `--devices 0,5,6,7` 这类非连续物理 NPU ID。
+- **多卡 NPU strict probe。** 新增 `scripts/npu/multi_card.sh`（包装 `python -m torch.distributed.run`）与 `multi_card_probe.py`：验证 HCCL 初始化、rank→NPU 绑定、`shard_context`、object `all_gather`、实数 NPU tensor 的 `broadcast_parameters`/`all_reduce_mean`，并在每个 rank 上跑 typed IR/deriv 小图与 supernet `safe`/`aggressive` 小规模多卡任务。设备绑定对齐 `demos/BeH2/BeH2_npu.py`：`LOCAL_RANK -> npu:{LOCAL_RANK}`。
 - **NPU suite 目标漂移守卫。** `tests/scripts/test_npu_test_runner.py` 现在校验每个 suite 的 pytest target 与 probe script 都真实存在，避免文件改名后 `run_all.sh` 在远端 NPU 跑到中后段才因 `file or directory not found` 失败。
 
 ### Fixed
@@ -22,14 +22,14 @@
 - **Ascend NPU complex64 限制导致的 typed-IR deriv/backend 问题。** 本轮迁移确认真实 NPU 上不能把 CPU/GPU 的任意 complex64 torch 图视为等价契约；`NPUBackend` 路径必须继续经 real/imag 分解或自定义 autograd，避免 `aclnnMatmul` / `aclnnInplaceAdd` / `aclnnAdd(DT_COMPLEX64)` 等不支持路径。相关说明已写入项目记忆/文档；真实 NPU deriv 以 `typed_ir_deriv_probe.sh --section deriv` 和 `scripts/npu/deriv.sh --strict-npu` 为准，通用 full-matrix complex autograd 仅保留 CPU/fallback 合同。
 - **`NPUBackend.inner_product` 的共轭内积语义。** 远端 NPU 测试暴露 `torch.dot(torch.conj(bra), ket)` 期望与 workaround 结果不一致；修正后 NPU-safe 路径按 `<bra|ket>` 语义计算，且测试避免把 unsupported `torch.dot` 当作真实 NPU workaround 的实现依赖。
 - **`gloo` 分布式测试遇到 NPU tensor。** `tests/test_supernet_sharding_dist.py` 是 CPU-gloo reproducibility 测试，但真实 NPU 环境下 supernet 参数/梯度会落在 `npu` tensor 上，直接 `dist.broadcast` / `dist.all_reduce` 触发 `RuntimeError: No backend type associated with device type npu`。`aicir.qas.core.sharding` 现仅在「非 CPU tensor + 非 HCCL process group」时 CPU staging 后 collective，再 copy 回原设备；真实多 NPU HCCL 路径仍走原生 NPU collective。
-- **非连续 Ascend NPU ID 的分布式设备映射。** 远端 4 卡机器暴露 `ASCEND_RT_VISIBLE_DEVICES=0,5,6,7` 时，旧 `NPUBackend.from_distributed_env()` 把 `LOCAL_RANK=1/2/3` 直接映射到 `npu:1/2/3`，触发 `Set visible device failed, invalid device=1/2/3`。现在会按 `LOCAL_RANK` 索引 `ASCEND_RT_VISIBLE_DEVICES` / `ASCEND_VISIBLE_DEVICES`，rank 1/2/3 分别使用 `npu:5/6/7`。
+- **多卡 NPU probe 设备选择对齐 BeH2 demo。** 远端验证表明在该 Ascend runtime 上显式设置 `ASCEND_RT_VISIBLE_DEVICES=0,5,6,7` 会让 `torch.npu.set_device(...)` 同时拒绝逻辑 ID（`npu:1/2/3`）和物理 ID（`npu:5/6/7`）。因此 `multi_card.sh` 不再导出 Ascend visible-device 变量，`--devices` 仅保留为兼容 no-op；多卡验证应像 BeH2 一样只用 `torchrun --nproc_per_node=N`，由 `LOCAL_RANK` 绑定 `npu:{LOCAL_RANK}`。
 - **NPU runner 文件名漂移。** `circuit` suite 中旧目标 `tests/circuit/test_typed_gates_api.py` 更新为实际文件 `tests/circuit/test_circuit_typed_gates_api.py`，并由 suite target 存在性测试防回退。
 
 ### Validation
 
 - 真实 Ascend NPU 上已完成单卡 strict sweep：`typed_ir_deriv_probe.sh --section all`、`typed_ir.sh --strict-npu --pytest-arg -q`、`deriv.sh --strict-npu --pytest-arg -q`、`backend.sh --strict-npu --pytest-arg -q`、`capacity.sh --strict-npu --pytest-arg -q` 均通过。
 - 真实 Ascend NPU 上 `scripts/npu/run_all.sh --strict-npu --fail-fast --pytest-arg -q --pytest-arg --durations=20` 已从 `smoke` 跑到 `demos` 全套完成，无 failure/error；覆盖 typed IR、Circuit.gates API、deriv、NPUBackend workaround、capacity/sharding、QML、tensor simulator、QAS 和 demos。当前结论是：typed `Circuit.gates` API 迁移在单卡真实 NPU 上通过全量 NPU 脚本验证；后续多卡代码仍应另跑 HCCL 多 NPU 场景。
-- 多卡验证入口已准备：建议先跑 `scripts/npu/multi_card.sh --nproc-per-node 4 --devices 0,5,6,7 --section collectives`，再跑 `scripts/npu/multi_card.sh --nproc-per-node 4 --devices 0,5,6,7 --section all`。真实 HCCL 多卡结果待远端执行日志确认。
+- 多卡验证入口已准备：建议先跑 `scripts/npu/multi_card.sh --nproc-per-node 4 --section collectives`，再跑 `scripts/npu/multi_card.sh --nproc-per-node 4 --section all`。真实 HCCL 多卡结果待远端执行日志确认。
 
 ## 2026-07-03
 
