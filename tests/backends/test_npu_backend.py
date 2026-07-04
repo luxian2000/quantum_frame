@@ -108,6 +108,31 @@ class TestNPUBackend(unittest.TestCase):
         self.assertTrue(backend.runtime_context.distributed)
         self.assertFalse(backend.runtime_context.process_group_initialized)
 
+    def test_from_distributed_env_maps_ascend_visible_devices(self):
+        requested_devices = []
+
+        def fake_resolve(*, device=None, fallback_to_cpu=True):
+            requested_devices.append(device)
+            return torch.device("cpu")
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "WORLD_SIZE": "4",
+                "RANK": "2",
+                "LOCAL_RANK": "2",
+                "MASTER_ADDR": "",
+                "MASTER_PORT": "",
+                "ASCEND_RT_VISIBLE_DEVICES": "0,5,6,7",
+            },
+            clear=False,
+        ):
+            with mock.patch.object(NPUBackend, "_resolve_device", side_effect=fake_resolve):
+                backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
+
+        self.assertEqual(requested_devices, ["npu:6"])
+        self.assertEqual(backend.runtime_context.local_rank, 2)
+
     def test_from_distributed_env_initializes_process_group_when_rendezvous_env_exists(self):
         env = {
             "WORLD_SIZE": "2",
