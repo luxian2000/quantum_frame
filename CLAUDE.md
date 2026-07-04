@@ -31,6 +31,9 @@ torchrun --nproc_per_node=2 demos/demo_npu.py     # task-parallel (NOT state sha
 scripts/npu/typed_ir_deriv_probe.sh --section all # strict typed-IR/deriv hardware probe
 scripts/npu/typed_ir.sh --strict-npu --pytest-arg -q
 scripts/npu/deriv.sh --strict-npu --pytest-arg -q
+scripts/npu/run_all.sh --strict-npu --fail-fast --pytest-arg -q
+scripts/npu/multi_card.sh --nproc-per-node 4 --section all
+scripts/npu/qnn_4card.sh --nproc-per-node 4
 ```
 
 `torch`, `matplotlib`, and `scipy` are **optional**. Tests that need them call `pytest.importorskip(...)` and skip cleanly when absent — don't add hard imports of these to core modules.
@@ -40,6 +43,13 @@ scripts/npu/deriv.sh --strict-npu --pytest-arg -q
 Everything is built on a backend abstraction so upper layers (`StateVector`, `Circuit`, `Measure`, VQE, QAS…) never touch the underlying numeric framework.
 
 - **Backends** (`aicir/backends/`): all implement the abstract `Backend` (`base.py`). `NumpyBackend` (default, CPU), `GPUBackend` (Torch, autograd-capable; `TorchBackend` is a deprecated alias), `NPUBackend` (Ascend). Conventions: state vector shape `(2^n, 1)`, density matrix `(2^n, 2^n)`, complex dtype; methods return native tensors, `to_numpy()` is the single conversion exit. Ascend note: `NPUBackend` uses `torch.complex64` tensors, but `torch_npu` does **not** support every complex64 operator/backward path. Avoid raw torch complex matmul/trace/fan-out gradient accumulation on real NPU; failures include `aclnnMatmul` or `aclnnInplaceAdd` for `DT_COMPLEX64`. Route NPU code through `NPUBackend` methods/custom autograd (real/imag decompositions such as `matmul`, `expectation_sv`, local-gate apply, Hamiltonian gradients). Generic full-matrix complex autograd is a CPU/fallback contract; real-NPU deriv is covered by `scripts/npu/typed_ir_deriv_probe.sh --section deriv` and `scripts/npu/deriv.sh --strict-npu`. To add a backend, subclass `Backend` and implement all abstract methods — nothing else should need changing.
+
+  Ascend NPU usage rules to remember:
+  - Single-card validation should use the strict NPU scripts, especially `scripts/npu/typed_ir_deriv_probe.sh --section all`, `scripts/npu/typed_ir.sh --strict-npu --pytest-arg -q`, `scripts/npu/deriv.sh --strict-npu --pytest-arg -q`, and the full sweep `scripts/npu/run_all.sh --strict-npu --fail-fast --pytest-arg -q`. Use `--allow-cpu-fallback` only for local development, never as evidence of real NPU correctness.
+  - Multi-card validation follows `demos/BeH2/BeH2_npu.py`: launch with `torchrun`/`python -m torch.distributed.run`, let `LOCAL_RANK=0..N-1` map to `npu:{LOCAL_RANK}` through `NPUBackend.from_distributed_env(...)`, and require HCCL in strict real-NPU runs.
+  - Do **not** set `ASCEND_RT_VISIBLE_DEVICES=0,5,6,7` for the current multi-card probes/demos. On the verified Ascend runtime this made `torch.npu.set_device(...)` reject both logical ids (`npu:1/2/3`) and physical ids (`npu:5/6/7`). The `--devices` option in `scripts/npu/multi_card.sh` and `scripts/npu/qnn_4card.sh` is compatibility-only and intentionally ignored.
+  - Current multi-NPU support is task/data parallel, not single-statevector sharding. Each rank keeps a full circuit/statevector on its local NPU. Cross-rank communication uses Python objects and real tensors (`broadcast_parameters`, `all_reduce_mean`); do not introduce complex dtype collectives.
+  - Verified real-hardware baselines: single-card strict sweep passed through `scripts/npu/run_all.sh`; 4-card HCCL passed `scripts/npu/multi_card.sh --nproc-per-node 4 --section all`; 4-card typed-IR QNN training passed `scripts/npu/qnn_4card.sh --nproc-per-node 4` and `scripts/npu/qnn_4card.sh --nproc-per-node 4 --steps 24 --samples 64`.
 
 - **Gates are typed instructions at runtime**. Gate factories (`pauli_x`, `cnot`, `rx`, `rzz`, `rxx`/`ms_gate`, `toffoli`, `u3`, …) and `Circuit.__init__`/`append`/`extend` normalize through `aicir.ir.as_instruction(...)`; `Circuit.gates`, iteration, and `Circuit.operations` expose typed `Operation`/measurement/control-flow objects. Controlled gates take `(target, control_qubits_list)` and may carry `control_states` (0/1). Dicts are retained only as JSON/QASM/legacy interop via `Circuit.legacy_gates`, `Circuit.to_gate_dicts()`, `Operation.to_dict()`, and `aicir.ir.instruction_to_gate_dict(...)`. Runtime code should use instruction helpers (`instruction_name`, `instruction_qubits`, `instruction_controls`, `instruction_parameter`, etc.) instead of `gate["..."]` / `gate.get(...)`.
 
