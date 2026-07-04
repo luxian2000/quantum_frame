@@ -13,6 +13,7 @@ scripts/npu/backend.sh --strict-npu
 scripts/npu/ops.sh --strict-npu
 scripts/npu/run_all.sh --strict-npu
 scripts/npu/multi_card.sh --nproc-per-node 4
+scripts/npu/qnn_4card.sh --nproc-per-node 4
 ```
 
 Use `--dry-run` to inspect commands without executing them:
@@ -77,6 +78,39 @@ Use `--dry-run` to inspect the generated command. The probe sections are:
 - `supernet`: small real multi-rank `supernet_qas` runs in both `safe` and
   `aggressive` sharding modes, checking that final energies agree across ranks.
 - `all`: all sections above.
+
+## 4-card QNN demo
+
+After the multi-card probe passes, run this small typed-IR quantum neural
+network demo to exercise an actual training loop:
+
+```sh
+scripts/npu/qnn_4card.sh --nproc-per-node 4
+```
+
+The demo is strict by default: it expects real Ascend NPU devices and HCCL. It
+uses the same BeH2-style binding as the multi-card probe (`LOCAL_RANK ->
+npu:{LOCAL_RANK}`) and does not export `ASCEND_RT_VISIBLE_DEVICES`.
+
+What it covers:
+
+- typed `Operation` construction for the QNN ansatz.
+- statevector forward execution on each rank-local NPU.
+- autodiff through typed gates and `NPUBackend.expectation_sv`.
+- data-parallel training where each rank owns a sample shard.
+- real-valued parameter broadcast and gradient averaging with HCCL.
+
+It does not shard one statevector across four NPUs. Each rank keeps its own
+small statevector and synchronizes only real parameters/gradients. Use
+`--allow-cpu-fallback` only for local dry development, not for real NPU
+validation.
+
+Useful variants:
+
+```sh
+scripts/npu/qnn_4card.sh --dry-run --nproc-per-node 4
+scripts/npu/qnn_4card.sh --nproc-per-node 4 --steps 24 --samples 64
+```
 
 ## Typed IR / deriv probe
 
