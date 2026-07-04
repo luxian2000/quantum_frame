@@ -99,6 +99,7 @@ def test_npu_shell_entrypoints_exist_and_are_executable():
     for filename in (
         "run_all.sh",
         "multi_card.sh",
+        "qnn_4card.sh",
         "smoke.sh",
         "backend.sh",
         "ops.sh",
@@ -146,6 +147,34 @@ def test_npu_multicard_dry_run_prints_torchrun_command():
     assert "--section collectives" in result.stdout
 
 
+def test_npu_qnn_4card_dry_run_prints_torchrun_command():
+    script = ROOT / "scripts" / "npu" / "qnn_4card.sh"
+    result = subprocess.run(
+        [
+            str(script),
+            "--dry-run",
+            "--nproc-per-node",
+            "4",
+            "--steps",
+            "2",
+            "--samples",
+            "8",
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ASCEND_RT_VISIBLE_DEVICES" not in result.stdout
+    assert "-m torch.distributed.run" in result.stdout
+    assert "--nproc_per_node 4" in result.stdout
+    assert "demos/demo_npu_qnn_4card.py" in result.stdout
+    assert "--steps 2" in result.stdout
+    assert "--samples 8" in result.stdout
+
+
 def test_npu_runner_suite_targets_exist():
     runner = load_runner_module()
 
@@ -186,3 +215,19 @@ def test_multi_card_probe_help_lists_sections():
     assert result.returncode == 0, result.stderr
     assert "collectives" in result.stdout
     assert "supernet" in result.stdout
+
+
+def test_demo_npu_qnn_4card_help_lists_training_options():
+    demo = ROOT / "demos" / "demo_npu_qnn_4card.py"
+    result = subprocess.run(
+        [sys.executable, str(demo), "--help"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--steps" in result.stdout
+    assert "--layers" in result.stdout
+    assert "--allow-cpu-fallback" in result.stdout
