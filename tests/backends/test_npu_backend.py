@@ -288,7 +288,12 @@ class TestNPUBackend(unittest.TestCase):
         b, k = bra.reshape(-1), ket.reshape(-1)
         expected = torch.dot(torch.conj(b), k)
         result = self._run_with_npu_forced(lambda: backend.inner_product(bra, ket))
-        self.assertTrue(torch.allclose(result.unsqueeze(0), expected.unsqueeze(0), atol=1e-5))
+        actual_np = np.asarray(backend.to_numpy(result)).reshape(())
+        expected_np = np.asarray(expected.detach().cpu().numpy()).reshape(())
+        self.assertTrue(
+            np.allclose(actual_np, expected_np, atol=1e-5),
+            f"actual={actual_np!r}, expected={expected_np!r}",
+        )
 
     def test_inner_product_workaround_does_not_use_torch_dot(self):
         backend = NPUBackend(fallback_to_cpu=True)
@@ -301,8 +306,12 @@ class TestNPUBackend(unittest.TestCase):
         with mock.patch("torch.dot", side_effect=fail_dot):
             result = self._run_with_npu_forced(lambda: backend.inner_product(bra, ket))
 
-        expected = torch.tensor(1 + 0.5j, dtype=torch.complex64)
-        self.assertTrue(torch.allclose(result.unsqueeze(0), expected.unsqueeze(0), atol=1e-5))
+        actual_np = np.asarray(backend.to_numpy(result)).reshape(())
+        expected_np = np.asarray(1 + 0.5j, dtype=np.complex64).reshape(())
+        self.assertTrue(
+            np.allclose(actual_np, expected_np, atol=1e-5),
+            f"actual={actual_np!r}, expected={expected_np!r}",
+        )
 
     def test_inner_product_workaround_uses_backend_matmul_path(self):
         backend = NPUBackend(fallback_to_cpu=True)
@@ -315,8 +324,12 @@ class TestNPUBackend(unittest.TestCase):
 
         dagger.assert_called_once()
         matmul.assert_called_once()
-        expected = torch.tensor(1 + 0.5j, dtype=torch.complex64)
-        self.assertTrue(torch.allclose(result.unsqueeze(0), expected.unsqueeze(0), atol=1e-5))
+        actual_np = np.asarray(backend.to_numpy(result)).reshape(())
+        expected_np = np.asarray(1 + 0.5j, dtype=np.complex64).reshape(())
+        self.assertTrue(
+            np.allclose(actual_np, expected_np, atol=1e-5),
+            f"actual={actual_np!r}, expected={expected_np!r}",
+        )
 
     def test_partial_trace_workaround_matches_parent(self):
         from aicir.backends.gpu_backend import TorchBackend
