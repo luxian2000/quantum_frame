@@ -44,7 +44,7 @@ SUITES: dict[str, Suite] = {
     ),
     "ops": Suite(
         name="ops",
-        description="NPU-safe complex operator decompositions and Hamiltonian/local-gate gradients.",
+        description="NPU-safe complex operator decompositions and backend gradient regressions.",
         targets=(
             "tests/backends/test_npu_hamiltonian_grad.py",
             "tests/backends/test_npu_backend.py::TestNPUBackend::test_npu_complex_matmul_function_matches_native_gradient",
@@ -96,7 +96,7 @@ SUITES: dict[str, Suite] = {
     ),
     "deriv": Suite(
         name="deriv",
-        description="Typed IR derivative paths on NPU: ad, auto, psr/fd, gate matrix autograd, and estimator gradients.",
+        description="Typed IR derivative paths on NPU: ad, auto, psr/fd, backend autograd, and estimator gradients.",
         targets=(
             "tests/qml",
             "tests/primitives/test_estimator_gradient.py",
