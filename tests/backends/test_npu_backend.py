@@ -304,6 +304,20 @@ class TestNPUBackend(unittest.TestCase):
         expected = torch.tensor(1 + 0.5j, dtype=torch.complex64)
         self.assertTrue(torch.allclose(result.unsqueeze(0), expected.unsqueeze(0), atol=1e-5))
 
+    def test_inner_product_workaround_uses_backend_matmul_path(self):
+        backend = NPUBackend(fallback_to_cpu=True)
+        bra = torch.tensor([[1 + 1j], [0 - 1j]], dtype=torch.complex64)
+        ket = torch.tensor([[0.5 + 0j], [1 - 0.5j]], dtype=torch.complex64)
+
+        with mock.patch.object(backend, "dagger", wraps=backend.dagger) as dagger:
+            with mock.patch.object(backend, "matmul", wraps=backend.matmul) as matmul:
+                result = self._run_with_npu_forced(lambda: backend.inner_product(bra, ket))
+
+        dagger.assert_called_once()
+        matmul.assert_called_once()
+        expected = torch.tensor(1 + 0.5j, dtype=torch.complex64)
+        self.assertTrue(torch.allclose(result.unsqueeze(0), expected.unsqueeze(0), atol=1e-5))
+
     def test_partial_trace_workaround_matches_parent(self):
         from aicir.backends.gpu_backend import TorchBackend
         ref = TorchBackend()

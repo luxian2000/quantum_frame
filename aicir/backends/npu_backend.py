@@ -854,15 +854,11 @@ class NPUBackend(GPUBackend):
         return super().trace(matrix)
 
     def inner_product(self, bra, ket):
-        """NPU workaround: inner product via real/imag dot products (avoids torch.dot on complex64)."""
+        """NPU workaround: inner product via backend matmul (avoids torch.dot on complex64)."""
         if self._is_npu_complex(bra) and self._is_npu_complex(ket):
-            b = bra.reshape(-1)
-            k = ket.reshape(-1)
-            br, bi = torch.real(b), torch.imag(b)
-            kr, ki = torch.real(k), torch.imag(k)
-            real = torch.sum(br * kr + bi * ki)
-            imag = torch.sum(br * ki - bi * kr)
-            return torch.complex(real, imag)
+            b = bra.reshape(-1, 1)
+            k = ket.reshape(-1, 1)
+            return self.matmul(self.dagger(b), k).reshape(())
         return super().inner_product(bra, ket)
 
     @staticmethod
