@@ -34,7 +34,7 @@ scripts/npu/qml.sh --strict-npu --pytest-arg -vv --pytest-arg --tb=short
 - `capacity`: capability probe, capacity guards, sharding helpers.
 - `typed_ir`: typed `CircuitIR`/`Operation`/`Measurement`, dict interop, JSON/QASM, metrics, transpile, and NPU execution.
 - `circuit`: circuit execution, measurement, typed gates, JSON/QASM I/O.
-- `deriv`: typed-IR derivative paths on NPU, with focus on `qml.ad`, direct `qml.auto`, `psr`/`fd`, matrix autograd, and estimator parameter binding.
+- `deriv`: typed-IR derivative paths on NPU, with focus on `qml.ad`, direct `qml.auto`, `psr`/`fd`, NPU-safe backend autograd, and estimator parameter binding.
 - `qml`: gradient, qlayer, parameter-shift, estimator paths.
 - `tensor`: tensor network simulator and cotengra-facing paths.
 - `qas`: QAS/VQE workloads likely to stress NPU batch and gradient paths.
@@ -71,6 +71,13 @@ device. Use `--allow-cpu-fallback` only for local development.
   gradient.
 - `StatevectorEstimator.gradient(..., method="psr"|"fd")` over a typed-gate
   parameter-binding template.
+
+Generic full-matrix complex autograd in `tests/gates/test_matrix_autograd.py`
+is still run for the CPU/fallback backend contract. On a real Ascend NPU that
+test intentionally excludes the `NPUBackend` parametrization because torch_npu
+cannot backward through arbitrary complex fan-out graphs (`aclnnInplaceAdd` does
+not support `DT_COMPLEX64`). Real-NPU deriv coverage is provided by the probe
+above plus the NPUBackend custom-autograd tests selected by `scripts/npu/deriv.sh`.
 
 Without `--strict-npu`, the suites still run in environments where current tests
 use CPU fallback or mocked NPU paths. With `--strict-npu`, the runner first
