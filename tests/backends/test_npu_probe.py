@@ -42,8 +42,11 @@ def test_cache_key_uses_device_and_versions():
     assert caps.cache_key() == "npu:0|2.1.0|2.1.0"
 
 
-def test_collect_capabilities_cpu_fallback_does_not_crash():
-    caps = _collect_capabilities(allow_cpu_fallback=True)
+def test_collect_capabilities_cpu_fallback_does_not_crash(monkeypatch):
+    import aicir.backends.npu_probe as mod
+
+    monkeypatch.setattr(mod, "is_npu_available", lambda: False)
+    caps = mod._collect_capabilities(allow_cpu_fallback=True)
     assert caps.device == "cpu"
     # CPU 支持复数算子 → 无需 real/imag 分解
     assert caps.supports_complex_matmul is True
@@ -112,11 +115,14 @@ def test_probe_npu_stale_key_reprobes(tmp_path, monkeypatch):
 
 
 def test_probe_npu_corrupted_cache_is_a_miss(tmp_path, monkeypatch):
+    import aicir.backends.npu_probe as mod
+
     monkeypatch.setenv("AICIR_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(mod, "is_npu_available", lambda: False)
     cp = cache_path()
     cp.parent.mkdir(parents=True, exist_ok=True)
     cp.write_text("{ not valid json")
-    caps = probe_npu(allow_cpu_fallback=True)  # 损坏缓存视为未命中：不崩溃、重探并覆盖
+    caps = mod.probe_npu(allow_cpu_fallback=True)  # 损坏缓存视为未命中：不崩溃、重探并覆盖
     assert caps.device == "cpu"
     assert json.loads(cp.read_text())  # 缓存被有效 JSON 覆盖
 
