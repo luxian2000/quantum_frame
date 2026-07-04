@@ -28,6 +28,7 @@ from aicir.metrics.circuit_structure import (
 )
 from aicir.metrics.trainability import structure_proxy
 from aicir.metrics.hardware import native_depth_twoq_efficiency
+from aicir.ir import instruction_controls, instruction_name
 from aicir.qas.core.reward import RewardWeights
 from aicir.qas.library.ansatz import (
     HEAMask,
@@ -93,7 +94,15 @@ def candidate_record_from_mask(mask: HEAMask, hamiltonian_class: str) -> Candida
         topology=mask.entangle_pattern,
         depth_group=_depth_group(mask),
         n_params=float(parameter_count(architecture.circuit)),
-        two_q_count=float(len([gate for gate in architecture.circuit.gates if gate.get("control_qubits") or gate.get("type") == "rzz"])),
+        two_q_count=float(
+            len(
+                [
+                    instruction
+                    for instruction in architecture.circuit.gates
+                    if instruction_controls(instruction) or instruction_name(instruction) == "rzz"
+                ]
+            )
+        ),
         hamiltonian_class=hamiltonian_class,
         hamiltonian_coverage=_hamiltonian_coverage(mask, hamiltonian_class),
         metadata={
@@ -120,9 +129,9 @@ def candidate_record_from_layerwise_gene(gene: LayerwiseAnsatzGene, hamiltonian_
     two_q_count = float(
         len(
             [
-                gate
-                for gate in architecture.circuit.gates
-                if gate.get("control_qubits") or gate.get("type") in {"rxx", "rzz"}
+                instruction
+                for instruction in architecture.circuit.gates
+                if instruction_controls(instruction) or instruction_name(instruction) in {"rxx", "rzz"}
             ]
         )
     )

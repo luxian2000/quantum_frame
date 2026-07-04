@@ -11,7 +11,13 @@ from typing import Any
 import numpy as np
 
 from ..gates import gate_generator, parametric_pauli_gates
-from ..ir import circuit_instructions, instruction_name, instruction_to_gate_dict
+from ..ir import (
+    circuit_instructions,
+    instruction_controls,
+    instruction_name,
+    instruction_parameter,
+    instruction_qubits,
+)
 
 
 def _as_scalar(value: Any, *, label: str) -> float:
@@ -573,57 +579,51 @@ def _ad_gate_local_matrix_and_axes(gate, backend):
         _unitary_parameter_matrix,
     )
 
-    gate = instruction_to_gate_dict(gate)
-    gate_type = gate["type"]
+    gate_type = instruction_name(gate)
+    qubits = [int(qubit) for qubit in instruction_qubits(gate)]
     if gate_type in ("identity", "I"):
         return None, None
     if gate_type == "swap":
-        return _SWAP_LOCAL, [int(gate["qubit_1"]), int(gate["qubit_2"])]
+        return _SWAP_LOCAL, qubits
     if gate_type == "rzz":
-        return np.asarray(_rzz(gate["parameter"]), dtype=_CDTYPE), [
-            int(gate["qubit_1"]),
-            int(gate["qubit_2"]),
-        ]
+        return np.asarray(_rzz(instruction_parameter(gate)), dtype=_CDTYPE), qubits
     if gate_type == "rxx":
-        return np.asarray(_rxx(gate["parameter"]), dtype=_CDTYPE), [
-            int(gate["qubit_1"]),
-            int(gate["qubit_2"]),
-        ]
+        return np.asarray(_rxx(instruction_parameter(gate)), dtype=_CDTYPE), qubits
     if gate_type == "unitary":
-        matrix = np.asarray(_unitary_parameter_matrix(gate.get("parameter"), backend=None), dtype=_CDTYPE)
+        matrix = np.asarray(_unitary_parameter_matrix(instruction_parameter(gate), backend=None), dtype=_CDTYPE)
         gate_qubits = int(round(np.log2(matrix.shape[0])))
         return matrix, list(range(gate_qubits))
 
     base = _single_qubit_base_for_gate(gate)
     if base is None:
         raise ValueError(f"adjoint differentiation does not support gate type {gate_type!r}")
-    if "control_qubits" in gate:
+    if instruction_controls(gate):
         controls, control_states = _normalized_control_data(gate)
         local = _controlled_local_from_base(base, control_states)
-        return np.asarray(local, dtype=_CDTYPE), controls + [int(gate["target_qubit"])]
-    return np.asarray(base, dtype=_CDTYPE), [int(gate["target_qubit"])]
+        return np.asarray(local, dtype=_CDTYPE), controls + qubits
+    return np.asarray(base, dtype=_CDTYPE), qubits
 
 
 def _ad_generator_local_and_axes(gate):
     """Return ``(generator_matrix, axes)`` for a differentiable gate."""
     from aicir.core.gates import _normalized_control_data
 
-    gate = instruction_to_gate_dict(gate)
-    gate_type = gate["type"]
+    gate_type = instruction_name(gate)
+    qubits = [int(qubit) for qubit in instruction_qubits(gate)]
     if gate_type == "rzz":
         zz = np.diag([1.0, -1.0, -1.0, 1.0]).astype(_CDTYPE)
-        return zz, [int(gate["qubit_1"]), int(gate["qubit_2"])]
+        return zz, qubits
     if gate_type == "rxx":
         xx = np.array(
             [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]],
             dtype=_CDTYPE,
         )
-        return xx, [int(gate["qubit_1"]), int(gate["qubit_2"])]
+        return xx, qubits
     pauli = _pauli_local(_AD_PAULI_GENERATOR[gate_type])
     if gate_type in ("crx", "cry", "crz"):
         controls, control_states = _normalized_control_data(gate)
-        return _controlled_generator_local(pauli, control_states), controls + [int(gate["target_qubit"])]
-    return pauli, [int(gate["target_qubit"])]
+        return _controlled_generator_local(pauli, control_states), controls + qubits
+    return pauli, qubits
 
 
 def _ad_apply(backend, matrix, axes, n_qubits, state):

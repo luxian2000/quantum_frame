@@ -12,16 +12,17 @@ from typing import Any
 import numpy as np
 
 from ..core.circuit import Circuit
+from ..ir import circuit_instructions, instruction_parameter
 
 
 def parameter_count(circuit: Circuit) -> int:
     """Count scalar trainable parameters stored on circuit gate records."""
 
     count = 0
-    for gate in circuit.gates:
-        if "parameter" not in gate or gate.get("parameter") is None:
+    for instruction in circuit_instructions(circuit):
+        parameter: Any = instruction_parameter(instruction)
+        if parameter is None:
             continue
-        parameter: Any = gate["parameter"]
         if isinstance(parameter, (list, tuple, np.ndarray)):
             count += int(np.asarray(parameter).size)
         else:

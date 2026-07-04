@@ -23,6 +23,7 @@ from ..core.state import State
 from ..ir import (
     ControlFlow,
     circuit_instructions,
+    instruction_metadata,
     instruction_name,
     instruction_qubits,
 )
@@ -46,13 +47,8 @@ def _marker_qubits(gate, n: int) -> List[int]:
 
 
 def _gate_basis(gate) -> str:
-    """从 Measurement 类型对象或旧式 dict 中读取 basis 字段，缺省 'Z'。"""
-    # circuit_instructions 返回的是类型化 Measurement 对象，有 .basis 属性
-    basis = getattr(gate, "basis", None)
-    if basis is None:
-        # 兼容仍为 dict 的极端情况
-        basis = gate.get("basis", "Z") if hasattr(gate, "get") else "Z"
-    return str(basis)
+    """从 Measurement 类型对象读取 basis 字段，缺省 'Z'。"""
+    return str(getattr(gate, "basis", "Z"))
 
 
 def _apply_unitary(gate, state: State, backend, n: int, noise_model) -> State:
@@ -140,9 +136,9 @@ def _exec_ops(ops, state, classical, backend, n, *, rng, noise_model,
             continue
 
         if _is_measure(gate):
-            reg_name = gate.get("classical_register")
+            reg_name = instruction_metadata(gate).get("classical_register")
             if reg_name is not None:
-                clbits = list(getattr(gate, "classical_bits", ()) or gate.get("classical_bits", ()))
+                clbits = list(getattr(gate, "classical_bits", ()))
                 qubits = _marker_qubits(gate, n)
                 state = _measure_into_creg(state, qubits, reg_name, clbits, classical, rng)
             else:

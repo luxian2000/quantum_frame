@@ -6,7 +6,7 @@ aicir/core/io/dag.py
 
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List
 
 import numpy as np
 
@@ -18,14 +18,14 @@ from ..circuit import Circuit
 # 内部工具
 # ---------------------------------------------------------------------------
 
-def _gate_name(gate: dict) -> str:
+def _gate_name(gate: Any) -> str:
     """返回 typed instruction 的门类型名称。"""
     return instruction_name(gate)
 
 
-def _gate_qubits(gate: dict, circuit_n_qubits: int) -> List[int]:
+def _gate_qubits(gate: Any, circuit_n_qubits: int) -> List[int]:
     """
-    从 aicir 门字典中提取所有作用的量子比特索引列表。
+    从 aicir typed instruction 或旧门字典中提取所有作用的量子比特索引列表。
 
     aicir 门字典的比特字段因门类型而异：
     - 单比特门：target_qubit
@@ -63,7 +63,7 @@ def circuit_to_dag(
     输出节点特征矩阵 X、有向邻接矩阵 A 以及门类型 one-hot 矩阵。
 
     Args:
-        circuit:    aicir Circuit 对象（circuit.gates 为 list of dict，
+        circuit:    aicir Circuit 对象（circuit.gates 为 typed instruction 列表，
                     circuit.n_qubits 为量子比特总数）。
         gate_types: list of str，所有可能的门类型集合
                     （例如 ['hadamard', 'rx', 'ry', 'rz', 'cx', 'cz']）。
