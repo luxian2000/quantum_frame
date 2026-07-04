@@ -7,6 +7,8 @@ aicir/core/gates.py
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from dataclasses import replace
 from typing import Iterable
 
 import numpy as np
@@ -17,7 +19,15 @@ except ModuleNotFoundError:
     torch = None
 
 from ..gates import canonical_gate_name
-from ..ir.operation import normalize_gate
+from ..ir import (
+    as_instruction,
+    instruction_control_states,
+    instruction_controls,
+    instruction_name,
+    instruction_n_qubits,
+    instruction_parameter,
+    instruction_qubits,
+)
 
 _CDTYPE = np.complex64
 
@@ -182,8 +192,8 @@ def _controlled_from_base(base_single, target_qubit: int, control_qubits: Iterab
 
 
 def _normalized_control_data(gate):
-    controls = list(gate["control_qubits"])
-    control_states = list(gate.get("control_states", [1] * len(controls)))
+    controls = list(instruction_controls(gate))
+    control_states = list(instruction_control_states(gate))
     if len(control_states) != len(controls):
         raise ValueError("control_states的长度必须与control_qubits的长度相同")
     return controls, control_states
@@ -344,13 +354,19 @@ def _torch_base_matrix(entries, dtype, device):
     return torch.stack(rows).to(dtype=dtype, device=device)
 
 
+def _matrix_descriptor_name_parameter(value):
+    """Return ``(canonical_name, parameter)`` for typed gates or matrix descriptors."""
+
+    if isinstance(value, Mapping):
+        return canonical_gate_name(str(value.get("type"))), value.get("parameter")
+    return canonical_gate_name(instruction_name(value)), instruction_parameter(value)
+
+
 def _single_qubit_base_for_gate_backend(gate, backend):
-    gate = normalize_gate(gate)
-    parameter = gate.get("parameter", None)
+    gate_type, parameter = _matrix_descriptor_name_parameter(gate)
     if not _contains_torch_tensor(parameter):
         return _single_qubit_base_for_gate(gate)
 
-    gate_type = canonical_gate_name(gate["type"])
     ref = _first_torch_tensor(parameter)
     backend_dtype = getattr(backend, "_dtype", torch.complex64)
     dtype = _torch_complex_dtype(backend_dtype)
@@ -819,9 +835,7 @@ def _apply_local_matrix_to_state_flat(state, local_matrix, axes, n_qubits, backe
 
 
 def _single_qubit_base_for_gate(gate):
-    gate = normalize_gate(gate)
-    gate_type = canonical_gate_name(gate["type"])
-    gate_parameter = gate.get("parameter", None)
+    gate_type, gate_parameter = _matrix_descriptor_name_parameter(gate)
 
     if gate_type in ["pauli_x", "cx", "toffoli"]:
         return np.array([[0.0 + 0.0j, 1.0 + 0.0j], [1.0 + 0.0j, 0.0 + 0.0j]], dtype=_CDTYPE)
@@ -923,17 +937,13 @@ def _multi_target_subgates(gate):
     ``cx([t1, t2], [controls])`` 携带 ``qubits`` 键；展开后的各单目标门彼此
     对易，故展开顺序不影响结果。单目标门（``target_qubit`` 形式）返回 ``None``。
     """
-    if canonical_gate_name(gate["type"]) not in _MULTI_TARGET_CONTROLLED:
+    gate = as_instruction(gate)
+    if canonical_gate_name(instruction_name(gate)) not in _MULTI_TARGET_CONTROLLED:
         return None
-    targets = gate.get("qubits")
-    if targets is None:
+    targets = instruction_qubits(gate)
+    if len(targets) <= 1:
         return None
-    subgates = []
-    for target in targets:
-        subgate = {key: value for key, value in gate.items() if key != "qubits"}
-        subgate["target_qubit"] = int(target)
-        subgates.append(subgate)
-    return subgates
+    return [replace(gate, qubits=(int(target),)) for target in targets]
 
 
 _CONTROLLED_BASE_GATE = {
@@ -949,12 +959,9 @@ _CONTROLLED_BASE_GATE = {
 
 def _gate_axes(gate):
     """门作用比特轴序：``qubits`` > ``qubit_1``/``qubit_2`` > ``target_qubit``。"""
-    if gate.get("qubits") is not None:
-        return [int(q) for q in gate["qubits"]]
-    if gate.get("qubit_1") is not None and gate.get("qubit_2") is not None:
-        return [int(gate["qubit_1"]), int(gate["qubit_2"])]
-    if gate.get("target_qubit") is not None:
-        return [int(gate["target_qubit"])]
+    qubits = instruction_qubits(gate)
+    if qubits:
+        return [int(q) for q in qubits]
     raise ValueError("门缺少 qubits/qubit_1/qubit_2/target_qubit，无法定位作用比特")
 
 
@@ -969,9 +976,9 @@ def _gate_local_matrix(gate, gate_type, backend):
     """
     from ..gates import gate_matrix as _registry_gate_matrix
 
-    parameter = gate.get("parameter")
+    parameter = instruction_parameter(gate)
 
-    if gate.get("control_qubits"):
+    if instruction_controls(gate):
         controls, control_states = _normalized_control_data(gate)
         base_name = _CONTROLLED_BASE_GATE.get(gate_type, gate_type)
         base = _registry_gate_matrix(base_name, parameter, backend)
@@ -1011,8 +1018,8 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
     局部矩阵统一取自 ``_gate_local_matrix``（注册表单一来源）。若门类型无法局部
     展开则返回 None，调用方可回退到 gate_to_matrix + apply_unitary。
     """
-    gate = normalize_gate(gate)
-    gate_type = canonical_gate_name(gate["type"])
+    gate = as_instruction(gate)
+    gate_type = canonical_gate_name(instruction_name(gate))
 
     subgates = _multi_target_subgates(gate)
     if subgates is not None:
@@ -1024,7 +1031,7 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
         return state
 
     if gate_type == "unitary":
-        matrix = _unitary_parameter_matrix(gate.get("parameter"), backend)
+        matrix = _unitary_parameter_matrix(instruction_parameter(gate), backend)
         shape = tuple(int(dim) for dim in matrix.shape)
         if len(shape) != 2 or shape[0] != shape[1]:
             raise ValueError("unitary 门参数必须是方阵")
@@ -1032,7 +1039,7 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
         inferred = int(round(math.log2(dim))) if dim > 0 else 0
         if (1 << inferred) != dim:
             raise ValueError("unitary 门矩阵维度必须是 2 的幂")
-        gate_qubits = int(gate.get("n_qubits", inferred))
+        gate_qubits = int(instruction_n_qubits(gate, inferred))
         if (1 << gate_qubits) != dim:
             raise ValueError("unitary 门的 n_qubits 与矩阵维度不一致")
         if gate_qubits > n_qubits:
@@ -1059,17 +1066,16 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
 
 def _local_target_qubits(gate):
     """自定义门回退路径的目标比特列表（``qubits`` 优先，退而 ``target_qubit``）。"""
-    if gate.get("qubits") is not None:
-        return [int(q) for q in gate["qubits"]]
-    if gate.get("target_qubit") is not None:
-        return [int(gate["target_qubit"])]
+    qubits = instruction_qubits(gate)
+    if qubits:
+        return [int(q) for q in qubits]
     raise ValueError("门缺少 qubits/target_qubit，无法定位作用比特")
 
 
 def gate_to_matrix(gate, cir_qubits=1, backend=None):
-    gate = normalize_gate(gate)
-    gate_type = canonical_gate_name(gate["type"])
-    gate_parameter = gate.get("parameter", None)
+    gate = as_instruction(gate)
+    gate_type = canonical_gate_name(instruction_name(gate))
+    gate_parameter = instruction_parameter(gate)
 
     subgates = _multi_target_subgates(gate)
     if subgates is not None:
@@ -1095,7 +1101,7 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
         if (1 << inferred) != dim:
             raise ValueError("unitary 门矩阵维度必须是 2 的幂")
 
-        gate_qubits = gate.get("n_qubits", inferred)
+        gate_qubits = instruction_n_qubits(gate, inferred)
         if (1 << int(gate_qubits)) != dim:
             raise ValueError("unitary 门的 n_qubits 与矩阵维度不一致")
 
@@ -1130,7 +1136,7 @@ def gate_tensors(gate, backend):
     - 无法局部展开的门（未注册/含未绑定参数）抛 ``ValueError``。
     ``matrix`` 为 ``2^k×2^k`` 后端张量，``axes`` 为其作用比特轴序（controls+targets）。
     """
-    gate = normalize_gate(gate)
+    gate = as_instruction(gate)
     subgates = _multi_target_subgates(gate)
     if subgates is not None:
         result = []
@@ -1138,12 +1144,12 @@ def gate_tensors(gate, backend):
             result.extend(gate_tensors(subgate, backend))
         return result
 
-    gate_type = canonical_gate_name(gate["type"])
+    gate_type = canonical_gate_name(instruction_name(gate))
     if gate_type in ("identity", "measure"):
         return []
 
     if gate_type == "unitary":
-        matrix = _unitary_parameter_matrix(gate.get("parameter"), backend)
+        matrix = _unitary_parameter_matrix(instruction_parameter(gate), backend)
         return [(matrix, _local_target_qubits(gate))]
 
     local, axes, _ = _gate_local_matrix(gate, gate_type, backend)

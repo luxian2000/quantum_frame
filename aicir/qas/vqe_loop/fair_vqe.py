@@ -15,6 +15,7 @@ import numpy as np
 
 from ...backends.base import Backend
 from ...core.circuit import Circuit
+from ...ir import circuit_instructions, instruction_parameter, instruction_with_parameter
 from ...metrics.circuit_structure import parameter_count
 from ...optimizer import COBYLA
 from ...vqc import BasicVQE
@@ -42,26 +43,29 @@ class VQEOptimizationResult:
 def _bind_parameters(circuit: Circuit, parameters: Sequence[float]) -> Circuit:
     """Return a bound copy of ``circuit`` using QAS gate-list order."""
 
-    import copy
-
     values = [float(value) for value in parameters]
-    gates = copy.deepcopy(circuit.gates)
+    instructions = []
     cursor = 0
-    for gate in gates:
-        if "parameter" not in gate or gate.get("parameter") is None:
+    for instruction in circuit_instructions(circuit):
+        parameter = instruction_parameter(instruction)
+        if parameter is None:
+            instructions.append(instruction)
             continue
-        parameter = gate["parameter"]
         if isinstance(parameter, (list, tuple, np.ndarray)):
             shape = np.asarray(parameter).shape
             size = int(np.asarray(parameter).size)
-            gate["parameter"] = np.asarray(values[cursor : cursor + size], dtype=float).reshape(shape).tolist()
+            instruction = instruction_with_parameter(
+                instruction,
+                np.asarray(values[cursor : cursor + size], dtype=float).reshape(shape).tolist(),
+            )
             cursor += size
         else:
-            gate["parameter"] = values[cursor]
+            instruction = instruction_with_parameter(instruction, values[cursor])
             cursor += 1
+        instructions.append(instruction)
     if cursor != len(values):
         raise ValueError(f"Expected {cursor} parameters, got {len(values)}")
-    return Circuit(*gates, n_qubits=circuit.n_qubits, backend=circuit.backend)
+    return Circuit(*instructions, n_qubits=circuit.n_qubits, backend=circuit.backend)
 
 
 def fair_vqe_screening_maxfev(n_params: int) -> int:

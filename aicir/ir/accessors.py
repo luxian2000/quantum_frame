@@ -1,13 +1,13 @@
 """Shared accessors for consuming circuits through typed IR.
 
-The public ``Circuit.gates`` surface remains a list of gate dictionaries for
-compatibility. Internal consumers should use these helpers so they can accept
-``CircuitIR`` and typed instructions without re-implementing dict field rules.
+``Circuit.gates`` now exposes typed instructions. These helpers also accept
+legacy gate mappings so old dict inputs and new IR objects share one read path.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from .circuit_ir import CircuitIR, CircuitInstruction
@@ -89,6 +89,35 @@ def instruction_control_states(instruction: CircuitInstruction | Mapping[str, An
     if inst.control_states:
         return inst.control_states
     return tuple(1 for _ in inst.controls)
+
+
+def instruction_metadata(instruction: CircuitInstruction | Mapping[str, Any]) -> dict[str, Any]:
+    """Return instruction metadata as a detached dictionary."""
+
+    inst = as_instruction(instruction)
+    return dict(getattr(inst, "metadata", {}) or {})
+
+
+def instruction_n_qubits(instruction: CircuitInstruction | Mapping[str, Any], default: Any = None) -> Any:
+    """Return explicit instruction width metadata when present."""
+
+    inst = as_instruction(instruction)
+    if isinstance(inst, ControlFlow):
+        return inst.n_qubits
+    return instruction_metadata(inst).get("n_qubits", default)
+
+
+def instruction_with_parameter(
+    instruction: CircuitInstruction | Mapping[str, Any],
+    parameter: Any,
+) -> CircuitInstruction:
+    """Return a typed instruction copy with its parameter payload replaced."""
+
+    inst = as_instruction(instruction)
+    if not isinstance(inst, Operation):
+        raise TypeError("Only Operation instructions can carry parameters")
+    params = tuple(parameter) if isinstance(parameter, (list, tuple)) else (parameter,)
+    return replace(inst, params=params)
 
 
 def instruction_to_gate_dict(instruction: CircuitInstruction | Mapping[str, Any]) -> dict[str, Any]:

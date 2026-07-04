@@ -2,6 +2,15 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-04
+
+### Changed
+
+- **Breaking:** `Circuit.gates` 现在返回 typed instruction 列表，而不是可变门字典列表。元素类型包括 `Operation`、`Measurement` 和 `ControlFlow`；`Circuit.operations` 是同一 typed 视图的 tuple 形式。typed gate 仍支持旧字典键的只读访问（如 `gate["type"]`、`gate.get("parameter")`）以及与旧 dict 的 `==` 比较，但 `gate[...] = ...` 会抛 `TypeError`。
+- 新增/稳定旧字典互操作 API：`Circuit.legacy_gates` 与 `Circuit.to_gate_dicts()` 返回 detached legacy dict 列表，供 JSON/QASM/第三方互操作和旧代码修改参数使用。迁移规则：把会修改门的 `copy.deepcopy(circuit.gates)` / `list(circuit.gates)` 改为 `circuit.to_gate_dicts()`；把序列化输出改为消费 `to_gate_dicts()`；新 typed 代码优先使用 `gate.name`、`gate.qubits`、`gate.params`。
+- 内部消费端已迁移：控制流 body/else-body、QAS VQE 参数绑定、supernet 跨 rank payload 均显式走 legacy dict 快照，避免 typed immutable gate 泄漏到需要可变 dict 或 JSON-like payload 的边界。
+- 内部运行时进一步 typed 化：`core.circuit`、`core.gates`、`core.batch`、`measure.trajectory`、`simulator.network`、`qml.deriv`、`metrics`、`visual.plot`、MoG-VQE、VQE-QAS preparation/fair binding 以及主要 transpile passes 不再读取 `gate["..."]` / `gate.get(...)` 业务字段，而是走 `aicir.ir` accessors。新增静态守卫测试禁止非边界生产代码重新依赖 legacy gate dict 字段。保留 dict 的边界限定为 IR dict round-trip、core IO/第三方互操作、legacy transpile rewrite API 和 CRLQAS action-space DTO。
+
 ## 2026-07-03
 
 ### Added

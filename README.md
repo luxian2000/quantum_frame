@@ -399,7 +399,9 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 
 - **构造期校验**：量子比特下标、控制位/控制态长度，以及按 GateSpec 注册表检查目标比特数、参数个数与控制位要求（见 4.6 节），错误在调用处立即报出。
 - **旧字典只读兼容**：`gate["type"]`、`.get("parameter")`、`in`、`dict(gate)`、迭代等读取照常可用，且与旧门字典可直接 `==` 比较；写入（`gate[...] = ...`）会抛 `TypeError`（对象不可变）。
-- **`Circuit` 内部存储不变**：仍是门字典列表（`circuit.gates`），下游代码无需改动。
+- **`Circuit.gates` API 已升级**：`circuit.gates` 现在返回 typed instruction 列表（`Operation` / `Measurement` / `ControlFlow`），不是可变门字典列表。读旧键仍兼容，写入不兼容。
+- **旧字典互操作出口**：需要 JSON/QASM/legacy/WuYue/Qiskit/PennyLane 等门字典格式时，使用 `circuit.legacy_gates` 或 `circuit.to_gate_dicts()`；返回值是 detached dict，可安全修改。
+- **内部运行时 typed 化**：矩阵构造、测量轨迹、批量模拟、QML adjoint、metrics、visual、主要 transpile pass 与 QAS/VQE 绑定路径都消费 typed instruction/accessor。dict 只保留在 IR `to_dict/from_dict`、core IO/第三方互操作、legacy transpile rewrite API、CRLQAS action-space DTO 等明确边界。
 
 ### 4.2 构建电路
 
@@ -466,7 +468,21 @@ cir = Circuit(
 )
 ```
 
-`Circuit` 继续保留 `.gates` 门字典 surface（内部存储不变），同时提供 `.operations` 和 `.ir` typed IR 视图；`aicir.ir` 另有 `Observable`/`CircuitIR` 用于可观测量与线路级 IR。
+`Circuit.gates` 与 `.operations` 现在都给出 typed instruction 视图；`aicir.ir` 另有 `Observable`/`CircuitIR` 用于可观测量与线路级 IR。需要旧门字典时不要读取或修改 `.gates`，改用：
+
+```python
+legacy = cir.to_gate_dicts()      # 推荐：函数语义最明确
+legacy = cir.legacy_gates         # 等价属性：兼容旧集成
+legacy[0]["parameter"] = 0.3      # 修改的是 detached dict，不影响 cir
+```
+
+已有代码迁移规则：
+
+- 只读门名：`gate["type"]` 可继续工作，但新代码优先写 `gate.name`。
+- 比较旧门字典：`assert circuit.gates == [...]` 多数仍可因兼容 `==` 通过；更明确的断言应改为 `circuit.legacy_gates == [...]`。
+- 修改门参数：把 `copy.deepcopy(circuit.gates)` 改为 `circuit.to_gate_dicts()`，再修改 dict；typed gate 本身不可变。
+- 导出/序列化：统一使用 `to_gate_dicts()`，不要把 typed gate 直接交给 JSON。
+- 内部扩展：新模块不要用 `gate["type"]` / `gate.get(...)` 读业务字段，改用 `aicir.ir` 的 `instruction_name`、`instruction_qubits`、`instruction_controls`、`instruction_parameter` 等 accessor。
 
 ### 4.3 让 Circuit 作用于 State
 
@@ -556,7 +572,7 @@ print(rho1.probabilities())   # [0.  0.5 0.5 0. ]
 
 ### 4.4 参数化量子线路
 
-`Parameter` 可作为旋转门参数的符号占位符，用于构建量子神经网络、VQE、QAOA 等可训练线路模板。模板电路在绑定参数前只保存门字典，不会生成数值矩阵。
+`Parameter` 可作为旋转门参数的符号占位符，用于构建量子神经网络、VQE、QAOA 等可训练线路模板。模板电路在绑定参数前只保存 typed instruction，不会生成数值矩阵。
 
 ```python
 from aicir import Circuit, Parameter, rx, ry, crz, cnot

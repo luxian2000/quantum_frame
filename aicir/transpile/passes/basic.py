@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from ...core.circuit import Circuit
 from ...gates import canonical_gate_name
 from ...ir import (
@@ -9,6 +11,7 @@ from ...ir import (
     circuit_instructions,
     instruction_controls,
     instruction_name,
+    Operation,
 )
 from ..base import TransformationPass
 from ._local_rewrite import circuit_from_gates
@@ -55,10 +58,10 @@ class CanonicalizePass(TransformationPass):
     """
 
     def run(self, circuit: Circuit) -> Circuit:
-        gates = []
-        for gate in circuit_gate_dicts(circuit):
-            canonical = canonical_gate_name(gate["type"])
-            if canonical != gate["type"]:
-                gate = {**gate, "type": canonical}
-            gates.append(gate)
-        return circuit_from_gates(circuit, gates)
+        instructions = []
+        for instruction in circuit_instructions(circuit):
+            canonical = canonical_gate_name(instruction_name(instruction))
+            if isinstance(instruction, Operation) and canonical != instruction.name:
+                instruction = replace(instruction, name=canonical)
+            instructions.append(instruction)
+        return Circuit(*instructions, n_qubits=circuit.n_qubits, backend=getattr(circuit, "backend", None))

@@ -8,11 +8,14 @@ from .accessors import (
     has_circuit_instructions,
     instruction_control_states,
     instruction_controls,
+    instruction_metadata,
     instruction_name,
+    instruction_n_qubits,
     instruction_parameter,
     instruction_params,
     instruction_qubits,
     instruction_to_gate_dict,
+    instruction_with_parameter,
 )
 from .circuit_ir import CircuitIR
 from .control_flow import ControlFlow
@@ -33,10 +36,13 @@ __all__ = [
     "has_circuit_instructions",
     "instruction_control_states",
     "instruction_controls",
+    "instruction_metadata",
     "instruction_name",
+    "instruction_n_qubits",
     "instruction_parameter",
     "instruction_params",
     "instruction_qubits",
     "instruction_to_gate_dict",
+    "instruction_with_parameter",
     "normalize_gate",
 ]

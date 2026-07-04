@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -10,7 +9,7 @@ import numpy as np
 from ..backends.numpy_backend import NumpyBackend
 from ..core.circuit import Circuit
 from ..core.gates import apply_gate_to_state
-from ..ir import circuit_gate_dicts, circuit_instruction_count, circuit_instructions, instruction_parameter
+from ..ir import circuit_instruction_count, circuit_instructions, instruction_parameter, instruction_with_parameter
 from ._utils import count_gate_families, depth_proxy
 
 
@@ -55,23 +54,28 @@ def _parameter_slices(circuit: Circuit) -> List[tuple[int, Optional[tuple[int, .
 
 
 def _bind_parameter_values(circuit: Circuit, values: Sequence[float]) -> Circuit:
-    gates = deepcopy(circuit_gate_dicts(circuit))
+    instructions = []
     cursor = 0
-    for gate in gates:
-        if "parameter" not in gate or gate.get("parameter") is None:
+    for instruction in circuit_instructions(circuit):
+        parameter = instruction_parameter(instruction)
+        if parameter is None:
+            instructions.append(instruction)
             continue
-        parameter = gate["parameter"]
         if isinstance(parameter, (list, tuple, np.ndarray)):
             template = np.asarray(parameter, dtype=float)
             size = int(template.size)
-            gate["parameter"] = np.asarray(values[cursor : cursor + size], dtype=float).reshape(template.shape).tolist()
+            instruction = instruction_with_parameter(
+                instruction,
+                np.asarray(values[cursor : cursor + size], dtype=float).reshape(template.shape).tolist(),
+            )
             cursor += size
         else:
-            gate["parameter"] = float(values[cursor])
+            instruction = instruction_with_parameter(instruction, float(values[cursor]))
             cursor += 1
+        instructions.append(instruction)
     if cursor != len(values):
         raise ValueError(f"Expected {cursor} parameters, got {len(values)}")
-    return Circuit(*gates, n_qubits=circuit.n_qubits, backend=getattr(circuit, "backend", None))
+    return Circuit(*instructions, n_qubits=circuit.n_qubits, backend=getattr(circuit, "backend", None))
 
 
 def _z_expectations_from_probabilities(probabilities: np.ndarray, n_qubits: int) -> np.ndarray:

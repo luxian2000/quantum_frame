@@ -22,7 +22,15 @@ import numpy as np
 
 from ...core.circuit import Circuit
 from ...gates import canonical_gate_name, gate_decomposition, gate_matrix
-from ...ir import circuit_gate_dicts, instruction_controls, instruction_qubits
+from ...ir import (
+    circuit_instructions,
+    instruction_control_states,
+    instruction_controls,
+    instruction_name,
+    instruction_parameter,
+    instruction_qubits,
+    instruction_to_gate_dict,
+)
 from ..base import TransformationPass
 from ._local_rewrite import circuit_from_gates
 
@@ -46,9 +54,9 @@ def _zyz_angles(u: np.ndarray) -> tuple[float, float, float]:
     return a + b, float(gamma), a - b
 
 
-def _zyz_decomposition(name: str, gate: dict, qubit: int) -> list[dict] | None:
+def _zyz_decomposition(name: str, instruction, qubit: int) -> list[dict] | None:
     """单比特门 -> ``rz·ry·rz`` 门字典序列（基底等价至全局相位）；不可分解返回 ``None``。"""
-    local = gate_matrix(name, gate.get("parameter", ()), None)
+    local = gate_matrix(name, instruction_parameter(instruction, ()), None)
     if local is None:
         return None
     u = np.asarray(local, dtype=complex)
@@ -62,14 +70,13 @@ def _zyz_decomposition(name: str, gate: dict, qubit: int) -> list[dict] | None:
     ]
 
 
-def _apply_rule(rule, gate: dict) -> list[dict] | None:
+def _apply_rule(rule, instruction) -> list[dict] | None:
     """把门规范化为 ``(qubits, controls, control_states, params)`` 后调用分解规则。"""
 
-    qubits = tuple(instruction_qubits(gate))
-    controls = tuple(instruction_controls(gate))
-    states = gate.get("control_states")
-    states = tuple(int(s) for s in states) if states is not None else None
-    params = gate.get("parameter")
+    qubits = tuple(instruction_qubits(instruction))
+    controls = tuple(instruction_controls(instruction))
+    states = tuple(int(s) for s in instruction_control_states(instruction)) if controls else None
+    params = instruction_parameter(instruction)
     return rule(qubits, controls, states, params)
 
 
@@ -95,35 +102,35 @@ class DecomposePass(TransformationPass):
 
     def run(self, circuit: Circuit) -> Circuit:
         out: list[dict] = []
-        for gate in circuit_gate_dicts(circuit):
-            name = canonical_gate_name(gate["type"])
+        for instruction in circuit_instructions(circuit):
+            name = canonical_gate_name(instruction_name(instruction))
             if name in self.basis_gates:
-                out.append(gate)
+                out.append(instruction_to_gate_dict(instruction))
                 continue
             rule = gate_decomposition(name)
-            replacement = _apply_rule(rule, gate) if rule is not None else None
+            replacement = _apply_rule(rule, instruction) if rule is not None else None
             if replacement is not None:
                 out.extend(replacement)
                 continue
             # 单比特门：基底含 rz/ry 时经 ZYZ 翻译到目标基底（等价至全局相位）。
-            qubits = instruction_qubits(gate)
+            qubits = instruction_qubits(instruction)
             if (
                 len(qubits) == 1
-                and not instruction_controls(gate)
+                and not instruction_controls(instruction)
                 and _ZYZ_BASIS <= self.basis_gates
             ):
-                zyz = _zyz_decomposition(name, gate, int(qubits[0]))
+                zyz = _zyz_decomposition(name, instruction, int(qubits[0]))
                 if zyz is not None:
                     out.extend(zyz)
                     continue
             if self.skip_unsupported:
-                out.append(gate)
+                out.append(instruction_to_gate_dict(instruction))
                 continue
-            qubits = instruction_qubits(gate)
-            if len(qubits) + len(instruction_controls(gate)) >= 2:
+            qubits = instruction_qubits(instruction)
+            if len(qubits) + len(instruction_controls(instruction)) >= 2:
                 raise ValueError(
                     f"DecomposePass: gate '{name}' is not in basis {sorted(self.basis_gates)} "
                     "and has no decomposition rule"
                 )
-            out.append(gate)
+            out.append(instruction_to_gate_dict(instruction))
         return circuit_from_gates(circuit, out)

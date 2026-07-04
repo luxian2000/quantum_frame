@@ -56,7 +56,7 @@ def test_circuit_ir_is_accepted_by_json_round_trip():
     rebuilt = circuit_from_json(circuit_to_json(ir))
 
     assert rebuilt.n_qubits == ir.n_qubits
-    assert rebuilt.gates == ir.to_gate_dicts()
+    assert rebuilt.legacy_gates == ir.to_gate_dicts()
 
 
 def test_circuit_ir_is_accepted_by_transpile_and_optimizer():
@@ -73,8 +73,8 @@ def test_circuit_ir_is_accepted_by_transpile_and_optimizer():
     optimized = PassManager(["cancel_inverse", "merge_rotations"]).run(ir)
     optimized_via_legacy = optimize_circuit(ir)
 
-    assert optimized.gates == [{"type": "rx", "target_qubit": 0, "parameter": 0.30000000000000004}]
-    assert optimized_via_legacy.gates == optimized.gates
+    assert optimized.legacy_gates == [{"type": "rx", "target_qubit": 0, "parameter": 0.30000000000000004}]
+    assert optimized_via_legacy.legacy_gates == optimized.legacy_gates
 
 
 def test_circuit_ir_is_accepted_by_measure_and_adjoint_gradient():

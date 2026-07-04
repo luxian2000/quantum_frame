@@ -2,7 +2,8 @@
 
 约定：工厂函数签名与参数顺序完全不变（``rz(theta, qubit)`` 等），
 但返回值由裸字典升级为类型化 IR 对象；对象支持只读的旧字典键访问，
-喂给 ``Circuit`` 后内部存储仍为与旧版完全一致的字典。
+喂给 ``Circuit`` 后 ``Circuit.gates`` 保持类型化对象；旧字典互操作走
+``Circuit.legacy_gates`` / ``Circuit.to_gate_dicts()``。
 """
 
 import pytest
@@ -202,11 +203,11 @@ def test_operation_is_immutable_via_item_assignment():
 
 
 # ---------------------------------------------------------------------------
-# Circuit 内部存储与旧版字典完全一致
+# Circuit 暴露 typed gates，并保留 legacy dict 互操作出口
 # ---------------------------------------------------------------------------
 
 
-def test_circuit_stores_same_dicts_as_before():
+def test_circuit_exposes_typed_gates_and_legacy_dicts():
     cir = Circuit(
         hadamard(0),
         rz(0.5, 1),
@@ -219,7 +220,7 @@ def test_circuit_stores_same_dicts_as_before():
         reset([1, 3]),
         n_qubits=4,
     )
-    assert cir.gates == [
+    assert cir.legacy_gates == [
         {"type": "hadamard", "target_qubit": 0},
         {"type": "rz", "target_qubit": 1, "parameter": 0.5},
         {"type": "cx", "target_qubit": 1, "control_qubits": [0], "control_states": [1]},
@@ -230,4 +231,4 @@ def test_circuit_stores_same_dicts_as_before():
         {"type": "measure", "qubits": [1, 3]},
         {"type": "reset", "qubits": [1, 3]},
     ]
-    assert all(type(gate) is dict for gate in cir.gates)
+    assert all(isinstance(gate, (Operation, Measurement)) for gate in cir.gates)

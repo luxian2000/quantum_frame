@@ -27,10 +27,14 @@ class ControlFlow(LegacyGateView):
             raise TypeError("condition 必须是 Condition")
         if name == "while" and max_iterations is None:
             raise ValueError("while 必须提供 max_iterations")
+        from .accessors import instruction_to_gate_dict
+
         self.name = name
         self.condition = condition
-        self.body_gates = tuple(dict(g) for g in body_gates)
-        self.else_gates = None if else_gates is None else tuple(dict(g) for g in else_gates)
+        self.body_gates = tuple(instruction_to_gate_dict(g) for g in body_gates)
+        self.else_gates = None if else_gates is None else tuple(
+            instruction_to_gate_dict(g) for g in else_gates
+        )
         self.n_qubits = int(n_qubits)
         self.max_iterations = None if max_iterations is None else int(max_iterations)
 
