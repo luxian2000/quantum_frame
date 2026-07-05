@@ -610,6 +610,8 @@ class BasicQAOA:
     def _gradient(
         self, params: np.ndarray, *, grad_method: str = "fd", **energy_kwargs: Any
     ) -> np.ndarray:
+        if grad_method not in ("fd", "analytic", "psr"):
+            raise ValueError(f"grad_method 必须是 fd/analytic/psr，收到 {grad_method!r}")
         if self.cost is not None:
             flat = np.asarray(params, dtype=float).reshape(-1)
             return np.asarray(self.cost.grad(flat), dtype=float).reshape(flat.shape)
@@ -621,8 +623,6 @@ class BasicQAOA:
                 backend=energy_kwargs.get("backend"),
                 method=energy_kwargs.get("method", "statevector"),
             )
-        if grad_method != "fd":
-            raise ValueError(f"grad_method 必须是 fd/analytic/psr，收到 {grad_method!r}")
         return self.finite_difference_gradient(params, **energy_kwargs)
 
     def finite_difference_gradient(self, params: np.ndarray, eps: float = 1e-4, **energy_kwargs: Any) -> np.ndarray:

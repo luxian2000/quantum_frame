@@ -132,6 +132,28 @@ def test_run_invalid_grad_method_raises():
         raise AssertionError("expected invalid grad_method to raise ValueError")
 
 
+def test_cost_backed_run_invalid_grad_method_raises():
+    class _FakeCost:
+        _multi = False
+
+        def __call__(self, params):
+            flat = np.asarray(params, dtype=float).reshape(-1)
+            return float(np.dot(flat, flat))
+
+        def grad(self, params):
+            flat = np.asarray(params, dtype=float).reshape(-1)
+            return 2.0 * flat
+
+    qaoa = BasicQAOA(cost=_FakeCost(), p=1)
+
+    try:
+        qaoa.run(max_iters=1, lr=0.1, init_params=np.array([0.2, -0.3]), grad_method="bogus")
+    except ValueError as exc:
+        assert "grad_method" in str(exc)
+    else:
+        raise AssertionError("expected invalid grad_method to raise ValueError for cost-backed QAOA")
+
+
 def test_run_analytic_grad_with_shots_raises():
     qaoa = BasicQAOA(problem_hamiltonian=Hamiltonian(n_qubits=2, terms=[("ZZ", -1.0)]), p=1, seed=5)
     params = qaoa.initial_params()
