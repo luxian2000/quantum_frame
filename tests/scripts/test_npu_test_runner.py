@@ -42,6 +42,7 @@ def test_npu_runner_lists_layered_suites():
         "circuit",
         "deriv",
         "qml",
+        "qaoa",
         "tensor",
         "qas",
         "demos",
@@ -87,6 +88,23 @@ def test_npu_runner_dry_run_prints_typed_ir_and_deriv_probe_commands():
     assert "tests/qml" in result.stdout
 
 
+def test_npu_runner_dry_run_prints_qaoa_probe_and_pytest_commands():
+    result = run_runner(
+        "--dry-run",
+        "--suite",
+        "qaoa",
+        "--pytest-arg",
+        "-q",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "scripts/npu/qaoa_probe.py" in result.stdout
+    assert "tests/vqc/test_qaoa_canonical.py" in result.stdout
+    assert "tests/vqc/test_qaoa_qfun.py" in result.stdout
+    assert "tests/optimization/qubo/test_qaoa_helpers.py" in result.stdout
+    assert "-q" in result.stdout
+
+
 def test_npu_runner_strict_dry_run_includes_real_npu_check():
     result = run_runner("--dry-run", "--strict-npu", "--suite", "smoke")
 
@@ -108,6 +126,7 @@ def test_npu_shell_entrypoints_exist_and_are_executable():
         "circuit.sh",
         "deriv.sh",
         "qml.sh",
+        "qaoa.sh",
         "tensor.sh",
         "qas.sh",
         "demos.sh",
@@ -200,6 +219,21 @@ def test_typed_ir_deriv_probe_help_lists_sections():
     assert result.returncode == 0, result.stderr
     assert "typed-ir" in result.stdout
     assert "deriv" in result.stdout
+
+
+def test_qaoa_probe_help_lists_options():
+    probe = ROOT / "scripts" / "npu" / "qaoa_probe.py"
+    result = subprocess.run(
+        [sys.executable, str(probe), "--help"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--allow-cpu-fallback" in result.stdout
+    assert "--shots" in result.stdout
 
 
 def test_multi_card_probe_help_lists_sections():

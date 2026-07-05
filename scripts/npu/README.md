@@ -11,6 +11,7 @@ scripts/npu/typed_ir.sh --strict-npu
 scripts/npu/deriv.sh --strict-npu
 scripts/npu/backend.sh --strict-npu
 scripts/npu/ops.sh --strict-npu
+scripts/npu/qaoa.sh --strict-npu --pytest-arg -q
 scripts/npu/run_all.sh --strict-npu
 scripts/npu/multi_card.sh --nproc-per-node 4
 scripts/npu/qnn_4card.sh --nproc-per-node 4
@@ -38,6 +39,7 @@ scripts/npu/qml.sh --strict-npu --pytest-arg -vv --pytest-arg --tb=short
 - `circuit`: circuit execution, measurement, typed gates, JSON/QASM I/O.
 - `deriv`: typed-IR derivative paths on NPU, with focus on `qml.ad`, direct `qml.auto`, `psr`/`fd`, NPU-safe backend autograd, and estimator parameter binding.
 - `qml`: gradient, qlayer, parameter-shift, estimator paths.
+- `qaoa`: gate-level QAOA with aicir `Hamiltonian`, Trotter order 1/2, exact energy, diagonal sampling, and QUBO helpers.
 - `tensor`: tensor network simulator and cotengra-facing paths.
 - `qas`: QAS/VQE workloads likely to stress NPU batch and gradient paths.
 - `demos`: demo and molecule smoke tests before long NPU jobs.
