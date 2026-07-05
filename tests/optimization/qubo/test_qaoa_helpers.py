@@ -1,5 +1,6 @@
 import numpy as np
 
+from aicir.core.operators import Hamiltonian
 from aicir.optimization.qubo import (
     Binary,
     Model,
@@ -47,7 +48,8 @@ def test_model_to_basic_qaoa_builds_solver() -> None:
 
     assert solver.n_qubits == 1
     assert solver.n_params == 2
-    assert solver.problem_hamiltonian.shape == (2, 2)
+    assert isinstance(solver.problem_hamiltonian, Hamiltonian)
+    assert solver.build_circuit(np.array([0.1, 0.2])).n_qubits == 1
 
 
 def test_builder_to_basic_qaoa_builds_solver() -> None:
@@ -59,6 +61,7 @@ def test_builder_to_basic_qaoa_builds_solver() -> None:
 
     assert solver.n_qubits == 1
     assert solver.n_params == 2
+    assert isinstance(solver.problem_hamiltonian, Hamiltonian)
 
 
 def test_run_model_qaoa_runs_short_optimization() -> None:
