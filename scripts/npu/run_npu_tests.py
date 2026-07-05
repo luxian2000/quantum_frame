@@ -123,6 +123,16 @@ SUITES: dict[str, Suite] = {
             "tests/optimizer/test_params_diff_registry.py",
         ),
     ),
+    "qaoa": Suite(
+        name="qaoa",
+        description="Gate-level QAOA on NPU: Hamiltonian circuits, Trotter order 1/2, exact energy, and sampling.",
+        targets=(
+            "tests/vqc/test_qaoa_canonical.py",
+            "tests/vqc/test_qaoa_qfun.py",
+            "tests/optimization/qubo/test_qaoa_helpers.py",
+        ),
+        scripts=(("scripts/npu/qaoa_probe.py",),),
+    ),
     "tensor": Suite(
         name="tensor",
         description="Tensor-network simulator, cotengra API, contraction primitives, and NPU demo importability.",
