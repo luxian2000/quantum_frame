@@ -1,4 +1,5 @@
 import numpy as np
+from importlib import import_module
 
 from aicir import (
     BitFlipChannel,
@@ -71,3 +72,28 @@ def test_noisy_measure_run_does_not_use_statevector_local_hook():
     assert backend.local_calls == []
     assert result.final_state.is_density
     np.testing.assert_allclose(np.trace(result.final_state.to_numpy()), 1.0, atol=1e-6)
+
+
+def test_statevector_measure_path_does_not_call_gate_to_matrix_for_supported_local_gates(monkeypatch):
+    trajectory = import_module("aicir.measure.trajectory")
+
+    def forbidden_gate_to_matrix(*args, **kwargs):
+        raise AssertionError("pure statevector local gates must not build global gate matrices")
+
+    monkeypatch.setattr(trajectory, "gate_to_matrix", forbidden_gate_to_matrix)
+
+    backend = NumpyBackend()
+    circuit = Circuit(
+        hadamard(0),
+        rx(0.1, 1),
+        ry(-0.2, 2),
+        cnot(3, [0]),
+        rzz(0.4, 1, 3),
+        n_qubits=4,
+        backend=backend,
+    )
+
+    result = Measure(backend).run(circuit, shots=None, return_state=True)
+
+    assert result.final_state.n_qubits == 4
+    assert np.isclose(result.final_state.norm(), 1.0, atol=1e-6)
