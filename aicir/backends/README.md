@@ -601,6 +601,23 @@ loss.backward()                              # 全程实张量，NPU 安全
 | `expectation_sv(state, operator)` | 纯态期望值 ⟨ψ\|O\|ψ⟩ |
 | `expectation_dm(rho, operator)` | 混合态期望值 Tr(ρO) |
 
+### Local Statevector Kernel Hook
+
+Pure-state circuit execution should prefer local statevector updates over full
+`2^n x 2^n` unitary construction. Backends may implement:
+
+```python
+apply_statevector_local(state, local_matrix, axes, n_qubits)
+```
+
+The method receives a `(2**n_qubits, 1)` statevector, a local gate matrix, and
+the target/control axes in the local matrix order. It returns a new statevector
+or `None` to request the generic fallback.
+
+`NumpyBackend` implements this hook for one- and two-qubit local matrices using
+bounded chunks. `Circuit.unitary()` remains a dense diagnostic API and is not
+the scalable execution path for large circuits.
+
 ### 便利方法（非抽象）
 
 | 方法 | 说明 |
