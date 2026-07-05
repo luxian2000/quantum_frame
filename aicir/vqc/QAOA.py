@@ -12,7 +12,7 @@ from typing import Any, Callable
 import numpy as np
 
 from ..backends.numpy_backend import NumpyBackend
-from ..core.circuit import Circuit, cnot, hadamard, rx, ry, rz, rzz
+from ..core.circuit import Circuit, cnot, hadamard, pauli_x, pauli_y, pauli_z, rx, ry, rz, rzz
 from ..core.operators import Hamiltonian
 from ..measure import Measure
 
@@ -413,6 +413,30 @@ class BasicQAOA:
             for qubit in term.qubits:
                 eigenvalue *= 1 if bits[int(qubit)] == "0" else -1
             value += term.coefficient * eigenvalue
+        return float(value)
+
+    def _sparse_cost_expectation(self, state, backend) -> float:
+        """稀疏计算 ⟨ψ|H_C|ψ⟩ = Σ_j c_j ⟨ψ|P_j|ψ⟩，逐 Pauli 串作用到态矢量，避免构造 2^n×2^n 稠密矩阵。
+
+        参数:
+            state:   后端原生态矢量张量（如 ``State.data``）。
+            backend: 计算后端。
+        返回:
+            实数期望值（含常数偏移 ``self._cost_offset``）。
+        """
+        from ..core.gates import apply_gate_to_state
+
+        factory = {"X": pauli_x, "Y": pauli_y, "Z": pauli_z}
+        psi = np.asarray(backend.to_numpy(state), dtype=np.complex128).reshape(-1)
+        value = float(self._cost_offset)
+        for term in self._cost_terms:
+            transformed = state
+            for pauli, qubit in zip(term.paulis, term.qubits):
+                transformed = apply_gate_to_state(
+                    factory[pauli](int(qubit)), transformed, self.n_qubits, backend
+                )
+            t_np = np.asarray(backend.to_numpy(transformed), dtype=np.complex128).reshape(-1)
+            value += term.coefficient * float(np.vdot(psi, t_np).real)
         return float(value)
 
     def ansatz_state(self, params: np.ndarray, init_state: np.ndarray | None = None) -> np.ndarray:
