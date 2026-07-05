@@ -614,6 +614,8 @@ class BasicQAOA:
             flat = np.asarray(params, dtype=float).reshape(-1)
             return np.asarray(self.cost.grad(flat), dtype=float).reshape(flat.shape)
         if grad_method in ("analytic", "psr"):
+            if energy_kwargs.get("shots") is not None:
+                raise ValueError("analytic/psr gradient requires shots=None for exact energy")
             return self.analytic_gradient(
                 params,
                 backend=energy_kwargs.get("backend"),
@@ -626,30 +628,14 @@ class BasicQAOA:
     def finite_difference_gradient(self, params: np.ndarray, eps: float = 1e-4, **energy_kwargs: Any) -> np.ndarray:
         flat = np.asarray(params, dtype=float).reshape(-1)
         grad = np.zeros_like(flat)
-        use_five_point = self._gate_level and self.cost is None and energy_kwargs.get("shots") is None
-        step = max(float(abs(eps)), 5e-3) if use_five_point else float(eps)
         for index in range(flat.size):
-            if use_five_point:
-                plus_plus = flat.copy()
-                plus = flat.copy()
-                minus = flat.copy()
-                minus_minus = flat.copy()
-                plus_plus[index] += 2.0 * step
-                plus[index] += step
-                minus[index] -= step
-                minus_minus[index] -= 2.0 * step
-                grad[index] = (
-                    -self.energy(plus_plus, **energy_kwargs)
-                    + 8.0 * self.energy(plus, **energy_kwargs)
-                    - 8.0 * self.energy(minus, **energy_kwargs)
-                    + self.energy(minus_minus, **energy_kwargs)
-                ) / (12.0 * step)
-                continue
             plus = flat.copy()
             minus = flat.copy()
-            plus[index] += step
-            minus[index] -= step
-            grad[index] = (self.energy(plus, **energy_kwargs) - self.energy(minus, **energy_kwargs)) / (2.0 * step)
+            plus[index] += eps
+            minus[index] -= eps
+            grad[index] = (
+                self.energy(plus, **energy_kwargs) - self.energy(minus, **energy_kwargs)
+            ) / (2.0 * eps)
         return grad
 
     def _tape_energy(self, records, gate_index: int, delta: float, backend, method: str) -> float:
