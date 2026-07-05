@@ -718,6 +718,12 @@ def _apply_local_matrix_to_state(state, local_matrix, axes, n_qubits, backend):
     if _should_use_flat_local_apply(backend, n_qubits):
         return _apply_local_matrix_to_state_flat(state, local_matrix, axes, n_qubits, backend)
 
+    apply_statevector_local = getattr(backend, "apply_statevector_local", None)
+    if callable(apply_statevector_local):
+        updated = apply_statevector_local(state, local_matrix, axes, n_qubits)
+        if updated is not None:
+            return updated
+
     # 将态向量整形为「目标比特轴 + 合并后的空闲段」的分组张量，而非按比特展开
     # 成 (2,)*n 的高阶张量。后者在 20+ 量子比特时秩高达 n，超出昇腾 NPU ACL
     # 算子最多 8 维的限制（aclnnInplaceCopy 报错）。这里把相邻的非目标比特合并
