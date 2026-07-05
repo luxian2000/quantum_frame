@@ -4,6 +4,12 @@
 
 ## 2026-07-05
 
+### QAOA 稀疏化与解析梯度
+
+- 门级 `BasicQAOA` 精确能量（`shots=None`）改走稀疏逐项期望 `Σ_j c_j⟨ψ|P_j|ψ⟩`，移除稠密 `to_matrix` 与 `2^n` Python 循环（对角/非对角统一）。
+- `build_circuit` 重构为门磁带（`_qaoa_tape`/`_circuit_from_tape`），作为前向与梯度的单一事实来源。
+- 新增可选解析参数移位梯度：`BasicQAOA.analytic_gradient(...)` 与 `run(..., grad_method="analytic")`（逐门 π/2 移位 + 链式法则聚合，对 Trotter 化线路解析精确）。默认梯度仍为有限差分（`grad_method="fd"`）。
+
 ### Changed
 
 - **`BasicQAOA` 升级为 canonical gate-level QAOA。** `aicir.vqc.BasicQAOA` 现在可直接接收 aicir 标准 `Hamiltonian` 作为 `problem_hamiltonian`，支持任意实系数 Pauli cost 项；主路径会构造 `Circuit`（`H` 初态、`rz`/`rzz` 快速路径、一般 Pauli string 的一阶/二阶 Trotter-Suzuki product formula、`rx` mixer layer）。新增 `trotter_steps>=1` 与 `trotter_order=1/2`（默认 `1`）；diagonal I/Z-only cost 继续支持 bitstring energy 和基于最终 Z-basis counts 的 shots energy，非对角 cost 支持 exact expectation，shots energy 暂要求后续接 Pauli-term estimator。旧 dense matrix 输入仍作为 exact-simulator 兼容路径保留；QUBO helper 默认改为传递 `Hamiltonian`，显式 dense custom mixer 时才回退到 matrix 路径。
