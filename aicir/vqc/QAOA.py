@@ -478,17 +478,10 @@ class BasicQAOA:
                 counts = self.sample(params, shots=int(shots), backend=backend, seed=seed, method=method)
                 total = sum(counts.values()) or 1
                 return float(sum(self.bitstring_energy(bitstring) * count for bitstring, count in counts.items()) / total)
-            if self._diagonal_cost:
-                probs = self.probabilities(params, backend=backend, method=method)
-                value = 0.0
-                for index, probability in enumerate(probs):
-                    if probability:
-                        value += float(probability) * self.bitstring_energy(format(index, f"0{self.n_qubits}b"))
-                return float(value)
             active_backend = NumpyBackend() if backend is None else backend
             result = self.measure(params, backend=active_backend, method=method, return_state=True)
-            operator = self.problem_hamiltonian.to_matrix(active_backend)
-            return float(result.final_state.expectation(operator))
+            # 精确能量（shots=None）：稀疏逐项期望，避免稠密矩阵与 2^n Python 循环
+            return self._sparse_cost_expectation(result.final_state.data, active_backend)
         if shots is not None:
             raise ValueError("shots-based QAOA energy requires an aicir Hamiltonian problem_hamiltonian")
         state = self.ansatz_state(params)
