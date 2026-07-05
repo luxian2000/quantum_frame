@@ -28,7 +28,7 @@ def model_to_qaoa_matrix(
     include_offset: bool = True,
     backend: NumpyBackend | None = None,
 ) -> tuple[np.ndarray, int]:
-    """Convert a QUBO ``Model`` into the dense matrix expected by ``BasicQAOA``."""
+    """Convert a QUBO ``Model`` into the legacy dense matrix accepted by ``BasicQAOA``."""
 
     active_backend = NumpyBackend() if backend is None else backend
     hamiltonian = model_to_hamiltonian(
@@ -47,7 +47,7 @@ def builder_to_qaoa_matrix(
     include_offset: bool = True,
     backend: NumpyBackend | None = None,
 ) -> tuple[np.ndarray, int]:
-    """Convert a ``QuboBuilder`` into the dense matrix expected by ``BasicQAOA``."""
+    """Convert a ``QuboBuilder`` into the legacy dense matrix accepted by ``BasicQAOA``."""
 
     active_backend = NumpyBackend() if backend is None else backend
     hamiltonian = builder_to_hamiltonian(
@@ -70,16 +70,28 @@ def model_to_basic_qaoa(
 ) -> BasicQAOA:
     """Build a ``BasicQAOA`` solver from a QUBO ``Model``."""
 
-    matrix, n_qubits = model_to_qaoa_matrix(
+    if mixer_hamiltonian is not None:
+        matrix, n_qubits = model_to_qaoa_matrix(
+            model,
+            compact=compact,
+            include_offset=include_offset,
+        )
+        return BasicQAOA(
+            problem_hamiltonian=matrix,
+            p=p,
+            n_qubits=n_qubits,
+            mixer_hamiltonian=mixer_hamiltonian,
+            seed=seed,
+        )
+
+    hamiltonian = model_to_hamiltonian(
         model,
         compact=compact,
         include_offset=include_offset,
     )
     return BasicQAOA(
-        problem_hamiltonian=matrix,
+        problem_hamiltonian=hamiltonian,
         p=p,
-        n_qubits=n_qubits,
-        mixer_hamiltonian=mixer_hamiltonian,
         seed=seed,
     )
 
@@ -95,16 +107,28 @@ def builder_to_basic_qaoa(
 ) -> BasicQAOA:
     """Build a ``BasicQAOA`` solver from a ``QuboBuilder``."""
 
-    matrix, n_qubits = builder_to_qaoa_matrix(
+    if mixer_hamiltonian is not None:
+        matrix, n_qubits = builder_to_qaoa_matrix(
+            builder,
+            compact=compact,
+            include_offset=include_offset,
+        )
+        return BasicQAOA(
+            problem_hamiltonian=matrix,
+            p=p,
+            n_qubits=n_qubits,
+            mixer_hamiltonian=mixer_hamiltonian,
+            seed=seed,
+        )
+
+    hamiltonian = builder_to_hamiltonian(
         builder,
         compact=compact,
         include_offset=include_offset,
     )
     return BasicQAOA(
-        problem_hamiltonian=matrix,
+        problem_hamiltonian=hamiltonian,
         p=p,
-        n_qubits=n_qubits,
-        mixer_hamiltonian=mixer_hamiltonian,
         seed=seed,
     )
 

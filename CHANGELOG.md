@@ -2,6 +2,12 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-05
+
+### Changed
+
+- **`BasicQAOA` 升级为 canonical gate-level QAOA。** `aicir.vqc.BasicQAOA` 现在可直接接收 aicir 标准 `Hamiltonian` 作为 `problem_hamiltonian`，支持任意实系数 Pauli cost 项；主路径会构造 `Circuit`（`H` 初态、`rz`/`rzz` 快速路径、一般 Pauli string 的一阶/二阶 Trotter-Suzuki product formula、`rx` mixer layer）。新增 `trotter_steps>=1` 与 `trotter_order=1/2`（默认 `1`）；diagonal I/Z-only cost 继续支持 bitstring energy 和基于最终 Z-basis counts 的 shots energy，非对角 cost 支持 exact expectation，shots energy 暂要求后续接 Pauli-term estimator。旧 dense matrix 输入仍作为 exact-simulator 兼容路径保留；QUBO helper 默认改为传递 `Hamiltonian`，显式 dense custom mixer 时才回退到 matrix 路径。
+
 ## 2026-07-04
 
 ### Changed
