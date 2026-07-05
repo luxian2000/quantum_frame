@@ -53,7 +53,7 @@ def _gate_basis(gate) -> str:
 
 def _apply_unitary(gate, state: State, backend, n: int, noise_model) -> State:
     """施加一个酉门（可选噪声）。原 run_trajectory 中的酉门演化逻辑原样抽出。"""
-    if state.is_density:
+    if state.is_density or noise_model is not None:
         gm = gate_to_matrix(gate, cir_qubits=n, backend=backend)
         state = state.evolve(gm)
     else:
