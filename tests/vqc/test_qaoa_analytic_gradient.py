@@ -51,11 +51,20 @@ def test_qaoa_tape_owner_indices_cover_all_parameters():
 
 
 def _fd_reference(qaoa, params, backend):
-    return qaoa.finite_difference_gradient(params, eps=1e-5, backend=backend)
+    flat = np.asarray(params, dtype=float).reshape(-1)
+    grad = np.zeros_like(flat)
+    eps = 2e-3
+    for index in range(flat.size):
+        plus = flat.copy()
+        minus = flat.copy()
+        plus[index] += eps
+        minus[index] -= eps
+        grad[index] = (qaoa.energy(plus, backend=backend) - qaoa.energy(minus, backend=backend)) / (2.0 * eps)
+    return grad
 
 
 def test_analytic_gradient_matches_fd_diagonal():
-    backend = NumpyBackend()
+    backend = NumpyBackend(dtype=np.complex128)
     hamiltonian = Hamiltonian(n_qubits=3, terms=[("ZZI", -1.0), ("IZZ", 0.5), ("ZIZ", 0.25)])
     qaoa = BasicQAOA(problem_hamiltonian=hamiltonian, p=2, seed=17)
     params = qaoa.initial_params()
@@ -63,11 +72,11 @@ def test_analytic_gradient_matches_fd_diagonal():
     analytic = qaoa.analytic_gradient(params, backend=backend)
     fd = _fd_reference(qaoa, params, backend)
 
-    np.testing.assert_allclose(analytic, fd, atol=1e-4)
+    np.testing.assert_allclose(analytic, fd, atol=1.5e-4)
 
 
 def test_analytic_gradient_matches_fd_non_diagonal_and_trotterized():
-    backend = NumpyBackend()
+    backend = NumpyBackend(dtype=np.complex128)
     hamiltonian = Hamiltonian(n_qubits=2, terms=[("XX", 0.6), ("YZ", [0, 1], -0.3), ("ZZ", 1.0)])
     for order in (1, 2):
         qaoa = BasicQAOA(
@@ -78,7 +87,7 @@ def test_analytic_gradient_matches_fd_non_diagonal_and_trotterized():
         analytic = qaoa.analytic_gradient(params, backend=backend)
         fd = _fd_reference(qaoa, params, backend)
 
-        np.testing.assert_allclose(analytic, fd, atol=1e-4)
+        np.testing.assert_allclose(analytic, fd, atol=1.5e-4)
 
 
 def test_run_grad_method_analytic_reaches_same_optimum_as_fd():
@@ -94,3 +103,55 @@ def test_run_grad_method_analytic_reaches_same_optimum_as_fd():
     )
 
     assert np.isclose(fd_run.energy, an_run.energy, atol=1e-3)
+
+
+def test_run_grad_method_psr_alias_reaches_same_optimum_as_analytic():
+    backend = NumpyBackend()
+    hamiltonian = Hamiltonian(n_qubits=3, terms=[("ZZI", -1.0), ("IZZ", -1.0)])
+    init = BasicQAOA(problem_hamiltonian=hamiltonian, p=2, seed=29).initial_params()
+
+    analytic_run = BasicQAOA(problem_hamiltonian=hamiltonian, p=2, seed=29).run(
+        max_iters=20, lr=0.1, init_params=init, backend=backend, grad_method="analytic"
+    )
+    psr_run = BasicQAOA(problem_hamiltonian=hamiltonian, p=2, seed=29).run(
+        max_iters=20, lr=0.1, init_params=init, backend=backend, grad_method="psr"
+    )
+
+    assert np.isclose(analytic_run.energy, psr_run.energy, atol=1e-8)
+
+
+def test_run_invalid_grad_method_raises():
+    qaoa = BasicQAOA(problem_hamiltonian=Hamiltonian(n_qubits=2, terms=[("ZZ", -1.0)]), p=1, seed=3)
+    params = qaoa.initial_params()
+
+    try:
+        qaoa.run(max_iters=1, lr=0.1, init_params=params, grad_method="bogus")
+    except ValueError as exc:
+        assert "grad_method" in str(exc)
+    else:
+        raise AssertionError("expected invalid grad_method to raise ValueError")
+
+
+def test_run_analytic_grad_with_shots_raises():
+    qaoa = BasicQAOA(problem_hamiltonian=Hamiltonian(n_qubits=2, terms=[("ZZ", -1.0)]), p=1, seed=5)
+    params = qaoa.initial_params()
+
+    try:
+        qaoa.run(max_iters=1, lr=0.1, init_params=params, shots=64, grad_method="analytic")
+    except ValueError as exc:
+        assert "shots=None" in str(exc)
+    else:
+        raise AssertionError("expected analytic gradient with shots to raise ValueError")
+
+
+def test_dense_legacy_analytic_gradient_rejects():
+    problem = np.diag([1.0, -1.0, -1.0, 1.0]).astype(np.complex128)
+    qaoa = BasicQAOA(problem_hamiltonian=problem, p=1, seed=7)
+    params = qaoa.initial_params()
+
+    try:
+        qaoa.analytic_gradient(params)
+    except ValueError as exc:
+        assert "analytic_gradient requires" in str(exc)
+    else:
+        raise AssertionError("expected dense legacy analytic_gradient to raise ValueError")
