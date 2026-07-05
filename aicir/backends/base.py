@@ -200,6 +200,15 @@ class Backend(ABC):
             实数标量张量
         """
 
+    def apply_statevector_local(self, state, local_matrix, axes, n_qubits: int):
+        """Optionally apply a local gate directly to a pure statevector.
+
+        Backends that can perform bounded-memory local statevector updates may
+        return a new ``(2**n_qubits, 1)`` state tensor. Returning ``None`` means
+        the caller should use the generic local-matrix fallback.
+        """
+        return None
+
     # ──────────────────────── 张量网络收缩原语 ──────────────────────
     def tensordot(self, a, b, axes):
         """沿 axes=(list_a, list_b) 收缩两张量；轴序同 numpy.tensordot。"""
