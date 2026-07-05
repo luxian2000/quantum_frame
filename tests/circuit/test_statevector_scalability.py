@@ -1,6 +1,17 @@
 import numpy as np
 
-from aicir import Circuit, Measure, NumpyBackend, cnot, hadamard, rx, ry, rzz
+from aicir import (
+    BitFlipChannel,
+    Circuit,
+    Measure,
+    NoiseModel,
+    NumpyBackend,
+    cnot,
+    hadamard,
+    rx,
+    ry,
+    rzz,
+)
 from aicir.core import State
 from aicir.core.gates import apply_gate_to_state
 
@@ -48,3 +59,15 @@ def test_measure_run_statevector_uses_chunked_hook_and_matches_unitary_reference
 
     np.testing.assert_allclose(actual, reference, atol=1e-6)
     assert len(backend.local_calls) == 5
+
+
+def test_noisy_measure_run_does_not_use_statevector_local_hook():
+    backend = RecordingNumpyBackend()
+    circuit = Circuit(hadamard(0), n_qubits=1, backend=backend)
+    circuit.noise_model = NoiseModel().add_channel(BitFlipChannel(target_qubit=0, p=0.0))
+
+    result = Measure(backend).run(circuit, shots=None, return_state=True)
+
+    assert backend.local_calls == []
+    assert result.final_state.is_density
+    np.testing.assert_allclose(np.trace(result.final_state.to_numpy()), 1.0, atol=1e-6)
