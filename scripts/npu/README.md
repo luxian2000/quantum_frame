@@ -15,6 +15,7 @@ scripts/npu/qaoa.sh --strict-npu --pytest-arg -q
 scripts/npu/run_all.sh --strict-npu
 scripts/npu/multi_card.sh --nproc-per-node 4
 scripts/npu/qnn_4card.sh --nproc-per-node 4
+scripts/npu/qaoa_8card.sh --nproc-per-node 8
 ```
 
 Use `--dry-run` to inspect commands without executing them:
@@ -112,6 +113,35 @@ Useful variants:
 ```sh
 scripts/npu/qnn_4card.sh --dry-run --nproc-per-node 4
 scripts/npu/qnn_4card.sh --nproc-per-node 4 --steps 24 --samples 64
+```
+
+## 8-card QAOA probe
+
+Use this after the single-card QAOA suite passes. It launches `torchrun` with
+8 ranks by default. Each rank binds through the same BeH2-style convention
+(`LOCAL_RANK -> npu:{LOCAL_RANK}`), runs rank-local gate-level `BasicQAOA`
+circuits, owns a shard of small problem Hamiltonians, and synchronizes only
+real parameters, finite-difference gradients, and scalar losses through HCCL.
+
+```sh
+scripts/npu/qaoa_8card.sh --nproc-per-node 8
+```
+
+What it covers:
+
+- 8 rank distributed initialization and rank-local NPU binding.
+- diagonal QAOA sampling on every rank.
+- non-diagonal Hamiltonian exact energy with mixed `trotter_order=1/2` problem shards.
+- shared QAOA parameters broadcast from rank 0.
+- finite-difference QAOA gradients averaged through real-valued HCCL collectives.
+- shard coverage check that all synthetic problem instances are covered exactly once.
+
+It does not shard one statevector across eight NPUs. Each rank keeps a complete
+small statevector and synchronizes only real values. Useful variants:
+
+```sh
+scripts/npu/qaoa_8card.sh --dry-run --nproc-per-node 8
+scripts/npu/qaoa_8card.sh --nproc-per-node 8 --samples 16 --steps 2
 ```
 
 ## Typed IR / deriv probe
