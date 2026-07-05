@@ -21,6 +21,26 @@ from .base import Backend
 _CDTYPE = np.complex64
 
 
+def _local_offsets(axes, n_qubits: int):
+    offsets = []
+    for local_index in range(1 << len(axes)):
+        offset = 0
+        for local_pos, axis in enumerate(axes):
+            bit = (local_index >> (len(axes) - 1 - local_pos)) & 1
+            offset |= bit << (int(n_qubits) - 1 - int(axis))
+        offsets.append(np.int64(offset))
+    return offsets
+
+
+def _zero_target_bases(start: int, stop: int, axes, n_qubits: int) -> np.ndarray:
+    basis = np.arange(start, stop, dtype=np.int64)
+    mask = np.ones(basis.shape, dtype=bool)
+    for axis in axes:
+        shift = int(n_qubits) - 1 - int(axis)
+        mask &= ((basis >> shift) & 1) == 0
+    return basis[mask]
+
+
 class NumpyBackend(Backend):
     """基于 NumPy 的 CPU 计算后端（无自动微分支持）。"""
 
@@ -109,6 +129,48 @@ class NumpyBackend(Backend):
 
     def apply_unitary(self, state, unitary):
         return unitary @ state
+
+    def apply_statevector_local(self, state, local_matrix, axes, n_qubits: int):
+        axes = tuple(int(axis) for axis in axes)
+        n_qubits = int(n_qubits)
+        if len(axes) == 0:
+            return state
+        if len(axes) > 2:
+            return None
+        if len(set(axes)) != len(axes):
+            raise ValueError("局部门作用的量子比特不能重复")
+        if any(axis < 0 or axis >= n_qubits for axis in axes):
+            raise ValueError("局部门作用的量子比特索引超出范围")
+
+        dim_local = 1 << len(axes)
+        local = np.asarray(local_matrix, dtype=self._dtype)
+        if local.shape != (dim_local, dim_local):
+            raise ValueError(
+                f"local gate matrix shape {local.shape} does not match {len(axes)} target qubit(s)"
+            )
+
+        flat = np.asarray(state).reshape(-1)
+        dim = 1 << n_qubits
+        if flat.size != dim:
+            raise ValueError(f"state length {flat.size} does not match n_qubits={n_qubits}")
+
+        out = np.empty_like(flat)
+        chunk_size = int(getattr(self, "_statevector_chunk_size", 1 << 20))
+        chunk_size = max(chunk_size, 1)
+        offsets = _local_offsets(axes, n_qubits)
+
+        for start in range(0, dim, chunk_size):
+            stop = min(start + chunk_size, dim)
+            bases = _zero_target_bases(start, stop, axes, n_qubits)
+            if bases.size == 0:
+                continue
+            gathered_indices = [bases | offset for offset in offsets]
+            gathered = np.stack([flat[index] for index in gathered_indices], axis=0)
+            updated = local @ gathered
+            for index, values in zip(gathered_indices, updated):
+                out[index] = values
+
+        return out.reshape(dim, 1)
 
     def inner_product(self, bra, ket):
         b = np.asarray(bra).reshape(-1)
