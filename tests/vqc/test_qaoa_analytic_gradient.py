@@ -48,3 +48,49 @@ def test_qaoa_tape_owner_indices_cover_all_parameters():
     params = qaoa.initial_params()
     owners = {rec.owner for rec in qaoa._qaoa_tape(params) if rec.owner is not None}
     assert owners == set(range(qaoa.n_params))
+
+
+def _fd_reference(qaoa, params, backend):
+    return qaoa.finite_difference_gradient(params, eps=1e-5, backend=backend)
+
+
+def test_analytic_gradient_matches_fd_diagonal():
+    backend = NumpyBackend()
+    hamiltonian = Hamiltonian(n_qubits=3, terms=[("ZZI", -1.0), ("IZZ", 0.5), ("ZIZ", 0.25)])
+    qaoa = BasicQAOA(problem_hamiltonian=hamiltonian, p=2, seed=17)
+    params = qaoa.initial_params()
+
+    analytic = qaoa.analytic_gradient(params, backend=backend)
+    fd = _fd_reference(qaoa, params, backend)
+
+    np.testing.assert_allclose(analytic, fd, atol=1e-4)
+
+
+def test_analytic_gradient_matches_fd_non_diagonal_and_trotterized():
+    backend = NumpyBackend()
+    hamiltonian = Hamiltonian(n_qubits=2, terms=[("XX", 0.6), ("YZ", [0, 1], -0.3), ("ZZ", 1.0)])
+    for order in (1, 2):
+        qaoa = BasicQAOA(
+            problem_hamiltonian=hamiltonian, p=2, trotter_steps=3, trotter_order=order, seed=19
+        )
+        params = qaoa.initial_params()
+
+        analytic = qaoa.analytic_gradient(params, backend=backend)
+        fd = _fd_reference(qaoa, params, backend)
+
+        np.testing.assert_allclose(analytic, fd, atol=1e-4)
+
+
+def test_run_grad_method_analytic_reaches_same_optimum_as_fd():
+    backend = NumpyBackend()
+    hamiltonian = Hamiltonian(n_qubits=3, terms=[("ZZI", -1.0), ("IZZ", -1.0)])
+    init = BasicQAOA(problem_hamiltonian=hamiltonian, p=2, seed=23).initial_params()
+
+    fd_run = BasicQAOA(problem_hamiltonian=hamiltonian, p=2, seed=23).run(
+        max_iters=40, lr=0.1, init_params=init, backend=backend
+    )
+    an_run = BasicQAOA(problem_hamiltonian=hamiltonian, p=2, seed=23).run(
+        max_iters=40, lr=0.1, init_params=init, backend=backend, grad_method="analytic"
+    )
+
+    assert np.isclose(fd_run.energy, an_run.energy, atol=1e-3)

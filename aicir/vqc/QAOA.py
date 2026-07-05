@@ -607,23 +607,89 @@ class BasicQAOA:
         value = np.vdot(state, self.problem_hamiltonian @ state)
         return float(np.real(value))
 
-    def _gradient(self, params: np.ndarray, **energy_kwargs: Any) -> np.ndarray:
+    def _gradient(
+        self, params: np.ndarray, *, grad_method: str = "fd", **energy_kwargs: Any
+    ) -> np.ndarray:
         if self.cost is not None:
             flat = np.asarray(params, dtype=float).reshape(-1)
             return np.asarray(self.cost.grad(flat), dtype=float).reshape(flat.shape)
+        if grad_method in ("analytic", "psr"):
+            return self.analytic_gradient(
+                params,
+                backend=energy_kwargs.get("backend"),
+                method=energy_kwargs.get("method", "statevector"),
+            )
+        if grad_method != "fd":
+            raise ValueError(f"grad_method 必须是 fd/analytic/psr，收到 {grad_method!r}")
         return self.finite_difference_gradient(params, **energy_kwargs)
 
     def finite_difference_gradient(self, params: np.ndarray, eps: float = 1e-4, **energy_kwargs: Any) -> np.ndarray:
         flat = np.asarray(params, dtype=float).reshape(-1)
         grad = np.zeros_like(flat)
+        use_five_point = self._gate_level and self.cost is None and energy_kwargs.get("shots") is None
+        step = max(float(abs(eps)), 5e-3) if use_five_point else float(eps)
         for index in range(flat.size):
+            if use_five_point:
+                plus_plus = flat.copy()
+                plus = flat.copy()
+                minus = flat.copy()
+                minus_minus = flat.copy()
+                plus_plus[index] += 2.0 * step
+                plus[index] += step
+                minus[index] -= step
+                minus_minus[index] -= 2.0 * step
+                grad[index] = (
+                    -self.energy(plus_plus, **energy_kwargs)
+                    + 8.0 * self.energy(plus, **energy_kwargs)
+                    - 8.0 * self.energy(minus, **energy_kwargs)
+                    + self.energy(minus_minus, **energy_kwargs)
+                ) / (12.0 * step)
+                continue
             plus = flat.copy()
             minus = flat.copy()
-            plus[index] += eps
-            minus[index] -= eps
-            grad[index] = (
-                self.energy(plus, **energy_kwargs) - self.energy(minus, **energy_kwargs)
-            ) / (2.0 * eps)
+            plus[index] += step
+            minus[index] -= step
+            grad[index] = (self.energy(plus, **energy_kwargs) - self.energy(minus, **energy_kwargs)) / (2.0 * step)
+        return grad
+
+    def _tape_energy(self, records, gate_index: int, delta: float, backend, method: str) -> float:
+        """将 records[gate_index] 的参数平移 delta 后重建线路并返回精确能量。"""
+
+        rec = records[gate_index]
+        shifted = list(records)
+        shifted[gate_index] = _GateRecord(rec.name, rec.qubits, rec.arg + delta, rec.owner, rec.dcoeff)
+        circuit = _circuit_from_tape(shifted, self.n_qubits, backend)
+        result = Measure(backend).run(
+            circuit, shots=None, measure_qubits=(), return_state=True, method=method
+        )
+        return self._sparse_cost_expectation(result.final_state.data, backend)
+
+    def analytic_gradient(
+        self, params: np.ndarray, *, backend: Any = None, method: str = "statevector"
+    ) -> np.ndarray:
+        """精确能量的解析梯度：对磁带中每个变分门做逐门参数移位（生成元谱 +-1/2，移位 pi/2），
+        再按链式法则 dE/dtheta_k = sum_g (d arg_g/dtheta_k)*1/2[E(arg_g+pi/2)-E(arg_g-pi/2)] 聚合。
+
+        对被评估的（Trotter 化）线路是解析精确的。仅支持门级 Hamiltonian 路径。
+        """
+
+        if not self._gate_level:
+            raise ValueError("analytic_gradient requires an aicir Hamiltonian problem_hamiltonian")
+
+        active_backend = NumpyBackend() if backend is None else backend
+        theta = np.asarray(params, dtype=float).reshape(-1)
+        if theta.size != self.n_params:
+            raise ValueError(f"params size {theta.size} does not match expected {self.n_params}")
+
+        records = self._qaoa_tape(theta)
+        grad = np.zeros(self.n_params, dtype=float)
+        shift = np.pi / 2.0
+        for gate_index, rec in enumerate(records):
+            if rec.owner is None:
+                continue
+            e_plus = self._tape_energy(records, gate_index, shift, active_backend, method)
+            e_minus = self._tape_energy(records, gate_index, -shift, active_backend, method)
+            grad[rec.owner] += rec.dcoeff * 0.5 * (e_plus - e_minus)
         return grad
 
     def run(
@@ -638,6 +704,7 @@ class BasicQAOA:
         backend: Any = None,
         seed: int | None = None,
         method: str = "statevector",
+        grad_method: str = "fd",
     ) -> QAOAResult:
         if max_iters <= 0:
             raise ValueError("max_iters must be a positive integer")
@@ -705,7 +772,7 @@ class BasicQAOA:
             if callback is not None:
                 callback(step, current_energy, params)
 
-            grad = self._gradient(params, **energy_kwargs)
+            grad = self._gradient(params, grad_method=grad_method, **energy_kwargs)
             params = params - lr * grad
 
         final_state = None
