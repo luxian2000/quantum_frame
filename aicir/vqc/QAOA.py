@@ -181,6 +181,120 @@ def _append_trotter_slice(
         _append_pauli_evolution(circuit, term, 0.5 * gamma_step * term.coefficient)
 
 
+@dataclass(frozen=True)
+class _GateRecord:
+    """QAOA 线路磁带的单门记录。
+
+    name:   门类型（"h"/"rx"/"ry"/"rz"/"rzz"/"cx"）。
+    qubits: 作用比特（cx 为 (pivot, control)，rzz 为 (q0, q1)）。
+    arg:    旋转门参数；h/cx 为 None。
+    owner:  变分参数的扁平索引（γ 层为 0..p-1，β 层为 p..2p-1）；固定门为 None。
+    dcoeff: d(arg)/d(theta_owner)；固定门为 None。
+    """
+
+    name: str
+    qubits: tuple[int, ...]
+    arg: float | None
+    owner: int | None
+    dcoeff: float | None
+
+
+def _basis_change_records(records: list[_GateRecord], pauli: str, qubit: int) -> None:
+    if pauli == "X":
+        records.append(_GateRecord("h", (qubit,), None, None, None))
+    elif pauli == "Y":
+        records.append(_GateRecord("rz", (qubit,), -np.pi / 2.0, None, None))
+        records.append(_GateRecord("h", (qubit,), None, None, None))
+
+
+def _basis_uncompute_records(records: list[_GateRecord], pauli: str, qubit: int) -> None:
+    if pauli == "X":
+        records.append(_GateRecord("h", (qubit,), None, None, None))
+    elif pauli == "Y":
+        records.append(_GateRecord("h", (qubit,), None, None, None))
+        records.append(_GateRecord("rz", (qubit,), np.pi / 2.0, None, None))
+
+
+def _pauli_evolution_records(
+    records: list[_GateRecord], term: _PauliCostTerm, rotation: float, drotation: float, owner: int
+) -> None:
+    """记录 exp(-i angle P) 的门序列，rotation = 2*angle，drotation = d(rotation)/d(theta_owner)。"""
+
+    if len(term.qubits) == 1:
+        pauli = term.paulis[0]
+        qubit = term.qubits[0]
+        name = {"X": "rx", "Y": "ry"}.get(pauli, "rz")
+        records.append(_GateRecord(name, (qubit,), float(rotation), owner, float(drotation)))
+        return
+    if len(term.qubits) == 2 and term.paulis == ("Z", "Z"):
+        records.append(
+            _GateRecord("rzz", (term.qubits[0], term.qubits[1]), float(rotation), owner, float(drotation))
+        )
+        return
+
+    for pauli, qubit in zip(term.paulis, term.qubits):
+        _basis_change_records(records, pauli, qubit)
+
+    pivot = term.qubits[-1]
+    for control in term.qubits[:-1]:
+        records.append(_GateRecord("cx", (pivot, control), None, None, None))
+    records.append(_GateRecord("rz", (pivot,), float(rotation), owner, float(drotation)))
+    for control in reversed(term.qubits[:-1]):
+        records.append(_GateRecord("cx", (pivot, control), None, None, None))
+
+    for pauli, qubit in reversed(tuple(zip(term.paulis, term.qubits))):
+        _basis_uncompute_records(records, pauli, qubit)
+
+
+def _trotter_slice_records(
+    records: list[_GateRecord],
+    terms: tuple[_PauliCostTerm, ...],
+    gamma: float,
+    owner: int,
+    trotter_steps: int,
+    trotter_order: int,
+) -> None:
+    if not terms:
+        return
+    gamma_step = gamma / trotter_steps
+
+    def emit(term: _PauliCostTerm, mult: float) -> None:
+        rotation = 2.0 * mult * gamma_step * term.coefficient
+        drotation = 2.0 * mult * term.coefficient / trotter_steps
+        _pauli_evolution_records(records, term, rotation, drotation, owner)
+
+    if trotter_order == 1 or len(terms) == 1:
+        for term in terms:
+            emit(term, 1.0)
+        return
+
+    for term in terms[:-1]:
+        emit(term, 0.5)
+    emit(terms[-1], 1.0)
+    for term in reversed(terms[:-1]):
+        emit(term, 0.5)
+
+
+def _circuit_from_tape(records: list[_GateRecord], n_qubits: int, backend: Any = None) -> Circuit:
+    circuit = Circuit(n_qubits=n_qubits, backend=backend)
+    for rec in records:
+        if rec.name == "h":
+            circuit.append(hadamard(rec.qubits[0]))
+        elif rec.name == "cx":
+            circuit.append(cnot(rec.qubits[0], [rec.qubits[1]]))
+        elif rec.name == "rx":
+            circuit.append(rx(rec.arg, rec.qubits[0]))
+        elif rec.name == "ry":
+            circuit.append(ry(rec.arg, rec.qubits[0]))
+        elif rec.name == "rz":
+            circuit.append(rz(rec.arg, rec.qubits[0]))
+        elif rec.name == "rzz":
+            circuit.append(rzz(rec.arg, rec.qubits[0], rec.qubits[1]))
+        else:
+            raise ValueError(f"未知磁带门类型 {rec.name!r}")
+    return circuit
+
+
 @dataclass
 class QAOAResult:
     """Container for a QAOA run."""
@@ -319,6 +433,25 @@ class BasicQAOA:
             raise ValueError(f"params size {flat.size} does not match expected {self.n_params}")
         return flat[: self.p].copy(), flat[self.p :].copy()
 
+    def _qaoa_tape(self, params: np.ndarray) -> list[_GateRecord]:
+        """构造 QAOA 线路的门磁带（单一事实来源，build_circuit 与解析梯度共用）。"""
+
+        gammas, betas = self.split_params(params)
+        records: list[_GateRecord] = []
+        for qubit in range(self.n_qubits):
+            records.append(_GateRecord("h", (qubit,), None, None, None))
+
+        for layer in range(self.p):
+            gamma = float(gammas[layer])
+            for _ in range(self.trotter_steps):
+                _trotter_slice_records(
+                    records, self._cost_terms, gamma, layer, self.trotter_steps, self.trotter_order
+                )
+            beta = float(betas[layer])
+            for qubit in range(self.n_qubits):
+                records.append(_GateRecord("rx", (qubit,), 2.0 * beta, self.p + layer, 2.0))
+        return records
+
     def build_circuit(self, params: np.ndarray, *, backend: Any = None) -> Circuit:
         """Build the canonical gate-level QAOA circuit for ``params``."""
 
@@ -326,21 +459,7 @@ class BasicQAOA:
             raise ValueError("build_circuit is unavailable when BasicQAOA delegates to an external cost")
         if not self._gate_level:
             raise ValueError("build_circuit requires an aicir Hamiltonian problem_hamiltonian")
-
-        gammas, betas = self.split_params(params)
-        circuit = Circuit(n_qubits=self.n_qubits, backend=backend)
-        for qubit in range(self.n_qubits):
-            circuit.append(hadamard(qubit))
-
-        for layer in range(self.p):
-            gamma = float(gammas[layer])
-            gamma_step = gamma / self.trotter_steps
-            for _ in range(self.trotter_steps):
-                _append_trotter_slice(circuit, self._cost_terms, gamma_step, self.trotter_order)
-            beta = float(betas[layer])
-            for qubit in range(self.n_qubits):
-                circuit.append(rx(2.0 * beta, qubit))
-        return circuit
+        return _circuit_from_tape(self._qaoa_tape(params), self.n_qubits, backend)
 
     def measure(
         self,
