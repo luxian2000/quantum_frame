@@ -100,7 +100,7 @@ class MPSState:
         k = int(np.asarray(bk.to_numpy(s)).shape[0])
         self.tensors[i] = bk.reshape(u, (dl, 2, k))
         s_c = bk.cast(s)
-        carry = vh * bk.reshape(s_c, (k, 1))  # (K, dr)
+        carry = bk.mul(vh, bk.reshape(s_c, (k, 1)))  # (K, dr)
         nxt = self.tensors[i + 1]  # (dr, 2, Dr2)
         self.tensors[i + 1] = bk.tensordot(carry, nxt, ([1], [0]))  # (K, 2, Dr2)
         self.oc = i + 1
@@ -115,7 +115,7 @@ class MPSState:
         k = int(np.asarray(bk.to_numpy(s)).shape[0])
         self.tensors[i] = bk.reshape(vh, (k, 2, dr))
         s_c = bk.cast(s)
-        carry = u * bk.reshape(s_c, (1, k))  # (dl, K)
+        carry = bk.mul(u, bk.reshape(s_c, (1, k)))  # (dl, K)
         prev = self.tensors[i - 1]  # (Dm, 2, dl)
         self.tensors[i - 1] = bk.tensordot(prev, carry, ([2], [0]))  # (Dm, 2, K)
         self.oc = i - 1
@@ -150,7 +150,7 @@ class MPSState:
         vh_k = vh[:k, :]
         s_k = bk.cast(sv[:k])
         self.tensors[s] = bk.reshape(u_k, (dl, 2, k))
-        vh_scaled = vh_k * bk.reshape(s_k, (k, 1))  # 把奇异值吸收进右张量
+        vh_scaled = bk.mul(vh_k, bk.reshape(s_k, (k, 1)))  # 把奇异值吸收进右张量
         self.tensors[s + 1] = bk.reshape(vh_scaled, (k, 2, dr))
         self.oc = s + 1
 
@@ -262,9 +262,9 @@ def _expectation_from_mps(mps, observable, backend):
         phys = ["I"] * n
         for q in range(n):  # 逻辑 Pauli 放到其物理 site
             phys[mps.site_of[q]] = labels[q]
-        contrib = backend.cast(np.array([[complex(coef)]], dtype=np.complex64)) * _transfer(mps, phys)
+        contrib = backend.mul(backend.cast(np.array([[complex(coef)]], dtype=np.complex64)), _transfer(mps, phys))
         total = contrib if total is None else backend.add(total, contrib)
-    ratio = total / norm2  # (1,1) 逐元素相除；numpy/torch 均保留计算图
+    ratio = backend.div(total, norm2)  # (1,1) 逐元素相除；numpy/torch 均保留计算图
     return backend.real(backend.reshape(ratio, ()))  # 0 维标量的实部
 
 
