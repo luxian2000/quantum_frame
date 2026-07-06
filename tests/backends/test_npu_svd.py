@@ -37,6 +37,25 @@ def test_real_embedding_svd_differentiable_cpu():
     assert torch.allclose(a.grad, a2.grad, atol=1e-3)
 
 
+def test_real_embedding_svd_degenerate_cpu():
+    torch.manual_seed(2)
+
+    def _rand_unitary(k):
+        q, _ = torch.linalg.qr(torch.randn(k, k, dtype=torch.complex128))
+        return q
+
+    u0, v0 = _rand_unitary(4), _rand_unitary(4)
+    s0 = torch.tensor([3.0, 3.0, 2.0, 1.0], dtype=torch.float64)  # 重复奇异值
+    a = (u0 @ torch.diag(s0).to(torch.complex128) @ v0.conj().T).to(torch.complex64)
+    u, s, vh = _real_embedding_svd(a)
+    # 简并下仍须 A ≈ U diag(S) Vh（旧 stride-2 方案在此误差 ~0.386）
+    assert torch.allclose(u @ torch.diag(s.to(u.dtype)) @ vh, a, atol=1e-3)
+    ref = torch.linalg.svdvals(a.to(torch.complex128)).to(torch.float32)
+    assert torch.allclose(s, ref, atol=1e-3)
+    # U 列正交归一
+    assert torch.allclose(u.conj().T @ u, torch.eye(4, dtype=u.dtype), atol=1e-3)
+
+
 @pytest.mark.skipif(not is_npu_available(), reason="需要真实 NPU")
 def test_npu_svd_on_device():
     from aicir.backends.npu_backend import NPUBackend
