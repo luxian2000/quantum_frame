@@ -46,6 +46,7 @@ class MPSState:
         self.backend = backend
         self.max_bond_dim = None if max_bond_dim is None else int(max_bond_dim)
         self.cutoff = float(cutoff)
+        # 累加各局部 SVD 截断丢弃的权重比例，是启发式诊断量，不是严格的全局保真度下界。
         self.truncation_error = 0.0
         self.oc = 0
         self.logical_at = list(range(self.n_qubits))
@@ -69,7 +70,6 @@ class MPSState:
         cur = bk.reshape(self.tensors[0], (2, self.tensors[0].shape[2]))
         for s in range(1, self.n_qubits):
             t = self.tensors[s]
-            dl = t.shape[0]
             cur = bk.tensordot(cur, t, ([cur.ndim - 1], [0]))  # (..., 2, Dr)
             new_rows = 1
             shape = np.asarray(bk.to_numpy(cur)).shape
@@ -246,16 +246,15 @@ def _pauli_terms(observable):
     return None
 
 
-def mps_expectation(circuit, observable, *, max_bond_dim=None, cutoff=1e-10, backend=None):
-    """经 MPS 求期望 <psi|O|psi>。Pauli/Hamiltonian 走 transfer 收缩（不稠密化），
-    任意稠密矩阵回退到 to_statevector。返回后端标量（GPU 上可微）。"""
-    backend = _resolve_backend(circuit, backend)
-    mps = _build_mps(circuit, backend, max_bond_dim, cutoff)
+def _expectation_from_mps(mps, observable, backend):
+    """从已构建的 MPS 求 <psi|O|psi>（Pauli transfer 或稠密回退）。截断后态未归一，均除以 <psi|psi>。"""
     terms = _pauli_terms(observable)
-    if terms is None:  # 稠密矩阵回退：稠密化后走 expectation_sv
+    if terms is None:  # 稠密矩阵回退：稠密化后走 expectation_sv，并按 <psi|psi> 归一
         psi = mps.to_statevector()
         operator = observable.to_matrix(backend) if hasattr(observable, "to_matrix") else backend.cast(observable)
-        return backend.expectation_sv(psi.to_numpy(), operator)
+        raw = backend.expectation_sv(psi.data, operator)                 # <s|O|s>
+        nrm = backend.real(backend.inner_product(psi.data, psi.data))    # <s|s>
+        return raw / nrm
     n = mps.n_qubits
     norm2 = _transfer(mps, ["I"] * n)  # <psi|psi>，(1,1)
     total = None
@@ -267,3 +266,11 @@ def mps_expectation(circuit, observable, *, max_bond_dim=None, cutoff=1e-10, bac
         total = contrib if total is None else backend.add(total, contrib)
     ratio = total / norm2  # (1,1) 逐元素相除；numpy/torch 均保留计算图
     return backend.real(backend.reshape(ratio, ()))  # 0 维标量的实部
+
+
+def mps_expectation(circuit, observable, *, max_bond_dim=None, cutoff=1e-10, backend=None):
+    """经 MPS 求期望 <psi|O|psi>。Pauli/Hamiltonian 走 transfer 收缩（不稠密化），
+    任意稠密矩阵回退到 to_statevector。返回后端标量（GPU 上可微）。"""
+    backend = _resolve_backend(circuit, backend)
+    mps = _build_mps(circuit, backend, max_bond_dim, cutoff)
+    return _expectation_from_mps(mps, observable, backend)

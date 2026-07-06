@@ -1,9 +1,6 @@
 import numpy as np
 
 from aicir.backends import NumpyBackend
-from aicir.core import Circuit
-from aicir import hadamard, cnot
-from aicir.simulator import tn_statevector
 from aicir.simulator.mps import MPSState
 
 _H = (1 / np.sqrt(2)) * np.array([[1, 1], [1, -1]], dtype=np.complex64)

@@ -14,8 +14,8 @@ def _random_circuit(n, depth, seed):
     c = Circuit(n_qubits=n)
     for _ in range(depth):
         for q in range(n):
-            c.append(rx(q, float(rng.uniform(0, np.pi))))
-            c.append(rz(q, float(rng.uniform(0, np.pi))))
+            c.append(rx(float(rng.uniform(0, np.pi)), q))
+            c.append(rz(float(rng.uniform(0, np.pi)), q))
         for q in range(n - 1):
             c.append(cnot(q + 1, [q]))
     return c
