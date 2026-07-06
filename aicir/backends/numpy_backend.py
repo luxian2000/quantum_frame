@@ -127,6 +127,12 @@ class NumpyBackend(Backend):
     def add(self, a, b):
         return np.asarray(a) + np.asarray(b)
 
+    def mul(self, a, b):
+        return np.asarray(a) * np.asarray(b)
+
+    def div(self, a, b):
+        return np.asarray(a) / np.asarray(b)
+
     def abs_sq(self, tensor):
         return np.abs(tensor) ** 2
 

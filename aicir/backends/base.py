@@ -242,6 +242,14 @@ class Backend(ABC):
         """逐元素相加，用于切片收缩结果累加。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现 add")
 
+    def mul(self, a, b):
+        """逐元素乘（支持广播）。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 mul")
+
+    def div(self, a, b):
+        """逐元素除（支持广播）。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 div")
+
     # ──────────────────────────── 便利方法（非抽象）────────────────────
 
     def tensor_product(self, *matrices):
