@@ -478,61 +478,69 @@ class _NpuLocalGateApplyFn(torch.autograd.Function):
         return grad_flat, grad_local, None  # indices 无梯度
 
 
-def _cmul(a, b):
-    """复数乘（逐元素/广播），real/imag 分解，autograd 安全（NPU 无 complex 内核）。"""
-    ar, ai = torch.real(a), torch.imag(a)
-    br, bi = torch.real(b), torch.imag(b)
-    return torch.complex(ar * br - ai * bi, ar * bi + ai * br)
+class _SplitComplex(torch.autograd.Function):
+    """把复数张量拆成 (real, imag) 两个实张量（单入边 → 反传单次 torch.complex，规避 NPU
+    complex64 梯度累加 aclnnInplaceAdd）。所有 real/imag 分解的入口都应经此，避免复数张量在
+    计算图里 fan-out。"""
 
+    @staticmethod
+    def forward(ctx, z):
+        return torch.real(z).contiguous(), torch.imag(z).contiguous()
 
-def _cmatvec(matrix, v):
-    """复数矩阵×向量 matrix(m,n)·v(n,) via real/imag → (m,)。"""
-    ar, ai = torch.real(matrix), torch.imag(matrix)
-    vr, vi = torch.real(v), torch.imag(v)
-    return torch.complex(ar @ vr - ai @ vi, ar @ vi + ai @ vr)
-
-
-def _cdot(a, b):
-    """复内积 <a,b> = conj(a)·b（0 维复标量）。"""
-    ar, ai = torch.real(a), torch.imag(a)
-    br, bi = torch.real(b), torch.imag(b)
-    return torch.complex((ar * br + ai * bi).sum(), (ar * bi - ai * br).sum())
+    @staticmethod
+    def backward(ctx, gr, gi):
+        if gr is None:
+            gr = torch.zeros_like(gi)
+        if gi is None:
+            gi = torch.zeros_like(gr)
+        return torch.complex(gr, gi)
 
 
 def _real_embedding_svd(matrix):
     """复数矩阵的 real-embedding 约化 SVD（Ascend 无原生 complex64 SVD）。
 
-    用 [[Re,-Im],[Im,Re]] 实块跑 NPU 原生实数 SVD 得奇异值与右奇异子空间；再用实数算术的
-    复数 modified Gram-Schmidt 从候选右向量中提取 p 个正交归一复数右向量 V，令 U = A V / S、
-    Vh = V^H。对简并/近简并奇异值鲁棒（MPS 的 Bell/GHZ/乘积态常见），A ≈ U diag(S) Vh 且
-    U/V 列正交归一。全程实数 op + torch.complex，autograd 从实数 SVD 反传回 matrix；简并处
+    用 [[Re,-Im],[Im,Re]] 实块跑 NPU 原生实数 SVD 得奇异值与右奇异子空间；再用**纯实数算术**
+    的复数 modified Gram-Schmidt（右向量以 (real, imag) 实数对表示）提取 p 个正交归一复数右
+    向量 V，令 U = A V / S、Vh = V^H。对简并/近简并奇异值鲁棒（MPS 的 Bell/GHZ/乘积态常见），
+    A ≈ U diag(S) Vh 且 U/V 列正交归一。
+
+    NPU 安全：全程只用实数 op（NPU 有 complex64 会缺的是 sub/add/mul 等）；复数张量仅在入口
+    经 :class:`_SplitComplex`（单入边）拆一次、在出口用 torch.complex 构造，中途不做复数
+    加/减、也不 fan-out 复数张量——forward 与 backward 都不触碰缺失的 complex64 内核。简并处
     的选择为数据相关分支，梯度分段定义（SVD-autograd 在简并处本就不光滑，各后端共有）。
     """
     m, n = int(matrix.shape[0]), int(matrix.shape[1])
     p = min(m, n)
-    ar, ai = torch.real(matrix), torch.imag(matrix)
+    ar, ai = _SplitComplex.apply(matrix)  # 单入边拆分，反传安全
     big = torch.cat([torch.cat([ar, -ai], dim=1), torch.cat([ai, ar], dim=1)], dim=0)
     _ur, sr, vhr = torch.linalg.svd(big, full_matrices=False)  # sr 降序，长 2p
-    kept_v, kept_s = [], []
+    kvr, kvi, ks = [], [], []  # 保留右向量的 real/imag 对与对应奇异值
     for j in range(int(sr.shape[0])):
-        w = torch.complex(vhr[j, :n], vhr[j, n:])  # 候选复数右向量 (n,)
-        for kv in kept_v:
-            w = w - _cmul(_cdot(kv, w), kv)          # 投影掉已保留方向
-        nrm = torch.sqrt(torch.real(_cdot(w, w)))
-        if float(nrm.detach()) > 0.5:                # 分支为控制流，保留张量仍带梯度
-            inv = torch.complex(1.0 / nrm, torch.zeros_like(nrm))
-            kept_v.append(_cmul(inv, w))
-            kept_s.append(sr[j])
-        if len(kept_v) == p:
+        wr, wi = vhr[j, :n], vhr[j, n:]  # 候选右向量的实/虚部（实数对）
+        for kr, ki in zip(kvr, kvi):
+            dr = (kr * wr + ki * wi).sum()  # <k,w> = conj(k)·w 的实/虚部
+            di = (kr * wi - ki * wr).sum()
+            pr = dr * kr - di * ki  # proj = <k,w>·k
+            pi = dr * ki + di * kr
+            wr = wr - pr  # 实数减法（NPU 安全）
+            wi = wi - pi
+        nrm = torch.sqrt((wr * wr + wi * wi).sum())
+        if float(nrm.detach()) > 0.5:  # 分支为控制流，保留张量仍带梯度
+            kvr.append(wr / nrm)
+            kvi.append(wi / nrm)
+            ks.append(sr[j])
+        if len(kvr) == p:
             break
-    V = torch.stack(kept_v, dim=1)   # (n, p) 正交归一复数右向量
-    S = torch.stack(kept_s)          # (p,) 实数降序
-    cols = []
+    vr, vi = torch.stack(kvr, dim=1), torch.stack(kvi, dim=1)  # (n, p) 实/虚
+    S = torch.stack(ks)  # (p,) 实数降序
+    ur_cols, ui_cols = [], []
     for i in range(p):
-        cc = _cmatvec(matrix, V[:, i])
-        cols.append(torch.complex(torch.real(cc) / S[i], torch.imag(cc) / S[i]))  # A v_i / σ_i
-    U = torch.stack(cols, dim=1)     # (m, p)
-    Vh = torch.complex(torch.real(V).transpose(0, 1), -torch.imag(V).transpose(0, 1))  # V^H (p, n)
+        avr = ar @ vr[:, i] - ai @ vi[:, i]  # A v_i 的实/虚部
+        avi = ar @ vi[:, i] + ai @ vr[:, i]
+        ur_cols.append(avr / S[i])  # U 列 = A v_i / σ_i
+        ui_cols.append(avi / S[i])
+    U = torch.complex(torch.stack(ur_cols, dim=1), torch.stack(ui_cols, dim=1))  # (m, p)
+    Vh = torch.complex(vr.transpose(0, 1), -vi.transpose(0, 1))  # V^H (p, n)
     return U, S, Vh
 
 
