@@ -10,6 +10,8 @@ from __future__ import annotations
 import numpy as np
 
 from ..core.state import State
+from ..core.gates import gate_tensors
+from ..ir import ControlFlow
 
 _SWAP4 = np.array(
     [[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=np.complex64
@@ -173,3 +175,40 @@ class MPSState:
             s = self.site_of[v]  # == pv
             op4_t = bk.transpose(op4, [1, 0, 3, 2])  # 物理序 (v, u)
             self._apply_two_site(op4_t, s, truncate=True)
+
+
+def _resolve_backend(circuit, backend):
+    if backend is not None:
+        return backend
+    bk = getattr(circuit, "backend", None)
+    if bk is not None:
+        return bk
+    from ..backends import NumpyBackend
+    return NumpyBackend()
+
+
+def _build_mps(circuit, backend, max_bond_dim, cutoff):
+    n = int(circuit.n_qubits)
+    mps = MPSState.zero_state(n, backend, max_bond_dim=max_bond_dim, cutoff=cutoff)
+    for gate in circuit.gates:
+        if isinstance(gate, ControlFlow):
+            raise ValueError("控制流指令不支持 MPS 模拟；请用 Measure.run 执行")
+        for matrix, axes in gate_tensors(gate, backend):
+            k = len(axes)
+            if k == 1:
+                m2 = backend.reshape(matrix, (2, 2))
+                mps._apply_one_site(m2, mps.site_of[int(axes[0])])
+            elif k == 2:
+                mps.apply_two_qubit(matrix, list(axes))
+            else:
+                raise ValueError(
+                    f"MPS 引擎仅接受 1/2 比特门（收到作用 {k} 比特）；"
+                    "请先用 aicir.transpile.DecomposePass 分解"
+                )
+    return mps
+
+
+def mps_statevector(circuit, *, max_bond_dim=None, cutoff=1e-10, backend=None):
+    """经 MPS 演化电路，返回 MPSState（bond 截断的近似末态）。"""
+    backend = _resolve_backend(circuit, backend)
+    return _build_mps(circuit, backend, max_bond_dim, cutoff)
