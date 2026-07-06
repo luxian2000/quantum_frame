@@ -11,6 +11,10 @@ import numpy as np
 
 from ..core.state import State
 
+_SWAP4 = np.array(
+    [[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=np.complex64
+).reshape(2, 2, 2, 2)
+
 
 def _keep_count(s_np, max_bond_dim, cutoff):
     """按 cutoff（相对最大奇异值）+ max_bond_dim 决定保留的奇异值个数（≥1）。"""
@@ -140,3 +144,32 @@ class MPSState:
         vh_scaled = vh_k * bk.reshape(s_k, (k, 1))  # 把奇异值吸收进右张量
         self.tensors[s + 1] = bk.reshape(vh_scaled, (k, 2, dr))
         self.oc = s + 1
+
+    def _swap_adjacent(self, p):
+        """交换物理 site p 与 p+1（用 SWAP 门，不截断），并更新逻辑↔物理记账。"""
+        bk = self.backend
+        self._apply_two_site(bk.cast(_SWAP4), p, truncate=False)
+        lu, lv = self.logical_at[p], self.logical_at[p + 1]
+        self.logical_at[p], self.logical_at[p + 1] = lv, lu
+        self.site_of[lu], self.site_of[lv] = p + 1, p
+
+    def apply_two_qubit(self, matrix, axes):
+        """作用双比特门 matrix(4x4) 于逻辑比特 axes=[u,v]（u=MSB, v=LSB）。
+
+        自动用 SWAP 把 u,v 移到相邻物理 site，再按物理顺序摆正 op4 后作用。
+        """
+        bk = self.backend
+        u, v = int(axes[0]), int(axes[1])
+        pu, pv = self.site_of[u], self.site_of[v]
+        op4 = bk.reshape(matrix, (2, 2, 2, 2))  # (out_u, out_v, in_u, in_v)
+        if pu < pv:
+            for p in range(pv - 1, pu, -1):  # 把 v 冒泡到 pu+1
+                self._swap_adjacent(p)
+            s = self.site_of[u]  # == pu
+            self._apply_two_site(op4, s, truncate=True)  # site s=u, s+1=v
+        else:
+            for p in range(pu - 1, pv, -1):  # 把 u 冒泡到 pv+1
+                self._swap_adjacent(p)
+            s = self.site_of[v]  # == pv
+            op4_t = bk.transpose(op4, [1, 0, 3, 2])  # 物理序 (v, u)
+            self._apply_two_site(op4_t, s, truncate=True)
