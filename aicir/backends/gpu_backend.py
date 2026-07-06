@@ -102,6 +102,10 @@ class GPUBackend(Backend):
     def conj(self, a):
         return torch.conj(a)
 
+    def svd(self, matrix):
+        u, s, vh = torch.linalg.svd(matrix, full_matrices=False)
+        return u, s, vh
+
     def take(self, a, axis, index):
         return torch.select(a, int(axis), int(index))
 
