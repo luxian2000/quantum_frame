@@ -19,6 +19,7 @@ import numpy as np
 
 from ..core.state import State
 from ..ir import (
+    ControlFlow,
     circuit_instructions,
     has_circuit_instructions,
     instruction_name,
@@ -37,6 +38,14 @@ def _is_measure(g) -> bool:
 def _is_reset(g) -> bool:
     """判断操作是否为线路内嵌 reset 标记。"""
     return instruction_name(g).lower() == "reset"
+
+
+def _needs_trajectory(circuit) -> bool:
+    """判断电路是否必须走逐轨迹执行（含 in-circuit measure 或控制流指令）。"""
+    for g in circuit_instructions(circuit):
+        if isinstance(g, ControlFlow) or _is_measure(g):
+            return True
+    return False
 
 
 class Measure:
@@ -78,7 +87,11 @@ class Measure:
                     raise ValueError(f"{instruction_name(gate)} 含越界比特 {q}（n={n}）")
             if len(set(qs)) != len(qs):
                 raise ValueError(f"{instruction_name(gate)} 含重复比特：{qs}")
-            if _is_measure(gate):
+            if _is_measure(gate) and gate.get("classical_register") is None:
+                # creg 目标的 measure（携带 classical_register）只做逐比特 Z 投影、
+                # 写入 trajectory 本地经典 store，不产生联合 Pauli 本征值，
+                # 不应注册为 MeasureSpec（否则 exact/shots=1 路径按 op_index 读
+                # tr.incircuit 时会 KeyError，因为 _exec_ops 从不为它写 incircuit）。
                 # circuit_instructions 返回类型化 Measurement 对象（非 dict），
                 # 须用 getattr 读取 id/basis，否则会被错误地默认。
                 mid = getattr(gate, "id", None)
@@ -122,7 +135,7 @@ class Measure:
     def run(self, circuit, shots=1, measure_qubits=(), snap=None,
             sm="avg", seed=None, *,
             initial_state=None, initial_density_matrix=None,
-            observables=None, return_state=True) -> Result:
+            observables=None, return_state=True, method="statevector") -> Result:
         """统一测量入口。
 
         参数:
@@ -141,6 +154,7 @@ class Measure:
                                      与 initial_state 互斥）
             observables:             可观测量字典 {name: operator_matrix}
             return_state:            是否在结果中附带 state / final_state
+            method:                  "statevector"（默认，逐门态矢量演化）或 "tensor"（张量网络求末态后复用既有测量机制；仅纯态、无噪声）
         """
         if not hasattr(circuit, "n_qubits"):
             raise TypeError("circuit 需要具备 n_qubits 属性")
@@ -148,6 +162,23 @@ class Measure:
         if n <= 0:
             raise ValueError("n_qubits 必须为正整数")
         backend = self._resolve_backend(circuit)
+
+        if method not in ("statevector", "tensor"):
+            raise ValueError(f"method 必须是 statevector/tensor，收到 {method!r}")
+        if method == "tensor":
+            if getattr(circuit, "noise_model", None) is not None:
+                raise ValueError("method='tensor' 仅支持纯态，无法用于含噪线路")
+            if any(_is_measure(g) for g in circuit_instructions(circuit)):
+                raise ValueError("method='tensor' 不支持线路内嵌 measure 标记")
+            from ..simulator import tn_statevector
+            psi = tn_statevector(circuit, backend=backend)
+            from ..core.circuit import Circuit as _Circuit
+            stripped = _Circuit(n_qubits=n)
+            return self.run(
+                stripped, shots=shots, measure_qubits=measure_qubits, snap=snap,
+                sm=sm, seed=seed, initial_state=psi, observables=observables,
+                return_state=return_state, method="statevector",
+            )
 
         norm_shots = self._validate_shots(shots)             # None=exact
         exact = norm_shots is None
@@ -187,7 +218,7 @@ class Measure:
                 return initial_state
             return State(initial_state, n, backend)
 
-        has_incircuit = any(True for g in circuit_instructions(circuit) if _is_measure(g)) if n_ops else False
+        has_incircuit = _needs_trajectory(circuit) if n_ops else False
         M = 1 if exact else norm_shots
 
         rng = np.random.default_rng(seed_seq)
@@ -219,6 +250,7 @@ class Measure:
     def _build_result(self, trajectories, n, backend, norm_shots, exact, specs,
                       terminal_qubits, do_terminal, observables, return_state,
                       *, noise_model=None, initial_density_matrix=None) -> Result:
+        classical_trajectories = [dict(getattr(tr, "classical", {}) or {}) for tr in trajectories]
         """把轨迹集合按 shots 语义折叠成 Result。"""
         if exact or norm_shots == 1:
             tr = trajectories[0]
@@ -283,4 +315,5 @@ class Measure:
             expectation_values=exp_vals, expectation_variances=exp_vars,
             snapshot_states=snap_states,
             metadata=meta,
+            classical_trajectories=classical_trajectories,
         )

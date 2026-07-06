@@ -11,14 +11,6 @@ __all__ = [
 ]
 
 try:
-    from . import ansatz
-except ModuleNotFoundError as exc:
-    if exc.name != "torch":
-        raise
-else:
-    __all__.append("ansatz")
-
-try:
     from .SSVQE import BasicSSVQE, SSVQEResult, run_ssvqe
     from .VQD import BasicVQD, VQDResult, run_vqd
     from .VQE import BasicVQE, VQEResult, run_vqe

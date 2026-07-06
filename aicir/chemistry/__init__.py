@@ -1,4 +1,4 @@
-﻿"""Chemistry helpers and molecular Hamiltonian presets."""
+"""Chemistry helpers and molecular Hamiltonian presets."""
 
 from .molecules import (
     BEH2_321G_JW_16Q,
@@ -18,6 +18,7 @@ from .molecules import (
     molecule_matrix,
     register_molecule,
 )
+from .pipeline import build_molecule
 from .spec import (
     GeneratedHamiltonian,
     MolecularSpec,
@@ -45,6 +46,7 @@ __all__ = [
     "iter_molecules",
     "molecule_hamiltonian",
     "molecule_matrix",
+    "build_molecule",
     "GeneratedHamiltonian",
     "MolecularSpec",
     "PauliTermsSpec",

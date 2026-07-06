@@ -1,10 +1,15 @@
-"""单条测量轨迹：逐操作执行 cir，处理线路内 measure/reset、snap 与末端测量。
+"""单条测量轨迹：递归执行 cir，处理线路内 measure/reset、if/while 控制流、
+measure→经典寄存器写入、snap 与末端测量。
 
 执行语义：
-- in-circuit measure 门 → 联合 Pauli 投影测量，本征值记录于 incircuit[op_index]
+- in-circuit measure 门（无经典目标）→ 联合 Pauli 投影测量，本征值记录于 incircuit[op_index]
+- in-circuit measure 门（有经典目标 classical_register）→ 逐比特 Z 投影，
+  |0>/|1> 写入 trajectory 本地经典 store 的 classical[reg_name][clbit]
 - in-circuit reset 门  → 重置信道（无需事先测量）
+- if/while 控制流      → 依据 Condition.evaluate(classical) 递归执行 body/else_body；
+                        while 超过 max_iterations 仍满足条件抛 RuntimeError
 - 酉门              → 演化态；可选在每门后施加噪声（密度矩阵路径）
-- snap_ops          → 记录指定 op_index 操作完成后的完整态快照
+- snap_ops          → 记录指定 op_index 操作完成后的完整态快照（仅顶层操作下标）
 - 末端测量          → tm=True 时对 measure_qubits 逐比特 Z 基测量
 """
 
@@ -16,7 +21,9 @@ from typing import Dict, List, Optional, Sequence, Set
 from ..core.gates import apply_gate_to_state, gate_to_matrix
 from ..core.state import State
 from ..ir import (
+    ControlFlow,
     circuit_instructions,
+    instruction_metadata,
     instruction_name,
     instruction_qubits,
 )
@@ -40,13 +47,114 @@ def _marker_qubits(gate, n: int) -> List[int]:
 
 
 def _gate_basis(gate) -> str:
-    """从 Measurement 类型对象或旧式 dict 中读取 basis 字段，缺省 'Z'。"""
-    # circuit_instructions 返回的是类型化 Measurement 对象，有 .basis 属性
-    basis = getattr(gate, "basis", None)
-    if basis is None:
-        # 兼容仍为 dict 的极端情况
-        basis = gate.get("basis", "Z") if hasattr(gate, "get") else "Z"
-    return str(basis)
+    """从 Measurement 类型对象读取 basis 字段，缺省 'Z'。"""
+    return str(getattr(gate, "basis", "Z"))
+
+
+def _apply_unitary(gate, state: State, backend, n: int, noise_model) -> State:
+    """施加一个酉门（可选噪声）。原 run_trajectory 中的酉门演化逻辑原样抽出。"""
+    if state.is_density or noise_model is not None:
+        gm = gate_to_matrix(gate, cir_qubits=n, backend=backend)
+        state = state.evolve(gm)
+    else:
+        new_data = apply_gate_to_state(gate, state.data, n, backend)
+        if new_data is None:
+            gm = gate_to_matrix(gate, cir_qubits=n, backend=backend)
+            state = state.evolve(gm)
+        else:
+            state = State(new_data, n, backend, bit_order=state.bit_order)
+    # 可选噪声（密度矩阵路径）
+    if noise_model is not None:
+        rho_data = (
+            state.data if state.is_density
+            else state.to_density_matrix().data
+        )
+        rho_noisy = noise_model.apply(
+            rho_data,
+            n_qubits=n,
+            backend=backend,
+            gate_type=instruction_name(gate),
+        )
+        state = State(rho_noisy, n, backend)
+    return state
+
+
+def _measure_into_creg(state, qubits, reg_name, clbits, classical, rng):
+    """per-qubit Z 投影，比特 |0>->0/|1>->1 写入 classical[reg_name][clbit]。
+
+    复用 projector.terminal_z_measure 做逐比特 Z 采样（按 qubits 入参顺序坍缩并
+    返回本征值 ±1，约定 0 比特 -> +1、1 比特 -> -1；此处转换回 0/1 比特值）。
+    """
+    state, eig = projector.terminal_z_measure(state, list(qubits), rng)
+    bits = [0 if lam == 1 else 1 for lam in eig]
+    slot = classical.setdefault(reg_name, [0] * (max(clbits) + 1))
+    if len(slot) < max(clbits) + 1:
+        slot.extend([0] * (max(clbits) + 1 - len(slot)))
+    for cb, b in zip(clbits, bits):
+        slot[cb] = int(b)
+    return state
+
+
+def _exec_ops(ops, state, classical, backend, n, *, rng, noise_model,
+              snap_ops, incircuit, snaps, top_level):
+    """递归执行一段操作序列，处理控制流 / measure→creg / 酉门 / reset。
+
+    op_index 只在 top_level=True 时才有意义：它是顶层 circuit_instructions
+    的枚举下标（`enumerate`），与该操作内部（if/while body）实际执行了多少
+    子操作完全无关 —— 这样 body/else_body/while-body 中执行任意数量的子操作
+    都不会挪动其后顶层操作的编号。嵌套递归（top_level=False）不写
+    incircuit/snaps，也不使用/需要 op_index；creg 写入在任意深度都照常生效
+    （写入的是 classical store，不是按 op_index 记账的 incircuit/snaps）。
+    """
+    instrs = circuit_instructions(ops)
+    iterator = enumerate(instrs) if top_level else ((None, gate) for gate in instrs)
+
+    for op_index, gate in iterator:
+        if isinstance(gate, ControlFlow):
+            cond = gate.condition
+            if gate.name == "if":
+                if cond.evaluate(classical):
+                    state = _exec_ops(gate.body, state, classical, backend, n,
+                                      rng=rng, noise_model=noise_model, snap_ops=snap_ops,
+                                      incircuit=incircuit, snaps=snaps, top_level=False)
+                elif gate.else_gates is not None:
+                    state = _exec_ops(gate.else_body, state, classical, backend, n,
+                                      rng=rng, noise_model=noise_model, snap_ops=snap_ops,
+                                      incircuit=incircuit, snaps=snaps, top_level=False)
+            else:  # while
+                iters = 0
+                while cond.evaluate(classical):
+                    iters += 1
+                    if iters > gate.max_iterations:
+                        raise RuntimeError(
+                            f"while 超过 max_iterations={gate.max_iterations} 仍满足条件")
+                    state = _exec_ops(gate.body, state, classical, backend, n,
+                                      rng=rng, noise_model=noise_model, snap_ops=snap_ops,
+                                      incircuit=incircuit, snaps=snaps, top_level=False)
+            if top_level and op_index in snap_ops:
+                snaps[op_index] = state
+            continue
+
+        if _is_measure(gate):
+            reg_name = instruction_metadata(gate).get("classical_register")
+            if reg_name is not None:
+                clbits = list(getattr(gate, "classical_bits", ()))
+                qubits = _marker_qubits(gate, n)
+                state = _measure_into_creg(state, qubits, reg_name, clbits, classical, rng)
+            else:
+                qubits = _marker_qubits(gate, n)
+                basis = _gate_basis(gate)
+                state, lam = projector.measure_joint_pauli(state, qubits, basis, rng)
+                if top_level:
+                    incircuit[op_index] = lam
+        elif _is_reset(gate):
+            state = projector.reset_channel(state, _marker_qubits(gate, n))
+        else:
+            state = _apply_unitary(gate, state, backend, n, noise_model)
+
+        if top_level and op_index in snap_ops:
+            snaps[op_index] = state
+    return state
 
 
 @dataclass
@@ -56,15 +164,17 @@ class TrajectoryResult:
     属性:
         pre:       末端测量前的量子态（即所有酉门和线路内 measure/reset 执行完后）
         post:      末端测量后的坍缩态（tm=False 时与 pre 相同）
-        incircuit: 线路内 measure 门的测量本征值，键为 op_index
+        incircuit: 线路内 measure 门（无经典目标）的测量本征值，键为 op_index
         terminal:  末端测量本征值列表（tm=False 时为 None）
         snaps:     snap_ops 指定位置的量子态快照，键为 op_index
+        classical: 轨迹本地经典 store，键为寄存器名，值为该寄存器的位列表（0/1）
     """
     pre: State
     post: State
     incircuit: Dict[int, int] = field(default_factory=dict)
     terminal: Optional[List[int]] = None
     snaps: Dict[int, State] = field(default_factory=dict)
+    classical: Dict[str, list] = field(default_factory=dict)
 
 
 def run_trajectory(
@@ -94,52 +204,14 @@ def run_trajectory(
     返回:
         TrajectoryResult 对象
     """
-    state = init_state
-    n = state.n_qubits
+    n = init_state.n_qubits
+    classical: Dict[str, list] = {}
     incircuit: Dict[int, int] = {}
     snaps: Dict[int, State] = {}
 
-    for op_index, gate in enumerate(circuit_instructions(circuit)):
-        if _is_measure(gate):
-            # 线路内嵌测量：联合 Pauli 投影，记录本征值
-            qubits = _marker_qubits(gate, n)
-            basis = _gate_basis(gate)
-            state, lam = projector.measure_joint_pauli(state, qubits, basis, rng)
-            incircuit[op_index] = lam
-        elif _is_reset(gate):
-            # 重置信道：直接作用，无需先测量
-            qubits = _marker_qubits(gate, n)
-            state = projector.reset_channel(state, qubits)
-        else:
-            # 酉门演化：密度矩阵形态直接走 gate_to_matrix + evolve（UρU†），
-            # 纯态形态先尝试快速路径，回退到 evolve。
-            if state.is_density:
-                gm = gate_to_matrix(gate, cir_qubits=n, backend=backend)
-                state = state.evolve(gm)
-            else:
-                new_data = apply_gate_to_state(gate, state.data, n, backend)
-                if new_data is None:
-                    gm = gate_to_matrix(gate, cir_qubits=n, backend=backend)
-                    state = state.evolve(gm)
-                else:
-                    state = State(new_data, n, backend, bit_order=state.bit_order)
-            # 可选噪声（密度矩阵路径）
-            if noise_model is not None:
-                rho_data = (
-                    state.data if state.is_density
-                    else state.to_density_matrix().data
-                )
-                rho_noisy = noise_model.apply(
-                    rho_data,
-                    n_qubits=n,
-                    backend=backend,
-                    gate_type=instruction_name(gate),
-                )
-                state = State(rho_noisy, n, backend)
-
-        # 快照：在本 op 执行完后记录
-        if op_index in snap_ops:
-            snaps[op_index] = state
+    state = _exec_ops(circuit, init_state, classical, backend, n, rng=rng,
+                      noise_model=noise_model, snap_ops=snap_ops, incircuit=incircuit,
+                      snaps=snaps, top_level=True)
 
     # 末端测量
     pre = state
@@ -156,4 +228,5 @@ def run_trajectory(
         incircuit=incircuit,
         terminal=terminal,
         snaps=snaps,
+        classical=classical,
     )

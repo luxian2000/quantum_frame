@@ -55,15 +55,15 @@ def _topology_edges(n_qubits: int, topology: str) -> List[Edge]:
 
 
 def _controlled_gate(gate_type: str, control_qubit: int, target_qubit: int, cursor: _ParameterCursor) -> Dict[str, Any]:
-    gate: Dict[str, Any] = {
+    payload: Dict[str, Any] = {
         "type": gate_type,
         "target_qubit": target_qubit,
         "control_qubits": [control_qubit],
         "control_states": [1],
     }
     if gate_type in {"crx", "cry", "crz"}:
-        gate["parameter"] = cursor.next()
-    return gate
+        return {**payload, "parameter": cursor.next()}
+    return payload
 
 
 def _two_qubit_gate(gate_type: str, edge: Edge, cursor: _ParameterCursor) -> Dict[str, Any]:

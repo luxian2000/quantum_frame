@@ -1,7 +1,7 @@
 """
 aicir/core/model.py
 
-aicir 内部 Circuit 数据结构与门字典构造器。
+aicir Circuit 数据结构、typed 门工厂与 legacy dict 互操作。
 """
 
 from __future__ import annotations
@@ -16,7 +16,19 @@ import sys
 import numpy as np
 
 from ..gates import canonical_gate_name, get_gate_spec
-from ..ir import CircuitIR, Measurement, Operation, normalize_gate
+from ..ir import (
+    CircuitIR,
+    ControlFlow,
+    Measurement,
+    Operation,
+    as_instruction,
+    instruction_controls,
+    instruction_name,
+    instruction_n_qubits,
+    instruction_parameter,
+    instruction_qubits,
+    instruction_to_gate_dict,
+)
 from .gates import gate_to_matrix, identity
 
 
@@ -44,6 +56,9 @@ class Parameter:
 def _iter_parameters(value):
     if isinstance(value, Parameter):
         yield value
+        return
+    if hasattr(value, "to_dict") and not isinstance(value, Mapping):
+        yield from _iter_parameters(value.to_dict())
         return
     if isinstance(value, Mapping):
         for item in value.values():
@@ -97,6 +112,8 @@ def _normalize_parameter_bindings(values, parameters):
 def _bind_parameter_value(value, bindings):
     if isinstance(value, Parameter):
         return bindings.get(value.name, value)
+    if hasattr(value, "to_dict") and not isinstance(value, Mapping):
+        return _bind_parameter_value(value.to_dict(), bindings)
     if isinstance(value, Mapping):
         return {key: _bind_parameter_value(item, bindings) for key, item in value.items()}
     if isinstance(value, list):
@@ -108,24 +125,24 @@ def _bind_parameter_value(value, bindings):
 
 def _is_measure_gate(gate):
     """True for in-circuit measurement markers (see :func:`measure`)."""
-    return isinstance(gate, Mapping) and gate.get("type") in ("measure", "measurement")
+    return instruction_name(gate) in ("measure", "measurement")
 
 
 def _is_reset_gate(gate):
     """True for in-circuit reset markers (see :func:`reset`)."""
-    return isinstance(gate, Mapping) and gate.get("type") == "reset"
+    return instruction_name(gate) == "reset"
 
 
 def _measure_gate_qubits(gate):
     """Qubits a marker gate targets; empty list means 'all qubits'."""
-    qubits = gate.get("qubits")
-    if not qubits and "target_qubit" in gate:
-        qubits = [gate["target_qubit"]]
-    return [int(q) for q in (qubits or [])]
+    return [int(q) for q in instruction_qubits(gate)]
 
 
 def _required_n_qubits_from_gate(gate):
-    gate_type = canonical_gate_name(gate["type"])
+    gate_type = canonical_gate_name(instruction_name(gate))
+
+    if gate_type in {"if", "while"}:
+        return int(instruction_n_qubits(gate))
 
     if gate_type in {"measure", "reset"}:
         measured = _measure_gate_qubits(gate)
@@ -134,9 +151,10 @@ def _required_n_qubits_from_gate(gate):
         return (max(measured) + 1) if measured else 0
 
     if gate_type == "unitary":
-        if "n_qubits" in gate:
-            return int(gate["n_qubits"])
-        parameter = gate.get("parameter")
+        explicit_width = instruction_n_qubits(gate)
+        if explicit_width is not None:
+            return int(explicit_width)
+        parameter = instruction_parameter(gate)
         shape = getattr(parameter, "shape", None)
         if shape is None:
             matrix = np.asarray(parameter)
@@ -153,37 +171,31 @@ def _required_n_qubits_from_gate(gate):
             raise ValueError("unitary 门矩阵维度必须是 2 的幂")
         return inferred
 
-    def extend_qubits(qubits, values):
-        if isinstance(values, (list, tuple, set)):
-            qubits.extend(int(qubit) for qubit in values)
-        else:
-            qubits.append(int(values))
-
-    explicit_qubits = []
-    if "target_qubit" in gate:
-        explicit_qubits.append(int(gate["target_qubit"]))
-    controls = gate.get("control_qubits")
-    if controls is not None:
-        extend_qubits(explicit_qubits, controls)
-    for key in ("qubit_1", "qubit_2"):
-        if key in gate:
-            explicit_qubits.append(int(gate[key]))
-    for key in ("qubits", "targets"):
-        values = gate.get(key)
-        if values is not None:
-            extend_qubits(explicit_qubits, values)
+    explicit_qubits = [int(qubit) for qubit in instruction_qubits(gate)]
+    explicit_qubits.extend(int(qubit) for qubit in instruction_controls(gate))
 
     if gate_type == "identity":
-        return gate["n_qubits"]
+        return int(instruction_n_qubits(gate))
     if explicit_qubits:
         return max(explicit_qubits) + 1
-    return gate["target_qubit"] + 1
+    return 0
 
 
 def _infer_n_qubits_from_gates(gates):
     if not gates:
         raise ValueError("未提供 n_qubits 且没有输入量子门，无法自动推断总量子比特数")
     return max(_required_n_qubits_from_gate(gate) for gate in gates)
+
+
+def _check_control_flow_nqubits(gate, parent_n_qubits):
+    """控制流指令的 n_qubits 必须与所属父线路一致，否则在装配时报错。"""
+    gate_type = canonical_gate_name(instruction_name(gate))
+    gate_n_qubits = instruction_n_qubits(gate)
+    if gate_type in {"if", "while"} and int(gate_n_qubits) != int(parent_n_qubits):
+        raise ValueError(
+            f"控制流 {gate_type} 的 body n_qubits={gate_n_qubits} 与父线路 "
+            f"n_qubits={parent_n_qubits} 不一致"
+        )
 
 
 def _single_gate_symbol(gate_type):
@@ -274,9 +286,9 @@ def _format_angle_value(value):
 
 
 def _rotation_angle_label(gate):
-    gate_type = gate.get("type")
+    gate_type = instruction_name(gate)
     if gate_type in {"rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"}:
-        return f"θ={_format_angle_value(gate.get('parameter'))}"
+        return f"θ={_format_angle_value(instruction_parameter(gate))}"
     return None
 
 
@@ -284,21 +296,21 @@ def _angle_row_index_for_gate(gate, n_qubits):
     if n_qubits <= 1:
         return None
 
-    gate_type = gate.get("type")
+    gate_type = instruction_name(gate)
     if gate_type in {"rzz", "rxx", "swap"}:
-        q1 = int(gate["qubit_1"])
-        q2 = int(gate["qubit_2"])
+        q1, q2 = [int(qubit) for qubit in instruction_qubits(gate)[:2]]
         lo, hi = min(q1, q2), max(q1, q2)
         return (lo + hi - 1) // 2
 
-    controls = [int(q) for q in gate.get("control_qubits", [])]
-    if controls and "target_qubit" in gate:
-        target = int(gate["target_qubit"])
+    controls = [int(q) for q in instruction_controls(gate)]
+    targets = [int(q) for q in instruction_qubits(gate)]
+    if controls and targets:
+        target = targets[0]
         lo, hi = min(controls + [target]), max(controls + [target])
         return (lo + hi - 1) // 2
 
-    if "target_qubit" in gate:
-        target = int(gate["target_qubit"])
+    if targets:
+        target = targets[0]
         return target - 1 if target > 0 else 0
 
     return None
@@ -316,14 +328,15 @@ def _gate_to_column(gate, n_qubits):
     qubit_col = [_wire_cell()] * n_qubits
     between_col = [_blank_cell()] * max(0, n_qubits - 1)
     angle_col = [_blank_cell()] * max(0, n_qubits - 1)
-    gate_type = canonical_gate_name(gate["type"])
+    gate_type = canonical_gate_name(instruction_name(gate))
+    targets = [int(q) for q in instruction_qubits(gate)]
 
     if gate_type == "identity":
         qubit_col = [_symbol_cell("I")] * n_qubits
         return qubit_col, between_col, angle_col
 
     if gate_type == "unitary":
-        gate_n_qubits = min(int(gate.get("n_qubits", n_qubits)), n_qubits)
+        gate_n_qubits = min(int(instruction_n_qubits(gate, n_qubits)), n_qubits)
         for q in range(gate_n_qubits):
             qubit_col[q] = _symbol_cell("U")
         for q in range(max(0, gate_n_qubits - 1)):
@@ -331,8 +344,7 @@ def _gate_to_column(gate, n_qubits):
         return qubit_col, between_col, angle_col
 
     if gate_type == "swap":
-        q1 = int(gate["qubit_1"])
-        q2 = int(gate["qubit_2"])
+        q1, q2 = targets[:2]
         lo, hi = min(q1, q2), max(q1, q2)
         qubit_col[q1] = _symbol_cell("x")
         qubit_col[q2] = _symbol_cell("x")
@@ -341,8 +353,7 @@ def _gate_to_column(gate, n_qubits):
         return qubit_col, between_col, angle_col
 
     if gate_type in {"rzz", "rxx"}:
-        q1 = int(gate["qubit_1"])
-        q2 = int(gate["qubit_2"])
+        q1, q2 = targets[:2]
         lo, hi = min(q1, q2), max(q1, q2)
         symbol = "Rzz" if gate_type == "rzz" else "Rxx"
         qubit_col[q1] = _symbol_cell(symbol)
@@ -361,14 +372,10 @@ def _gate_to_column(gate, n_qubits):
             qubit_col[int(target)] = _symbol_cell("|0>")
         return qubit_col, between_col, angle_col
 
-    controls = [int(q) for q in gate.get("control_qubits", [])]
+    controls = [int(q) for q in instruction_controls(gate)]
 
     if controls:
         # 多目标受控门画作单列：每个目标位一个目标标记，控制位为 ●，整列用竖线相连。
-        if "qubits" in gate:
-            targets = [int(q) for q in gate["qubits"]]
-        else:
-            targets = [int(gate["target_qubit"])]
         involved = controls + targets
         lo, hi = min(involved), max(involved)
         for q in range(lo, hi):
@@ -387,8 +394,8 @@ def _gate_to_column(gate, n_qubits):
             angle_col[row_idx] = _angle_cell(label)
         return qubit_col, between_col, angle_col
 
-    if "target_qubit" in gate:
-        target = int(gate["target_qubit"])
+    if targets:
+        target = targets[0]
         symbol = _single_gate_symbol(gate_type)
         if symbol is None:
             symbol = _fallback_symbol(gate_type)
@@ -440,19 +447,21 @@ class Circuit:
     """量子电路类：支持门序构建、拼接和矩阵生成。"""
 
     def __init__(self, *gates, n_qubits=None, backend=None):
-        self.gates = [normalize_gate(gate) for gate in gates]
+        self.gates = [as_instruction(gate) for gate in gates]
         self.n_qubits = _infer_n_qubits_from_gates(self.gates) if n_qubits is None else n_qubits
+        for gate in self.gates:
+            _check_control_flow_nqubits(gate, self.n_qubits)
         self._backend = backend
 
     @property
     def operations(self):
         """Typed IR view of the current gate list."""
 
-        return CircuitIR.from_circuit(self).operations
+        return tuple(self.gates)
 
     @property
     def ir(self):
-        """Circuit-level typed IR view while preserving the ``gates`` surface."""
+        """Circuit-level typed IR view."""
 
         return CircuitIR.from_circuit(self)
 
@@ -467,12 +476,28 @@ class Circuit:
         return Circuit(*self.gates, *other.gates, n_qubits=self.n_qubits, backend=backend)
 
     def append(self, gate):
-        self.gates.append(normalize_gate(gate))
+        normalized = as_instruction(gate)
+        _check_control_flow_nqubits(normalized, self.n_qubits)
+        self.gates.append(normalized)
         return self
 
     def extend(self, *gates):
-        self.gates.extend(normalize_gate(gate) for gate in gates)
+        normalized = [as_instruction(gate) for gate in gates]
+        for gate in normalized:
+            _check_control_flow_nqubits(gate, self.n_qubits)
+        self.gates.extend(normalized)
         return self
+
+    @property
+    def legacy_gates(self):
+        """Legacy gate dictionaries for serialization and old integrations."""
+
+        return self.to_gate_dicts()
+
+    def to_gate_dicts(self):
+        """Return detached gate dictionaries equivalent to ``self.gates``."""
+
+        return [instruction_to_gate_dict(gate) for gate in self.gates]
 
     @property
     def parameters(self):
@@ -520,6 +545,11 @@ class Circuit:
         if parameters:
             names = ", ".join(parameter.name for parameter in parameters)
             raise ValueError(f"Circuit has unbound parameter(s): {names}; call bind_parameters(...) first")
+
+        # 控制流检查：不能跳过，即使 ignore_nonunitary=True
+        for gate in self.gates:
+            if isinstance(gate, ControlFlow) or instruction_name(gate) in {"if", "while"}:
+                raise ValueError("控制流指令无法表示为酉矩阵；请用 Measure.run 执行")
 
         backend = backend or self._backend
         if not self.gates:
@@ -591,7 +621,8 @@ def circuit(*gates, n_qubits=1, backend=None):
 
 # ---------------------------------------------------------------------------
 # 门工厂：签名与参数顺序保持旧字典时代不变，返回值升级为类型化 Operation。
-# Operation 支持旧字典键的只读访问（gate["type"] 等），Circuit 内部存储不变。
+# Operation 支持旧字典键的只读访问（gate["type"] 等）。
+# Circuit.gates 现在返回 typed instruction；dict 互操作走 to_gate_dicts()/legacy_gates。
 # ---------------------------------------------------------------------------
 
 
@@ -731,19 +762,54 @@ def u2(phi, lam, target_qubit=0):
     return Operation("u2", qubits=(target_qubit,), params=(phi, lam))
 
 
-def measure(qubits=None, *, basis="Z", id=None):
-    """线路内联合 Pauli 投影测量标记（非破坏性，保留比特）。
+def measure(qubits=None, *, basis="Z", id=None, creg=None, cbits=None):
+    """线路内投影测量标记。
+
+    无经典目标（creg/cbits 均 None）：联合 Pauli 投影，保留比特（原行为）。
+    有经典目标：per-qubit Z 基投影，比特 |0>->0 / |1>->1 写入指定经典位。
+      creg=ClassicalRegister：按序写入 0..k-1 号位（len(qubits)<=len(creg)）。
+      cbits=[Bit, ...]：显式指定每比特写入的位（len==len(qubits)，须同一寄存器）。
 
     measure(0)                  # 单比特 Z 测量
     measure(0, basis="X")       # 单比特 X 测量
     measure([0, 1], basis="X")  # 联合 X⊗X 投影测量
     measure([0, 1, 2], id="m0") # 联合测量 + 结果标识符
     measure()                   # 空 = 运行时读取全部比特
+    measure([0, 1], creg=c)     # 将结果写入寄存器 c 的前 2 位
+    measure([0, 1], cbits=[c[1], c[0]])  # 将 q0 结果写入 c[1]，q1 结果写入 c[0]
 
     qubits 为单个 int 或比特下标列表；多个比特须用列表（measure(0, 1) 不再支持）。
     basis 默认 "Z"（X/Y/Z）；id 可选、用于 result.output("m0")。
     """
-    return Measurement(_normalize_marker_qubits(qubits), basis=basis, id=id)
+    qs = _normalize_marker_qubits(qubits)
+    if creg is None and cbits is None:
+        return Measurement(qs, basis=basis, id=id)
+
+    from .classical import Bit, ClassicalRegister
+    if creg is not None and cbits is not None:
+        raise ValueError("creg 与 cbits 互斥，只能提供其一")
+    if str(basis).strip().upper() != "Z":
+        raise ValueError("有经典目标的 measure 仅支持 Z 基")
+
+    if creg is not None:
+        if not isinstance(creg, ClassicalRegister):
+            raise ValueError("creg 必须是 ClassicalRegister")
+        if len(qs) > len(creg):
+            raise ValueError(f"比特数 {len(qs)} 超过寄存器位数 {len(creg)}")
+        reg_name = creg.name
+        clbits = tuple(range(len(qs)))
+    else:
+        bits = list(cbits)
+        if len(bits) != len(qs):
+            raise ValueError(f"cbits 数 {len(bits)} 与比特数 {len(qs)} 不符")
+        names = {b.register_name for b in bits}
+        if len(names) != 1:
+            raise ValueError("cbits 必须属于同一寄存器")
+        reg_name = names.pop()
+        clbits = tuple(b.index for b in bits)
+
+    return Measurement(qs, basis="Z", id=id, classical_bits=clbits,
+                       metadata={"classical_register": reg_name})
 
 
 def _normalize_marker_qubits(qubits):
@@ -765,6 +831,25 @@ def reset(qubits=None):
     无前置条件——可出现在线路任意位置（见统一测量模型设计文档）。
     """
     return Measurement(_normalize_marker_qubits(qubits), measurement_type="reset")
+
+
+def if_(condition, body, else_body=None):
+    """条件执行 body（可选 else_body），依据测量写入的经典寄存器。"""
+    from ..ir.control_flow import ControlFlow
+    n = int(body.n_qubits)
+    if else_body is not None and int(else_body.n_qubits) != n:
+        raise ValueError("else_body 的 n_qubits 必须与 body 一致")
+    return ControlFlow("if", condition, body.to_gate_dicts(), n,
+                        else_gates=(None if else_body is None else else_body.to_gate_dicts()))
+
+
+def while_(condition, body, *, max_iterations):
+    """条件循环执行 body，最多 max_iterations 次；超限仍满足条件抛 RuntimeError。"""
+    from ..ir.control_flow import ControlFlow
+    if int(max_iterations) <= 0:
+        raise ValueError("max_iterations 必须为正")
+    return ControlFlow("while", condition, body.to_gate_dicts(), int(body.n_qubits),
+                       max_iterations=int(max_iterations))
 
 
 __all__ = [
@@ -798,4 +883,6 @@ __all__ = [
     "u2",
     "measure",
     "reset",
+    "if_",
+    "while_",
 ]

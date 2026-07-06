@@ -42,7 +42,13 @@ from ...core.operators import Hamiltonian
 from ...core.circuit import Circuit
 from ...core.gates import gate_to_matrix
 from ...core.state import State
-from ...ir import instruction_controls, instruction_name, instruction_qubits
+from ...ir import (
+    instruction_controls,
+    instruction_name,
+    instruction_parameter,
+    instruction_qubits,
+    instruction_to_gate_dict,
+)
 
 
 @dataclass
@@ -295,7 +301,7 @@ def _parameter_size(param: Any) -> int:
 def _extract_parameters(gates: Sequence[Dict[str, Any]], param_indices: Sequence[int]) -> np.ndarray:
     values: List[float] = []
     for gate_index in param_indices:
-        parameter = gates[gate_index].get("parameter")
+        parameter = instruction_parameter(gates[gate_index])
         if np.isscalar(parameter):
             values.append(float(parameter))
         else:
@@ -308,10 +314,10 @@ def _inject_parameters(
     param_indices: Sequence[int],
     parameters: np.ndarray,
 ) -> List[Dict[str, Any]]:
-    updated = [dict(g) for g in gates]
+    updated = [instruction_to_gate_dict(g) for g in gates]
     cursor = 0
     for gate_index in param_indices:
-        original = gates[gate_index].get("parameter")
+        original = instruction_parameter(gates[gate_index])
         size = _parameter_size(original)
         chunk = parameters[cursor: cursor + size]
         cursor += size
@@ -559,17 +565,18 @@ def train_crlqas(
                 rng=rng_py,
             )
 
-            gate = dict(action_space[action_index])
-            if "parameter" in gate:
-                if np.isscalar(gate["parameter"]):
-                    gate["parameter"] = float(rng_np.uniform(-np.pi, np.pi))
+            action = dict(action_space[action_index])
+            parameter = instruction_parameter(action)
+            if parameter is not None:
+                if np.isscalar(parameter):
+                    action["parameter"] = float(rng_np.uniform(-np.pi, np.pi))
                 else:
-                    size = len(np.asarray(gate["parameter"]).reshape(-1))
-                    gate["parameter"] = [float(x) for x in rng_np.uniform(-np.pi, np.pi, size=size).tolist()]
-            gates.append(gate)
+                    size = len(np.asarray(parameter).reshape(-1))
+                    action["parameter"] = [float(x) for x in rng_np.uniform(-np.pi, np.pi, size=size).tolist()]
+            gates.append(action)
 
             row_index = min(len(gates) - 1, cfg.n_act - 1)
-            state_tensor[row_index] = _gate_to_tensor_row(gate, n_qubits=n_qubits)
+            state_tensor[row_index] = _gate_to_tensor_row(action, n_qubits=n_qubits)
             next_state = _flatten_state_tensor(state_tensor)
 
             gates, cost, param_vector = _adam_spsa_optimize(

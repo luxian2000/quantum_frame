@@ -106,7 +106,7 @@ def build_w3_action_gates(include_cry: bool = True) -> List[Dict[str, object]]:
 
 def decompose_non_one_controls(circuit: Circuit) -> Circuit:
     """兼容函数：当前动作空间已只用 |1> 控制态，直接返回副本。"""
-    return Circuit(*[dict(g) for g in circuit.gates], n_qubits=circuit.n_qubits, backend=circuit.backend)
+    return Circuit(*circuit.to_gate_dicts(), n_qubits=circuit.n_qubits, backend=circuit.backend)
 
 
 def main() -> None:

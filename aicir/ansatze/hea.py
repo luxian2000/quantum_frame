@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from ...core.circuit import (
+from ..core.circuit import (
     Circuit,
     Parameter,
     crx,

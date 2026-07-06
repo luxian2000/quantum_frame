@@ -6,6 +6,7 @@ from aicir.optimizer import (
     COBYLA,
     GD,
     LBFGSB,
+    NelderMead,
     OptimizationResult,
     SPSA,
     ScipyMinimize,
@@ -102,3 +103,17 @@ def test_cobyla_optimizer_and_scipy_minimize_wrapper():
     assert result.fun < 1e-6
     assert wrapped.fun < 1e-6
     assert generic.fun < 1e-5
+
+
+def test_nelder_mead_optimizer_minimizes_black_box_objective():
+    pytest.importorskip("scipy")
+    fn, _ = _quadratic(np.array([1.0, -2.0]))
+
+    result = NelderMead(options={"maxiter": 1000, "xatol": 1e-8, "fatol": 1e-8}).minimize(
+        fn,
+        np.array([3.0, 4.0]),
+    )
+
+    assert result.success
+    assert result.fun < 1e-8
+    assert np.allclose(result.x, [1.0, -2.0], atol=1e-4)

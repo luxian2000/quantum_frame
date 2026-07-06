@@ -90,7 +90,13 @@ class TestNPUBackend(unittest.TestCase):
     def test_from_distributed_env(self):
         with mock.patch.dict(
             "os.environ",
-            {"WORLD_SIZE": "8", "RANK": "3", "LOCAL_RANK": "2"},
+            {
+                "WORLD_SIZE": "8",
+                "RANK": "3",
+                "LOCAL_RANK": "2",
+                "MASTER_ADDR": "",
+                "MASTER_PORT": "",
+            },
             clear=False,
         ):
             backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
@@ -101,6 +107,30 @@ class TestNPUBackend(unittest.TestCase):
         self.assertEqual(backend.runtime_context.local_rank, 2)
         self.assertTrue(backend.runtime_context.distributed)
         self.assertFalse(backend.runtime_context.process_group_initialized)
+
+    def test_from_distributed_env_uses_local_rank_device(self):
+        requested_devices = []
+
+        def fake_resolve(*, device=None, fallback_to_cpu=True):
+            requested_devices.append(device)
+            return torch.device("cpu")
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "WORLD_SIZE": "4",
+                "RANK": "2",
+                "LOCAL_RANK": "2",
+                "MASTER_ADDR": "",
+                "MASTER_PORT": "",
+            },
+            clear=False,
+        ):
+            with mock.patch.object(NPUBackend, "_resolve_device", side_effect=fake_resolve):
+                backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
+
+        self.assertEqual(requested_devices, ["npu:2"])
+        self.assertEqual(backend.runtime_context.local_rank, 2)
 
     def test_from_distributed_env_initializes_process_group_when_rendezvous_env_exists(self):
         env = {
@@ -116,9 +146,10 @@ class TestNPUBackend(unittest.TestCase):
                     with mock.patch("torch.distributed.init_process_group") as init_pg:
                         backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 
-        init_pg.assert_called_once_with(backend="gloo", rank=1, world_size=2)
+        expected_backend = "hccl" if getattr(backend._device, "type", None) == "npu" else "gloo"
+        init_pg.assert_called_once_with(backend=expected_backend, rank=1, world_size=2)
         self.assertTrue(backend.runtime_context.process_group_initialized)
-        self.assertEqual(backend.runtime_context.process_group_backend, "gloo")
+        self.assertEqual(backend.runtime_context.process_group_backend, expected_backend)
 
     def test_distributed_batch_helpers_partition_and_gather(self):
         backend = NPUBackend(fallback_to_cpu=True)
@@ -274,14 +305,56 @@ class TestNPUBackend(unittest.TestCase):
         result = self._run_with_npu_forced(lambda: backend.trace(m))
         self.assertTrue(torch.allclose(result.unsqueeze(0), expected.unsqueeze(0), atol=1e-5))
 
-    def test_inner_product_workaround_matches_torch(self):
+    def test_inner_product_workaround_matches_numpy_reference(self):
         backend = NPUBackend(fallback_to_cpu=True)
         bra = torch.tensor([[1 + 1j], [0 - 1j]], dtype=torch.complex64)
         ket = torch.tensor([[0.5 + 0j], [1 - 0.5j]], dtype=torch.complex64)
-        b, k = bra.reshape(-1), ket.reshape(-1)
-        expected = torch.dot(torch.conj(b), k)
+        expected_np = np.vdot(
+            np.asarray(bra.detach().cpu().numpy()).reshape(-1),
+            np.asarray(ket.detach().cpu().numpy()).reshape(-1),
+        ).astype(np.complex64)
         result = self._run_with_npu_forced(lambda: backend.inner_product(bra, ket))
-        self.assertTrue(torch.allclose(result.unsqueeze(0), expected.unsqueeze(0), atol=1e-5))
+        actual_np = np.asarray(backend.to_numpy(result)).reshape(())
+        self.assertTrue(
+            np.allclose(actual_np, expected_np, atol=1e-5),
+            f"actual={actual_np!r}, expected={expected_np!r}",
+        )
+
+    def test_inner_product_workaround_does_not_use_torch_dot(self):
+        backend = NPUBackend(fallback_to_cpu=True)
+        bra = torch.tensor([[1 + 1j], [0 - 1j]], dtype=torch.complex64)
+        ket = torch.tensor([[0.5 + 0j], [1 - 0.5j]], dtype=torch.complex64)
+
+        def fail_dot(*args, **kwargs):
+            raise RuntimeError("torch.dot is not NPU-safe for this workaround")
+
+        with mock.patch("torch.dot", side_effect=fail_dot):
+            result = self._run_with_npu_forced(lambda: backend.inner_product(bra, ket))
+
+        actual_np = np.asarray(backend.to_numpy(result)).reshape(())
+        expected_np = np.asarray(1 + 0.5j, dtype=np.complex64).reshape(())
+        self.assertTrue(
+            np.allclose(actual_np, expected_np, atol=1e-5),
+            f"actual={actual_np!r}, expected={expected_np!r}",
+        )
+
+    def test_inner_product_workaround_uses_backend_matmul_path(self):
+        backend = NPUBackend(fallback_to_cpu=True)
+        bra = torch.tensor([[1 + 1j], [0 - 1j]], dtype=torch.complex64)
+        ket = torch.tensor([[0.5 + 0j], [1 - 0.5j]], dtype=torch.complex64)
+
+        with mock.patch.object(backend, "dagger", wraps=backend.dagger) as dagger:
+            with mock.patch.object(backend, "matmul", wraps=backend.matmul) as matmul:
+                result = self._run_with_npu_forced(lambda: backend.inner_product(bra, ket))
+
+        dagger.assert_called_once()
+        matmul.assert_called_once()
+        actual_np = np.asarray(backend.to_numpy(result)).reshape(())
+        expected_np = np.asarray(1 + 0.5j, dtype=np.complex64).reshape(())
+        self.assertTrue(
+            np.allclose(actual_np, expected_np, atol=1e-5),
+            f"actual={actual_np!r}, expected={expected_np!r}",
+        )
 
     def test_partial_trace_workaround_matches_parent(self):
         from aicir.backends.gpu_backend import TorchBackend

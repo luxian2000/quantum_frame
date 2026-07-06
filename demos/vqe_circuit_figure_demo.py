@@ -30,7 +30,7 @@ from aicir import NumpyBackend
 from aicir.chemistry import get_molecule, molecule_hamiltonian, molecule_matrix
 from aicir.optimizer import COBYLA
 from aicir.vqc import BasicVQE
-from aicir.vqc.ansatz import hea
+from aicir.ansatze import hea
 from aicir.visual import plot
 
 from ._visual_demo_utils import add_common_visual_args, configure_matplotlib
