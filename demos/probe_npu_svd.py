@@ -12,6 +12,10 @@ MPS 引擎需要什么、哪些已知能跑、哪些是未知：
   4. 复数 SVD 的 real-embedding 变通（2m×2n 实块矩阵）前向/反传能否跑、数值是否正确？
   5. MPS 截断真实算子：complex theta 矩阵 (Dl*2, 2*Dr) 约化 SVD → 截断 top-k → 反传。
 
+初始化顺序很重要：`torch_npu` 在模块顶层紧随 `torch` 导入，且第一次 NPU 触碰用一个
+平凡 `.npu()` 预热（与已验证可跑的最小用例一致），避免某些 CANN 版本上 `get_device_name`
+先行触发 `AclSetCompileopt(ACL_PRECISION_MODE)` 失败而毒化整个进程的 NPU 初始化。
+
 用法（在 Ascend 机器、仓库根目录）：
 
     PYTHONPATH=. python demos/probe_npu_svd.py                 # 严格要求 NPU
@@ -25,7 +29,17 @@ from __future__ import annotations
 import argparse
 import platform
 import sys
-import traceback
+
+import torch
+
+try:  # 顶层紧随 torch 导入（与已验证可跑的最小用例一致）
+    import torch_npu  # noqa: F401
+
+    _TORCH_NPU_VER = getattr(torch_npu, "__version__", "unknown")
+    _TORCH_NPU_ERR = None
+except Exception as e:  # noqa: BLE001
+    _TORCH_NPU_VER = None
+    _TORCH_NPU_ERR = f"{type(e).__name__}: {e}"
 
 RESULTS = []  # (name, ok, detail)
 
@@ -37,8 +51,7 @@ def record(name, ok, detail=""):
 
 
 def short_exc(e):
-    s = f"{type(e).__name__}: {e}"
-    return s.replace("\n", " ")[:300]
+    return f"{type(e).__name__}: {e}".replace("\n", " ")[:300]
 
 
 def probe(name, fn):
@@ -55,29 +68,16 @@ def main():
     args = ap.parse_args()
 
     import numpy as np
-    import torch
 
-    # ---- 环境信息 ----
     env = {
         "python": platform.python_version(),
         "torch": torch.__version__,
         "numpy": np.__version__,
+        "torch_npu": _TORCH_NPU_VER or f"IMPORT_FAIL {_TORCH_NPU_ERR}",
     }
-    try:
-        import torch_npu  # noqa: F401
-
-        env["torch_npu"] = getattr(torch_npu, "__version__", "unknown")
-    except Exception as e:  # noqa: BLE001
-        env["torch_npu"] = f"IMPORT_FAIL {short_exc(e)}"
 
     npu_ok = hasattr(torch, "npu") and getattr(torch.npu, "is_available", lambda: False)()
     env["npu_available"] = npu_ok
-    if npu_ok:
-        try:
-            env["npu_count"] = torch.npu.device_count()
-            env["npu_name"] = torch.npu.get_device_name(0)
-        except Exception as e:  # noqa: BLE001
-            env["npu_info_err"] = short_exc(e)
 
     if not npu_ok and not args.allow_cpu:
         print("NPU 不可用；如需在 CPU 上干跑请加 --allow-cpu", file=sys.stderr)
@@ -86,6 +86,22 @@ def main():
         sys.exit(2)
 
     dev = torch.device("npu:0") if npu_ok else torch.device("cpu")
+
+    # ---- 预热：第一次 NPU 触碰用平凡 add（已验证可跑的路径），先把设备初始化好 ----
+    if npu_ok:
+        try:
+            w = torch.ones(2, 2).npu()
+            _ = (w + w).cpu()
+            env["warmup"] = "ok"
+        except Exception as e:  # noqa: BLE001
+            env["warmup"] = f"FAIL {short_exc(e)}"
+        # 设备信息放到预热之后再取（避免先行触发坏初始化）
+        try:
+            env["npu_count"] = torch.npu.device_count()
+            env["npu_name"] = torch.npu.get_device_name(0)
+        except Exception as e:  # noqa: BLE001
+            env["npu_info_err"] = short_exc(e)
+
     cdtype = torch.complex64
     print(f"\n=== 探针设备: {dev} ===\n")
 
@@ -96,43 +112,36 @@ def main():
         bk = NPUBackend(fallback_to_cpu=not npu_ok)
         a = bk.cast(np.array([[1 + 1j, 2], [0, 1j]], dtype=np.complex64))
         b = bk.cast(np.array([[1, 0], [1j, 1]], dtype=np.complex64))
-        mm = bk.matmul(a, b)  # 复数 matmul（real/imag 分解）
+        mm = bk.matmul(a, b)
         td = bk.tensordot(bk.reshape(a, (2, 2)), bk.reshape(b, (2, 2)), ([1], [0]))
         _ = bk.conj(a)
         _ = bk.add(a, b)
-        return f"backend={bk.name.split('(')[0]}; matmul&tensordot&conj&add ok, mm.dtype={mm.dtype}, td.dtype={td.dtype}"
+        return f"matmul&tensordot&conj&add ok, mm.dtype={mm.dtype}, td.dtype={td.dtype}"
 
     probe("00_npu_backend_complex_primitives", backend_smoke)
 
-    # ---- 通用工具：前向+CPU 数值核对，再反传 ----
     def cpu_singular_ref(x):
         return torch.linalg.svdvals(x.detach().cpu().to(torch.complex128 if x.is_complex() else torch.float64))
 
-    def svd_forward(dtype_name, dtype, shape):
+    def svd_forward(dtype, shape):
         def fn():
-            if dtype.is_complex:
-                x = torch.randn(*shape, dtype=dtype, device=dev)
-            else:
-                x = torch.randn(*shape, dtype=dtype, device=dev)
+            x = torch.randn(*shape, dtype=dtype, device=dev)
             u, s, vh = torch.linalg.svd(x, full_matrices=False)
-            # 数值核对：奇异值 vs CPU 参考
             ref = cpu_singular_ref(x)
             diff = float((s.detach().cpu().to(ref.dtype) - ref).abs().max())
-            # 重建核对
-            recon = (u @ torch.diag(s.to(u.dtype)) @ vh)
+            recon = u @ torch.diag(s.to(u.dtype)) @ vh
             rerr = float((recon.detach().cpu() - x.detach().cpu()).abs().max())
             return f"shape={tuple(shape)} sv_maxdiff_vs_cpu={diff:.2e} recon_maxerr={rerr:.2e} S.dtype={s.dtype}"
 
         return fn
 
-    def svd_backward(dtype_name, dtype, shape):
+    def svd_backward(dtype, shape):
         def fn():
             x = torch.randn(*shape, dtype=dtype, device=dev, requires_grad=True)
             u, s, vh = torch.linalg.svd(x, full_matrices=False)
-            loss = s.sum()  # 奇异值是实数，sum 可反传
-            loss.backward()
+            s.sum().backward()  # 奇异值实数，可反传
             g = x.grad
-            gok = g is not None and bool(torch.isfinite(g.float() if not g.is_complex() else g.abs()).all())
+            gok = g is not None and bool(torch.isfinite(g.abs() if g.is_complex() else g).all())
             gnorm = float(g.abs().sum()) if g is not None else -1.0
             return f"shape={tuple(shape)} grad_finite={gok} grad_absnorm={gnorm:.3e}"
 
@@ -142,8 +151,7 @@ def main():
         def fn():
             x = torch.randn(*shape, dtype=dtype, device=dev)
             q, r = torch.linalg.qr(x, mode="reduced")
-            recon = q @ r
-            rerr = float((recon.detach().cpu() - x.detach().cpu()).abs().max())
+            rerr = float(((q @ r).detach().cpu() - x.detach().cpu()).abs().max())
             return f"shape={tuple(shape)} recon_maxerr={rerr:.2e} Q.dtype={q.dtype}"
 
         return fn
@@ -152,81 +160,57 @@ def main():
         def fn():
             x = torch.randn(*shape, dtype=dtype, device=dev, requires_grad=True)
             q, r = torch.linalg.qr(x, mode="reduced")
-            loss = r.abs().sum()
-            loss.backward()
+            r.abs().sum().backward()
             g = x.grad
             gok = g is not None and bool(torch.isfinite(g.abs()).all())
             return f"shape={tuple(shape)} grad_finite={gok}"
 
         return fn
 
-    # 覆盖几种 MPS 常见形状：小方阵、tall、theta 形 (Dl*2, 2*Dr)
     shapes = [(4, 4), (16, 16), (32, 8), (8, 32)]
-
-    # ---- 1. real SVD 前向 ----
     for sh in shapes:
-        probe(f"01_svd_fwd_real_{sh[0]}x{sh[1]}", svd_forward("real", torch.float32, sh))
-    # ---- 2. real SVD 反传 ----
+        probe(f"01_svd_fwd_real_{sh[0]}x{sh[1]}", svd_forward(torch.float32, sh))
     for sh in shapes:
-        probe(f"02_svd_bwd_real_{sh[0]}x{sh[1]}", svd_backward("real", torch.float32, sh))
-    # ---- 3. complex64 SVD 前向 ----
+        probe(f"02_svd_bwd_real_{sh[0]}x{sh[1]}", svd_backward(torch.float32, sh))
     for sh in shapes:
-        probe(f"03_svd_fwd_cplx_{sh[0]}x{sh[1]}", svd_forward("cplx", cdtype, sh))
-    # ---- 4. complex64 SVD 反传 ----
+        probe(f"03_svd_fwd_cplx_{sh[0]}x{sh[1]}", svd_forward(cdtype, sh))
     for sh in shapes:
-        probe(f"04_svd_bwd_cplx_{sh[0]}x{sh[1]}", svd_backward("cplx", cdtype, sh))
-    # ---- 5. real QR 前向/反传 ----
+        probe(f"04_svd_bwd_cplx_{sh[0]}x{sh[1]}", svd_backward(cdtype, sh))
     probe("05_qr_fwd_real_16x8", qr_forward(torch.float32, (16, 8)))
     probe("06_qr_bwd_real_16x8", qr_backward(torch.float32, (16, 8)))
-    # ---- 7. complex QR 前向/反传 ----
     probe("07_qr_fwd_cplx_16x8", qr_forward(cdtype, (16, 8)))
     probe("08_qr_bwd_cplx_16x8", qr_backward(cdtype, (16, 8)))
 
-    # ---- 9. real-embedding 复数 SVD 变通（若 complex SVD 不行的备选路径）----
     def real_embed_svd():
         m, n = 12, 8
         a = torch.randn(m, n, dtype=cdtype, device=dev, requires_grad=True)
         ar, ai = torch.real(a), torch.imag(a)
-        top = torch.cat([ar, -ai], dim=1)
-        bot = torch.cat([ai, ar], dim=1)
-        big = torch.cat([top, bot], dim=0)  # (2m, 2n) 实矩阵
+        big = torch.cat([torch.cat([ar, -ai], dim=1), torch.cat([ai, ar], dim=1)], dim=0)  # (2m,2n) 实
         u, s, vh = torch.linalg.svd(big, full_matrices=False)
-        # big 的奇异值是 |a| 奇异值各出现两次；去重后应与复数 SVD 一致
-        ref = cpu_singular_ref(a)  # 复数 a 的奇异值（CPU complex128）
+        ref = cpu_singular_ref(a)
         s_sorted = torch.sort(s.detach().cpu(), descending=True).values
-        # 取每隔一个（成对），比对前 n 个
         s_dedup = s_sorted[0 : 2 * n : 2][:n].to(ref.dtype)
         diff = float((s_dedup - ref[:n]).abs().max())
-        loss = s.sum()
-        loss.backward()
+        s.sum().backward()
         gok = a.grad is not None and bool(torch.isfinite(a.grad.abs()).all())
-        return f"real-embed sv_maxdiff_vs_cplx={diff:.2e} grad_finite={gok}"
+        return f"sv_maxdiff_vs_cplx={diff:.2e} grad_finite={gok}"
 
     probe("09_real_embed_complex_svd_fwd_bwd", real_embed_svd)
 
-    # ---- 10. MPS 截断真实算子：complex theta (Dl*2, 2*Dr) 约化 SVD → 截断 top-k → 反传 ----
     def mps_truncation_op():
         Dl, Dr, k = 4, 4, 2
         theta = torch.randn(Dl * 2, 2 * Dr, dtype=cdtype, device=dev, requires_grad=True)
         u, s, vh = torch.linalg.svd(theta, full_matrices=False)
-        u_k = u[:, :k]
-        s_k = s[:k]
-        vh_k = vh[:k, :]
-        # 吸收奇异值进右张量（MPS 里的写法）
+        u_k, s_k, vh_k = u[:, :k], s[:k], vh[:k, :]
         vh_scaled = vh_k * s_k.to(vh_k.dtype).reshape(k, 1)
         a_left = u_k.reshape(Dl, 2, k)
         a_right = vh_scaled.reshape(k, 2, Dr)
-        # 用一个标量损失反传（模拟期望值对参数的梯度）
-        loss = a_left.abs().sum() + a_right.abs().sum()
-        loss.backward()
+        (a_left.abs().sum() + a_right.abs().sum()).backward()
         gok = theta.grad is not None and bool(torch.isfinite(theta.grad.abs()).all())
-        # 截断重建误差（前向数值合理性）
-        recon = u_k @ torch.diag(s_k.to(u.dtype)) @ vh_k
-        return f"k={k} left/right built; slice+scale+reshape ok; trunc_grad_finite={gok}"
+        return f"k={k} slice+scale+reshape ok; trunc_grad_finite={gok}"
 
     probe("10_mps_truncation_op_fwd_bwd", mps_truncation_op)
 
-    # ---- SUMMARY ----
     print("\n" + "=" * 60)
     print("SUMMARY (把这一整段贴回)")
     print("=" * 60)
