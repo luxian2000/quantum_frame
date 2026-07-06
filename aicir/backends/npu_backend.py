@@ -827,6 +827,11 @@ class NPUBackend(GPUBackend):
             return _NpuConjFn.apply(a)
         return super().conj(a)
 
+    def svd(self, matrix):
+        raise NotImplementedError(
+            "MPS SVD 暂不支持 NPU；见 CLAUDE.md NPU complex64 限制"
+        )
+
     def take(self, a, axis, index):
         if self._is_npu_complex(a):
             return _NpuTakeFn.apply(a, int(axis), int(index))

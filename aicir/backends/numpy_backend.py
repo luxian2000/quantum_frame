@@ -116,6 +116,11 @@ class NumpyBackend(Backend):
     def conj(self, a):
         return np.conj(np.asarray(a))
 
+    def svd(self, matrix):
+        m = np.asarray(matrix, dtype=np.complex128)
+        u, s, vh = np.linalg.svd(m, full_matrices=False)
+        return u.astype(self._dtype), s.astype(np.float64), vh.astype(self._dtype)
+
     def take(self, a, axis, index):
         return np.take(np.asarray(a), int(index), axis=int(axis))
 
