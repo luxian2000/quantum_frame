@@ -56,3 +56,11 @@ class MPSState:
         logical = bk.transpose(phys, perm)
         data = bk.reshape(logical, (1 << self.n_qubits, 1))
         return State(data, self.n_qubits, bk)
+
+    def _apply_one_site(self, m2, site):
+        """单比特门就地作用于物理 site 的物理指标（不改正交性、不截断）。"""
+        bk = self.backend
+        t = self.tensors[site]  # (Dl, 2, Dr)
+        # tensordot(m2 (o,i), t (Dl,i,Dr)) over i -> (o, Dl, Dr) -> (Dl, o, Dr)
+        out = bk.tensordot(m2, t, ([1], [1]))
+        self.tensors[site] = bk.transpose(out, [1, 0, 2])
