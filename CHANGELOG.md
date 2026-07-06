@@ -6,6 +6,12 @@
 
 ### Added
 
+- **MPS 引擎支持 Ascend NPU（端到端可微）。** `NPUBackend.svd` 由
+  `NotImplementedError` 改为 real-embedding 实现（`[[Re,-Im],[Im,Re]]` 实块跑 NPU 原生实数
+  SVD 后重建复数因子，autograd 可反传）；新增 `Backend.mul`/`div` 原语（numpy/gpu 为
+  `*`//`，NPU 走 real/imag 分解，`_NpuMulFn` 自定义 autograd Function）；`mps.py` 的复数
+  乘/除改走 backend 原语。配套 `demos/demo_npu_mps.py`（真机验收）与 NPU 门控测试。CPU/GPU
+  结果不变。
 - **`aicir.simulator` MPS（矩阵乘积态）近似模拟引擎（Spec 2）：`mps_statevector` /
   `mps_expectation`，并为 `Measure.run` 增加 `method="mps"`。** bond 截断由
   `max_bond_dim`（硬上限）+ `cutoff`（相对奇异值阈值，默认 1e-10）共同控制；正交
