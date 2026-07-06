@@ -13,6 +13,13 @@ from ..core.state import State
 from ..core.gates import gate_tensors
 from ..ir import ControlFlow
 
+_PAULI = {
+    "I": np.array([[1, 0], [0, 1]], dtype=np.complex64),
+    "X": np.array([[0, 1], [1, 0]], dtype=np.complex64),
+    "Y": np.array([[0, -1j], [1j, 0]], dtype=np.complex64),
+    "Z": np.array([[1, 0], [0, -1]], dtype=np.complex64),
+}
+
 _SWAP4 = np.array(
     [[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=np.complex64
 ).reshape(2, 2, 2, 2)
@@ -212,3 +219,50 @@ def mps_statevector(circuit, *, max_bond_dim=None, cutoff=1e-10, backend=None):
     """经 MPS 演化电路，返回 MPSState（bond 截断的近似末态）。"""
     backend = _resolve_backend(circuit, backend)
     return _build_mps(circuit, backend, max_bond_dim, cutoff)
+
+
+def _transfer(mps, phys_labels):
+    """按物理 site 序做 <psi| (⊗ P_site) |psi> 的 transfer 收缩，返回后端 (1,1) 标量。"""
+    bk = mps.backend
+    left = bk.cast(np.array([[1.0]], dtype=np.complex64))  # (bra_left, ket_left)
+    for s in range(mps.n_qubits):
+        a = mps.tensors[s]  # (Dl, 2, Dr) ket
+        p = bk.cast(_PAULI[phys_labels[s]])  # (o, i)
+        pa = bk.tensordot(p, a, ([1], [1]))  # (o, Dl, Dr)
+        pa = bk.transpose(pa, [1, 0, 2])  # (Dl, o, Dr) ket with P
+        conj_a = bk.conj(a)  # bra (Dl, 2, Dr)
+        t = bk.tensordot(left, conj_a, ([0], [0]))  # (ket_left, 2, bra_right)
+        left = bk.tensordot(t, pa, ([0, 1], [0, 1]))  # (bra_right, ket_right)
+    return left  # 末端 left 为 (1,1)
+
+
+def _pauli_terms(observable):
+    """把 observable 归一为 [(coefficient, qubit_labels)] 列表；非 Pauli 返回 None。"""
+    if hasattr(observable, "terms"):  # Hamiltonian
+        return [(ps.coefficient, ps.qubit_labels) for ps in observable.terms]
+    if hasattr(observable, "qubit_labels"):  # PauliString
+        return [(observable.coefficient, observable.qubit_labels)]
+    return None
+
+
+def mps_expectation(circuit, observable, *, max_bond_dim=None, cutoff=1e-10, backend=None):
+    """经 MPS 求期望 <psi|O|psi>。Pauli/Hamiltonian 走 transfer 收缩（不稠密化），
+    任意稠密矩阵回退到 to_statevector。返回后端标量（GPU 上可微）。"""
+    backend = _resolve_backend(circuit, backend)
+    mps = _build_mps(circuit, backend, max_bond_dim, cutoff)
+    terms = _pauli_terms(observable)
+    if terms is None:  # 稠密矩阵回退：稠密化后走 expectation_sv
+        psi = mps.to_statevector()
+        operator = observable.to_matrix(backend) if hasattr(observable, "to_matrix") else backend.cast(observable)
+        return backend.expectation_sv(psi.to_numpy(), operator)
+    n = mps.n_qubits
+    norm2 = _transfer(mps, ["I"] * n)  # <psi|psi>，(1,1)
+    total = None
+    for coef, labels in terms:
+        phys = ["I"] * n
+        for q in range(n):  # 逻辑 Pauli 放到其物理 site
+            phys[mps.site_of[q]] = labels[q]
+        contrib = backend.cast(np.array([[complex(coef)]], dtype=np.complex64)) * _transfer(mps, phys)
+        total = contrib if total is None else backend.add(total, contrib)
+    ratio = total / norm2  # (1,1) 逐元素相除；numpy/torch 均保留计算图
+    return backend.real(backend.reshape(ratio, ()))  # 0 维标量的实部
