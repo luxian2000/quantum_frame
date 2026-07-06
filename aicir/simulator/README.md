@@ -81,7 +81,7 @@
 - 仅接受 1/2 比特门；≥3 比特门需先经 `aicir.transpile.DecomposePass` 分解。
 - 非相邻双比特门自动插入 SWAP 网络，并跟踪逻辑↔物理置换（`site_permutation` 属性）。
 - 仅支持纯态、无噪声、无经典控制流（`ControlFlow`）。
-- 后端限制：仅 `NumpyBackend` 与 `GPUBackend`（可微）；`NPUBackend` 因 complex64 SVD 限制返回 `NotImplementedError`。
+- 后端支持 NumPy/GPU/NPU；GPU 与 NPU 上对参数门可微。NPU 上 `NPUBackend.svd` 走 real-embedding（Ascend 无原生 complex64 SVD），复数乘/除经 real/imag 分解，真机验收见 `demos/demo_npu_mps.py`。
 
 ### `mps_expectation(circuit, observable, *, max_bond_dim=None, cutoff=1e-10, backend=None)`
 
