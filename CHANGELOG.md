@@ -2,6 +2,20 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-06
+
+### Added
+
+- **`aicir.simulator` MPS（矩阵乘积态）近似模拟引擎（Spec 2）：`mps_statevector` /
+  `mps_expectation`，并为 `Measure.run` 增加 `method="mps"`。** bond 截断由
+  `max_bond_dim`（硬上限）+ `cutoff`（相对奇异值阈值，默认 1e-10）共同控制；正交
+  中心 + SVD 的 TEBD 式演化，单比特门就地作用、相邻双比特门 SVD 截断、非相邻双比特
+  门自动 SWAP 并跟踪逻辑↔物理置换。新增 `Backend.svd` 原语（NumPy/GPU 实现，NPU 因
+  complex64 限制 `NotImplementedError`）。`mps_expectation` 对 `Hamiltonian`/
+  `PauliString` 走 transfer 收缩不稠密化、GPU 上对参数门可微。新增
+  `aicir.primitives.MPSEstimator`（可注入 `BasicVQE(energy_estimator=...)`）。仅纯态、
+  无噪声、1/2 比特门（≥3 比特门先经 `DecomposePass`）。
+
 ## 2026-07-05
 
 ### QAOA 稀疏化与解析梯度

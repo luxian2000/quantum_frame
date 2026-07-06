@@ -226,6 +226,14 @@ class Backend(ABC):
         """逐元素复共轭。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现 conj")
 
+    def svd(self, matrix):
+        """约化 SVD：返回 (U, S, Vh)，S 为一维降序奇异值。
+
+        matrix ≈ U @ diag(S) @ Vh。MPS 截断用；仅 NumPy/GPU 后端实现，
+        NPU 因 complex64 限制不支持（见 CLAUDE.md）。
+        """
+        raise NotImplementedError("子类需实现 svd")
+
     def take(self, a, axis, index):
         """沿 axis 取下标 index（该轴消失），用于张量网络切片固定指标。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现 take")
