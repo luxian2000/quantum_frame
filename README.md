@@ -28,6 +28,7 @@
 - **变分算法**：内置 `BasicVQE`、`run_vqe`、QAOA、VQD、SSVQE，以及 HEA、离子阱 HEA-TI 等 ansatz 模板。
 - **QML 梯度**：支持参数移位（`psr`、`spsr`、`multipsr`，以及激发门四项参数移位 `psr4`）、有限差分、SPSA、量子自然梯度和 PyTorch `autograd`。
 - **量子架构搜索**：支持权重共享 supernet、CRLQAS、PPR\_DQL、PPO\_RB（需要 PyTorch）。
+- **多种模拟引擎**：态矢量、密度矩阵、精确张量网络（`tn_statevector`/单/部分振幅），以及 bond 截断的 MPS 近似引擎（`mps_statevector`/`mps_expectation`、`Measure.run(method="mps")`、`MPSEstimator`），适合低纠缠、大比特数电路。
 - **噪声模拟**：通过密度矩阵演化支持退相干、比特/相位翻转、振幅阻尼和离子阱噪声。
 - **OpenQASM 输入输出**：支持 OpenQASM 2.0/3.0 导入导出，并提供 Qiskit、PennyLane、WuYue 互操作。
 - **可插拔后端**：`NumpyBackend`（CPU）、`GPUBackend`（PyTorch/CUDA）、`NPUBackend`（Ascend），只需替换一行即可切换。
@@ -118,7 +119,7 @@ aicir/
   vqc/           # VQE、QAOA、VQD、SSVQE 等变分算法
   qas/           # supernet、DQAS、CRLQAS、PPR_DQL、PPO_RB 等量子架构搜索
   chemistry/     # 分子哈密顿量预置与可选电子结构计算接口
-  simulator/     # 态矢量 / 张量网络模拟入口
+  simulator/     # 态矢量 / 精确张量网络 / MPS 近似模拟入口
   transpile/     # PassManager、线路优化与硬件约束变换
   optimizer/     # 经典参数优化器（Adam、COBYLA、LBFGS、SPSA 等）
   optimization/  # QUBO、Ising 映射等经典优化问题工具
@@ -1189,7 +1190,7 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 | `aicir/primitives`        | [`aicir/primitives/README.md`](aicir/primitives/README.md)               | Sampler/Estimator primitives 统一执行入口与 `SampleResult`/`EstimateResult` 结果对象。 |
 | `aicir/qas`               | [`aicir/qas/README.md`](aicir/qas/README.md)                             | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。                                    |
 | `aicir/qml`               | [`aicir/qml/README.md`](aicir/qml/README.md)                             | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。                   |
-| `aicir/simulator`         | [`aicir/simulator/README.md`](aicir/simulator/README.md)                 | 精确张量网络模拟：`tn_statevector`/单/部分振幅/`tn_expectation`，cotengra 路径+切片（`tn` extra），NPU 上可微。 |
+| `aicir/simulator`         | [`aicir/simulator/README.md`](aicir/simulator/README.md)                 | 精确张量网络模拟：`tn_statevector`/单/部分振幅/`tn_expectation`，cotengra 路径+切片（`tn` extra），NPU 上可微；以及 bond 截断的 MPS 近似引擎 `mps_statevector`/`mps_expectation`（`Measure.run(method="mps")`、`MPSEstimator`）。 |
 | `aicir/transpile`         | [`aicir/transpile/README.md`](aicir/transpile/README.md)                 | 线路编译与优化流水线：`PassManager`、`optimize` 入口、多格式 `optimize_basic`/`optimize_circuit` 与本地化简 pass。 |
 | `aicir/visual`           | [`aicir/visual/README.md`](aicir/visual/README.md)                     | 线路图、态向量/概率分布、密度矩阵热力图，以及 QAS / metrics 结果可视化。 |
 | `aicir/vqc`               | [`aicir/vqc/README.md`](aicir/vqc/README.md)                             | VQE、QAOA、VQD、SSVQE 等基础变分算法编排（ansatz 模板已独立为 `aicir.ansatze`）。          |
