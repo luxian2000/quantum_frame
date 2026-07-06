@@ -155,7 +155,11 @@ class Measure:
                                      与 initial_state 互斥）
             observables:             可观测量字典 {name: operator_matrix}
             return_state:            是否在结果中附带 state / final_state
-            method:                  "statevector"（默认，逐门态矢量演化）或 "tensor"（张量网络求末态后复用既有测量机制；仅纯态、无噪声）
+            method:                  "statevector"（默认，逐门态矢量演化）、"tensor"（张量网络求末态后
+                                     复用既有测量机制；仅纯态、无噪声）或 "mps"（bond 截断的矩阵乘积态
+                                     演化求末态后复用既有测量机制；仅纯态、无噪声、不支持 snap/initial_state）
+            max_bond_dim:            仅 method="mps" 生效：bond 维上限（None 表示无硬上限，仅按 cutoff 截断）
+            cutoff:                  仅 method="mps" 生效：相对最大奇异值的截断阈值（默认 1e-10）
         """
         if not hasattr(circuit, "n_qubits"):
             raise TypeError("circuit 需要具备 n_qubits 属性")

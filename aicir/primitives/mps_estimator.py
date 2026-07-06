@@ -23,12 +23,14 @@ class MPSEstimator(BaseEstimator):
         self.cutoff = float(cutoff)
 
     def _expectation(self, circuit, observable):
-        from ..simulator import mps_statevector, mps_expectation
+        from ..simulator import mps_statevector
+        from ..simulator.mps import _expectation_from_mps
 
-        # 复用一次构建：先取 truncation_error，再求期望（两次构建成本相当，语义清晰）
+        # 只构建一次 MPS，复用同一份张量求期望，避免重复演化电路
         mps = mps_statevector(circuit, max_bond_dim=self.max_bond_dim, cutoff=self.cutoff, backend=self.backend)
-        raw = mps_expectation(circuit, observable, max_bond_dim=self.max_bond_dim, cutoff=self.cutoff, backend=self.backend)
-        return float(np.real(complex(self.backend.to_numpy(raw) if hasattr(raw, "shape") else raw))), float(mps.truncation_error)
+        raw = _expectation_from_mps(mps, observable, self.backend)
+        value = float(np.real(complex(self.backend.to_numpy(raw) if hasattr(raw, "shape") else raw)))
+        return value, float(mps.truncation_error)
 
     def estimate(self, circuit, hamiltonian, **_ignored):
         value, _err = self._expectation(circuit, hamiltonian)

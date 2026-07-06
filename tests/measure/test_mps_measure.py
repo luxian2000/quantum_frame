@@ -3,7 +3,7 @@ import pytest
 
 from aicir.backends import NumpyBackend
 from aicir.core import Circuit, measure
-from aicir import hadamard, cnot, rx
+from aicir import cnot, rx
 from aicir.measure import Measure
 from aicir.noise import NoiseModel
 
@@ -12,7 +12,7 @@ def _circ(seed):
     rng = np.random.default_rng(seed)
     c = Circuit(n_qubits=4)
     for q in range(4):
-        c.append(rx(q, float(rng.uniform(0, np.pi))))
+        c.append(rx(float(rng.uniform(0, np.pi)), q))
     for q in range(3):
         c.append(cnot(q + 1, [q]))
     return c

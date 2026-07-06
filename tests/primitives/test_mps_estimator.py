@@ -11,11 +11,11 @@ def _circ(seed):
     rng = np.random.default_rng(seed)
     c = Circuit(n_qubits=4)
     for q in range(4):
-        c.append(rx(q, float(rng.uniform(0, np.pi))))
+        c.append(rx(float(rng.uniform(0, np.pi)), q))
     for q in range(3):
         c.append(cnot(q + 1, [q]))
     for q in range(4):
-        c.append(rz(q, float(rng.uniform(0, np.pi))))
+        c.append(rz(float(rng.uniform(0, np.pi)), q))
     return c
 
 

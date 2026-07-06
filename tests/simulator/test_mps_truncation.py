@@ -3,7 +3,7 @@ import numpy as np
 
 from aicir.backends import NumpyBackend
 from aicir.core import Circuit
-from aicir import hadamard, cnot, rx, rz
+from aicir import cnot, rx, rz
 from aicir.simulator import tn_statevector, mps_statevector
 
 
@@ -12,8 +12,8 @@ def _brickwork(n, depth, seed):
     c = Circuit(n_qubits=n)
     for d in range(depth):
         for q in range(n):
-            c.append(rx(q, float(rng.uniform(0, np.pi))))
-            c.append(rz(q, float(rng.uniform(0, np.pi))))
+            c.append(rx(float(rng.uniform(0, np.pi)), q))
+            c.append(rz(float(rng.uniform(0, np.pi)), q))
         start = d % 2
         for q in range(start, n - 1, 2):
             c.append(cnot(q + 1, [q]))
