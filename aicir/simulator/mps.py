@@ -201,6 +201,7 @@ def _build_mps(circuit, backend, max_bond_dim, cutoff):
         if isinstance(gate, ControlFlow):
             raise ValueError("控制流指令不支持 MPS 模拟；请用 Measure.run 执行")
         for matrix, axes in gate_tensors(gate, backend):
+            matrix = backend.cast(matrix)
             k = len(axes)
             if k == 1:
                 m2 = backend.reshape(matrix, (2, 2))

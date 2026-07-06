@@ -55,7 +55,7 @@ def test_gpu_expectation_differentiable():
     bk = GPUBackend(device="cpu")
     theta = torch.tensor(0.5, dtype=torch.float32, requires_grad=True)
     c = Circuit(n_qubits=2)
-    c.append(rx(0, theta))
+    c.append(rx(theta, 0))
     c.append(cnot(1, [0]))
     H = Hamiltonian([("ZI", 1.0)])
     val = mps_expectation(c, H, backend=bk)
