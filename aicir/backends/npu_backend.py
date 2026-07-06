@@ -443,6 +443,29 @@ class _NpuLocalGateApplyFn(torch.autograd.Function):
         return grad_flat, grad_local, None  # indices 无梯度
 
 
+def _real_embedding_svd(matrix):
+    """复数矩阵的 real-embedding 约化 SVD：用 [[Re,-Im],[Im,Re]] 实块跑实数 SVD 后重建复数因子。
+
+    Ascend 无原生 complex64 SVD；实数 SVD 前向+反传可跑。返回 (U, S, Vh)，S 一维降序实数，
+    matrix ≈ U @ diag(S) @ Vh。device 无关（NPU/CPU torch 均可），autograd 从实数 SVD 反传回 matrix。
+    """
+    ar, ai = torch.real(matrix), torch.imag(matrix)
+    top = torch.cat([ar, -ai], dim=1)
+    bot = torch.cat([ai, ar], dim=1)
+    big = torch.cat([top, bot], dim=0)  # (2m, 2n) 实
+    ur, sr, vhr = torch.linalg.svd(big, full_matrices=False)
+    m, n = matrix.shape[0], matrix.shape[1]
+    p = min(m, n)
+    idx = torch.arange(0, 2 * p, 2, device=matrix.device)  # 每对相等奇异值取其一
+    s = sr.index_select(0, idx)          # (p,) 实
+    ur_sel = ur.index_select(1, idx)     # (2m, p)
+    vhr_sel = vhr.index_select(0, idx)   # (p, 2n)
+    u = torch.complex(ur_sel[:m, :], ur_sel[m:, :])          # (m, p)
+    vc = torch.complex(vhr_sel[:, :n], vhr_sel[:, n:])       # (p, n) = v^T 复数
+    vh = torch.complex(torch.real(vc), -torch.imag(vc))      # conj(vc) = V^H
+    return u, s, vh
+
+
 class NPUBackend(GPUBackend):
     """NPU-first backend for Ascend devices, compatible with GPUBackend API."""
 
@@ -828,9 +851,10 @@ class NPUBackend(GPUBackend):
         return super().conj(a)
 
     def svd(self, matrix):
-        raise NotImplementedError(
-            "MPS SVD 暂不支持 NPU；见 CLAUDE.md NPU complex64 限制"
-        )
+        """NPU 复数 SVD 走 real-embedding（Ascend 无原生 complex64 SVD）；实数/CPU 回退父类。"""
+        if self._is_npu_complex(matrix):
+            return _real_embedding_svd(matrix)
+        return super().svd(matrix)
 
     def take(self, a, axis, index):
         if self._is_npu_complex(a):
