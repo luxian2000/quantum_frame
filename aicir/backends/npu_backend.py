@@ -342,6 +342,41 @@ class _NpuAddFn(torch.autograd.Function):
         return grad_output, grad_output
 
 
+def _reduce_grad(grad, shape):
+    """把广播后的实数梯度按 sum 归约回 shape（自定义 Function 广播反传用）。"""
+    shape = tuple(int(s) for s in shape)
+    while grad.dim() > len(shape):
+        grad = grad.sum(0)
+    for i in range(len(shape)):
+        if shape[i] == 1 and grad.shape[i] != 1:
+            grad = grad.sum(i, keepdim=True)
+    return grad
+
+
+class _NpuMulFn(torch.autograd.Function):
+    """复数逐元素乘的 NPU 自动微分安全包装（real/imag 分解，支持广播）。"""
+
+    @staticmethod
+    def forward(ctx, a, b):
+        ar, ai = torch.real(a), torch.imag(a)
+        br, bi = torch.real(b), torch.imag(b)
+        ctx.save_for_backward(ar, ai, br, bi)
+        ctx.a_shape = tuple(a.shape)
+        ctx.b_shape = tuple(b.shape)
+        return torch.complex(ar * br - ai * bi, ar * bi + ai * br)
+
+    @staticmethod
+    def backward(ctx, grad):
+        ar, ai, br, bi = ctx.saved_tensors
+        gr, gi = torch.real(grad), torch.imag(grad)
+        # grad_a = grad·conj(b), grad_b = grad·conj(a)
+        gar, gai = gr * br + gi * bi, gi * br - gr * bi
+        gbr, gbi = gr * ar + gi * ai, gi * ar - gr * ai
+        ga = torch.complex(_reduce_grad(gar, ctx.a_shape), _reduce_grad(gai, ctx.a_shape))
+        gb = torch.complex(_reduce_grad(gbr, ctx.b_shape), _reduce_grad(gbi, ctx.b_shape))
+        return ga, gb
+
+
 class _NpuLocalGateApplyFn(torch.autograd.Function):
     """局部量子门（gather→matmul→scatter）的 NPU 自动微分安全包装。
 
@@ -900,6 +935,22 @@ class NPUBackend(GPUBackend):
         if self._is_npu_complex(a) or self._is_npu_complex(b):
             return _NpuAddFn.apply(a, b)
         return super().add(a, b)
+
+    def mul(self, a, b):
+        if self._is_npu_complex(a) or self._is_npu_complex(b):
+            a = self.cast(a) if not torch.is_tensor(a) else a
+            b = self.cast(b) if not torch.is_tensor(b) else b
+            return _NpuMulFn.apply(self.cast(a), self.cast(b))
+        return super().mul(a, b)
+
+    def div(self, a, b):
+        if self._is_npu_complex(a) or self._is_npu_complex(b):
+            bb = self.cast(b)
+            br, bi = torch.real(bb), torch.imag(bb)
+            denom = br * br + bi * bi                       # 实数 |b|^2
+            inv_b = torch.complex(br / denom, -bi / denom)  # conj(b)/|b|^2
+            return self.mul(self.cast(a), inv_b)
+        return super().div(a, b)
 
     def dagger(self, matrix):
         """NPU workaround: conjugate transpose via real/imag split (avoids torch.conj on complex64)."""
