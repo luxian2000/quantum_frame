@@ -112,6 +112,14 @@ term_stats = solver._last_estimator_result.term_results
 
 `BasicQAOA` 用于 canonical gate-level QAOA：输入 aicir 标准 `Hamiltonian`，构造可执行的 `Circuit`，并通过 `Measure` 做 exact statevector 或 shots sampling。`Hamiltonian` 可以包含任意实系数 Pauli 项；`I`/`Z`/`ZZ` 的 Ising/QUBO cost 使用快速门路径，含 `X`/`Y` 或更长 Pauli string 的 cost 按 `trotter_order` 用 Trotter/Suzuki product formula 展开。
 
+gate-level exact energy（`shots=None`）不会构造 dense `2^n x 2^n` cost matrix，也不会对所有 bitstring 做 Python 循环。它会先执行 QAOA circuit 得到 statevector，再按 Pauli 项稀疏计算：
+
+```text
+E = offset + sum_j c_j <psi|P_j|psi>
+```
+
+每个 Pauli string 通过局部门作用到 statevector 上，因此会复用 backend 的 local statevector kernel。`build_circuit()` 本身由门磁带 `_qaoa_tape` 物化，forward circuit 和 analytic gradient 共用同一门序事实来源。
+
 标准 ansatz 为：
 
 ```text
@@ -142,6 +150,15 @@ prod_l exp(-i beta_l sum_i X_i) exp(-i gamma_l H_C) |+>^n
 | `trotter_order`       | Trotter/Suzuki 公式阶数；支持`1` 和 `2`，默认 `1`                                           |
 | `mixer_hamiltonian`   | 仅 dense matrix 输入支持；`Hamiltonian` 路径固定使用标准 X mixer                                |
 | `cost`                | 可选外部 qfun 代价函数入口；使用该入口时不构造 QAOA circuit                                       |
+
+`run()` 还支持 `grad_method`：
+
+| `grad_method`              | 说明                                                                                 |
+| -------------------------- | ------------------------------------------------------------------------------------ |
+| `"fd"`                     | 默认；有限差分 gradient descent，保持兼容行为                                         |
+| `"analytic"` / `"psr"`     | 可选；对 gate tape 中每个变分旋转门做参数移位并按链式法则聚合，要求 `shots=None` |
+
+解析梯度对当前 Trotterized circuit 是精确的。旋转约定为 `rx/ry/rz/rzz(t) = exp(-i t/2 P)`，因此每个门参数 `t` 的 shift 为 `pi/2`，系数为 `0.5`；若一个 QAOA 参数控制多个门，梯度按每个门记录的 `d(arg)/d(theta)` 汇总。
 
 ### 示例：Hamiltonian → gate-level Circuit
 
@@ -182,6 +199,47 @@ print(sampled_energy)
 
 注意：`energy(..., shots=...)` 仅支持 diagonal I/Z-only cost。含 `X`/`Y` 的非对角 Hamiltonian 可以用 `energy(params)` 做 exact expectation；有限 shots 能量需要 Pauli-term estimator，而不是直接使用最终 Z-basis counts。
 
+### 示例：exact sparse energy 与解析梯度
+
+```python
+import numpy as np
+from aicir import Hamiltonian, NumpyBackend
+from aicir.vqc import BasicQAOA
+
+cost = Hamiltonian(
+    n_qubits=2,
+    terms=[
+        ("XX", 0.6),
+        ("YZ", [0, 1], -0.3),
+        ("ZZ", 1.0),
+    ],
+)
+
+qaoa = BasicQAOA(problem_hamiltonian=cost, p=2, trotter_steps=3, trotter_order=2)
+params = qaoa.initial_params()
+backend = NumpyBackend()
+
+energy = qaoa.energy(params, backend=backend)  # exact sparse Pauli expectation
+grad = qaoa.analytic_gradient(params, backend=backend)
+
+print(energy)
+print(grad)
+```
+
+也可以在内置 gradient descent 中 opt-in：
+
+```python
+result = qaoa.run(
+    max_iters=40,
+    lr=0.1,
+    init_params=params,
+    backend=backend,
+    grad_method="analytic",
+)
+```
+
+`grad_method="analytic"` / `"psr"` 只适用于 exact energy（`shots=None`）。若传入 `shots`，会抛出 `ValueError`，避免把 sampled objective 和 exact gradient 混用。
+
 ### 示例：使用黑盒优化器
 
 ```python
@@ -212,6 +270,8 @@ dense_qaoa = BasicQAOA(problem_hamiltonian=matrix, p=1)
 
 这条路径不生成 gate-level `Circuit`，也不支持 shots-based QAOA energy。需要构造、采样或下发线路时，请传入 `Hamiltonian`。
 
+dense matrix 路径仍使用 matrix-form exact simulator 兼容实现，不使用 sparse Pauli expectation、门磁带或 `analytic_gradient()`。
+
 ---
 
 ## 4. 验证命令
@@ -219,7 +279,7 @@ dense_qaoa = BasicQAOA(problem_hamiltonian=matrix, p=1)
 ```bash
 PYTHONPATH=. pytest tests/vqc/test_vqe_orchestration.py
 PYTHONPATH=. pytest tests/vqc/test_parameter_shift_uses_qml.py
-PYTHONPATH=. pytest tests/vqc/test_qaoa_canonical.py tests/vqc/test_qaoa_qfun.py
+PYTHONPATH=. pytest tests/vqc/test_qaoa_canonical.py tests/vqc/test_qaoa_qfun.py tests/vqc/test_qaoa_sparse_energy.py tests/vqc/test_qaoa_analytic_gradient.py
 PYTHONPATH=. pytest tests/optimization/qubo/test_qaoa_helpers.py
 ```
 
