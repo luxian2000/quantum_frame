@@ -2,6 +2,103 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-05
+
+### QAOA 稀疏化与解析梯度
+
+- 门级 `BasicQAOA` 精确能量（`shots=None`）改走稀疏逐项期望 `Σ_j c_j⟨ψ|P_j|ψ⟩`，移除稠密 `to_matrix` 与 `2^n` Python 循环（对角/非对角统一）。
+- `build_circuit` 重构为门磁带（`_qaoa_tape`/`_circuit_from_tape`），作为前向与梯度的单一事实来源。
+- 新增可选解析参数移位梯度：`BasicQAOA.analytic_gradient(...)` 与 `run(..., grad_method="analytic")`（逐门 π/2 移位 + 链式法则聚合，对 Trotter 化线路解析精确）。默认梯度仍为有限差分（`grad_method="fd"`）。
+
+### Changed
+
+- **`BasicQAOA` 升级为 canonical gate-level QAOA。** `aicir.vqc.BasicQAOA` 现在可直接接收 aicir 标准 `Hamiltonian` 作为 `problem_hamiltonian`，支持任意实系数 Pauli cost 项；主路径会构造 `Circuit`（`H` 初态、`rz`/`rzz` 快速路径、一般 Pauli string 的一阶/二阶 Trotter-Suzuki product formula、`rx` mixer layer）。新增 `trotter_steps>=1` 与 `trotter_order=1/2`（默认 `1`）；diagonal I/Z-only cost 继续支持 bitstring energy 和基于最终 Z-basis counts 的 shots energy，非对角 cost 支持 exact expectation，shots energy 暂要求后续接 Pauli-term estimator。旧 dense matrix 输入仍作为 exact-simulator 兼容路径保留；QUBO helper 默认改为传递 `Hamiltonian`，显式 dense custom mixer 时才回退到 matrix 路径。
+
+## 2026-07-04
+
+### Changed
+
+- **Breaking:** `Circuit.gates` 现在返回 typed instruction 列表，而不是可变门字典列表。元素类型包括 `Operation`、`Measurement` 和 `ControlFlow`；`Circuit.operations` 是同一 typed 视图的 tuple 形式。typed gate 仍支持旧字典键的只读访问（如 `gate["type"]`、`gate.get("parameter")`）以及与旧 dict 的 `==` 比较，但 `gate[...] = ...` 会抛 `TypeError`。
+- 新增/稳定旧字典互操作 API：`Circuit.legacy_gates` 与 `Circuit.to_gate_dicts()` 返回 detached legacy dict 列表，供 JSON/QASM/第三方互操作和旧代码修改参数使用。迁移规则：把会修改门的 `copy.deepcopy(circuit.gates)` / `list(circuit.gates)` 改为 `circuit.to_gate_dicts()`；把序列化输出改为消费 `to_gate_dicts()`；新 typed 代码优先使用 `gate.name`、`gate.qubits`、`gate.params`。
+- 内部消费端已迁移：控制流 body/else-body、QAS VQE 参数绑定、supernet 跨 rank payload 均显式走 legacy dict 快照，避免 typed immutable gate 泄漏到需要可变 dict 或 JSON-like payload 的边界。
+- 内部运行时进一步 typed 化：`core.circuit`、`core.gates`、`core.batch`、`measure.trajectory`、`simulator.network`、`qml.deriv`、`metrics`、`visual.plot`、MoG-VQE、VQE-QAS preparation/fair binding 以及主要 transpile passes 不再读取 `gate["..."]` / `gate.get(...)` 业务字段，而是走 `aicir.ir` accessors。新增静态守卫测试禁止非边界生产代码重新依赖 legacy gate dict 字段。保留 dict 的边界限定为 IR dict round-trip、core IO/第三方互操作、legacy transpile rewrite API 和 CRLQAS action-space DTO。
+
+### Added
+
+- **显式 Nelder-Mead 优化器 API。** 新增 `aicir.optimizer.NelderMead`，作为 `ScipyMinimize(method="Nelder-Mead")` 的薄封装，便于对无梯度黑盒 VQE/VQA 目标直接选择 Nelder-Mead 单纯形法；已有 `scipy_minimize(..., method="Nelder-Mead")` 路径保持不变。
+- **typed IR 迁移的 NPU 回归脚本矩阵。** 新增/整理 `scripts/npu/{smoke,backend,ops,capacity,typed_ir,circuit,deriv,qml,qaoa,tensor,qas,demos,run_all}.sh` 与统一 runner，支持 `--strict-npu`、`--fail-fast`、`--dry-run`、`--pytest-arg ...`。其中 `typed_ir_deriv_probe.sh --section all` 是轻量硬件探针：覆盖 `Circuit.gates` typed surface、legacy dict 互操作、JSON/QASM round-trip、metrics/transpile、typed `Observable`、`qml.auto`/`qml.ad`/`psr`/`fd` deriv 路径；`qaoa_probe.py` 覆盖 gate-level QAOA 的 `Hamiltonian` 输入、Trotter order 1/2、exact energy、diagonal sampling 和短优化路径。
+- **多卡 NPU strict probe。** 新增 `scripts/npu/multi_card.sh`（包装 `python -m torch.distributed.run`）与 `multi_card_probe.py`：验证 HCCL 初始化、rank→NPU 绑定、`shard_context`、object `all_gather`、实数 NPU tensor 的 `broadcast_parameters`/`all_reduce_mean`，并在每个 rank 上跑 typed IR/deriv 小图与 supernet `safe`/`aggressive` 小规模多卡任务。设备绑定对齐 `demos/BeH2/BeH2_npu.py`：`LOCAL_RANK -> npu:{LOCAL_RANK}`。
+- **4 卡 NPU QNN demo。** 新增 `demos/demo_npu_qnn_4card.py` 与 `scripts/npu/qnn_4card.sh`：用 typed `Operation` 构造 2-qubit teacher/student QNN，在 `torchrun` 4 rank 下做数据并行训练；每个 rank 在本地 NPU 上完成 statevector 前向与 `NPUBackend.expectation_sv` 反传，只通过 HCCL 同步实数参数/梯度。该 demo 验证 typed IR + autodiff + 多卡实数 collective 的实际训练路径，不宣称单个 statevector 已被切分到多 NPU。
+- **8 卡 NPU QAOA probe。** 新增 `scripts/npu/qaoa_8card.sh`、`run_qaoa_8card.py` 与 `qaoa_8card_probe.py`：用 `torchrun --nproc_per_node 8` 验证 rank-local gate-level `BasicQAOA`、diagonal sampling、非对角 `trotter_order=1/2` exact energy、rank 0 参数广播、有限差分 QAOA 梯度的 HCCL 实数均值同步，以及 synthetic problem shards 覆盖检查。该 probe 不宣称单个 statevector 已被切分到 8 张 NPU。
+- **NPU suite 目标漂移守卫。** `tests/scripts/test_npu_test_runner.py` 现在校验每个 suite 的 pytest target 与 probe script 都真实存在，避免文件改名后 `run_all.sh` 在远端 NPU 跑到中后段才因 `file or directory not found` 失败。
+
+### Fixed
+
+- **Ascend NPU complex64 限制导致的 typed-IR deriv/backend 问题。** 本轮迁移确认真实 NPU 上不能把 CPU/GPU 的任意 complex64 torch 图视为等价契约；`NPUBackend` 路径必须继续经 real/imag 分解或自定义 autograd，避免 `aclnnMatmul` / `aclnnInplaceAdd` / `aclnnAdd(DT_COMPLEX64)` 等不支持路径。相关说明已写入项目记忆/文档；真实 NPU deriv 以 `typed_ir_deriv_probe.sh --section deriv` 和 `scripts/npu/deriv.sh --strict-npu` 为准，通用 full-matrix complex autograd 仅保留 CPU/fallback 合同。
+- **`NPUBackend.inner_product` 的共轭内积语义。** 远端 NPU 测试暴露 `torch.dot(torch.conj(bra), ket)` 期望与 workaround 结果不一致；修正后 NPU-safe 路径按 `<bra|ket>` 语义计算，且测试避免把 unsupported `torch.dot` 当作真实 NPU workaround 的实现依赖。
+- **`gloo` 分布式测试遇到 NPU tensor。** `tests/test_supernet_sharding_dist.py` 是 CPU-gloo reproducibility 测试，但真实 NPU 环境下 supernet 参数/梯度会落在 `npu` tensor 上，直接 `dist.broadcast` / `dist.all_reduce` 触发 `RuntimeError: No backend type associated with device type npu`。`aicir.qas.core.sharding` 现仅在「非 CPU tensor + 非 HCCL process group」时 CPU staging 后 collective，再 copy 回原设备；真实多 NPU HCCL 路径仍走原生 NPU collective。
+- **多卡 NPU probe 设备选择对齐 BeH2 demo。** 远端验证表明在该 Ascend runtime 上显式设置 `ASCEND_RT_VISIBLE_DEVICES=0,5,6,7` 会让 `torch.npu.set_device(...)` 同时拒绝逻辑 ID（`npu:1/2/3`）和物理 ID（`npu:5/6/7`）。因此 `multi_card.sh` 不再导出 Ascend visible-device 变量，`--devices` 仅保留为兼容 no-op；多卡验证应像 BeH2 一样只用 `torchrun --nproc_per_node=N`，由 `LOCAL_RANK` 绑定 `npu:{LOCAL_RANK}`。
+- **NPU runner 文件名漂移。** `circuit` suite 中旧目标 `tests/circuit/test_typed_gates_api.py` 更新为实际文件 `tests/circuit/test_circuit_typed_gates_api.py`，并由 suite target 存在性测试防回退。
+
+### Validation
+
+- 真实 Ascend NPU 上已完成单卡 strict sweep：`typed_ir_deriv_probe.sh --section all`、`typed_ir.sh --strict-npu --pytest-arg -q`、`deriv.sh --strict-npu --pytest-arg -q`、`backend.sh --strict-npu --pytest-arg -q`、`capacity.sh --strict-npu --pytest-arg -q` 均通过。
+- 真实 Ascend NPU 上已完成 QAOA strict suite：`scripts/npu/qaoa.sh --strict-npu --pytest-arg -q` 通过，`qaoa_probe.py` 在 `NPUBackend(dtype=torch.complex64, device=npu:0, npu_available=True)` 上完成 diagonal gate-level energy/sampling、非对角 `trotter_order=1` exact energy、非对角 `trotter_order=2` exact energy 和短 `BasicQAOA.run(...)`；随后 `tests/vqc/test_qaoa_canonical.py`、`tests/vqc/test_qaoa_qfun.py`、`tests/optimization/qubo/test_qaoa_helpers.py` 共 25 项通过。
+- 真实 Ascend NPU 上 `scripts/npu/run_all.sh --strict-npu --fail-fast --pytest-arg -q --pytest-arg --durations=20` 已从 `smoke` 跑到 `demos` 全套完成，无 failure/error；覆盖 typed IR、Circuit.gates API、deriv、NPUBackend workaround、capacity/sharding、QML、tensor simulator、QAS 和 demos。当前结论是：typed `Circuit.gates` API 迁移在单卡真实 NPU 上通过全量 NPU 脚本验证。
+- 真实 4 卡 Ascend NPU / HCCL 上已完成多卡 strict probe：`scripts/npu/multi_card.sh --nproc-per-node 4 --section collectives` 通过 rank→`npu:0..3` 绑定、HCCL 初始化、`shard_context`、object `all_gather`、实数 NPU tensor `broadcast_parameters` 与 `all_reduce_mean`；`scripts/npu/multi_card.sh --nproc-per-node 4 --section all` 进一步通过每 rank typed IR、deriv，以及 supernet `safe`/`aggressive` 小规模分片。supernet safe 四 rank 能量一致为 `-1.0197104215621948`，aggressive 四 rank 能量一致为 `-0.9999998211860657`。
+- 真实 8 卡 Ascend NPU / HCCL 上已完成 QAOA 多卡 probe：`scripts/npu/qaoa_8card.sh --nproc-per-node 8 --samples 16 --steps 20` 通过，rank→`npu:0..7` 绑定、`WORLD_SIZE=8`、backend=`hccl`；16 个 synthetic QAOA problem shards 被 8 个 rank 各自持有 2 个并完整覆盖，rank-local gate-level `BasicQAOA` 跑通 diagonal sampling、非对角 `trotter_order=1/2` exact energy、rank 0 参数广播和 HCCL 实数有限差分梯度平均。全局 loss 从 `0.0082067298` 降到 `-0.5388664603`，最终梯度范数为 `0.0024492152`。该 probe 验证的是 rank-local QAOA + HCCL 实数同步，不宣称单个 statevector 已被切分到 8 张 NPU。
+- 真实 4 卡 Ascend NPU / HCCL 上已完成 QNN typed-IR 训练 demo：`scripts/npu/qnn_4card.sh --nproc-per-node 4` 通过，rank→`npu:0..3`、backend=`hccl`，32 samples / 12 steps 的 mean loss 从 `0.0357317636` 降到 `0.0031882407`；`scripts/npu/qnn_4card.sh --nproc-per-node 4 --steps 24 --samples 64` 通过，64 samples / 24 steps 的 mean loss 从 `0.0357317654` 降到 `0.0021315088`。这验证了 typed `Operation` QNN、rank-local NPU statevector 前向、`NPUBackend.expectation_sv` autodiff，以及 HCCL 实数梯度平均可在 4 卡真实 NPU 上闭环运行。
+
+## 2026-07-03
+
+### Added
+
+- **`aicir.simulator` 接入 cotengra（新 `tn` extra）**：`optimize="auto"|"cotengra"|"opt_einsum"|"greedy"` 选择收缩路径来源；`memory_limit=` 设定中间张量内存预算后由 cotengra 规划切片，执行侧逐切片固定指标（新 backend 原语 `take`）、同一 pairwise `tensordot` 收缩、`add` 累加——NPU 复数分解与 torch autograd 全程保留（`_NpuTakeFn`/`_NpuAddFn` 规避 aclnnAdd DT_COMPLEX64）。四个公共函数（`tn_statevector`/`single_amplitude`/`partial_amplitude`/`tn_expectation`）透传两参数。
+- **经典控制流（if/while）：`ClassicalRegister`/`Bit`/`Condition`（`aicir.core.classical`）+ `measure(..., creg=/cbits=)` + `if_`/`while_`（`aicir.core.circuit`）。** `ClassicalRegister(size, name)` 的位（`reg[i]`）与整寄存器（`reg`）都支持 `==`/`!=` 构造 `Condition`；`measure(qubits, creg=reg)` 按序、`measure(qubits, cbits=[...])` 显式指定，把 Z 基投影结果写入经典位（有经典目标时仅支持 Z 基，`creg`/`cbits` 互斥）。`if_(condition, body, else_body=None)` 与 `while_(condition, body, *, max_iterations)`（`max_iterations` 必填，超限仍满足条件抛 `RuntimeError`）产出 `ControlFlow` 指令（`aicir.ir.control_flow`），`body`/`else_body` 的 `n_qubits` 须与外层一致。控制流只走 `Measure.run` 测量轨迹路径逐轨迹求值/递归执行；`Circuit.unitary()` 与张量网络引擎（`aicir.simulator`）遇到 `ControlFlow` 一律抛 `ValueError`，QASM3 导出推迟。`Result.classical_counts(reg)` 统计各轨迹末尾经典寄存器整数取值分布（LSB=`reg[0]`，从未写入的轨迹计 0）。含 `ControlFlow`/`Condition` 的电路 JSON 序列化往返后执行结果与原电路一致。
+
+### Changed
+
+- **Breaking:** `aicir.vqc.ansatz` moved to `aicir.ansatze` (top-level package). `hea`/`hea_parameter_count`/`hea_ti`/`hea_ti_parameter_count`/`uccsd`/`uccsd_parameter_count`/`entangling_edges`/`hardware_efficient_ansatz`/`power_law_couplings` now import from `aicir.ansatze`, not `aicir.vqc.ansatz`. `aicir.vqc` no longer re-exports `ansatz`. Reason: ansatz has no dependency on `vqc` and is already consumed by `aicir.qas`, `aicir.optimization.qubo`, and `aicir.chemistry` (via decoupled data) — nesting it under `vqc` implied a coupling that didn't exist. No backward-compatible alias (see CLAUDE.md's "old long aliases are intentionally not kept" convention).
+
+## 2026-07-02
+
+### Added
+
+- **`aicir.chemistry.build_molecule`：电子结构现算流水线（`chem` extra：`qiskit-nature` +
+  `pyscf`），与固定预置并列。** 给定任意分子几何/基组/映射（`jordan_wigner`/`parity`/
+  `bravyi_kitaev`，可选 `active_electrons`/`active_orbitals` 做 active-space 裁剪），驱动
+  `PySCFDriver` + Qiskit Nature mapper 现算 qubit Hamiltonian，返回与预置同构的
+  `MoleculeHamiltonian`。仅 Jordan-Wigner 映射额外填充 `n_electrons`/`hf_occupation`/
+  `excitations` 三个字段（HF 参考态占据 + singles/doubles 费米子激发，qubit 索引与
+  `terms` 同一比特序），用于桥接 `aicir.vqc.ansatz.uccsd`。未安装 `chem` extra 时抛
+  `ImportError` 并提示安装命令，不影响核心 `numpy`-only 依赖。配套
+  `tests/chemistry/test_pipeline.py`、`test_pipeline_guard.py`、`test_molecule_metadata.py`
+  与 `aicir/chemistry/README.md` §3。
+- **`aicir.vqc.ansatz.uccsd`：UCCSD 化学 ansatz 模板，吃纯数据、与 `aicir.chemistry`
+  解耦。** `uccsd(n_qubits, hf_occupation, excitations, reps=1, ...)` 用 HF 占据位铺
+  `pauli_x` 参考态，再按激发列表逐个施加单/双激发门；非相邻 orbital 间的激发通过
+  fSWAP 网络（`ansatz/_excitation.py`：`fswap_ops`/`single_excitation_ops`/
+  `double_excitation_ops`）精确实现，双激发的创生/湮灭对角色由参数*位置*（而非数值
+  大小）决定，正确处理 HF 占据/未占据在比特序上交错分布的情形（如 H2 4-qubit JW：
+  占据 {1,3}、未占据 {0,2}）。参数顺序为先 reps 外层、后激发内层。配套
+  `uccsd_parameter_count`、`tests/vqc/test_uccsd_ansatz.py`、
+  `tests/vqc/test_excitation_circuits.py`（JW 生成元 expm oracle，覆盖交错角色配对）、
+  以及端到端集成测试 `tests/vqc/test_uccsd_vqe_integration.py`（`build_molecule` →
+  `uccsd` → `BasicVQE`，H2 收敛到基态能量，VQE 能量与精确对角化基态相差 ~1e-7）。
+- **`aicir.qml.QLayer`：把 `QFun` 封装成 `torch.nn.Module` 量子层，可一行嵌入
+  PyTorch 混合网络。** 前向调用 `qfun(params)`、反向调用 `qfun.grad(params)`（参数移位
+  Jacobian）接入 torch autograd，与 `QFun` 后端解耦（`device="numpy"/"gpu"/"npu"` 皆可），
+  梯度方法仍走 `aicir.qml.diff` 注册表单一真源。经典输入与可训练权重经 `torch.cat` 拼成
+  单参数向量喂给 `qfun`，梯度同时回流到前置经典层与本层权重；支持批量输入与多观测量输出。
+  `torch` 为可选依赖，缺失时 `aicir.qml.QLayer is None`。配套 `tests/qml/test_qlayer.py`
+  与 `aicir/qml/README.md` §17。
+- **`aicir.simulator` 精确张量网络模拟引擎：`tn_statevector` / `single_amplitude` /
+  `partial_amplitude` / `tn_expectation`，并为 `Measure.run` 增加 `method="tensor"`。**
+  收缩建立在新的 `Backend` 原语（`tensordot/transpose/reshape/conj`）之上，NPU 的
+  `tensordot` 复用 autograd-safe 复数 matmul（real/imag 分解），期望值在 torch/NPU 后端
+  可微；收缩路径用 opt_einsum（可选）或内置贪心。仅纯态、无噪声。配套
+  `demos/demo_npu_tensor.py`（远程 NPU 验证）与 `aicir/simulator/README.md`。MPS 截断另立 Spec 2。
+
 ## 2026-07-01
 
 ### Added

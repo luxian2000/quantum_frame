@@ -2,7 +2,8 @@
 
 Approach A 把矩阵构造改为经注册表 ``GateSpec.matrix`` 分发。本测试断言两条路径
 （``gate_to_matrix`` 全矩阵 / ``apply_gate_to_state`` 局部）对参数门的梯度仍与有限
-差分一致，即计算图未被破坏。跨 torch / npu 后端（可用才跑）。
+差分一致，即计算图未被破坏。CPU fallback 的 NPUBackend 会跑；真实 NPU 的
+通用 complex autograd fan-out 不在此测试契约内，NPU 专用 deriv 覆盖见 backend/probe 测试。
 """
 
 from __future__ import annotations
@@ -26,6 +27,17 @@ from aicir.core.gates import apply_gate_to_state, gate_to_matrix
 N_QUBITS = 4
 
 
+def _backend_device_type(backend):
+    device = getattr(backend, "_device", getattr(backend, "device", None))
+    if device is None:
+        return None
+    return getattr(device, "type", str(device).split(":", 1)[0])
+
+
+def _include_backend_for_generic_matrix_autograd(name, backend) -> bool:
+    return not (name == "npu" and _backend_device_type(backend) == "npu")
+
+
 def _backends():
     from aicir.backends.gpu_backend import GPUBackend
 
@@ -33,7 +45,9 @@ def _backends():
     try:
         from aicir.backends.npu_backend import NPUBackend
 
-        out.append(("npu", NPUBackend()))
+        npu_backend = NPUBackend()
+        if _include_backend_for_generic_matrix_autograd("npu", npu_backend):
+            out.append(("npu", npu_backend))
     except Exception:
         pass
     return out
@@ -41,6 +55,17 @@ def _backends():
 
 BACKENDS = _backends()
 BACKEND_IDS = [b[0] for b in BACKENDS]
+
+
+def test_real_npu_backend_is_not_in_generic_matrix_autograd_backend_list():
+    class RealNPUBackend:
+        class Device:
+            type = "npu"
+
+        _device = Device()
+
+    assert not _include_backend_for_generic_matrix_autograd("npu", RealNPUBackend())
+
 
 GATES = [
     ("rx", lambda th: rx(th, 0), 0.37),
@@ -70,7 +95,27 @@ def _expectation(theta_t, gate_fn, backend, psi, obs, path):
     else:
         psip = apply_gate_to_state(gate, psi, N_QUBITS, backend)
     psip = psip.reshape(-1, 1)
-    return (psip.conj().transpose(0, 1) @ obs @ psip).real.reshape(())
+    return backend.expectation_sv(psip, obs).reshape(())
+
+
+def test_expectation_helper_uses_backend_expectation_sv_for_backend_compatibility():
+    from aicir.backends.gpu_backend import GPUBackend
+
+    class RecordingBackend(GPUBackend):
+        def __init__(self):
+            super().__init__(device="cpu")
+            self.expectation_calls = 0
+
+        def expectation_sv(self, state, operator):
+            self.expectation_calls += 1
+            return super().expectation_sv(state, operator)
+
+    backend = RecordingBackend()
+    psi, obs = _fixtures(backend)
+
+    _expectation(torch.tensor(0.37), lambda th: rx(th, 0), backend, psi, obs, "local")
+
+    assert backend.expectation_calls == 1
 
 
 @pytest.mark.parametrize("path", ["matrix", "local"])

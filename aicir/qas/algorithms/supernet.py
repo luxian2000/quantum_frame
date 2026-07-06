@@ -1637,7 +1637,7 @@ class Supernet:
                 "supernet_id": local_supernet_id,
                 "ranking_index": cand_index,
                 "n_qubits": int(local_circuit.n_qubits),
-                "gates": list(local_circuit.gates),
+                "gates": local_circuit.to_gate_dicts(),
                 # 使用真实 ParameterKey（纯 tuple，可序列化）作为键，保证 all_gather
                 # 后各 rank 能用胜出架构的键直接索引 _final_metrics/_loss。
                 "numeric_parameters": {key: float(value.detach()) for key, value in local_params.items()},

@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from ...core.circuit import Circuit, Parameter, rx, ry, rz
+from ..core.circuit import Circuit, Parameter, rx, ry, rz
 
 
 _CDTYPE = np.complex64

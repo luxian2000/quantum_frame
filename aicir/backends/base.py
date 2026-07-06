@@ -200,6 +200,40 @@ class Backend(ABC):
             实数标量张量
         """
 
+    def apply_statevector_local(self, state, local_matrix, axes, n_qubits: int):
+        """Optionally apply a local gate directly to a pure statevector.
+
+        Backends that can perform bounded-memory local statevector updates may
+        return a new ``(2**n_qubits, 1)`` state tensor. Returning ``None`` means
+        the caller should use the generic local-matrix fallback.
+        """
+        return None
+
+    # ──────────────────────── 张量网络收缩原语 ──────────────────────
+    def tensordot(self, a, b, axes):
+        """沿 axes=(list_a, list_b) 收缩两张量；轴序同 numpy.tensordot。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 tensordot")
+
+    def transpose(self, a, axes):
+        """按 axes 置换张量轴。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 transpose")
+
+    def reshape(self, a, shape):
+        """把张量变形为 shape。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 reshape")
+
+    def conj(self, a):
+        """逐元素复共轭。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 conj")
+
+    def take(self, a, axis, index):
+        """沿 axis 取下标 index（该轴消失），用于张量网络切片固定指标。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 take")
+
+    def add(self, a, b):
+        """逐元素相加，用于切片收缩结果累加。"""
+        raise NotImplementedError(f"{type(self).__name__} 未实现 add")
+
     # ──────────────────────────── 便利方法（非抽象）────────────────────
 
     def tensor_product(self, *matrices):

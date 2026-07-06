@@ -6,25 +6,32 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from .control_flow import ControlFlow
 from .measurement import Measurement
 from .operation import Operation, _as_int_tuple
 
 
-CircuitInstruction = Operation | Measurement
+CircuitInstruction = Operation | Measurement | ControlFlow
 
 
 def _is_measurement_dict(gate: Mapping[str, Any]) -> bool:
-    return str(gate.get("type", "")).lower() in {"measure", "measurement"}
+    return str(gate.get("type", "")).lower() in {"measure", "measurement", "reset"}
+
+
+def _is_control_flow_dict(gate: Mapping[str, Any]) -> bool:
+    return str(gate.get("type", "")).lower() in {"if", "while"}
 
 
 def _instruction_from_object(value: CircuitInstruction | Mapping[str, Any]) -> CircuitInstruction:
-    if isinstance(value, (Operation, Measurement)):
+    if isinstance(value, (Operation, Measurement, ControlFlow)):
         return value
     if isinstance(value, Mapping):
+        if _is_control_flow_dict(value):
+            return ControlFlow.from_dict(value)
         if _is_measurement_dict(value):
             return Measurement.from_dict(value)
         return Operation.from_dict(value)
-    raise TypeError("CircuitIR operations must be Operation, Measurement, or gate mappings")
+    raise TypeError("CircuitIR operations must be Operation, Measurement, ControlFlow, or gate mappings")
 
 
 @dataclass(frozen=True)

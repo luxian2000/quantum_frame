@@ -11,6 +11,7 @@ from .circuit import (
     cy,
     cz,
     hadamard,
+    if_,
     measure,
     molmer_sorensen,
     ms_gate,
@@ -32,8 +33,10 @@ from .circuit import (
     toffoli,
     u2,
     u3,
+    while_,
 )
 from .state import State
+from .classical import Bit, ClassicalRegister, Condition
 from .io.json_io import circuit_from_json, circuit_to_json, load_circuit_json, save_circuit_json
 from .io.qasm import (
     circuit_from_qasm,
@@ -65,6 +68,9 @@ __all__ = [
     "Circuit",
     "Parameter",
     "State",
+    "ClassicalRegister",
+    "Bit",
+    "Condition",
     "circuit",
     "pauli_x",
     "pauli_y",
@@ -73,6 +79,8 @@ __all__ = [
     "hadamard",
     "measure",
     "reset",
+    "if_",
+    "while_",
     "molmer_sorensen",
     "ms_gate",
     "rx",

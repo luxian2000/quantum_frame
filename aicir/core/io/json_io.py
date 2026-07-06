@@ -5,7 +5,8 @@ Circuit 的 JSON 序列化与反序列化。
 
 与当前仓库的 `Circuit` 对象兼容：
 - circuit.n_qubits
-- typed IR operations 或 circuit.gates (list[dict])
+- typed IR operations / circuit.gates
+- legacy dict snapshots from circuit.to_gate_dicts()
 """
 
 from __future__ import annotations

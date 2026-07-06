@@ -29,18 +29,23 @@ from ..core.circuit import (
 from ..core.io.json_io import circuit_from_json, circuit_from_json_dict, load_circuit_json
 from ..core.io.qasm import circuit_from_qasm, load_circuit_qasm
 from ..gates import canonical_gate_name
-from ..ir import Measurement, Operation, circuit_gate_dicts, has_circuit_instructions
+from ..ir import (
+    Measurement,
+    Operation,
+    circuit_instructions,
+    has_circuit_instructions,
+    instruction_controls,
+    instruction_name,
+    instruction_n_qubits,
+    instruction_parameter,
+    instruction_qubits,
+)
 from .utils import require_matplotlib
 
 
-def _controlled_targets(gate: dict) -> list[int]:
+def _controlled_targets(gate) -> list[int]:
     """受控门的目标位列表：多目标 cx 携带 ``qubits``，单目标用 ``target_qubit``。"""
-    qubits = gate.get("qubits")
-    if qubits:
-        return [int(q) for q in qubits]
-    if "target_qubit" in gate:
-        return [int(gate["target_qubit"])]
-    return []
+    return [int(q) for q in instruction_qubits(gate)]
 
 
 # --- Style ----------------------------------------------------------------
@@ -173,15 +178,12 @@ def _style_for(gate_type: str) -> tuple[str, str]:
     return _PALETTE["default"]
 
 
-def _measure_targets(gate: dict) -> list[int]:
+def _measure_targets(gate) -> list[int]:
     """Qubits a measure gate reads out (supports ``qubits`` list or ``target_qubit``)."""
-    qubits = gate.get("qubits")
-    if not qubits and "target_qubit" in gate:
-        qubits = [gate["target_qubit"]]
-    return [int(q) for q in (qubits or [])]
+    return [int(q) for q in instruction_qubits(gate)]
 
 
-def _reset_targets(gate: dict, n_qubits: int) -> list[int]:
+def _reset_targets(gate, n_qubits: int) -> list[int]:
     """Qubits a reset gate targets; empty reset() means every qubit."""
     return _measure_targets(gate) or list(range(n_qubits))
 
@@ -192,8 +194,8 @@ def _pretty_angle(value: Any) -> str:
     return text.replace("pi", "π")
 
 
-def _gate_label(gate: dict) -> str:
-    gate_type = gate["type"]
+def _gate_label(gate) -> str:
+    gate_type = instruction_name(gate)
     canonical = canonical_gate_name(gate_type)
     if canonical == "single_excitation":
         return "Giv"
@@ -205,8 +207,8 @@ def _gate_label(gate: dict) -> str:
     return symbol
 
 
-def _angle_sublabel(gate: dict) -> str | None:
-    gate_type = canonical_gate_name(gate.get("type"))
+def _angle_sublabel(gate) -> str | None:
+    gate_type = canonical_gate_name(instruction_name(gate))
     if gate_type in {
         "rx",
         "ry",
@@ -219,11 +221,11 @@ def _angle_sublabel(gate: dict) -> str | None:
         "single_excitation",
         "double_excitation",
     }:
-        param = gate.get("parameter")
+        param = instruction_parameter(gate)
         if param is not None:
             return _pretty_angle(param)
     if gate_type in {"u2", "u3"}:
-        params = gate.get("parameter")
+        params = instruction_parameter(gate)
         if params is not None:
             angles = [_pretty_angle(value) for value in params]
             if gate_type == "u2":
@@ -234,27 +236,19 @@ def _angle_sublabel(gate: dict) -> str | None:
     return None
 
 
-def _sublabel_scale(gate: dict) -> float:
-    return 0.40 if gate.get("type") in {"u2", "u3"} else 0.50
+def _sublabel_scale(gate) -> float:
+    return 0.40 if instruction_name(gate) in {"u2", "u3"} else 0.50
 
 
-def _excitation_qubits(gate: dict) -> list[int]:
-    qubits = gate.get("qubits")
-    if qubits:
-        return [int(q) for q in qubits]
-    if "qubit_1" in gate and "qubit_2" in gate:
-        values = [int(gate["qubit_1"]), int(gate["qubit_2"])]
-        if "qubit_3" in gate and "qubit_4" in gate:
-            values.extend([int(gate["qubit_3"]), int(gate["qubit_4"])])
-        return values
-    return []
+def _excitation_qubits(gate) -> list[int]:
+    return [int(q) for q in instruction_qubits(gate)]
 
 
-def _gate_qubits(gate: dict, n_qubits: int) -> list[int]:
+def _gate_qubits(gate, n_qubits: int) -> list[int]:
     """All wires a gate touches (used for layer packing)."""
-    gate_type = canonical_gate_name(gate["type"])
+    gate_type = canonical_gate_name(instruction_name(gate))
     if gate_type in {"swap", "rzz", "rxx"}:
-        return [int(gate["qubit_1"]), int(gate["qubit_2"])]
+        return [int(q) for q in instruction_qubits(gate)]
     if gate_type in {"single_excitation", "double_excitation"}:
         return _excitation_qubits(gate)
     if gate_type in {"identity", "I", "unitary"}:
@@ -262,7 +256,7 @@ def _gate_qubits(gate: dict, n_qubits: int) -> list[int]:
     if gate_type in {"measure", "measurement", "reset"}:
         return list(range(n_qubits))
     qubits: list[int] = []
-    controls = gate.get("control_qubits")
+    controls = instruction_controls(gate)
     if controls:
         qubits.extend(int(q) for q in controls)
     qubits.extend(_controlled_targets(gate))
@@ -274,7 +268,7 @@ def _pack_layers(circuit: Any) -> list[int]:
     n_qubits = int(circuit.n_qubits)
     next_available = [0] * n_qubits
     columns: list[int] = []
-    for gate in circuit_gate_dicts(circuit):
+    for gate in circuit_instructions(circuit):
         touched = _gate_qubits(gate, n_qubits)
         span = set(range(min(touched), max(touched) + 1))
         col = max(next_available[q] for q in span)
@@ -284,15 +278,15 @@ def _pack_layers(circuit: Any) -> list[int]:
     return columns
 
 
-def _gate_draws_box_on_qubit(gate: dict, qubit: int, n_qubits: int) -> bool:
+def _gate_draws_box_on_qubit(gate, qubit: int, n_qubits: int) -> bool:
     """Whether rendering covers ``qubit`` with a box-shaped gate body."""
-    gate_type = canonical_gate_name(gate["type"])
+    gate_type = canonical_gate_name(instruction_name(gate))
     if gate_type in {"identity", "I"}:
         return True
     if gate_type == "unitary":
-        return qubit < int(gate.get("n_qubits", n_qubits))
+        return qubit < int(instruction_n_qubits(gate, n_qubits))
     if gate_type in {"rzz", "rxx"}:
-        return qubit in {int(gate["qubit_1"]), int(gate["qubit_2"])}
+        return qubit in set(instruction_qubits(gate))
     if gate_type in {"single_excitation", "double_excitation"}:
         return qubit in set(_excitation_qubits(gate))
     if gate_type == "swap":
@@ -301,14 +295,14 @@ def _gate_draws_box_on_qubit(gate: dict, qubit: int, n_qubits: int) -> bool:
     targets = _controlled_targets(gate)
     if not targets:
         return False
-    controls = [int(q) for q in gate.get("control_qubits", [])]
+    controls = [int(q) for q in instruction_controls(gate)]
     if controls:
         return qubit in targets and gate_type not in {"cx", "toffoli"}
     return qubit in targets
 
 
 def _next_quantum_gate_column(
-    gates: list[dict],
+    gates: list[Any],
     columns: list[int],
     start: int,
     qubit: int,
@@ -316,7 +310,7 @@ def _next_quantum_gate_column(
 ) -> float | None:
     """Return where a reset dash should stop before the next quantum gate."""
     for gate, col in zip(gates[start:], columns[start:]):
-        gate_type = canonical_gate_name(gate["type"])
+        gate_type = canonical_gate_name(instruction_name(gate))
         if gate_type in {"measure", "measurement", "reset"}:
             continue
         if qubit in _gate_qubits(gate, n_qubits):
@@ -327,7 +321,7 @@ def _next_quantum_gate_column(
 
 
 def _reset_link_targets(
-    gates: list[dict],
+    gates: list[Any],
     columns: list[int],
     n_qubits: int,
     default_end: float,
@@ -336,7 +330,7 @@ def _reset_link_targets(
     measured_col: dict[int, float] = {}
     links: dict[int, dict[int, tuple[float, float]]] = {}
     for index, (gate, col) in enumerate(zip(gates, columns)):
-        gate_type = canonical_gate_name(gate["type"])
+        gate_type = canonical_gate_name(instruction_name(gate))
         if gate_type in {"measure", "measurement"}:
             for q in (_measure_targets(gate) or list(range(n_qubits))):
                 measured_col[int(q)] = float(col)
@@ -518,7 +512,7 @@ def _draw_reset_link(ax, x_start, x_end, y, color):
 
 
 def _render_gate(ax, gate, x, n_qubits, fontsize, reset_link_targets=None):
-    gate_type = canonical_gate_name(gate["type"])
+    gate_type = canonical_gate_name(instruction_name(gate))
     facecolor, edgecolor = _style_for("measure" if gate_type == "reset" else gate_type)
     reset_link_targets = reset_link_targets or set()
 
@@ -542,7 +536,7 @@ def _render_gate(ax, gate, x, n_qubits, fontsize, reset_link_targets=None):
         return
 
     if gate_type == "unitary":
-        n = int(gate.get("n_qubits", n_qubits))
+        n = int(instruction_n_qubits(gate, n_qubits))
         top, bottom = _yy(0, n_qubits), _yy(n - 1, n_qubits)
         height = (top - bottom) + _BOX
         _draw_box(ax, x, (top + bottom) / 2, "U", facecolor, edgecolor,
@@ -550,14 +544,14 @@ def _render_gate(ax, gate, x, n_qubits, fontsize, reset_link_targets=None):
         return
 
     if gate_type == "swap":
-        q1, q2 = int(gate["qubit_1"]), int(gate["qubit_2"])
+        q1, q2 = [int(q) for q in instruction_qubits(gate)[:2]]
         _draw_connector(ax, x, min(q1, q2), max(q1, q2), n_qubits, edgecolor)
         _draw_swap_mark(ax, x, _yy(q1, n_qubits), edgecolor, fontsize=fontsize)
         _draw_swap_mark(ax, x, _yy(q2, n_qubits), edgecolor, fontsize=fontsize)
         return
 
     if gate_type in {"rzz", "rxx"}:
-        q1, q2 = int(gate["qubit_1"]), int(gate["qubit_2"])
+        q1, q2 = [int(q) for q in instruction_qubits(gate)[:2]]
         _draw_connector(ax, x, min(q1, q2), max(q1, q2), n_qubits, edgecolor)
         label = "Rzz" if gate_type == "rzz" else "Rxx"
         # Two squares share one angle, shown once below the lower square (the
@@ -592,7 +586,7 @@ def _render_gate(ax, gate, x, n_qubits, fontsize, reset_link_targets=None):
             )
         return
 
-    controls = [int(q) for q in gate.get("control_qubits", [])]
+    controls = [int(q) for q in instruction_controls(gate)]
     targets = _controlled_targets(gate)
 
     if controls:
@@ -636,7 +630,7 @@ def _render_figure(
     """Draw an already-resolved ``Circuit`` and return ``(fig, ax)``."""
     plt = require_matplotlib()
     n_qubits = int(circuit.n_qubits)
-    gates = circuit_gate_dicts(circuit)
+    gates = list(circuit_instructions(circuit))
 
     if layered and gates:
         columns = _pack_layers(circuit)
@@ -658,7 +652,7 @@ def _render_figure(
     # preceding measurement marker and lets the wire continue.
     measure_col: dict[int, float] = {}
     for gate, col in zip(gates, columns):
-        gate_type = canonical_gate_name(gate["type"])
+        gate_type = canonical_gate_name(instruction_name(gate))
         if gate_type in {"measure", "measurement"}:
             for q in (_measure_targets(gate) or list(range(n_qubits))):
                 measure_col.setdefault(q, float(col))

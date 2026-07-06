@@ -55,7 +55,7 @@ def test_operation_label_is_an_explicit_field():
     assert "label" not in unlabeled.to_dict()
 
 
-def test_operation_can_build_circuit_without_changing_gate_dict_surface():
+def test_operation_can_build_circuit_with_typed_and_legacy_surfaces():
     theta = Parameter("theta")
     circuit = Circuit(
         Operation("rx", qubits=(0,), params=(theta,)),
@@ -63,9 +63,10 @@ def test_operation_can_build_circuit_without_changing_gate_dict_surface():
         n_qubits=2,
     )
 
-    assert circuit.gates == [
+    assert [gate.name for gate in circuit.gates] == ["rx", "cx"]
+    assert circuit.legacy_gates == [
         {"type": "rx", "target_qubit": 0, "parameter": theta},
-        {"type": "cx", "target_qubit": 1, "control_qubits": [0], "control_states": [1]},
+        {"type": "cx", "target_qubit": 1, "control_qubits": [0]},
     ]
     assert circuit.parameters == (theta,)
 
@@ -189,7 +190,7 @@ def test_circuit_ir_round_trips_existing_circuit_surface():
     assert ir.metadata == {"name": "example"}
     assert isinstance(ir.operations[0], Operation)
     assert isinstance(ir.operations[2], Measurement)
-    assert ir.to_gate_dicts() == circuit.gates
+    assert ir.to_gate_dicts() == circuit.legacy_gates
 
     restored = ir.to_circuit()
 

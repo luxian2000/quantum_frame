@@ -8,7 +8,6 @@ aicir/metrics/expressibility.py
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import List, Optional
 
 import numpy as np
@@ -16,7 +15,7 @@ import numpy as np
 from ..backends.base import Backend
 from ..core.circuit import Circuit
 from ..core.state import State
-from ..ir import circuit_gate_dicts, circuit_instructions, instruction_name, instruction_parameter
+from ..ir import circuit_instructions, instruction_name, instruction_parameter, instruction_with_parameter
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -46,34 +45,43 @@ def _replace_circuit_parameters(circuit: Circuit, params: np.ndarray) -> Circuit
     返回:
         新的 Circuit 对象，所有参数化门的参数已更新
     """
-    gates_copy = deepcopy(circuit_gate_dicts(circuit))
+    instructions = []
     param_idx = 0
 
-    for i, gate in enumerate(gates_copy):
-        if "parameter" not in gate:
+    for instruction in circuit_instructions(circuit):
+        current_parameter = instruction_parameter(instruction)
+        if current_parameter is None:
+            instructions.append(instruction)
             continue
 
-        gate_type = gate["type"]
+        gate_type = instruction_name(instruction)
 
         # 根据门类型确定参数数量
         if gate_type in ("rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"):
             # 单参数门
-            gate["parameter"] = float(params[param_idx])
+            instruction = instruction_with_parameter(instruction, float(params[param_idx]))
             param_idx += 1
         elif gate_type == "u2":
             # 两参数门
-            gate["parameter"] = [float(params[param_idx]), float(params[param_idx + 1])]
+            instruction = instruction_with_parameter(
+                instruction,
+                [float(params[param_idx]), float(params[param_idx + 1])],
+            )
             param_idx += 2
         elif gate_type == "u3":
             # 三参数门
-            gate["parameter"] = [
-                float(params[param_idx]),
-                float(params[param_idx + 1]),
-                float(params[param_idx + 2]),
-            ]
+            instruction = instruction_with_parameter(
+                instruction,
+                [
+                    float(params[param_idx]),
+                    float(params[param_idx + 1]),
+                    float(params[param_idx + 2]),
+                ],
+            )
             param_idx += 3
+        instructions.append(instruction)
 
-    return Circuit(*gates_copy, n_qubits=circuit.n_qubits, backend=getattr(circuit, "backend", None))
+    return Circuit(*instructions, n_qubits=circuit.n_qubits, backend=getattr(circuit, "backend", None))
 
 
 def _compute_fidelity(sv1: State, sv2: State, backend: Backend) -> float:

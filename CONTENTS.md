@@ -40,8 +40,8 @@ quantum_frame/
 |   |   `-- passes/
 |   |-- universal/
 |   |-- visual/
+|   |-- ansatze/
 |   |-- vqc/
-|   |   `-- ansatz/
 |   `-- wireless/
 |-- demos/
 |   |-- BeH2/
@@ -85,5 +85,6 @@ quantum_frame/
     |-- transpile/
     |-- universal/
     |-- visual/
+    |-- ansatze/
     `-- vqc/
 ```

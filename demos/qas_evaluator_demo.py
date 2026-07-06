@@ -31,7 +31,7 @@ from aicir.qas import (
     evaluate_architectures,
     metric_catalog,
 )
-from aicir.vqc.ansatz import hea, hea_parameter_count, hea_ti, hea_ti_parameter_count
+from aicir.ansatze import hea, hea_parameter_count, hea_ti, hea_ti_parameter_count
 
 
 # 用一个简单计数器为每个参数门给出确定性的占位角度，便于复现。
@@ -117,7 +117,7 @@ def two_local_cz(n_qubits: int, layers: int) -> ArchitectureSpec:
 
 
 def vqc_hea(n_qubits: int, layers: int) -> ArchitectureSpec:
-    """直接复用 aicir.vqc.ansatz 的 hea 模板（RY/RZ + 线性 CX）。
+    """直接复用 aicir.ansatze 的 hea 模板（RY/RZ + 线性 CX）。
 
     模板默认生成符号 Parameter；这里给出确定性数值绑定，
     便于基于采样的指标稳定复现。
@@ -125,15 +125,15 @@ def vqc_hea(n_qubits: int, layers: int) -> ArchitectureSpec:
     n_params = hea_parameter_count(n_qubits, layers, rotation_gates=("ry", "rz"), entangler="cx")
     values = (0.071 * (1 + np.arange(n_params))).tolist()
     circuit = hea(n_qubits, layers, rotation_gates=("ry", "rz"), entangler="cx", parameters=values)
-    return ArchitectureSpec(name="vqc_hea", circuit=circuit, tags=["HEA", "vqc.ansatz"])
+    return ArchitectureSpec(name="vqc_hea", circuit=circuit, tags=["HEA", "ansatz"])
 
 
 def vqc_hea_ti(n_qubits: int, layers: int) -> ArchitectureSpec:
-    """直接复用 aicir.vqc.ansatz 的 hea_ti 模板（离子阱：Rx Ry Rx + 全局 TFIM 演化）。"""
+    """直接复用 aicir.ansatze 的 hea_ti 模板（离子阱：Rx Ry Rx + 全局 TFIM 演化）。"""
     n_params = hea_ti_parameter_count(n_qubits, layers, variant="general")
     values = (0.071 * (1 + np.arange(n_params))).tolist()
     circuit = hea_ti(n_qubits, layers, variant="general", parameters=values)
-    return ArchitectureSpec(name="vqc_hea_ti", circuit=circuit, tags=["HEA-TI", "trapped_ion", "vqc.ansatz"])
+    return ArchitectureSpec(name="vqc_hea_ti", circuit=circuit, tags=["HEA-TI", "trapped_ion", "ansatz"])
 
 
 def build_candidates(n_qubits: int = 4, layers: int = 2) -> List[ArchitectureSpec]:

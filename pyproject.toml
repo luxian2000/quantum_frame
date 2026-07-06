@@ -28,10 +28,14 @@ viz = ["matplotlib"]
 # 科学计算（部分优化器 / 经典优化层）
 sci = ["scipy"]
 chemistry = ["qiskit-nature", "pyscf"]
+# 电子结构流水线（build_molecule；pyscf 为重编译依赖，单列）
+chem = ["qiskit-nature", "pyscf"]
+# 张量网络收缩路径优化 + 切片（cotengra planner）
+tn = ["cotengra"]
 # 全部可选运行时依赖
-all = ["torch", "matplotlib", "scipy", "qiskit-nature", "pyscf"]
+all = ["torch", "matplotlib", "scipy", "qiskit-nature", "pyscf", "cotengra"]
 # 开发与测试
-dev = ["pytest", "torch", "matplotlib", "scipy", "qiskit-nature", "pyscf"]
+dev = ["pytest", "torch", "matplotlib", "scipy", "qiskit-nature", "pyscf", "cotengra"]
 
 [tool.setuptools.dynamic]
 version = { attr = "aicir.__version__" }

@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from aicir import NumpyBackend
-from aicir.vqc.ansatz import (
+from aicir.ansatze import (
     global_evolution_unitary,
     hea_ti,
     hea_ti_ansatz,

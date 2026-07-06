@@ -43,6 +43,7 @@ import numpy as np
 from ...backends.numpy_backend import NumpyBackend
 from ...core.circuit import Circuit, cx, ry, rz
 from ...core.operators import Hamiltonian
+from ...ir import instruction_controls, instruction_name, instruction_qubits
 
 
 Edge = tuple[int, int]
@@ -238,16 +239,14 @@ def extract_blocks_from_circuit(
     """Extract a MoG-VQE block topology from the CNOTs in an existing circuit."""
 
     blocks: list[MOGVQEBlock] = []
-    for gate in circuit.gates:
-        gate_type = str(gate["type"]).lower()
+    for instruction in circuit.gates:
+        gate_type = str(instruction_name(instruction)).lower()
         if gate_type not in {"cx", "cnot"}:
             continue
-        controls = list(gate.get("control_qubits", []))
+        controls = list(instruction_controls(instruction))
         if len(controls) != 1:
             continue
-        targets = gate.get("qubits", None)
-        if targets is None:
-            targets = [gate["target_qubit"]]
+        targets = instruction_qubits(instruction)
         for target in targets:
             blocks.append(MOGVQEBlock(int(controls[0]), int(target), block_type))
     return MOGVQEIndividual(
@@ -412,7 +411,7 @@ def nsga_ii_select(
 def count_cnot_gates(circuit: Circuit) -> int:
     """Count CNOT/CX gates in a generated ``Circuit``."""
 
-    return sum(1 for gate in circuit.gates if str(gate["type"]).lower() in {"cx", "cnot"})
+    return sum(1 for instruction in circuit.gates if str(instruction_name(instruction)).lower() in {"cx", "cnot"})
 
 
 def _append_block_gates(gates: list[Any], block: MOGVQEBlock, theta: np.ndarray) -> None:

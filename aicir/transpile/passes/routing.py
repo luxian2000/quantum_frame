@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections import deque
 
 from ...core.circuit import Circuit
-from ...ir import circuit_gate_dicts, instruction_controls, instruction_qubits
+from ...ir import circuit_gate_dicts, instruction_controls, instruction_name, instruction_qubits
 from ..base import TransformationPass
 from ._local_rewrite import circuit_from_gates, remap_gate
 
@@ -116,7 +116,7 @@ class RoutingPass(TransformationPass):
                 continue
             if len(qubits) > 2:
                 raise NotImplementedError(
-                    f"RoutingPass: gate '{gate['type']}' acts on {len(qubits)} qubits; "
+                    f"RoutingPass: gate '{instruction_name(gate)}' acts on {len(qubits)} qubits; "
                     "basic routing supports at most 2-qubit gates"
                 )
             q0, q1 = int(qubits[0]), int(qubits[1])

@@ -48,6 +48,7 @@ class Result:
     expectation_variances: Dict[str, float] = field(default_factory=dict)
     snapshot_states: Dict[int, State] = field(default_factory=dict)
     metadata: Dict[str, object] = field(default_factory=dict)
+    classical_trajectories: List[Dict[str, List[int]]] = field(default_factory=list)
 
     def _resolve(self, target: Union[int, str]) -> int:
         if isinstance(target, str):
@@ -78,6 +79,22 @@ class Result:
         if idx not in self.incircuit_counts:
             raise ValueError(f"操作下标 {idx} 不是线路内 measure 操作")
         return dict(self.incircuit_counts[idx])
+
+    def classical_counts(self, reg) -> Dict[int, int]:
+        """统计经典寄存器 reg 在各轨迹末尾的整数取值分布（LSB=bit0）。
+
+        reg 可以是 ClassicalRegister（读取其 .name）或寄存器名字符串。
+        从未写入该寄存器的轨迹 → 空 dict。
+        """
+        name = reg if isinstance(reg, str) else reg.name
+        counts: Dict[int, int] = {}
+        for traj in self.classical_trajectories:
+            bits = traj.get(name)
+            if bits is None:
+                continue
+            value = sum(int(b) << i for i, b in enumerate(bits))
+            counts[value] = counts.get(value, 0) + 1
+        return counts
 
     def prob(self, target: Union[int, str]):
         counts = self.counts(target)

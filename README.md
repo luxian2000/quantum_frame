@@ -7,7 +7,7 @@
 - [1. 项目概览与安装](#1-项目概览与安装)
 - [2. 模块导入](#2-模块导入)
 - [3. 构建量子态](#3-构建量子态)
-- [4. 量子线路的搭建](#4-量子线路的搭建)
+- [4. 搭建量子线路](#4-搭建量子线路)
 - [5. 量子测量](#5-量子测量)
 - [6. 构建哈密顿量](#6-构建哈密顿量)
 - [7. 子包说明索引](#7-子包说明索引)
@@ -16,36 +16,37 @@
 
 ## 1. 项目概览与安装
 
-A from-scratch quantum circuit simulator and quantum-algorithm framework for Python. Supports state vectors, density matrices, noise models, variational algorithms (VQE/QAOA/VQD/SSVQE), quantum architecture search, QML gradients, and OpenQASM I/O — with pluggable backends for CPU, GPU, and Ascend NPU.
+`aicir` 是一个从零实现的 Python 量子线路模拟器与量子算法框架，支持态矢量、密度矩阵、噪声模型、变分算法（VQE/QAOA/VQD/SSVQE）、量子架构搜索、QML 梯度和 OpenQASM 输入输出，并提供可插拔的 CPU、GPU 与 Ascend NPU 后端。
 
-### 1.1 Features（功能特性）
+### 1.1 功能特性
 
 
-- **Unified quantum state** — `State` class handles pure states (amplitude vector) and mixed states (density matrix) with a consistent API
-- **Rich gate library** — single-qubit, rotation, controlled, multi-target, multi-control, and particle-conserving excitation gates (`single_excitation`/Givens, `double_excitation`); typed `Operation` IR with construction-time validation
-- **Flexible measurement** — in-circuit Pauli projection, terminal readout, shot sampling, exact mode, state snapshots, and partial traces
-- **Variational algorithms** — `BasicVQE`, `run_vqe`, QAOA, VQD, SSVQE with built-in ansatz templates (HEA, trapped-ion HEA-TI)
-- **QML gradients** — parameter-shift (`psr`, `spsr`, `multipsr`, four-term `psr4` for excitation gates), finite-difference, SPSA, quantum natural gradient, and PyTorch `autograd`
-- **Quantum architecture search** — weight-shared supernet, CRLQAS, PPR\_DQL, PPO\_RB (requires PyTorch)
-- **Noise simulation** — depolarizing, bit/phase flip, amplitude damping, ion-trap noise via density-matrix evolution
-- **OpenQASM I/O** — round-trip import/export for OpenQASM 2.0 and 3.0; Qiskit, PennyLane, and WuYue interop
-- **Pluggable backends** — `NumpyBackend` (CPU), `GPUBackend` (PyTorch / CUDA), `NPUBackend` (Ascend) — swap with one line
+- **统一量子态表示**：`State` 用同一套 API 表示纯态（振幅向量）和混合态（密度矩阵）。
+- **丰富的门库**：支持单比特门、旋转门、受控门、多目标门、多控制门，以及粒子数守恒激发门（`single_excitation`/Givens、`double_excitation`）；门构造时会做参数和比特数校验。
+- **灵活测量模型**：支持线路内 Pauli 投影测量、末端读出、shots 采样、精确模式、态快照和偏迹。
+- **经典控制流**：支持由测量结果驱动的 `ClassicalRegister`、`measure(creg=)`、`if_`/`while_`（含 `else`），按每条测量轨迹求值（见 §5.13）。
+- **变分算法**：内置 `BasicVQE`、`run_vqe`、QAOA、VQD、SSVQE，以及 HEA、离子阱 HEA-TI 等 ansatz 模板。
+- **QML 梯度**：支持参数移位（`psr`、`spsr`、`multipsr`，以及激发门四项参数移位 `psr4`）、有限差分、SPSA、量子自然梯度和 PyTorch `autograd`。
+- **量子架构搜索**：支持权重共享 supernet、CRLQAS、PPR\_DQL、PPO\_RB（需要 PyTorch）。
+- **噪声模拟**：通过密度矩阵演化支持退相干、比特/相位翻转、振幅阻尼和离子阱噪声。
+- **OpenQASM 输入输出**：支持 OpenQASM 2.0/3.0 导入导出，并提供 Qiskit、PennyLane、WuYue 互操作。
+- **可插拔后端**：`NumpyBackend`（CPU）、`GPUBackend`（PyTorch/CUDA）、`NPUBackend`（Ascend），只需替换一行即可切换。
 
-### 1.2 Installation（安装）
+### 1.2 安装
 
 
 ```bash
-# Core (NumPy only)
+# 核心功能（仅 NumPy）
 pip install aicir
 
-# With optional extras
-pip install "aicir[torch]"   # GPU/NPU backend + QAS
-pip install "aicir[viz]"     # Circuit visualization (matplotlib)
-pip install "aicir[sci]"     # Classical optimizers (scipy)
-pip install "aicir[all]"     # Everything above
+# 按需安装可选功能
+pip install "aicir[torch]"   # GPU/NPU 后端 + QAS
+pip install "aicir[viz]"     # 线路可视化（matplotlib）
+pip install "aicir[sci]"     # 经典优化器（scipy）
+pip install "aicir[all]"     # 上述全部功能
 ```
 
-Or install editable from source:
+也可以从源码安装为可编辑模式：
 
 ```bash
 git clone https://github.com/luxian2000/quantum_frame.git
@@ -53,9 +54,9 @@ cd quantum_frame
 pip install -e ".[all]"
 ```
 
-> `torch`, `matplotlib`, and `scipy` are optional. Core simulation works with NumPy alone.
+> `torch`、`matplotlib` 和 `scipy` 都是可选依赖。只安装 NumPy 时也可以使用核心模拟功能。
 
-### 1.3 Quick Start（快速上手）
+### 1.3 快速上手
 
 
 ```python
@@ -64,7 +65,7 @@ from aicir.core import State
 
 backend = NumpyBackend()
 
-# Build a Bell-state circuit
+# 构建 Bell 态线路
 cir = Circuit(
     hadamard(0),
     cnot(1, [0]),
@@ -72,68 +73,76 @@ cir = Circuit(
     backend=backend,
 )
 
-# Run with 1024 shots
+# 运行 1024 次采样
 result = Measure(backend).run(cir, shots=1024)
 print(result.counts)   # {'00': ~512, '11': ~512}
 
-# Or evolve a state directly
+# 也可以直接演化量子态
 psi = State.zero_state(2, backend)
 psi1 = psi.evolve(cir.unitary())
 print(psi1.ket)        # 1/√2|00> + 1/√2|11>
 ```
 
-### 1.4 Backends（后端）
+### 1.4 后端
 
 
-| Backend | Library | Device | Autograd |
+| 后端 | 底层库 | 设备 | 自动微分 |
 | --- | --- | --- | --- |
-| `NumpyBackend` | NumPy | CPU | No |
-| `GPUBackend` | PyTorch | CPU / CUDA | Yes |
-| `NPUBackend` | PyTorch + torch\_npu | Ascend NPU | Yes |
+| `NumpyBackend` | NumPy | CPU | 否 |
+| `GPUBackend` | PyTorch | CPU / CUDA | 是 |
+| `NPUBackend` | PyTorch + torch\_npu | Ascend NPU | 是 |
 
-Switch backends by changing one line — no other code changes needed:
+切换后端只需要替换一行，其余线路代码通常无需修改：
 
 ```python
 from aicir import GPUBackend, NPUBackend
 
 backend = GPUBackend(device="cuda:0")
-# or
+# 或
 backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 ```
 
-### 1.5 Project Structure（项目结构）
+### 1.5 项目结构
 
 
 ```text
 aicir/
-  backends/     # NumpyBackend, GPUBackend, NPUBackend
-  core/         # State, Circuit, gates, I/O
-  measure/      # Measure, Result, Estimator
-  vqc/          # VQE, QAOA, VQD, SSVQE, ansatz templates
-  qas/          # Quantum architecture search (requires torch)
-  qml/          # Gradient methods
-  noise/        # Noise channels and models
-  ir/           # Typed Operation IR
-  gates/        # GateSpec registry
-  transpile/    # Pass-manager pipeline
-  primitives/   # ShotSampler, StatevectorEstimator, ShotEstimator
-  optimizer/    # Classical optimizers (Adam, COBYLA, LBFGS, …)
-  chemistry/    # Preset qubit Hamiltonians (H2, H2-JW, H2-tapered)
-  encoder/      # AmplitudeEncoder, AngleEncoder, BasisEncoder
-  universal/    # Reusable primitives (QFT, …)
-  visual/       # Circuit visualization
-demos/          # Runnable end-to-end examples
-tests/          # pytest test suite
+  core/          # State、Circuit、Parameter、基础门构造函数、QASM/JSON I/O
+  ir/            # Operation、Measurement、ControlFlow、CircuitIR 等线路表示
+  gates/         # GateSpec 注册表、门矩阵与门元信息
+  backends/      # NumpyBackend、GPUBackend、NPUBackend、NPU 能力探测
+  measure/       # Measure、Result、PauliEstimator、测量轨迹与统计结果
+  primitives/    # Sampler / Estimator primitives
+  qml/           # 参数移位、有限差分、autograd、QNG 等梯度工具
+  ansatze/       # HEA、HEA-TI、UCCSD 等可复用 ansatz 模板
+  vqc/           # VQE、QAOA、VQD、SSVQE 等变分算法
+  qas/           # supernet、DQAS、CRLQAS、PPR_DQL、PPO_RB 等量子架构搜索
+  chemistry/     # 分子哈密顿量预置与可选电子结构计算接口
+  simulator/     # 态矢量 / 张量网络模拟入口
+  transpile/     # PassManager、线路优化与硬件约束变换
+  optimizer/     # 经典参数优化器（Adam、COBYLA、LBFGS、SPSA 等）
+  optimization/  # QUBO、Ising 映射等经典优化问题工具
+  noise/         # 噪声通道、噪声模型与开放系统演化
+  metrics/       # 线路表达能力、可训练性、硬件指标等
+  encoder/       # AmplitudeEncoder、AngleEncoder、BasisEncoder
+  devices/       # 设备/目标硬件能力描述
+  universal/     # QFT 等可复用量子线路模块
+  visual/        # 线路绘图与可视化
+  qrc/           # Quantum Reservoir Computing 预留接口
+  wireless/      # 无线/通信方向实验模块
+demos/          # 可直接运行的端到端示例
+scripts/        # NPU 验证、生成工具等脚本
+tests/          # pytest 测试套件
 ```
 
-### 1.6 Requirements（环境要求）
+### 1.6 环境要求
 
 
 - Python ≥ 3.11
-- NumPy (required)
-- PyTorch (optional — GPU/NPU backend, QAS, autograd)
-- matplotlib (optional — visualization)
-- scipy (optional — classical optimizers)
+- NumPy（必需）
+- PyTorch（可选：GPU/NPU 后端、QAS、自动微分）
+- matplotlib（可选：可视化）
+- scipy（可选：经典优化器）
 
 ---
 
@@ -150,8 +159,7 @@ from aicir import GPUBackend, NumpyBackend, NPUBackend
 # 量子态（规范路径）：统一的 State 类
 from aicir.core import State
 
-# 量子门（构造函数；签名与参数顺序不变，返回类型化 Operation，
-# 支持旧门字典的只读访问与 == 比较，见 4.1 节说明）
+# 量子门（推荐用这些构造函数搭建线路；参数顺序见第 4 节）
 from aicir import (
     pauli_x, pauli_y, pauli_z,
     hadamard,
@@ -166,11 +174,15 @@ from aicir import (
     measure,     # 线路内联合 Pauli 投影测量标记，返回 Measurement
 )
 
-# 电路、 typed IR 与参数占位符
+# 电路、门对象与参数占位符
 from aicir import Circuit, CircuitIR, Measurement, Observable, Operation, Parameter
 
 # 测量
 from aicir import Measure, Result
+
+# 经典控制流（测量反馈的 if/while）
+from aicir import ClassicalRegister, if_, while_
+# measure(qubits, creg=/cbits=) 从 aicir.core.circuit 取用
 
 # 哈密顿量
 from aicir import PauliOp, PauliString, Hamiltonian
@@ -352,7 +364,7 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 
 ---
 
-## 4. 量子线路的搭建
+## 4. 搭建量子线路
 
 ### 4.1 门构造函数速查
 
@@ -388,17 +400,17 @@ print(final_psi.ket)  # 1/\sqrt{2}|01>+1/\sqrt{2}|10>
 | `measure(q...)`           | qubit list                       | 线路内测量标记  |
 | `reset(q...)`             | qubit list                       | 测量后重置为零态 |
 
-`toffoli` / `ccnot` 的矩阵构造与逐门执行路径支持任意数量控制位，也支持门字典中的 `control_states`；导出为 OpenQASM `ccx` 时仍只适用于两个控制位。
+`toffoli` / `ccnot` 的矩阵构造与逐门执行路径支持任意数量控制位；导出为 OpenQASM `ccx` 时仍只适用于两个控制位。
 
-门构造函数的**签名与参数顺序与旧版完全一致**，但返回值已由裸门字典升级为类型化 `Operation`（`measure(...)` / `reset(...)` 返回 `Measurement`）：
+日常写线路时只需要记住三条：
 
-- **构造期校验**：量子比特下标、控制位/控制态长度，以及按 GateSpec 注册表检查目标比特数、参数个数与控制位要求（见 4.6 节），错误在调用处立即报出。
-- **旧字典只读兼容**：`gate["type"]`、`.get("parameter")`、`in`、`dict(gate)`、迭代等读取照常可用，且与旧门字典可直接 `==` 比较；写入（`gate[...] = ...`）会抛 `TypeError`（对象不可变）。
-- **`Circuit` 内部存储不变**：仍是门字典列表（`circuit.gates`），下游代码无需改动。
+- **优先使用门构造函数**：`hadamard(0)`、`cnot(1, [0])`、`ry(theta, 0)` 这类写法最清楚，也会在构造时检查参数数量、目标比特和控制比特。
+- **显式写 `n_qubits`**：这样电路宽度一眼可见，不依赖自动推断，后续测量、绘图和导出也更稳。
+- **让 `Circuit` 管理门序列**：手写线路用 `Circuit(...)`；循环生成线路用 `append(...)` / `extend(...)`；参数化线路用 `Parameter` + `bind_parameters(...)`。
 
 ### 4.2 构建电路
 
-推荐的方式是在构造 `Circuit` 时直接传入门列表，并显式给出 `n_qubits`——这样电路宽度明确、不依赖自动推断，也不涉及后端继承等隐式行为：
+最推荐的写法是在构造 `Circuit` 时直接传入门列表，并显式给出 `n_qubits`。这适合绝大多数手写线路、demo、VQE/QAOA ansatz 和单元测试：
 
 ```python
 from aicir import Circuit, hadamard, cnot, rz
@@ -436,6 +448,31 @@ cir = Circuit(
 )
 ```
 
+如果线路由循环、搜索空间或配置生成，先创建空线路，再逐步追加门会更清楚：
+
+```python
+from aicir import Circuit, ry, rz, cnot
+
+cir = Circuit(n_qubits=4)
+
+for q in range(4):
+    cir.append(ry(0.1 * (q + 1), q))
+    cir.append(rz(0.2, q))
+
+for q in range(3):
+    cir.append(cnot(q + 1, [q]))
+```
+
+也可以一次性追加一组门：
+
+```python
+cir.extend(
+    ry(0.3, 0),
+    rz(-0.2, 1),
+    cnot(1, [0]),
+)
+```
+
 `double_excitation(θ, q1, q2, q3, q4)`（4 比特、粒子数守恒、耦合 |0011⟩↔|1100⟩）同样可直接构造，配合 HF 参考态做化学 VQE：
 
 ```python
@@ -448,7 +485,7 @@ cir = Circuit(
 )
 ```
 
-门构造函数返回的是 typed IR 对象（`Operation`，`measure(...)` 为 `Measurement`），也可以直接用 `Operation(...)` 显式构造，程序化生成线路时更方便：
+如果门名本身来自配置文件、搜索算法或外部数据，也可以直接用 `Operation(...)` 构造门对象；普通手写代码仍优先用上面的门函数：
 
 ```python
 from aicir import Circuit, Operation, Measurement
@@ -461,7 +498,28 @@ cir = Circuit(
 )
 ```
 
-`Circuit` 继续保留 `.gates` 门字典 surface（内部存储不变），同时提供 `.operations` 和 `.ir` typed IR 视图；`aicir.ir` 另有 `Observable`/`CircuitIR` 用于可观测量与线路级 IR。
+已有 QASM、Qiskit、PennyLane 或 WuYue 线路时，不需要手动重写门列表，直接用对应导入函数转换为 `Circuit`：
+
+```python
+from aicir import circuit_from_qasm, from_qiskit, from_pennylane, from_wuyue
+
+cir = circuit_from_qasm("""
+OPENQASM 2.0;
+qreg q[1];
+h q[0];
+""")
+# cir = from_qiskit(qiskit_circuit)
+# cir = from_pennylane(pennylane_tape_or_qnode)
+# cir = from_wuyue(wuyue_circuit)
+```
+
+使用建议：
+
+- 手写小线路：`Circuit(gate1, gate2, ..., n_qubits=N)`。
+- 循环生成线路：`cir = Circuit(n_qubits=N)` 后配合 `append` / `extend`。
+- 变分线路模板：`Parameter` 作为角度占位符，训练或执行前 `bind_parameters(...)`。
+- 化学 ansatz：优先使用 `pauli_x` 制备 HF 参考态，再叠加 `single_excitation` / `double_excitation`。
+- 外部工具互操作：使用 `circuit_from_qasm` / `from_qiskit` / `from_pennylane` / `from_wuyue`。
 
 ### 4.3 让 Circuit 作用于 State
 
@@ -551,7 +609,7 @@ print(rho1.probabilities())   # [0.  0.5 0.5 0. ]
 
 ### 4.4 参数化量子线路
 
-`Parameter` 可作为旋转门参数的符号占位符，用于构建量子神经网络、VQE、QAOA 等可训练线路模板。模板电路在绑定参数前只保存门字典，不会生成数值矩阵。
+`Parameter` 可作为旋转门参数的符号占位符，用于构建量子神经网络、VQE、QAOA 等可训练线路模板。模板电路在绑定参数前不会生成数值矩阵。
 
 ```python
 from aicir import Circuit, Parameter, rx, ry, crz, cnot
@@ -601,17 +659,17 @@ template.bind_parameters({"theta0": 0.2, "theta1": 0.5}, inplace=True)
 
 ### 4.5 自定义 unitary、identity 与 Torch 自动微分
 
-可以用门字典直接加入自定义酉矩阵：
+可以用 `Operation("unitary", ...)` 直接加入自定义酉矩阵：
 
 ```python
 import numpy as np
-from aicir import Circuit
+from aicir import Circuit, Operation
 
-custom = {
-    "type": "unitary",
-    "parameter": np.eye(4, dtype=np.complex64),
-    "n_qubits": 2,
-}
+custom = Operation(
+    "unitary",
+    qubits=(0, 1),
+    params=(np.eye(4, dtype=np.complex64),),
+)
 
 cir = Circuit(custom, n_qubits=3)
 U = cir.unitary()   # 自定义 2-qubit unitary 会扩展到 3-qubit 电路宽度
@@ -643,7 +701,7 @@ print(theta.grad)
 
 ### 4.6 GateSpec 门元信息注册表
 
-`aicir.gates` 是门元信息的单一来源：每个门的目标比特数、参数个数、别名、QASM 导出名和绘图符号只在注册表里登记一次，`Operation` 构造期校验、`transpile` 的 `ValidatePass`/`CanonicalizePass`、QASM 导出、矩阵路径与绘图都从这里读取。
+`aicir.gates` 是门元信息的单一来源：每个门的目标比特数、参数个数、别名、QASM 导出名和绘图符号只在注册表里登记一次。门构造、`transpile` 的 `ValidatePass`/`CanonicalizePass`、QASM 导出、矩阵路径与绘图都从这里读取。
 
 ```python
 from aicir.gates import GateSpec, get_gate_spec, register_gate, canonical_gate_name
@@ -943,6 +1001,53 @@ noisy = ShotEstimator(shots=4096).run(Circuit(pauli_x(0), n_qubits=1), ham)
 
 ---
 
+### 5.13 经典控制流（if/while）
+
+依赖测量结果的经典控制流：把 Z 基测量写入**经典寄存器**，再用 `if_`/`while_` 按寄存器取值条件执行子线路。控制流是**每 shot 的运行时行为**，只在 `Measure.run` 的测量轨迹路径上执行——每条轨迹按自己的测量结果各自决定分支。
+
+```python
+import numpy as np
+from aicir import Circuit, Measure, NumpyBackend, ClassicalRegister, hadamard, pauli_x, if_, while_
+from aicir.core.circuit import measure
+
+# 经典寄存器：ClassicalRegister(size, name)，reg[0] 为 LSB
+c = ClassicalRegister(1, "c")
+
+# H(0) → 测 q0 写入 c[0] → 若 c[0]==1 则翻转 q1
+circ = Circuit(
+    hadamard(0),
+    measure(0, creg=c),                              # 每比特 Z 基投影，|0>→0 / |1>→1
+    if_(c[0] == 1, Circuit(pauli_x(1), n_qubits=2)),  # else_body=... 可选
+    n_qubits=2,
+)
+res = Measure(NumpyBackend()).run(circ, shots=400, seed=7, measure_qubits=[1])
+res.classical_counts(c)   # {0: ~200, 1: ~200}：c 的整数取值分布（LSB=c[0]）
+res.counts(-1)            # q1 末端读出与 c 完全关联（每 shot q1 == c[0]）
+```
+
+`while_` 必须提供 `max_iterations`；达上限仍满足条件时抛 `RuntimeError`（不静默截断）：
+
+```python
+r = ClassicalRegister(1, "r")
+body = Circuit(pauli_x(0), measure(0, creg=r), n_qubits=1)   # 循环体须刷新 r，否则条件不变
+loop = Circuit(
+    pauli_x(0), measure(0, creg=r),                          # r[0]=1
+    while_(r[0] == 1, body, max_iterations=5),               # 一步内收敛：X 后再测得 0
+    n_qubits=1,
+)
+Measure(NumpyBackend()).run(loop, shots=10).classical_counts(r)   # {0: 10}
+```
+
+要点：
+
+- **写经典位**：`measure(qubits, creg=reg)` 按序写 `reg` 的 0..k-1 位；`measure(qubits, cbits=[reg[i], ...])` 显式指定。有经典目标时仅支持 Z 基，`creg`/`cbits` 互斥。无经典目标时 `measure(...)` 保持原联合 Pauli 投影语义不变。
+- **条件**：`reg[i] == v`（位，`v∈{0,1}`）或 `reg == N`（整个寄存器整数值）；支持 `==` 与 `!=`。
+- **结构**：`if_(condition, body, else_body=None)`、`while_(condition, body, *, max_iterations)`；`body`/`else_body` 为 `Circuit`，`n_qubits` 须与外层一致，可任意嵌套（body 内可再含 measure→creg、`if_`/`while_`）。
+- **读出**：`Result.classical_counts(reg)` 给出各 shot 末尾寄存器整数值的分布（reg 可传名字或 `ClassicalRegister`；从未写入 → `{}`）。
+- **限制**：控制流只能经 `Measure.run` 执行；`Circuit.unitary()`、张量网络引擎（`aicir.simulator`）遇控制流一律抛 `ValueError`（语义上不可表示为酉矩阵）；QASM3 控制流导出暂未支持。含控制流+creg 的电路支持 JSON 往返（`circuit_to_json`/`circuit_from_json`），往返后执行结果一致。
+
+---
+
 ## 6. 构建哈密顿量
 
 aicir 提供三个层次的算符构建工具：`PauliOp`、`PauliString`、`Hamiltonian`。
@@ -1072,17 +1177,20 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 
 | 子目录                      | 说明文档                                                                | 内容概要                                                                                   |
 | --------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `aicir/ansatze`           | [`aicir/ansatze/README.md`](aicir/ansatze/README.md)                     | 参数化线路 ansatz 模板：`hea`/`hea_ti`/`uccsd`（吃纯数据，与 `vqc`/`chemistry` 解耦）。 |
 | `aicir/backends`         | [`aicir/backends/README.md`](aicir/backends/README.md)                 | 计算后端选择与使用：NumpyBackend / GPUBackend / NPUBackend、NPU complex64 兼容、后端绑定、严格模式、分布式与端到端示例。 |
-| `aicir/chemistry`         | [`aicir/chemistry/README.md`](aicir/chemistry/README.md)                 | 小型固定设置的分子 qubit Hamiltonian 预置，用于 VQE 示例、单元测试和算法原型验证。         |
+| `aicir/chemistry`         | [`aicir/chemistry/README.md`](aicir/chemistry/README.md)                 | 分子 qubit Hamiltonian：固定预置 + `build_molecule` 现算流水线（`chem` extra，Qiskit Nature/PySCF；JW 附带 HF/激发元数据）。 |
 | `aicir/core/io`           | [`aicir/core/io/README.md`](aicir/core/io/README.md)                     | OpenQASM 导出行为、受控旋转门和多控旋转门分解规则。                                        |
 | `aicir/gates`             | [`aicir/gates/README.md`](aicir/gates/README.md)                         | GateSpec 门元信息注册表：目标比特数/参数个数/别名/QASM 名/绘图符号的单一来源。             |
+| `aicir/measure`           | [`aicir/measure/README.md`](aicir/measure/README.md)                     | 测量执行与经典控制流：轨迹路径、`ClassicalRegister`、`measure(creg=)`、`if_`/`while_`、`Result.classical_counts`。 |
 | `aicir/metrics`           | [`aicir/metrics/README.md`](aicir/metrics/README.md)                     | 任务无关的量子线路评分指标，供 QAS、VQE ansatz 筛选等架构层任务复用。                      |
 | `aicir/optimization/qubo` | [`aicir/optimization/qubo/README.md`](aicir/optimization/qubo/README.md) | QUBO 建模、Ising/Hamiltonian 转换、BasicQAOA 矩阵入口与结果解码。                          |
 | `aicir/optimizer`         | [`aicir/optimizer/README.md`](aicir/optimizer/README.md)                 | VQE/VQA 经典参数优化器（`Adam`/`SPSA`/`minimize` 等）；线路结构优化已迁至 `aicir.transpile`。 |
 | `aicir/primitives`        | [`aicir/primitives/README.md`](aicir/primitives/README.md)               | Sampler/Estimator primitives 统一执行入口与 `SampleResult`/`EstimateResult` 结果对象。 |
 | `aicir/qas`               | [`aicir/qas/README.md`](aicir/qas/README.md)                             | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。                                    |
 | `aicir/qml`               | [`aicir/qml/README.md`](aicir/qml/README.md)                             | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。                   |
+| `aicir/simulator`         | [`aicir/simulator/README.md`](aicir/simulator/README.md)                 | 精确张量网络模拟：`tn_statevector`/单/部分振幅/`tn_expectation`，cotengra 路径+切片（`tn` extra），NPU 上可微。 |
 | `aicir/transpile`         | [`aicir/transpile/README.md`](aicir/transpile/README.md)                 | 线路编译与优化流水线：`PassManager`、`optimize` 入口、多格式 `optimize_basic`/`optimize_circuit` 与本地化简 pass。 |
 | `aicir/visual`           | [`aicir/visual/README.md`](aicir/visual/README.md)                     | 线路图、态向量/概率分布、密度矩阵热力图，以及 QAS / metrics 结果可视化。 |
-| `aicir/vqc`               | [`aicir/vqc/README.md`](aicir/vqc/README.md)                             | VQE、QAOA、VQD、SSVQE 等基础变分算法实现，以及可复用的参数化线路 ansatz 模板。             |
+| `aicir/vqc`               | [`aicir/vqc/README.md`](aicir/vqc/README.md)                             | VQE、QAOA、VQD、SSVQE 等基础变分算法编排（ansatz 模板已独立为 `aicir.ansatze`）。          |
 | `demos`                   | [`demos/README.md`](demos/README.md)                                     | 演示 `aicir.visual` 模块的示例脚本，涵盖线路、态向量、密度矩阵和 QAS 结果可视化。        |

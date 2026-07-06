@@ -9,6 +9,7 @@ from .hea_ti import (
     power_law_couplings,
     trapped_ion_hamiltonian,
 )
+from .uccsd import uccsd, uccsd_parameter_count
 
 __all__ = [
     "Edge",
@@ -22,4 +23,6 @@ __all__ = [
     "hardware_efficient_ansatz",
     "power_law_couplings",
     "trapped_ion_hamiltonian",
+    "uccsd",
+    "uccsd_parameter_count",
 ]

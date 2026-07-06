@@ -165,10 +165,7 @@ class Operation(LegacyGateView):
 
         controls = _as_int_tuple(gate.get("control_qubits"), label="control_qubits")
         control_states = _as_int_tuple(gate.get("control_states"), label="control_states")
-        if controls and not control_states:
-            control_states = tuple(1 for _ in controls)
-
-        params = _parameter_tuple(gate["parameter"]) if "parameter" in gate else ()
+        params = _parameter_tuple(gate["parameter"]) if gate.get("parameter") is not None else ()
         label = gate.get("label")
         metadata = {key: value for key, value in gate.items() if key not in _KNOWN_GATE_KEYS}
 
@@ -224,8 +221,8 @@ class Operation(LegacyGateView):
 
         if self.controls:
             gate["control_qubits"] = list(self.controls)
-            states = self.control_states or tuple(1 for _ in self.controls)
-            gate["control_states"] = list(states)
+            if self.control_states:
+                gate["control_states"] = list(self.control_states)
 
         if self.params:
             gate["parameter"] = self.params[0] if len(self.params) == 1 else list(self.params)
@@ -243,10 +240,11 @@ def normalize_gate(gate: Operation | Mapping[str, Any]) -> dict[str, Any]:
 
     if isinstance(gate, Operation):
         return gate.to_dict()
+    from .control_flow import ControlFlow
     from .measurement import Measurement
 
-    if isinstance(gate, Measurement):
+    if isinstance(gate, (Measurement, ControlFlow)):
         return gate.to_dict()
     if isinstance(gate, Mapping):
         return dict(gate)
-    raise TypeError("gate must be an Operation, Measurement, or mapping")
+    raise TypeError("gate must be an Operation, Measurement, ControlFlow, or mapping")

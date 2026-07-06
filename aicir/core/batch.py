@@ -33,11 +33,9 @@ from typing import Optional
 import numpy as np
 import torch
 
-from .gates import (
-    canonical_gate_name,
-    normalize_gate,
-    _single_qubit_base_for_gate,
-)
+from ..gates import canonical_gate_name
+from ..ir import as_instruction, instruction_control_states, instruction_controls, instruction_name, instruction_parameter, instruction_qubits
+from .gates import _single_qubit_base_for_gate
 
 __all__ = ["BatchSV"]
 
@@ -110,8 +108,8 @@ class BatchSV:
         标量/常量门复用 aicir 单态路径的 ``_single_qubit_base_for_gate``;
         逐样本张量角度时按相同公式构造批量基矩阵。
         """
-        gate_type = canonical_gate_name(gate["type"])
-        parameter = gate.get("parameter", None)
+        gate_type = canonical_gate_name(instruction_name(gate))
+        parameter = instruction_parameter(gate)
 
         if _is_tensor(parameter):
             # 张量角度: 0 维标量(保留梯度)或逐样本 (batch,) —— 构造 (k, 2, 2)
@@ -164,17 +162,15 @@ class BatchSV:
 
     def apply_gate(self, gate) -> "BatchSV":
         """就地作用一个门 (dict 或 Operation), 返回自身以便链式调用。"""
-        gate = normalize_gate(gate)
-        gate_type = canonical_gate_name(gate["type"])
+        gate = as_instruction(gate)
+        gate_type = canonical_gate_name(instruction_name(gate))
 
         if gate_type == "identity":
             return self
 
-        target = int(gate["target_qubit"])
-        controls = [int(c) for c in gate.get("control_qubits", []) or []]
-        control_states = [int(s) for s in gate.get("control_states", []) or []]
-        if controls and not control_states:
-            control_states = [1] * len(controls)
+        target = int(instruction_qubits(gate)[0])
+        controls = [int(c) for c in instruction_controls(gate)]
+        control_states = [int(s) for s in instruction_control_states(gate)]
         if target in controls:
             raise ValueError("控制比特与目标比特不能相同")
 
