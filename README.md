@@ -195,6 +195,16 @@ from aicir import (
     BitFlipChannel,
     PhaseFlipChannel,
     AmplitudeDampingChannel,
+    PauliChannel,
+    PhaseDampingChannel,
+    GeneralizedAmplitudeDampingChannel,
+    TwoQubitDepolarizingChannel,
+    KrausChannel,
+    ResetChannel,
+    ErasureChannel,
+    ReadoutErrorChannel,
+    CorrelatedTwoQubitPauliChannel,
+    ThermalRelaxationChannel,
 )
 
 # OpenQASM 互转
@@ -1155,6 +1165,16 @@ from aicir import (
     BitFlipChannel,
     PhaseFlipChannel,
     AmplitudeDampingChannel,
+    PauliChannel,
+    PhaseDampingChannel,
+    GeneralizedAmplitudeDampingChannel,
+    TwoQubitDepolarizingChannel,
+    KrausChannel,
+    ResetChannel,
+    ErasureChannel,
+    ReadoutErrorChannel,
+    CorrelatedTwoQubitPauliChannel,
+    ThermalRelaxationChannel,
     GPUBackend,
 )
 from aicir.core import State
@@ -1185,6 +1205,7 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 | `aicir/gates`             | [`aicir/gates/README.md`](aicir/gates/README.md)                         | GateSpec 门元信息注册表：目标比特数/参数个数/别名/QASM 名/绘图符号的单一来源。             |
 | `aicir/measure`           | [`aicir/measure/README.md`](aicir/measure/README.md)                     | 测量执行与经典控制流：轨迹路径、`ClassicalRegister`、`measure(creg=)`、`if_`/`while_`、`Result.classical_counts`。 |
 | `aicir/metrics`           | [`aicir/metrics/README.md`](aicir/metrics/README.md)                     | 任务无关的量子线路评分指标，供 QAS、VQE ansatz 筛选等架构层任务复用。                      |
+| `aicir/noise`             | [`aicir/noise/README.md`](aicir/noise/README.md)                         | 噪声通道、门后触发式 `NoiseModel`、密度矩阵噪声敏感性分析、离子阱默认噪声配置和误差预算指标。 |
 | `aicir/optimization/qubo` | [`aicir/optimization/qubo/README.md`](aicir/optimization/qubo/README.md) | QUBO 建模、Ising/Hamiltonian 转换、BasicQAOA 矩阵入口与结果解码。                          |
 | `aicir/optimizer`         | [`aicir/optimizer/README.md`](aicir/optimizer/README.md)                 | VQE/VQA 经典参数优化器（`Adam`/`SPSA`/`minimize` 等）；线路结构优化已迁至 `aicir.transpile`。 |
 | `aicir/primitives`        | [`aicir/primitives/README.md`](aicir/primitives/README.md)               | Sampler/Estimator primitives 统一执行入口与 `SampleResult`/`EstimateResult` 结果对象。 |
