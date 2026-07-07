@@ -33,8 +33,8 @@ def test_dqas_strategy_registered_as_import_side_effect():
 def test_nonmigrated_methods_fall_back_to_table():
     for method in (
         "crlqas",
-        "ppr_dql",
-        "ppo_rb",
+        "pprdql",
+        "pporb",
         "supernet_classification",
         "supernet_h2",
         "qdrats",
