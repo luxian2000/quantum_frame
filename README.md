@@ -26,8 +26,8 @@
 - **灵活测量模型**：支持线路内 Pauli 投影测量、末端读出、shots 采样、精确模式、态快照和偏迹。
 - **经典控制流**：支持由测量结果驱动的 `ClassicalRegister`、`measure(creg=)`、`if_`/`while_`（含 `else`），按每条测量轨迹求值（见 §5.13）。
 - **变分算法**：内置 `BasicVQE`、`run_vqe`、QAOA、VQD、SSVQE，以及 HEA、离子阱 HEA-TI 等 ansatz 模板。
-- **QML 梯度**：支持参数移位（`psr`、`spsr`、`multipsr`，以及激发门四项参数移位 `psr4`）、有限差分、SPSA、量子自然梯度和 PyTorch `autograd`。
-- **量子架构搜索**：支持权重共享 supernet、CRLQAS、PPR\_DQL、PPO\_RB（需要 PyTorch）。
+- **QML 梯度**：支持参数移位（`psr`、`spsr`、`mpsr`，以及激发门四项参数移位 `psr4`）、有限差分、SPSA、量子自然梯度和 PyTorch `autograd`。
+- **量子架构搜索**：支持权重共享 supernet、CRLQAS、`pprdql`、`pporb`（需要 PyTorch；旧名 `ppr_dql` / `ppo_rb` 仍可作为别名使用）。
 - **多种模拟引擎**：态矢量、密度矩阵、精确张量网络（`tn_statevector`/单/部分振幅），以及 bond 截断的 MPS 近似引擎（`mps_statevector`/`mps_expectation`、`Measure.run(method="mps")`、`MPSEstimator`），适合低纠缠、大比特数电路。
 - **噪声模拟**：通过密度矩阵演化支持退相干、比特/相位翻转、振幅阻尼和离子阱噪声。
 - **OpenQASM 输入输出**：支持 OpenQASM 2.0/3.0 导入导出，并提供 Qiskit、PennyLane、WuYue 互操作。
@@ -117,7 +117,7 @@ aicir/
   qml/           # 参数移位、有限差分、autograd、QNG 等梯度工具
   ansatze/       # HEA、HEA-TI、UCCSD 等可复用 ansatz 模板
   vqc/           # VQE、QAOA、VQD、SSVQE 等变分算法
-  qas/           # supernet、DQAS、CRLQAS、PPR_DQL、PPO_RB 等量子架构搜索
+  qas/           # supernet、DQAS、CRLQAS、pprdql、pporb 等量子架构搜索
   chemistry/     # 分子哈密顿量预置与可选电子结构计算接口
   simulator/     # 态矢量 / 精确张量网络 / MPS 近似模拟入口
   transpile/     # PassManager、线路优化与硬件约束变换
@@ -222,7 +222,7 @@ from aicir import (
 )
 
 # QML 梯度工具
-from aicir.qml import psr, spsr, multipsr
+from aicir.qml import psr, spsr, mpsr
 
 # 线路编译与优化 pass pipeline
 from aicir.transpile import PassManager, optimize, optimize_basic, optimize_circuit
@@ -1215,4 +1215,4 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 | `aicir/transpile`         | [`aicir/transpile/README.md`](aicir/transpile/README.md)                 | 线路编译与优化流水线：`PassManager`、`optimize` 入口、多格式 `optimize_basic`/`optimize_circuit` 与本地化简 pass。 |
 | `aicir/visual`           | [`aicir/visual/README.md`](aicir/visual/README.md)                     | 线路图、态向量/概率分布、密度矩阵热力图，以及 QAS / metrics 结果可视化。 |
 | `aicir/vqc`               | [`aicir/vqc/README.md`](aicir/vqc/README.md)                             | VQE、QAOA、VQD、SSVQE 等基础变分算法编排（ansatz 模板已独立为 `aicir.ansatze`）。          |
-| `demos`                   | [`demos/README.md`](demos/README.md)                                     | 演示 `aicir.visual` 模块的示例脚本，涵盖线路、态向量、密度矩阵和 QAS 结果可视化。        |
+| `demos`                   | [`demos/`](demos/)                                                       | 演示 `aicir.visual` 模块的示例脚本，涵盖线路、态向量、密度矩阵和 QAS 结果可视化。        |
