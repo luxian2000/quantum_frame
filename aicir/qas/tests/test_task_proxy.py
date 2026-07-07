@@ -44,6 +44,34 @@ class VQETaskProxyTests(unittest.TestCase):
         self.assertGreater(float(result["task_proxy_hamiltonian_overlap"]), 0.0)
         self.assertGreaterEqual(float(result["task_proxy_adapt_growth_potential"]), 0.0)
 
+    def test_graph_feature_dataset_keeps_targets_and_feature_names(self):
+        from aicir.qas.vqe_loop.graph_predictor import build_graph_feature_dataset
+
+        rows = [operator_row(("XI",), fair=-1.0), operator_row(("YY",), fair=-0.5)]
+        dataset = build_graph_feature_dataset(rows)
+
+        self.assertEqual(dataset.row_count, 2)
+        self.assertEqual(dataset.targets, [-1.0, -0.5])
+        self.assertEqual(len(dataset.features), 2)
+        self.assertEqual(len(dataset.features[0]), len(dataset.feature_names))
+        self.assertIn("n_qubits", dataset.feature_names)
+
+    def test_graph_predictor_cross_validation_reports_fold_metrics(self):
+        from aicir.qas.vqe_loop.graph_predictor import cross_validate_graph_predictor
+
+        rows = [
+            operator_row(("XI",), fair=-1.0),
+            operator_row(("YY",), fair=-0.7),
+            operator_row(("ZZ",), fair=-0.2),
+            operator_row(("XI", "YY"), fair=-1.4),
+        ]
+
+        result = cross_validate_graph_predictor(rows, k=2, alpha=0.1)
+
+        self.assertEqual(result["folds"], 2)
+        self.assertEqual(len(result["fold_metrics"]), 2)
+        self.assertGreaterEqual(result["mean_mae"], 0.0)
+        self.assertIn("mean_rmse", result)
     def test_graph_energy_predictor_fits_labeled_rows_and_predicts_child(self):
         from aicir.qas.vqe_loop.graph_predictor import GraphEnergyPredictor
 

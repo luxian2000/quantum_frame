@@ -21,6 +21,27 @@ from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS
 from aicir.qas.vqe_loop.benchmark_table import read_csv_rows, write_csv_rows
 
 
+def _is_completed_label(row: Mapping[str, Any]) -> bool:
+    status = str(row.get("label_status", "") or "").strip().lower()
+    energy = str(row.get("fair_best_energy", "") or "").strip().lower()
+    return status == "completed" or energy not in {"", "nan", "none", "null"}
+
+
+def _merge_shard_outputs(
+    shard_outputs: list[Path],
+    output_path: Path,
+    *,
+    completed_only: bool = False,
+) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    for shard_output in shard_outputs:
+        rows = read_csv_rows(shard_output)
+        if completed_only:
+            rows = [row for row in rows if _is_completed_label(row)]
+        merged.extend(rows)
+    write_csv_rows(output_path, merged, fieldnames=BENCHMARK_TABLE_FIELDS)
+    return merged
+
 
 def _contiguous_shards(n_rows: int, num_shards: int) -> list[tuple[int, int]]:
     if int(num_shards) < 1:
@@ -122,10 +143,10 @@ def run_sharded_labels(args: argparse.Namespace) -> dict[str, Any]:
     if failures:
         raise RuntimeError(f"Fair-label shard failure(s): {failures}")
 
-    merged: list[dict[str, str]] = []
-    for _shard_index, _start, _end, _shard_queue, shard_output, _process in processes:
-        merged.extend(read_csv_rows(shard_output))
-    write_csv_rows(output_path, merged, fieldnames=BENCHMARK_TABLE_FIELDS)
+    _merge_shard_outputs(
+        [shard_output for _shard_index, _start, _end, _shard_queue, shard_output, _process in processes],
+        output_path,
+    )
 
     summary = {
         "queue": str(queue_path),
@@ -173,7 +194,39 @@ def main() -> None:
     parser.add_argument("--backend", default="npu")
     parser.add_argument("--dtype", default="complex64")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--merge-existing-only",
+        action="store_true",
+        help="Do not launch workers; merge already existing shard CSV outputs from --work-dir.",
+    )
+    parser.add_argument(
+        "--completed-only",
+        action="store_true",
+        help="With --merge-existing-only, merge only rows that already have completed fair labels.",
+    )
     args = parser.parse_args()
+
+    if args.merge_existing_only:
+        output_path = Path(args.output)
+        work_dir = Path(args.work_dir) if args.work_dir else output_path.with_suffix("")
+        shard_outputs = sorted(work_dir.glob(f"{output_path.stem}.shard??of??.csv"))
+        if not shard_outputs:
+            raise FileNotFoundError(f"No shard outputs found in {work_dir}")
+        merged = _merge_shard_outputs(shard_outputs, output_path, completed_only=bool(args.completed_only))
+        summary = {
+            "queue": str(args.queue),
+            "output": str(output_path),
+            "work_dir": str(work_dir),
+            "mode": "merge_existing_only",
+            "completed_only": bool(args.completed_only),
+            "rows": len(merged),
+            "shards": [str(path) for path in shard_outputs],
+        }
+        summary_path = Path(args.summary) if args.summary else output_path.with_suffix(".shard_summary.json")
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps(summary, ensure_ascii=False))
+        return
 
     summary = run_sharded_labels(args)
     print(json.dumps(summary, ensure_ascii=False))

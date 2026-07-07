@@ -102,6 +102,25 @@ class P1RoundDemoTests(unittest.TestCase):
             {"E2", "E5", "VQE_TASK_PROXY", "GNN_PROXY", "ENSEMBLE"},
         )
 
+    def test_auto_selector_registers_all_candidate_evaluators(self):
+        from aicir.qas.demos.run_p1_round_demo import _needed_registry_fields, build_arg_parser
+
+        args = build_arg_parser().parse_args(
+            [
+                "--bootstrap-labels-csv",
+                "bootstrap.csv",
+                "--selector",
+                "auto",
+                "--baseline-selectors",
+                "E2",
+            ]
+        )
+
+        self.assertEqual(args.selector, "auto")
+        self.assertEqual(
+            set(_needed_registry_fields(args)),
+            {"E2", "E5", "VQE_TASK_PROXY", "GNN_PROXY", "ENSEMBLE"},
+        )
     def test_ensemble_selector_builds_all_component_evaluators(self):
         from aicir.qas.demos.run_p1_round_demo import _needed_registry_fields, build_arg_parser
 
@@ -572,5 +591,3 @@ class P1RoundDemoTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
