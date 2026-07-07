@@ -58,6 +58,35 @@ class P1PolicyTests(unittest.TestCase):
         self.assertEqual(resolve_p1_selector_fields("both", cheap_eval_selector="e5"), ("E5",))
         self.assertEqual(resolve_p1_selector_fields("both", cheap_eval_selector="e2"), ("E2",))
 
+    def test_auto_selector_uses_p0_fair_labels_as_target(self):
+        from aicir.qas.vqe_loop.p1_selection import choose_p1_auto_selector
+
+        rows = [
+            {"architecture_id": "best", "fair_best_energy": "-5.0", "E2": "-4.0", "GNN_PROXY": "-1.0"},
+            {"architecture_id": "mid", "fair_best_energy": "-3.0", "E2": "-2.0", "GNN_PROXY": "-5.0"},
+            {"architecture_id": "bad", "fair_best_energy": "-1.0", "E2": "-1.0", "GNN_PROXY": "-3.0"},
+        ]
+
+        decision = choose_p1_auto_selector(rows, candidates=("E2", "GNN_PROXY"), top_k=1, min_completed=2)
+
+        self.assertEqual(decision.selector, "e2")
+        self.assertEqual(decision.field, "E2")
+        self.assertEqual(decision.reason, "p0_fair_alignment")
+        self.assertGreater(decision.scores["E2"]["top_k_hit_rate"], decision.scores["GNN_PROXY"]["top_k_hit_rate"])
+
+    def test_auto_selector_falls_back_when_p0_labels_are_sparse(self):
+        from aicir.qas.vqe_loop.p1_selection import choose_p1_auto_selector
+
+        decision = choose_p1_auto_selector(
+            [{"architecture_id": "only_one", "fair_best_energy": "-1.0", "E2": "-1.0"}],
+            candidates=("E2", "GNN_PROXY"),
+            min_completed=2,
+            fallback_selector="task_proxy",
+        )
+
+        self.assertEqual(decision.selector, "task_proxy")
+        self.assertEqual(decision.reason, "insufficient_p0_labels")
+
     def test_quota_policy_handles_cold_start_and_bad_oracle_feedback(self):
         from aicir.qas.vqe_loop.benchmark_table import choose_quota
 

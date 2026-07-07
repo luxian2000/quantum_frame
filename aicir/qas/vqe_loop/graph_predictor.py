@@ -27,6 +27,43 @@ class GraphPrediction:
 
 
 
+
+@dataclass(frozen=True)
+class GraphFeatureDataset:
+    features: list[list[float]]
+    targets: list[float]
+    row_keys: list[str]
+    feature_names: tuple[str, ...]
+
+    @property
+    def row_count(self) -> int:
+        return len(self.targets)
+
+
+GRAPH_FEATURE_NAMES: tuple[str, ...] = (
+    "bias",
+    "n_qubits",
+    "hamiltonian_ansatz_overlap",
+    "ansatz_pauli_support_coverage",
+    "gradient_sensitivity_proxy",
+    "is_operator_sequence",
+    "is_supernet_native",
+    "operator_count",
+    "operator_support_sum",
+    "operator_support_max",
+    "operator_x_fraction",
+    "operator_y_fraction",
+    "operator_z_fraction",
+    "supernet_layer_count",
+    "supernet_single_gate_count",
+    "supernet_two_gate_count",
+    "supernet_rx_fraction",
+    "supernet_ry_fraction",
+    "supernet_rz_fraction",
+    "supernet_cx_fraction",
+    "supernet_rzz_fraction",
+)
+
 def _operator_features(payload: Mapping[str, Any]) -> list[float]:
     operators = [str(op).upper() for op in payload.get("operators", ()) or ()]
     n_ops = len(operators)
@@ -105,6 +142,91 @@ def _solve_linear(matrix: list[list[float]], vector: list[float]) -> list[float]
     return [aug[i][-1] for i in range(n)]
 
 
+def _row_key(row: Mapping[str, Any], index: int) -> str:
+    return str(row.get("canonical_arch_hash") or row.get("architecture_id") or f"row:{index}")
+
+
+def build_graph_feature_dataset(rows: Sequence[Mapping[str, Any]]) -> GraphFeatureDataset:
+    features: list[list[float]] = []
+    targets: list[float] = []
+    row_keys: list[str] = []
+    for index, row in enumerate(rows):
+        target = _as_float(row.get("fair_best_energy"))
+        if target is None:
+            continue
+        encoded = encode_row_features(row)
+        if len(encoded) != len(GRAPH_FEATURE_NAMES):
+            raise ValueError(f"graph feature width mismatch: got {len(encoded)}, expected {len(GRAPH_FEATURE_NAMES)}")
+        features.append(encoded)
+        targets.append(float(target))
+        row_keys.append(_row_key(row, index))
+    return GraphFeatureDataset(features=features, targets=targets, row_keys=row_keys, feature_names=GRAPH_FEATURE_NAMES)
+
+
+def _regression_metrics(predictions: Sequence[float], targets: Sequence[float]) -> dict[str, float | int]:
+    paired = [(float(pred), float(target)) for pred, target in zip(predictions, targets)]
+    if not paired:
+        return {"count": 0, "mae": 0.0, "rmse": 0.0, "r2": 0.0}
+    errors = [pred - target for pred, target in paired]
+    mae = sum(abs(error) for error in errors) / float(len(errors))
+    rmse = math.sqrt(sum(error * error for error in errors) / float(len(errors)))
+    mean_target = sum(target for _pred, target in paired) / float(len(paired))
+    ss_tot = sum((target - mean_target) ** 2 for _pred, target in paired)
+    ss_res = sum(error * error for error in errors)
+    r2 = 0.0 if ss_tot <= 1e-12 else 1.0 - ss_res / ss_tot
+    return {"count": len(paired), "mae": float(mae), "rmse": float(rmse), "r2": float(r2)}
+
+
+def cross_validate_graph_predictor(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    k: int = 3,
+    alpha: float = 1.0,
+    min_train_labels: int = 2,
+) -> dict[str, Any]:
+    labeled_rows = [dict(row) for row in rows if _as_float(row.get("fair_best_energy")) is not None]
+    if len(labeled_rows) < max(2, int(min_train_labels)):
+        return {
+            "row_count": len(labeled_rows),
+            "folds": 0,
+            "fold_metrics": [],
+            "mean_mae": None,
+            "mean_rmse": None,
+            "mean_r2": None,
+            "reason": "insufficient_labels",
+        }
+    folds = min(max(2, int(k)), len(labeled_rows))
+    fold_metrics: list[dict[str, float | int]] = []
+    for fold_index in range(folds):
+        train = [row for index, row in enumerate(labeled_rows) if index % folds != fold_index]
+        test = [row for index, row in enumerate(labeled_rows) if index % folds == fold_index]
+        predictor = GraphEnergyPredictor(alpha=alpha, min_labels=min_train_labels)
+        predictor.fit(train)
+        predictions: list[float] = []
+        targets: list[float] = []
+        for row in test:
+            prediction = predictor.predict_row(row)
+            target = _as_float(row.get("fair_best_energy"))
+            if prediction.prediction is None or target is None:
+                continue
+            predictions.append(float(prediction.prediction))
+            targets.append(float(target))
+        metrics = _regression_metrics(predictions, targets)
+        metrics["fold"] = fold_index
+        metrics["train_count"] = len(train)
+        metrics["test_count"] = len(test)
+        fold_metrics.append(metrics)
+    valid = [metric for metric in fold_metrics if int(metric["count"]) > 0]
+    return {
+        "row_count": len(labeled_rows),
+        "folds": folds,
+        "fold_metrics": fold_metrics,
+        "mean_mae": sum(float(metric["mae"]) for metric in valid) / float(len(valid)) if valid else None,
+        "mean_rmse": sum(float(metric["rmse"]) for metric in valid) / float(len(valid)) if valid else None,
+        "mean_r2": sum(float(metric["r2"]) for metric in valid) / float(len(valid)) if valid else None,
+        "reason": "ok" if valid else "no_fold_predictions",
+    }
+
 class GraphEnergyPredictor:
     def __init__(self, alpha: float = 1.0, min_labels: int = 2):
         self.alpha = float(alpha)
@@ -170,8 +292,12 @@ def build_graph_predictor_evaluator(labeled_rows: Sequence[Mapping[str, Any]], *
 
 
 __all__ = [
+    "GRAPH_FEATURE_NAMES",
     "GraphEnergyPredictor",
+    "GraphFeatureDataset",
     "GraphPrediction",
+    "build_graph_feature_dataset",
     "build_graph_predictor_evaluator",
+    "cross_validate_graph_predictor",
     "encode_row_features",
 ]

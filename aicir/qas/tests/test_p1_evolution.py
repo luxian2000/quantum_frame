@@ -342,9 +342,27 @@ class P1VariationTests(unittest.TestCase):
         with patch("aicir.qas.vqe_loop.fair_vqe.evaluate_vqe_energy", side_effect=fake_energy):
             score = evaluator(make_operator_gene(("XI",)), "YY")
 
-        self.assertEqual(calls, [[1.25, 0.05], [1.25, -0.05]])
-        self.assertAlmostEqual(score, -2.0)
+        self.assertEqual(calls, [[1.25], [1.25, 0.05], [1.25, -0.05]])
+        self.assertAlmostEqual(score, -4.6)
 
+
+    def test_operator_adapt_growth_prefers_larger_energy_drop_when_gradient_ties(self):
+        from aicir.qas.vqe_loop.p1_evolution import mutate_gene
+
+        parent = make_operator_gene(("XI",))
+        scores = {
+            "YY": {"gradient_proxy": 1.0, "energy_drop": 0.1},
+            "ZZ": {"gradient_proxy": 1.0, "energy_drop": 0.8},
+        }
+
+        result = mutate_gene(
+            parent,
+            mutation_type="operator_adapt_growth",
+            operator_pool=("YY", "ZZ"),
+            operator_growth_evaluator=lambda _gene, candidate: scores[candidate],
+        )
+
+        self.assertEqual(result.child.operators, ("XI", "ZZ"))
 
     def test_operator_growth_evaluator_lives_in_p1_evolution(self):
         from aicir.qas.vqe_loop.p1_evolution import _operator_growth_evaluator_from_row

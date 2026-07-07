@@ -26,6 +26,7 @@ from aicir.qas.vqe_loop.benchmark_table import architecture_key, resolve_p1_sele
 from aicir.qas.vqe_loop.benchmark_table import read_csv_rows, write_csv_rows
 from aicir.qas.vqe_loop.graph_predictor import build_graph_predictor_evaluator
 from aicir.qas.vqe_loop.p1_round import plan_p1_round, write_p1_round_outputs
+from aicir.qas.vqe_loop.p1_selection import choose_p1_auto_selector
 from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS
 from aicir.qas.vqe_loop.benchmark_table import as_float as _as_float
 
@@ -171,7 +172,10 @@ def load_hamiltonian_for_demo(
 
 def _needed_registry_fields(args: argparse.Namespace) -> tuple[str, ...]:
     fields = set(_parse_csv_list(args.baseline_selectors))
-    fields.update(resolve_p1_selector_fields(args.selector, cheap_eval_selector=args.cheap_eval_selector))
+    if str(args.selector).strip().lower() == "auto":
+        fields.update(_parse_csv_list(args.auto_selector_candidates))
+    else:
+        fields.update(resolve_p1_selector_fields(args.selector, cheap_eval_selector=args.cheap_eval_selector))
     normalized: set[str] = set()
     for field in fields:
         upper = str(field).strip().upper()
@@ -451,10 +455,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--children-per-parent", type=int, default=8)
     parser.add_argument("--control-count", type=int, default=0)
     parser.add_argument("--fair-top-k", type=int, default=4)
-    parser.add_argument("--selector", choices=("e2", "e5", "both", "task_proxy", "gnn_proxy", "ensemble"), default="e5")
+    parser.add_argument("--selector", choices=("e2", "e5", "both", "task_proxy", "gnn_proxy", "ensemble", "auto"), default="e5")
     parser.add_argument("--cheap-eval-selector", choices=("e2", "e5"), default="e2")
+    parser.add_argument("--auto-selector-candidates", default="E2,E5,VQE_TASK_PROXY,GNN_PROXY,ENSEMBLE")
+    parser.add_argument("--auto-selector-top-k", type=int, default=3)
+    parser.add_argument("--auto-selector-min-completed", type=int, default=3)
+    parser.add_argument("--auto-selector-fallback", choices=("e2", "e5", "task_proxy", "gnn_proxy", "ensemble"), default="e2")
     parser.add_argument("--baseline-selectors", default="E2,E5")
-    parser.add_argument("--mutation-types", default="gate_mutation,connectivity_mutation,layer_mutation,depth_mutation")
+    parser.add_argument(
+        "--mutation-types",
+        default="gate_mutation,connectivity_mutation,layer_mutation,depth_mutation",
+        help=(
+            "Comma-separated P1 mutations. operator_adapt_growth is opt-in and only applies "
+            "to OperatorSequenceAnsatzGene rows; pass it explicitly together with --operator-pool."
+        ),
+    )
     parser.add_argument(
         "--operator-pool",
         default="",
@@ -534,6 +549,17 @@ def main(
     mutation_types = _parse_csv_list(args.mutation_types)
     operator_pool = _parse_csv_list(args.operator_pool)
     labeled_rows = _load_bootstrap_labels(args)
+    requested_selector = str(args.selector)
+    auto_selector_decision = None
+    if requested_selector.lower() == "auto":
+        auto_selector_decision = choose_p1_auto_selector(
+            labeled_rows,
+            candidates=_parse_csv_list(args.auto_selector_candidates),
+            top_k=int(args.auto_selector_top_k),
+            min_completed=int(args.auto_selector_min_completed),
+            fallback_selector=str(args.auto_selector_fallback),
+        )
+        args.selector = auto_selector_decision.selector
     known_unlabeled_rows = read_csv_rows(args.known_unlabeled_csv) if args.known_unlabeled_csv else []
     control_rows = _make_control_rows(
         count=args.control_count,
@@ -804,6 +830,9 @@ def main(
         "comparison": comparison,
         "summary": round_results[0]["summary"] if rounds == 1 else multi_round_summary,
         "rounds": round_results,
+        "requested_selector": requested_selector,
+        "resolved_selector": str(args.selector),
+        "auto_selector": auto_selector_decision.to_jsonable() if auto_selector_decision is not None else None,
     }
     (output_dir / "demo_result.json").write_text(
         json.dumps(result, indent=2, ensure_ascii=False) + "\n",
@@ -814,6 +843,4 @@ def main(
 
 if __name__ == "__main__":
     main()
-
-
 

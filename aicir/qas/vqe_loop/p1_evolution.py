@@ -101,12 +101,13 @@ def _finite_difference_operator_growth_score(
     from aicir.qas.problems.hamiltonians import VQEProblem
     from aicir.qas.vqe_loop.fair_vqe import evaluate_vqe_energy
 
+    base_architecture = architecture_from_operator_sequence_gene(gene)
     trial = OperatorSequenceAnsatzGene(
         n_qubits=gene.n_qubits,
         operators=gene.operators + (str(candidate_operator).upper(),),
         name=gene.name,
     )
-    architecture = architecture_from_operator_sequence_gene(trial)
+    trial_architecture = architecture_from_operator_sequence_gene(trial)
     problem = VQEProblem(
         name="operator_adapt_growth_proxy",
         n_qubits=gene.n_qubits,
@@ -118,12 +119,14 @@ def _finite_difference_operator_growth_score(
     if len(prefix) < gene.layers:
         prefix.extend([0.0] * (gene.layers - len(prefix)))
     try:
-        plus = evaluate_vqe_energy(architecture, problem, parameters=prefix + [float(epsilon)])
-        minus = evaluate_vqe_energy(architecture, problem, parameters=prefix + [-float(epsilon)])
+        base = evaluate_vqe_energy(base_architecture, problem, parameters=prefix)
+        plus = evaluate_vqe_energy(trial_architecture, problem, parameters=prefix + [float(epsilon)])
+        minus = evaluate_vqe_energy(trial_architecture, problem, parameters=prefix + [-float(epsilon)])
     except Exception:
         return float("inf")
-    return -abs((float(plus) - float(minus)) / (2.0 * float(epsilon)))
-
+    gradient = abs((float(plus) - float(minus)) / (2.0 * float(epsilon)))
+    energy_drop = max(0.0, float(base) - min(float(plus), float(minus)))
+    return -(gradient + energy_drop)
 
 def _best_parameters_from_row(row: Mapping[str, Any]) -> tuple[float, ...]:
     raw = row.get("best_trace")
@@ -173,12 +176,20 @@ def _operator_growth_evaluator_from_row(row: Mapping[str, Any]) -> OperatorGrowt
 
 def _growth_score_value(result: float | Mapping[str, Any]) -> float:
     if isinstance(result, Mapping):
-        for key in ("score", "energy", "value", "delta_energy", "gradient_proxy"):
+        if "score" in result:
+            return float(result["score"])
+        if "gradient_proxy" in result or "energy_drop" in result:
+            gradient = abs(float(result.get("gradient_proxy", 0.0)))
+            energy_drop = max(0.0, float(result.get("energy_drop", 0.0)))
+            return -(gradient + energy_drop)
+        for key in ("energy", "value", "delta_energy"):
             if key in result:
                 return float(result[key])
-        raise ValueError("operator_growth_evaluator mapping must contain score/energy/value/delta_energy/gradient_proxy")
+        raise ValueError(
+            "operator_growth_evaluator mapping must contain score, energy/value/delta_energy, "
+            "or gradient_proxy/energy_drop"
+        )
     return float(result)
-
 
 def _select_adapt_growth_operator(
     gene: OperatorSequenceAnsatzGene,
