@@ -946,15 +946,12 @@ class NPUBackend(GPUBackend):
 
     def mul(self, a, b):
         if self._is_npu_complex(a) or self._is_npu_complex(b):
-            a = self.cast(a) if not torch.is_tensor(a) else a
-            b = self.cast(b) if not torch.is_tensor(b) else b
             return _NpuMulFn.apply(self.cast(a), self.cast(b))
         return super().mul(a, b)
 
     def div(self, a, b):
         if self._is_npu_complex(a) or self._is_npu_complex(b):
-            bb = self.cast(b)
-            br, bi = torch.real(bb), torch.imag(bb)
+            br, bi = _SplitComplex.apply(self.cast(b))     # 单入边拆分，反传安全
             denom = br * br + bi * bi                       # 实数 |b|^2
             inv_b = torch.complex(br / denom, -bi / denom)  # conj(b)/|b|^2
             return self.mul(self.cast(a), inv_b)
