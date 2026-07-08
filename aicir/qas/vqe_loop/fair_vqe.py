@@ -1,8 +1,11 @@
 """Fair VQE execution helpers for QAS labels.
 
-The actual VQE engine is ``aicir.vqc.BasicVQE``; this wrapper adds QAS-specific
-fair-label policy: fixed budgets, multi-start initialization, warm-start input,
-best-parameter tracing, and benchmark-table-ready metadata.
+The actual VQE objective is evaluated through QAS's shared fair-label policy:
+fixed budgets, multi-start initialization, warm-start input, best-parameter
+tracing, and benchmark-table-ready metadata.  Large Pauli Hamiltonians are kept
+in Pauli-term form; fair labeling must not expand them into dense 2^n x 2^n
+matrices because 18q chemistry Hamiltonians would exceed device memory before
+optimization even starts.
 """
 
 from __future__ import annotations
@@ -15,13 +18,19 @@ import numpy as np
 
 from ...backends.base import Backend
 from ...core.circuit import Circuit
-from ...ir import circuit_instructions, instruction_parameter, instruction_with_parameter
+from ...core.gates import apply_gate_to_state
+from ...core.state import State
+from ...ir import circuit_instructions, instruction_name, instruction_parameter, instruction_with_parameter
 from ...metrics.circuit_structure import parameter_count
 from ...optimizer import COBYLA
-from ...vqc import BasicVQE
 from ..core._types import ArchitectureSpec
 from ..core.backend_utils import resolve_qas_backend
 from ..problems.hamiltonians import VQEProblem, h2_demo_problem, hamiltonian_matrix
+
+try:  # pragma: no cover - torch is optional in NumPy-only environments.
+    import torch
+except Exception:  # pragma: no cover
+    torch = None
 
 
 THETA_INIT_RANDOM_UNIFORM_PI = "random_uniform_pi"
@@ -86,13 +95,149 @@ def fair_vqe_top_k(candidate_count: int) -> int:
     return min(max(0, int(candidate_count)), max(10, int(np.ceil(0.1 * max(0, int(candidate_count))))))
 
 
+def _pauli_term_cache(hamiltonian: Sequence[tuple[float, str]], *, n_qubits: int) -> list[tuple[int, int, int, float, float]]:
+    cached_terms: list[tuple[int, int, int, float, float]] = []
+    for coefficient, pauli in hamiltonian:
+        labels = str(pauli).strip().upper()
+        if len(labels) != int(n_qubits):
+            raise ValueError("Hamiltonian Pauli strings must match problem.n_qubits")
+        invalid = sorted(set(labels) - {"I", "X", "Y", "Z"})
+        if invalid:
+            raise ValueError(f"unsupported Pauli character(s): {', '.join(invalid)}")
+        flip_mask = 0
+        sign_mask = 0
+        y_count = 0
+        for qubit, label in enumerate(labels):
+            bit_mask = 1 << (int(n_qubits) - qubit - 1)
+            if label in {"X", "Y"}:
+                flip_mask ^= bit_mask
+            if label in {"Y", "Z"}:
+                sign_mask ^= bit_mask
+            if label == "Y":
+                y_count += 1
+        coeff = complex(coefficient)
+        cached_terms.append((flip_mask, sign_mask, y_count % 4, float(coeff.real), float(coeff.imag)))
+    if not cached_terms:
+        raise ValueError("Hamiltonian must contain at least one Pauli term")
+    return cached_terms
+
+
+def _simulate_statevector(circuit: Circuit, *, backend: Backend):
+    state = State.zero_state(int(circuit.n_qubits), backend).data
+    for instruction in circuit_instructions(circuit):
+        name = str(instruction_name(instruction)).strip().lower()
+        if name in {"measure", "measurement", "reset", "if", "while"}:
+            raise ValueError(f"fair VQE exact statevector path does not support nonunitary/control-flow gate {name!r}")
+        updated = apply_gate_to_state(instruction, state, int(circuit.n_qubits), backend)
+        if updated is None:
+            raise ValueError(f"fair VQE exact statevector path cannot apply gate {name!r} without dense expansion")
+        state = updated
+    return state.reshape(-1)
+
+
+def _torch_pauli_signs(basis_indices, sign_mask: int):
+    if sign_mask == 0:
+        return None
+    parity = torch.zeros_like(basis_indices, dtype=torch.bool)
+    bit = 0
+    mask = int(sign_mask)
+    while mask:
+        if mask & 1:
+            parity = torch.logical_xor(parity, ((basis_indices >> bit) & 1).to(torch.bool))
+        mask >>= 1
+        bit += 1
+    ones = torch.ones_like(basis_indices, dtype=torch.float32)
+    return torch.where(parity, -ones, ones)
+
+
+def _torch_pauli_expectation(state, pauli_cache, *, backend: Backend):
+    flat = state.reshape(-1)
+    basis_indices = torch.arange(flat.numel(), dtype=torch.long, device=flat.device)
+    if hasattr(backend, "hamiltonian_expectation_pauli"):
+        return backend.hamiltonian_expectation_pauli(flat, basis_indices, pauli_cache)
+    state_real = torch.real(flat)
+    state_imag = torch.imag(flat)
+    energy = torch.zeros((), dtype=torch.float32, device=flat.device)
+    for flip_mask, sign_mask, y_phase, coefficient_real, coefficient_imag in pauli_cache:
+        if flip_mask:
+            mapped_indices = torch.bitwise_xor(basis_indices, int(flip_mask))
+            mapped_real = state_real.index_select(0, mapped_indices)
+            mapped_imag = state_imag.index_select(0, mapped_indices)
+        else:
+            mapped_real = state_real
+            mapped_imag = state_imag
+        overlap_real = mapped_real * state_real + mapped_imag * state_imag
+        overlap_imag = mapped_real * state_imag - mapped_imag * state_real
+        signs = _torch_pauli_signs(basis_indices, sign_mask)
+        if signs is not None:
+            overlap_real = overlap_real * signs
+            overlap_imag = overlap_imag * signs
+        if y_phase == 0:
+            term_real = overlap_real.sum()
+            term_imag = overlap_imag.sum()
+        elif y_phase == 1:
+            term_real = -overlap_imag.sum()
+            term_imag = overlap_real.sum()
+        elif y_phase == 2:
+            term_real = -overlap_real.sum()
+            term_imag = -overlap_imag.sum()
+        else:
+            term_real = overlap_imag.sum()
+            term_imag = -overlap_real.sum()
+        energy = energy + coefficient_real * term_real - coefficient_imag * term_imag
+    return energy
+
+
+def _numpy_pauli_expectation(state: np.ndarray, pauli_cache) -> float:
+    flat = np.asarray(state, dtype=np.complex128).reshape(-1)
+    basis_indices = np.arange(flat.size, dtype=np.int64)
+    state_conj = np.conjugate(flat)
+    energy = 0.0 + 0.0j
+    for flip_mask, sign_mask, y_phase, coefficient_real, coefficient_imag in pauli_cache:
+        mapped = flat[np.bitwise_xor(basis_indices, np.int64(flip_mask))] if flip_mask else flat
+        term = state_conj * mapped
+        if sign_mask:
+            parity = np.zeros(flat.size, dtype=bool)
+            bit = 0
+            mask = int(sign_mask)
+            while mask:
+                if mask & 1:
+                    parity ^= ((basis_indices >> bit) & 1).astype(bool)
+                mask >>= 1
+                bit += 1
+            term = np.where(parity, -term, term)
+        if y_phase:
+            term = term * (1j ** int(y_phase))
+        energy += complex(coefficient_real, coefficient_imag) * np.sum(term)
+    return float(np.real(energy))
+
+
+def _evaluate_pauli_state_energy(
+    architecture: ArchitectureSpec,
+    problem: VQEProblem,
+    parameters: Sequence[float],
+    *,
+    backend: Backend,
+) -> float:
+    n_params = parameter_count(architecture.circuit)
+    theta = np.asarray(parameters, dtype=float).reshape(-1)
+    bound = _bind_parameters(architecture.circuit, theta) if n_params else architecture.circuit
+    bound = Circuit(*list(circuit_instructions(bound)), n_qubits=bound.n_qubits, backend=backend)
+    state = _simulate_statevector(bound, backend=backend)
+    pauli_cache = _pauli_term_cache(problem.hamiltonian, n_qubits=problem.n_qubits)
+    if torch is not None and isinstance(state, torch.Tensor):
+        value = _torch_pauli_expectation(state, pauli_cache, backend=backend)
+        return float(np.asarray(backend.to_numpy(value)).reshape(()))
+    return _numpy_pauli_expectation(state, pauli_cache)
+
+
 def evaluate_vqe_energy(
     architecture: ArchitectureSpec,
     problem: VQEProblem,
     parameters: Optional[Sequence[float]] = None,
     backend: Optional[Backend] = None,
 ) -> float:
-    """Evaluate an architecture energy through the shared BasicVQE exact path."""
+    """Evaluate an architecture energy through the shared fair Pauli-term path."""
 
     if architecture.n_qubits != problem.n_qubits:
         raise ValueError("architecture and VQE problem must use the same number of qubits")
@@ -101,20 +246,7 @@ def evaluate_vqe_energy(
     params = [0.0] * n_params if parameters is None else list(parameters)
     if len(params) != n_params:
         raise ValueError(f"Expected {n_params} parameters, got {len(params)}")
-
-    def ansatz(theta: np.ndarray):
-        return _bind_parameters(architecture.circuit, theta.reshape(-1)) if n_params else architecture.circuit
-
-    solver = BasicVQE(
-        hamiltonian_matrix(problem.hamiltonian),
-        n_qubits=problem.n_qubits,
-        ansatz=ansatz,
-        n_params=n_params,
-        backend=backend,
-        shots=None,
-        energy_estimator="exact",
-    )
-    return float(solver.energy(np.asarray(params, dtype=float)))
+    return _evaluate_pauli_state_energy(architecture, problem, params, backend=backend)
 
 
 def evaluate_h2_energy(
@@ -198,10 +330,6 @@ def optimize_vqe_energy(
         init_scale=init_scale,
         initial_parameters=initial_parameters,
     )
-    hamiltonian = hamiltonian_matrix(problem.hamiltonian)
-
-    def ansatz(theta: np.ndarray):
-        return _bind_parameters(architecture.circuit, theta.reshape(-1)) if n_params else architecture.circuit
 
     best_energy = float("inf")
     best_params = np.zeros(n_params, dtype=float)
@@ -216,27 +344,20 @@ def optimize_vqe_energy(
             params = start
         else:
             optimizer = COBYLA(options={"maxiter": budget, "rhobeg": COBYLA_RHOBEG, "tol": COBYLA_TOL})
-            solver = BasicVQE(
-                hamiltonian,
-                n_qubits=problem.n_qubits,
-                ansatz=ansatz,
-                n_params=n_params,
-                backend=backend,
-                optimizer=optimizer,
-                shots=None,
-                energy_estimator="exact",
-            )
+
+            def objective(theta: np.ndarray) -> float:
+                return _evaluate_pauli_state_energy(architecture, problem, theta.reshape(-1), backend=backend)
+
             try:
-                result = solver.run(init_params=start, optimizer=optimizer)
-                energy = float(result.energy)
-                params = np.asarray(result.parameters, dtype=float).reshape(-1)
-                raw_optimizer = result.optimizer_result
-                nfev = int(getattr(raw_optimizer, "nfev", budget))
+                result = optimizer.minimize(objective, start)
+                energy = float(getattr(result, "best_fun", getattr(result, "fun")))
+                params = np.asarray(getattr(result, "best_x", getattr(result, "x")), dtype=float).reshape(-1)
+                nfev = int(getattr(result, "nfev", budget))
             except ModuleNotFoundError:
                 values = [start]
                 while len(values) < budget:
                     values.append(rng.uniform(-np.pi, np.pi, size=n_params))
-                scored = [(float(solver.energy(params)), params) for params in values]
+                scored = [(float(objective(params)), params) for params in values]
                 energy, params = min(scored, key=lambda item: item[0])
                 nfev = len(scored)
         total_evals += nfev
@@ -263,7 +384,7 @@ def optimize_vqe_energy(
         n_starts=len(starts),
         metadata={
             "optimizer": "COBYLA",
-            "vqe_engine": "BasicVQE",
+            "vqe_engine": "statevector_pauli_terms",
             "budget_per_start": budget,
             "nfev": total_evals,
             "per_start": per_start,
