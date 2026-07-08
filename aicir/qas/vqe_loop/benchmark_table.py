@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import csv
 import json
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from math import ceil
@@ -32,6 +33,19 @@ from aicir.qas.library.ansatz import (
     architecture_from_supernet_gene,
 )
 from aicir.qas.problems.hamiltonians import VQEProblem, exact_ground_energy
+
+
+def _raise_csv_field_size_limit() -> None:
+    limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            return
+        except OverflowError:
+            limit //= 10
+
+
+_raise_csv_field_size_limit()
 
 class LabelStatus(str, Enum):
     """Allowed benchmark-table label states."""
