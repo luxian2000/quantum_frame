@@ -38,6 +38,7 @@ THETA_INIT_RANDOM_UNIFORM_PI = "random_uniform_pi"
 THETA_INIT_ZERO_DIAGNOSTIC = "zero"
 COBYLA_RHOBEG = 1.0
 COBYLA_TOL = 1e-6
+CPU_PAULI_EXPECTATION_MIN_TERMS = 1024
 
 
 @dataclass
@@ -159,6 +160,43 @@ def _torch_inference_context():
         return context()
     return torch.no_grad()
 
+
+def _device_type(value: Any) -> str:
+    if value is None:
+        return ""
+    device_type = getattr(value, "type", None)
+    if device_type:
+        return str(device_type).lower()
+    text = str(value).strip().lower()
+    if ":" in text:
+        text = text.split(":", 1)[0]
+    return text
+
+
+def _prefer_cpu_pauli_expectation(state: Any, pauli_cache, *, backend: Backend) -> bool:
+    if not _is_backend_tensor_like(state):
+        return False
+    device_type = _device_type(getattr(state, "device", None)) or _device_type(getattr(backend, "_device", None))
+    return device_type == "npu" and len(pauli_cache) >= CPU_PAULI_EXPECTATION_MIN_TERMS
+
+
+def _backend_state_to_numpy_vector(state: Any, *, backend: Backend) -> np.ndarray:
+    if not hasattr(backend, "to_numpy"):
+        raise TypeError("Backend returned a tensor-like state but does not expose to_numpy for explicit CPU transfer")
+    return np.asarray(backend.to_numpy(state), dtype=np.complex128).reshape(-1)
+
+
+def _evaluate_state_pauli_energy(state: Any, pauli_cache, *, backend: Backend) -> float:
+    if _is_backend_tensor_like(state):
+        if _prefer_cpu_pauli_expectation(state, pauli_cache, backend=backend):
+            return _numpy_pauli_expectation(_backend_state_to_numpy_vector(state, backend=backend), pauli_cache)
+        if torch is None:
+            raise TypeError("Backend returned a tensor-like state, but torch is not importable")
+        value = _torch_pauli_expectation(state, pauli_cache, backend=backend)
+        return float(np.asarray(backend.to_numpy(value)).reshape(()))
+    return _numpy_pauli_expectation(state, pauli_cache)
+
+
 def _torch_pauli_signs(basis_indices, sign_mask: int):
     if sign_mask == 0:
         return None
@@ -252,12 +290,7 @@ def _evaluate_pauli_state_energy(
     pauli_cache = _pauli_term_cache(problem.hamiltonian, n_qubits=problem.n_qubits)
     with _torch_inference_context():
         state = _simulate_statevector(bound, backend=backend)
-        if _is_backend_tensor_like(state):
-            if torch is None:
-                raise TypeError("Backend returned a tensor-like state, but torch is not importable")
-            value = _torch_pauli_expectation(state, pauli_cache, backend=backend)
-            return float(np.asarray(backend.to_numpy(value)).reshape(()))
-        return _numpy_pauli_expectation(state, pauli_cache)
+        return _evaluate_state_pauli_energy(state, pauli_cache, backend=backend)
 
 
 def evaluate_vqe_energy(

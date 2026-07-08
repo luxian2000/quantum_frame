@@ -27,6 +27,42 @@ def _is_completed_label(row: Mapping[str, Any]) -> bool:
     return status == "completed" or energy not in {"", "nan", "none", "null"}
 
 
+
+def _format_shard_failure(
+    *,
+    shard_index: int,
+    start: int,
+    end: int,
+    return_code: int | None = None,
+    shard_output: Path | None = None,
+    missing_output: bool = False,
+) -> dict[str, Any]:
+    failure: dict[str, Any] = {"shard": shard_index, "start": start, "end": end}
+    if return_code is not None:
+        failure["return_code"] = return_code
+        if return_code < 0:
+            signal_number = abs(int(return_code))
+            signal_name = "SIGKILL" if signal_number == 9 else f"signal-{signal_number}"
+            failure["signal"] = signal_name
+            failure["possible_oom"] = signal_number == 9
+            if signal_number == 9:
+                failure["hint"] = "worker was killed by SIGKILL; on NPU runs this usually means host OOM or cgroup memory limit, not a Python exception"
+    if shard_output is not None:
+        failure["output"] = str(shard_output)
+        if shard_output.exists():
+            try:
+                rows = read_csv_rows(shard_output)
+                counts: dict[str, int] = {}
+                for row in rows:
+                    status = str(row.get("label_status", "") or "blank").strip() or "blank"
+                    counts[status] = counts.get(status, 0) + 1
+                failure["shard_output_status"] = ",".join(f"{key}={value}" for key, value in sorted(counts.items()))
+            except Exception as exc:  # pragma: no cover - best-effort diagnostic only.
+                failure["shard_output_status_error"] = repr(exc)
+        elif missing_output:
+            failure["missing_output"] = str(shard_output)
+    return failure
+
 def _merge_shard_outputs(
     shard_outputs: list[Path],
     output_path: Path,
@@ -137,9 +173,25 @@ def run_sharded_labels(args: argparse.Namespace) -> dict[str, Any]:
     for shard_index, start, end, _shard_queue, shard_output, process in processes:
         return_code = process.wait()
         if return_code != 0:
-            failures.append({"shard": shard_index, "start": start, "end": end, "return_code": return_code})
+            failures.append(
+                _format_shard_failure(
+                    shard_index=shard_index,
+                    start=start,
+                    end=end,
+                    return_code=return_code,
+                    shard_output=shard_output,
+                )
+            )
         if not shard_output.exists():
-            failures.append({"shard": shard_index, "start": start, "end": end, "missing_output": str(shard_output)})
+            failures.append(
+                _format_shard_failure(
+                    shard_index=shard_index,
+                    start=start,
+                    end=end,
+                    shard_output=shard_output,
+                    missing_output=True,
+                )
+            )
     if failures:
         raise RuntimeError(f"Fair-label shard failure(s): {failures}")
 
