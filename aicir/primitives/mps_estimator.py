@@ -36,6 +36,18 @@ class MPSEstimator(BaseEstimator):
         value, _err = self._expectation(circuit, hamiltonian)
         return _EnergyResult(value)
 
+    def gradient(self, circuit, observable, *, parameter_values, shots=None, method="psr"):
+        """默认走参数移位（PSR）：``run()`` 返回 python float，autograd 无从反传；NPU 上 MPS
+        复数张量的梯度 fan-out 累加还缺 complex64 内核（``aclnnInplaceAdd``），autograd 不可用。
+        PSR 只需前向求值，对 Pauli 旋转门精确，numpy/GPU/NPU 通用（已在真实 Ascend 验证）。"""
+        return super().gradient(
+            circuit,
+            observable,
+            parameter_values=parameter_values,
+            shots=shots,
+            method=method,
+        )
+
     def run(self, circuits, observables, *, shots=None, parameter_values=None):
         if shots is not None:
             raise ValueError("MPSEstimator 为（近似）精确路径，不接受 shots")

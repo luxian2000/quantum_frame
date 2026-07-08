@@ -26,8 +26,15 @@ def test_gpu_svd_reconstructs():
     assert torch.allclose(recon, m, atol=1e-4)
 
 
-def test_npu_svd_not_implemented():
+def test_npu_svd_cpu_device_falls_back_to_parent():
+    """NPUBackend.svd() on a non-npu device (here cpu) skips real-embedding and
+    falls back to GPUBackend.svd (torch.linalg.svd directly) — real-embedding only
+    triggers when _is_npu_complex(matrix) is True (device.type == 'npu')."""
+    torch = pytest.importorskip("torch")
     from aicir.backends.npu_backend import NPUBackend
 
-    with pytest.raises(NotImplementedError):
-        NPUBackend.svd(object.__new__(NPUBackend), np.eye(2))
+    bk = NPUBackend(device="cpu")
+    m = bk.cast(np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+    u, s, vh = bk.svd(m)
+    recon = torch.matmul(torch.matmul(u, torch.diag(s).to(u.dtype)), vh)
+    assert torch.allclose(recon, m, atol=1e-4)

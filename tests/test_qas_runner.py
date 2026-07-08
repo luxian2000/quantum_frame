@@ -27,7 +27,7 @@ def _tiny_vqa_config():
 
 
 def _tiny_ppr_config():
-    return config.ppr_dql(
+    return config.pprdql(
         episode_num=3,
         max_steps_per_episode=1,
         batch_size=1,
@@ -50,8 +50,8 @@ def test_available_qas_methods_contains_public_names():
         "supernet",
         "supernet_classification",
         "supernet_h2",
-        "ppo_rb",
-        "ppr_dql",
+        "pporb",
+        "pprdql",
         "crlqas",
         "qdrats",
         "dqas",
@@ -60,13 +60,16 @@ def test_available_qas_methods_contains_public_names():
 
 def test_config_factory_uses_method_names_without_config_class_imports():
     vqa_config = config.supernet(supernet_steps=0)
-    ppr_config = config.create("PPR_DQL", episode_num=1)
+    ppr_config = config.create("PPRDQL", episode_num=1)
+    ppr_legacy_alias_config = config.create("PPR_DQL", episode_num=2)
     crl_config = config.crlqas(adam_spsa={"iterations": 2})
 
     assert vqa_config.__class__.__name__ == "SupernetConfig"
     assert vqa_config.supernet_steps == 0
     assert ppr_config.__class__.__name__ == "PPRDQLConfig"
     assert ppr_config.episode_num == 1
+    assert ppr_legacy_alias_config.__class__.__name__ == "PPRDQLConfig"
+    assert ppr_legacy_alias_config.episode_num == 2
     assert crl_config.adam_spsa.iterations == 2
 
 
@@ -103,7 +106,7 @@ def test_run_accepts_custom_vqa_objective_keyword():
     assert result.best_score == 0.0
 
 
-def test_run_accepts_request_object_for_ppr_dql():
+def test_run_accepts_request_object_for_pprdql():
     target_state = State.from_array(
         np.array([0.0, 1.0], dtype=np.complex64),
         n_qubits=1,
@@ -124,7 +127,10 @@ def test_legacy_runner_alias_is_not_exported():
 
 
 def test_run_reports_required_inputs():
-    with pytest.raises(ValueError, match="ppr_dql requires target_state"):
+    with pytest.raises(ValueError, match="pprdql requires target_state"):
+        run("pprdql", config=_tiny_ppr_config())
+
+    with pytest.raises(ValueError, match="pprdql requires target_state"):
         run("ppr_dql", config=_tiny_ppr_config())
 
     with pytest.raises(ValueError, match="Available methods"):
