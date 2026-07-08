@@ -36,6 +36,7 @@ CHEMISTRY_MUTATION_TYPES = (
     "chemistry_delete",
     "chemistry_swap",
     "chemistry_change",
+    "chemistry_adapt_growth",
 )
 OPERATOR_MUTATION_TYPES = (
     "operator_insert",
@@ -56,6 +57,7 @@ class MutationUnavailable(ValueError):
 
 
 OperatorGrowthEvaluator = Callable[[OperatorSequenceAnsatzGene, str], float | Mapping[str, Any]]
+ChemistryGrowthEvaluator = Callable[[ChemistryExcitationAnsatzGene, Mapping[str, Any]], float | Mapping[str, Any]]
 
 
 def _default_operator_pool(n_qubits: int) -> tuple[str, ...]:
@@ -155,6 +157,27 @@ def _best_parameters_from_row(row: Mapping[str, Any]) -> tuple[float, ...]:
             best_energy = energy
             best_parameters = parsed
     return best_parameters
+
+
+def _operator_pool_from_row_hamiltonian(row: Mapping[str, Any], n_qubits: int) -> tuple[str, ...] | None:
+    pool: list[str] = []
+    try:
+        terms = row_hamiltonian_terms(row)
+    except ValueError:
+        return None
+    for coeff, pauli in terms:
+        candidate = str(pauli).strip().upper()
+        if len(candidate) != int(n_qubits):
+            continue
+        if all(symbol == "I" for symbol in candidate):
+            continue
+        if any(symbol not in {"I", "X", "Y", "Z"} for symbol in candidate):
+            continue
+        if float(coeff) == 0.0:
+            continue
+        if candidate not in pool:
+            pool.append(candidate)
+    return tuple(pool) if pool else None
 
 
 def _operator_growth_evaluator_from_row(row: Mapping[str, Any]) -> OperatorGrowthEvaluator | None:
@@ -480,6 +503,66 @@ def _mutate_depth(
 
 
 
+def _finite_difference_chemistry_growth_score(
+    gene: ChemistryExcitationAnsatzGene,
+    candidate_excitation: Mapping[str, Any],
+    terms: Sequence[tuple[float, str]],
+    *,
+    prefix_parameters: Sequence[float] | None = None,
+    epsilon: float = 0.05,
+) -> float:
+    from aicir.qas.library.ansatz import architecture_from_chemistry_excitation_gene
+    from aicir.qas.problems.hamiltonians import VQEProblem
+    from aicir.qas.vqe_loop.fair_vqe import evaluate_vqe_energy
+
+    base_architecture = architecture_from_chemistry_excitation_gene(gene)
+    trial = ChemistryExcitationAnsatzGene(
+        n_qubits=gene.n_qubits,
+        hf_occupied_qubits=gene.hf_occupied_qubits,
+        excitations=gene.excitations + (dict(candidate_excitation),),
+        active_electrons=gene.active_electrons,
+        active_spatial_orbitals=gene.active_spatial_orbitals,
+        name=gene.name,
+    )
+    trial_architecture = architecture_from_chemistry_excitation_gene(trial)
+    problem = VQEProblem(
+        name="chemistry_adapt_growth_proxy",
+        n_qubits=gene.n_qubits,
+        hamiltonian=tuple((float(coeff), str(pauli).upper()) for coeff, pauli in terms),
+        reference_energy=float("nan"),
+    )
+    parsed_prefix = [float(value) for value in tuple(prefix_parameters or ())]
+    prefix = parsed_prefix[: gene.layers]
+    if len(prefix) < gene.layers:
+        prefix.extend([0.0] * (gene.layers - len(prefix)))
+    try:
+        base = evaluate_vqe_energy(base_architecture, problem, parameters=prefix)
+        plus = evaluate_vqe_energy(trial_architecture, problem, parameters=prefix + [float(epsilon)])
+        minus = evaluate_vqe_energy(trial_architecture, problem, parameters=prefix + [-float(epsilon)])
+    except Exception:
+        return float("inf")
+    gradient = abs((float(plus) - float(minus)) / (2.0 * float(epsilon)))
+    energy_drop = max(0.0, float(base) - min(float(plus), float(minus)))
+    return -(gradient + energy_drop)
+
+
+def _chemistry_growth_evaluator_from_row(row: Mapping[str, Any]) -> ChemistryGrowthEvaluator | None:
+    terms = row_hamiltonian_terms(row)
+    if not terms:
+        return None
+    prefix_parameters = _best_parameters_from_row(row)
+
+    def evaluate(gene: ChemistryExcitationAnsatzGene, candidate_excitation: Mapping[str, Any]) -> float:
+        return _finite_difference_chemistry_growth_score(
+            gene,
+            candidate_excitation,
+            terms,
+            prefix_parameters=prefix_parameters,
+        )
+
+    return evaluate
+
+
 def _chemistry_excitation_pool(gene: ChemistryExcitationAnsatzGene) -> tuple[dict[str, Any], ...]:
     if gene.active_electrons is not None and gene.active_spatial_orbitals is not None:
         from aicir.qas.vqe_loop.p0_chemistry_excitation import closed_shell_excitation_pools
@@ -494,11 +577,36 @@ def _chemistry_excitation_pool(gene: ChemistryExcitationAnsatzGene) -> tuple[dic
     return tuple(dict(excitation) for excitation in gene.excitations)
 
 
+
+def _canonical_excitation(excitation: Mapping[str, Any]) -> tuple[str, tuple[int, ...]]:
+    return str(excitation.get("type", "")).strip().lower(), tuple(int(qubit) for qubit in excitation.get("qubits", ()))
+
+
+def _select_adapt_growth_excitation(
+    gene: ChemistryExcitationAnsatzGene,
+    pool: Sequence[Mapping[str, Any]],
+    evaluator: ChemistryGrowthEvaluator | None,
+) -> dict[str, Any]:
+    candidates = [dict(item) for item in pool]
+    if not candidates:
+        raise MutationUnavailable("chemistry_adapt_growth requires a non-empty chemistry excitation pool")
+    existing = {_canonical_excitation(excitation) for excitation in gene.excitations}
+    novel_candidates = [candidate for candidate in candidates if _canonical_excitation(candidate) not in existing]
+    if novel_candidates:
+        candidates = novel_candidates
+    if evaluator is None:
+        return dict(candidates[0])
+    scored: list[tuple[float, int, dict[str, Any]]] = []
+    for index, candidate in enumerate(candidates):
+        scored.append((_growth_score_value(evaluator(gene, candidate)), index, dict(candidate)))
+    scored.sort(key=lambda item: (item[0], item[1]))
+    return dict(scored[0][2])
 def _mutate_chemistry_excitation(
     gene: ChemistryExcitationAnsatzGene,
     mutation_type: str,
     rng: random.Random,
     *,
+    chemistry_growth_evaluator: ChemistryGrowthEvaluator | None,
     min_layers: int,
     max_layers: int | None,
 ) -> ChemistryExcitationAnsatzGene:
@@ -508,7 +616,12 @@ def _mutate_chemistry_excitation(
         raise MutationUnavailable(f"{mutation_type} requires a non-empty chemistry excitation pool")
     min_depth = max(0, int(min_layers))
     max_depth = None if max_layers is None else max(min_depth, int(max_layers))
-    if mutation_type == "chemistry_insert":
+    if mutation_type == "chemistry_adapt_growth":
+        if max_depth is not None and len(excitations) >= max_depth:
+            raise MutationUnavailable("chemistry_adapt_growth cannot exceed max_layers")
+        child = list(excitations)
+        child.append(_select_adapt_growth_excitation(gene, pool, chemistry_growth_evaluator))
+    elif mutation_type == "chemistry_insert":
         if max_depth is not None and len(excitations) >= max_depth:
             raise MutationUnavailable("chemistry_insert cannot exceed max_layers")
         child = list(excitations)
@@ -553,6 +666,7 @@ def mutate_gene(
     two_qubit_gates: Sequence[str] = DEFAULT_TWO_QUBIT_GATES,
     operator_pool: Sequence[str] | None = None,
     operator_growth_evaluator: OperatorGrowthEvaluator | None = None,
+    chemistry_growth_evaluator: ChemistryGrowthEvaluator | None = None,
     min_layers: int = 1,
     max_layers: int | None = None,
 ) -> MutationResult:
@@ -569,6 +683,7 @@ def mutate_gene(
             chemistry_gene,
             normalized,
             local_rng,
+            chemistry_growth_evaluator=chemistry_growth_evaluator,
             min_layers=int(min_layers),
             max_layers=max_layers,
         )
@@ -780,6 +895,7 @@ def generate_mutation_children(
     two_qubit_gates: Sequence[str] = DEFAULT_TWO_QUBIT_GATES,
     operator_pool: Sequence[str] | None = None,
     operator_growth_evaluator: OperatorGrowthEvaluator | None = None,
+    chemistry_growth_evaluator: ChemistryGrowthEvaluator | None = None,
     min_layers: int = 1,
     max_layers: int | None = None,
     mutation_weights: Mapping[str, float] | None = None,
@@ -794,6 +910,8 @@ def generate_mutation_children(
     for parent_index, parent_row in enumerate(parent_rows):
         parent_gene = _gene_from_row(parent_row)
         row_growth_evaluator = operator_growth_evaluator or _operator_growth_evaluator_from_row(parent_row)
+        row_chemistry_growth_evaluator = chemistry_growth_evaluator or _chemistry_growth_evaluator_from_row(parent_row)
+        row_operator_pool = operator_pool or _operator_pool_from_row_hamiltonian(parent_row, parent_gene.n_qubits)
         for child_index in range(int(children_per_parent)):
             result: MutationResult | None = None
             for mutation_type in _mutation_order(
@@ -811,8 +929,9 @@ def generate_mutation_children(
                         rng=local_rng,
                         single_qubit_gates=single_qubit_gates,
                         two_qubit_gates=two_qubit_gates,
-                        operator_pool=operator_pool,
+                        operator_pool=row_operator_pool,
                         operator_growth_evaluator=row_growth_evaluator,
+                        chemistry_growth_evaluator=row_chemistry_growth_evaluator,
                         min_layers=min_layers,
                         max_layers=max_layers,
                     )
@@ -865,6 +984,7 @@ __all__ = [
     "MutationUnavailable",
     "MutationResult",
     "OperatorGrowthEvaluator",
+    "ChemistryGrowthEvaluator",
     "generate_crossover_children",
     "generate_mutation_children",
     "layer_crossover",
@@ -872,6 +992,10 @@ __all__ = [
     "mutation_result_to_row",
     "select_parent_rows",
 ]
+
+
+
+
 
 
 

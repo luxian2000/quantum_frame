@@ -186,6 +186,34 @@ def _needed_registry_fields(args: argparse.Namespace) -> tuple[str, ...]:
     return tuple(sorted(normalized))
 
 
+def _route_mutation_weights(args: argparse.Namespace, mutation_types: Sequence[str]) -> dict[str, float] | None:
+    mutation_set = tuple(str(item).strip().lower() for item in mutation_types if str(item).strip())
+    if not mutation_set:
+        return None
+    route = str(args.growth_route).strip().lower()
+    if route == "line_a_operator_sequence":
+        genetic = tuple(item for item in mutation_set if item.startswith("operator_") and item != "operator_adapt_growth")
+        weights: dict[str, float] = {}
+        if genetic and float(args.operator_genetic_weight) > 0.0:
+            share = float(args.operator_genetic_weight) / float(len(genetic))
+            weights.update({item: share for item in genetic})
+        if "operator_adapt_growth" in mutation_set and float(args.operator_adapt_growth_weight) > 0.0:
+            weights["operator_adapt_growth"] = float(args.operator_adapt_growth_weight)
+        return weights or None
+    if route == "line_b_chemistry_excitation":
+        mode = str(args.chemistry_growth_mode).strip().lower()
+        genetic_weight = 0.0 if mode == "adapt" else float(args.chemistry_genetic_weight)
+        adapt_weight = 0.0 if mode == "genetic" else float(args.chemistry_adapt_growth_weight)
+        genetic = tuple(item for item in mutation_set if item.startswith("chemistry_") and item != "chemistry_adapt_growth")
+        weights: dict[str, float] = {}
+        if genetic and genetic_weight > 0.0:
+            share = genetic_weight / float(len(genetic))
+            weights.update({item: share for item in genetic})
+        if "chemistry_adapt_growth" in mutation_set and adapt_weight > 0.0:
+            weights["chemistry_adapt_growth"] = adapt_weight
+        return weights or None
+    return None
+
 def build_real_evaluator_registry(
     args: argparse.Namespace,
     terms: Sequence[tuple[float, str]],
@@ -475,6 +503,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="",
         help="Comma-separated Pauli strings used by operator_insert/operator_big_mutation, e.g. XI,YY,ZZ.",
     )
+    parser.add_argument("--growth-route", choices=("line_a_operator_sequence", "line_b_chemistry_excitation"), default="line_a_operator_sequence")
+    parser.add_argument("--operator-genetic-weight", type=float, default=0.5)
+    parser.add_argument("--operator-adapt-growth-weight", type=float, default=0.5)
+    parser.add_argument("--chemistry-genetic-weight", type=float, default=0.5)
+    parser.add_argument("--chemistry-adapt-growth-weight", type=float, default=0.5)
+    parser.add_argument("--chemistry-growth-mode", choices=("genetic", "adapt", "mixed"), default="mixed")
     parser.add_argument("--k-min", type=int, default=3)
     parser.add_argument("--d-max", type=float, default=0.1)
     parser.add_argument(
@@ -547,6 +581,7 @@ def main(
     terms = tuple((float(coeff), str(pauli)) for coeff, pauli in terms)
     baseline_selectors = _parse_csv_list(args.baseline_selectors)
     mutation_types = _parse_csv_list(args.mutation_types)
+    mutation_weights = _route_mutation_weights(args, mutation_types)
     operator_pool = _parse_csv_list(args.operator_pool)
     labeled_rows = _load_bootstrap_labels(args)
     requested_selector = str(args.selector)
@@ -615,6 +650,7 @@ def main(
             batch_id=round_batch_id,
             protocol_version=args.protocol_version,
             mutation_types=mutation_types,
+            mutation_weights=mutation_weights,
             operator_pool=operator_pool or None,
             seed=int(args.seed) + round_index,
             baseline_selector_fields=baseline_selectors,
@@ -843,4 +879,5 @@ def main(
 
 if __name__ == "__main__":
     main()
+
 

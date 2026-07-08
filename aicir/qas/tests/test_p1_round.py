@@ -488,8 +488,32 @@ class P1RoundTests(unittest.TestCase):
         self.assertEqual(rows[0]["parent_architecture_id"], "parent")
 
 
+
+    def test_plan_p1_round_passes_weighted_operator_route_generation(self):
+        from aicir.qas.vqe_loop.p1_round import plan_p1_round
+
+        plan = plan_p1_round(
+            labeled_rows=[operator_labeled_row("parent", -1.0, operators=("XI",))],
+            parent_count=1,
+            children_per_parent=2,
+            fair_top_k=1,
+            evaluator_registry={"E2": lambda row: {"E2": -1.0}},
+            selector="e2",
+            cheap_eval_selector="e2",
+            mutation_types=("operator_insert", "operator_adapt_growth"),
+            mutation_weights={"operator_insert": 0.0, "operator_adapt_growth": 1.0},
+            operator_pool=("YY", "ZZ"),
+            k_min=99,
+            selection_policy="no_regret",
+            baseline_selector_fields=("E2",),
+        )
+
+        self.assertGreaterEqual(len(plan.child_rows), 1)
+        self.assertEqual({row["mutation_type"] for row in plan.child_rows}, {"operator_adapt_growth"})
 if __name__ == "__main__":
     unittest.main()
+
+
 
 
 
