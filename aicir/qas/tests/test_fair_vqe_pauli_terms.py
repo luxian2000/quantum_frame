@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from io import StringIO
 import unittest
 from unittest.mock import patch
 
@@ -101,6 +102,27 @@ class FairVqePauliTermsTest(unittest.TestCase):
 
         self.assertEqual(backend.to_numpy_calls, 1)
         self.assertAlmostEqual(energy, float(CPU_PAULI_EXPECTATION_MIN_TERMS))
+
+
+    def test_fair_vqe_trace_prints_gate_and_expectation_stages(self):
+        architecture = ArchitectureSpec.from_gates("x_1q", [{"type": "pauli_x", "qubits": [0]}], n_qubits=1)
+        problem = VQEProblem(
+            name="z0_1q",
+            n_qubits=1,
+            hamiltonian=((1.0, "Z"),),
+            reference_energy=-1.0,
+        )
+        stream = StringIO()
+
+        with patch("sys.stdout", stream), patch("aicir.qas.vqe_loop.fair_vqe._fair_trace_enabled", return_value=True):
+            evaluate_vqe_energy(architecture, problem)
+
+        output = stream.getvalue()
+        self.assertIn("stage=simulate_gate_begin", output)
+        self.assertIn("gate_index=0", output)
+        self.assertIn("gate_type=pauli_x", output)
+        self.assertIn("stage=simulate_gate_end", output)
+        self.assertIn("stage=pauli_expectation_begin", output)
 
 if __name__ == "__main__":
     unittest.main()
