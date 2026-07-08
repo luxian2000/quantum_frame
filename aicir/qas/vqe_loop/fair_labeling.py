@@ -45,6 +45,26 @@ from aicir.qas.vqe_loop.benchmark_table import (
 
 
 
+
+def _label_trace_enabled() -> bool:
+    return str(os.environ.get("AICIR_QAS_LABEL_TRACE", "1")).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _label_trace(message: str) -> None:
+    if _label_trace_enabled():
+        print(f"[fair_label_trace] {message}", flush=True)
+
+
+def _safe_len(value: Any) -> str:
+    try:
+        return str(len(value))
+    except Exception:
+        return "unknown"
+
+
+def _architecture_row_id(row: dict[str, Any]) -> str:
+    return str(row.get("architecture_id", "") or row.get("canonical_arch_hash", "") or "unknown")
+
 def _load_warm_start_vector(
     row: dict[str, Any],
     *,
