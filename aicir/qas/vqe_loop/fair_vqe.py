@@ -11,6 +11,7 @@ optimization even starts.
 from __future__ import annotations
 
 from contextlib import nullcontext
+import os
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Sequence
@@ -40,6 +41,48 @@ COBYLA_RHOBEG = 1.0
 COBYLA_TOL = 1e-6
 CPU_PAULI_EXPECTATION_MIN_TERMS = 1024
 
+
+def _fair_trace_enabled() -> bool:
+    return str(os.environ.get("AICIR_QAS_FAIR_TRACE", "1")).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _describe_value(value: Any) -> str:
+    parts = []
+    shape = getattr(value, "shape", None)
+    dtype = getattr(value, "dtype", None)
+    device = getattr(value, "device", None)
+    if shape is not None:
+        try:
+            parts.append(f"shape={tuple(shape)}")
+        except TypeError:
+            parts.append(f"shape={shape}")
+    if dtype is not None:
+        parts.append(f"dtype={dtype}")
+    if device is not None:
+        parts.append(f"device={device}")
+    return " ".join(parts) if parts else f"type={type(value).__name__}"
+
+
+def _instruction_qubits_text(instruction: Any) -> str:
+    for key in ("qubits", "wires", "targets"):
+        if isinstance(instruction, dict) and key in instruction:
+            return str(instruction.get(key))
+        value = getattr(instruction, key, None)
+        if value is not None:
+            return str(value)
+    if isinstance(instruction, dict):
+        values = []
+        for key in ("qubit", "qubit_1", "qubit_2", "qubit_3", "qubit_4"):
+            if key in instruction:
+                values.append(instruction[key])
+        if values:
+            return str(values)
+    return "unknown"
+
+
+def _fair_trace(message: str) -> None:
+    if _fair_trace_enabled():
+        print(f"[fair_vqe_trace] {message}", flush=True)
 
 @dataclass
 class VQEOptimizationResult:
@@ -126,15 +169,31 @@ def _pauli_term_cache(hamiltonian: Sequence[tuple[float, str]], *, n_qubits: int
 
 def _simulate_statevector(circuit: Circuit, *, backend: Backend):
     state = State.zero_state(int(circuit.n_qubits), backend).data
-    for instruction in circuit_instructions(circuit):
+    _fair_trace(f"stage=simulate_start n_qubits={int(circuit.n_qubits)} state={_describe_value(state)}")
+    for gate_index, instruction in enumerate(circuit_instructions(circuit)):
         name = str(instruction_name(instruction)).strip().lower()
+        qubits = _instruction_qubits_text(instruction)
+        _fair_trace(
+            f"stage=simulate_gate_begin gate_index={gate_index} gate_type={name} qubits={qubits} state={_describe_value(state)}"
+        )
         if name in {"measure", "measurement", "reset", "if", "while"}:
+            _fair_trace(f"stage=simulate_gate_error gate_index={gate_index} gate_type={name} error=nonunitary_control_flow")
             raise ValueError(f"fair VQE exact statevector path does not support nonunitary/control-flow gate {name!r}")
-        updated = apply_gate_to_state(instruction, state, int(circuit.n_qubits), backend)
+        try:
+            updated = apply_gate_to_state(instruction, state, int(circuit.n_qubits), backend)
+        except BaseException as exc:
+            _fair_trace(f"stage=simulate_gate_error gate_index={gate_index} gate_type={name} qubits={qubits} error={exc!r}")
+            raise
         if updated is None:
+            _fair_trace(f"stage=simulate_gate_error gate_index={gate_index} gate_type={name} qubits={qubits} error=dense_expansion_required")
             raise ValueError(f"fair VQE exact statevector path cannot apply gate {name!r} without dense expansion")
         state = updated
-    return state.reshape(-1)
+        _fair_trace(
+            f"stage=simulate_gate_end gate_index={gate_index} gate_type={name} qubits={qubits} state={_describe_value(state)}"
+        )
+    result = state.reshape(-1)
+    _fair_trace(f"stage=simulate_end state={_describe_value(result)}")
+    return result
 
 
 def _is_backend_tensor_like(value: Any) -> bool:
@@ -187,14 +246,28 @@ def _backend_state_to_numpy_vector(state: Any, *, backend: Backend) -> np.ndarra
 
 
 def _evaluate_state_pauli_energy(state: Any, pauli_cache, *, backend: Backend) -> float:
-    if _is_backend_tensor_like(state):
-        if _prefer_cpu_pauli_expectation(state, pauli_cache, backend=backend):
-            return _numpy_pauli_expectation(_backend_state_to_numpy_vector(state, backend=backend), pauli_cache)
-        if torch is None:
-            raise TypeError("Backend returned a tensor-like state, but torch is not importable")
-        value = _torch_pauli_expectation(state, pauli_cache, backend=backend)
-        return float(np.asarray(backend.to_numpy(value)).reshape(()))
-    return _numpy_pauli_expectation(state, pauli_cache)
+    _fair_trace(f"stage=pauli_expectation_begin terms={len(pauli_cache)} state={_describe_value(state)}")
+    try:
+        if _is_backend_tensor_like(state):
+            if _prefer_cpu_pauli_expectation(state, pauli_cache, backend=backend):
+                _fair_trace("stage=pauli_expectation_cpu_transfer_begin reason=large_npu_pauli_cache")
+                state_np = _backend_state_to_numpy_vector(state, backend=backend)
+                _fair_trace(f"stage=pauli_expectation_cpu_transfer_end state={_describe_value(state_np)}")
+                value = _numpy_pauli_expectation(state_np, pauli_cache)
+                _fair_trace(f"stage=pauli_expectation_end path=cpu_numpy energy={value}")
+                return value
+            if torch is None:
+                raise TypeError("Backend returned a tensor-like state, but torch is not importable")
+            value = _torch_pauli_expectation(state, pauli_cache, backend=backend)
+            result = float(np.asarray(backend.to_numpy(value)).reshape(()))
+            _fair_trace(f"stage=pauli_expectation_end path=torch_backend energy={result}")
+            return result
+        result = _numpy_pauli_expectation(state, pauli_cache)
+        _fair_trace(f"stage=pauli_expectation_end path=numpy energy={result}")
+        return result
+    except BaseException as exc:
+        _fair_trace(f"stage=pauli_expectation_error error={exc!r}")
+        raise
 
 
 def _torch_pauli_signs(basis_indices, sign_mask: int):
@@ -285,12 +358,21 @@ def _evaluate_pauli_state_energy(
 ) -> float:
     n_params = parameter_count(architecture.circuit)
     theta = np.asarray(parameters, dtype=float).reshape(-1)
+    _fair_trace(
+        f"stage=evaluate_begin architecture_id={getattr(architecture, 'architecture_id', getattr(architecture, 'name', 'unknown'))} n_qubits={architecture.n_qubits} n_params={n_params} problem={problem.name}"
+    )
     bound = _bind_parameters(architecture.circuit, theta) if n_params else architecture.circuit
     bound = Circuit(*list(circuit_instructions(bound)), n_qubits=bound.n_qubits, backend=backend)
+    _fair_trace(f"stage=bind_end gates={len(list(circuit_instructions(bound)))}")
     pauli_cache = _pauli_term_cache(problem.hamiltonian, n_qubits=problem.n_qubits)
-    with _torch_inference_context():
-        state = _simulate_statevector(bound, backend=backend)
-        return _evaluate_state_pauli_energy(state, pauli_cache, backend=backend)
+    _fair_trace(f"stage=pauli_cache_end terms={len(pauli_cache)}")
+    try:
+        with _torch_inference_context():
+            state = _simulate_statevector(bound, backend=backend)
+            return _evaluate_state_pauli_energy(state, pauli_cache, backend=backend)
+    except BaseException as exc:
+        _fair_trace(f"stage=evaluate_error error={exc!r}")
+        raise
 
 
 def evaluate_vqe_energy(
