@@ -2,11 +2,9 @@
 import numpy as np
 import pytest
 
-torch = pytest.importorskip("torch")
-
 from aicir.backends.npu_backend import is_npu_available
 
-pytestmark = pytest.mark.skipif(not is_npu_available(), reason="需要真实 NPU")
+npu_only = pytest.mark.skipif(not is_npu_available(), reason="需要真实 NPU")
 
 
 def _circ():
@@ -24,9 +22,11 @@ def _circ():
 
 
 def _warm():
+    torch = pytest.importorskip("torch")
     torch.ones(1).npu()
 
 
+@npu_only
 def test_mps_statevector_npu_matches_cpu():
     _warm()
     from aicir.backends import NumpyBackend
@@ -39,6 +39,7 @@ def test_mps_statevector_npu_matches_cpu():
     assert np.allclose(npu, cpu, atol=1e-4)
 
 
+@npu_only
 def test_mps_expectation_npu_matches_cpu():
     _warm()
     from aicir.backends import NumpyBackend
@@ -54,6 +55,7 @@ def test_mps_expectation_npu_matches_cpu():
     assert abs(npu - cpu) < 1e-3
 
 
+@npu_only
 def test_mps_truncated_npu_matches_cpu():
     _warm()
     from aicir.backends import NumpyBackend
@@ -66,26 +68,47 @@ def test_mps_truncated_npu_matches_cpu():
     assert np.allclose(npu, cpu, atol=1e-3)
 
 
-def test_mps_expectation_npu_autograd_matches_cpu():
+@npu_only
+def test_mps_expectation_npu_psr_gradient_matches_analytic():
     _warm()
-    from aicir.backends import NumpyBackend
     from aicir.backends.npu_backend import NPUBackend
     from aicir.core import Circuit
     from aicir import rx, cnot
+    from aicir import Parameter
     from aicir.core.operators import Hamiltonian
-    from aicir.simulator import mps_expectation
+    from aicir.primitives import MPSEstimator
 
+    theta = Parameter("theta")
     H = Hamiltonian([("ZI", 1.0)])
+    c = Circuit(n_qubits=2)
+    c.append(rx(theta, 0))
+    c.append(cnot(1, [0]))
 
-    def build(theta):
-        c = Circuit(n_qubits=2)
-        c.append(rx(theta, 0))
-        c.append(cnot(1, [0]))
-        return c
+    grad = MPSEstimator(backend=NPUBackend()).gradient(
+        c, H, parameter_values=[0.7], method="psr"
+    )
+    assert np.allclose(grad.gradient, [-np.sin(0.7)], atol=1e-3)
 
-    # NPU autograd
-    t_npu = torch.tensor(0.7, dtype=torch.float32, device="npu:0", requires_grad=True)
-    mps_expectation(build(t_npu), H, backend=NPUBackend()).backward()
-    g_npu = float(t_npu.grad.cpu())
-    # CPU 参考（GPUBackend on cpu 亦可微；此处用解析 -sin）
-    assert abs(g_npu - (-np.sin(0.7))) < 1e-3
+
+def test_mps_estimator_gradient_defaults_to_psr_on_torch_cpu():
+    torch = pytest.importorskip("torch")
+    from aicir.backends import GPUBackend
+    from aicir.core import Circuit
+    from aicir import rx, cnot
+    from aicir import Parameter
+    from aicir.core.operators import Hamiltonian
+    from aicir.primitives import MPSEstimator, StatevectorEstimator
+
+    theta = Parameter("theta")
+    H = Hamiltonian([("ZI", 1.0)])
+    c = Circuit(n_qubits=2)
+    c.append(rx(theta, 0))
+    c.append(cnot(1, [0]))
+    x = np.array([0.7])
+
+    bk = GPUBackend(device=torch.device("cpu"))
+    got = MPSEstimator(backend=bk).gradient(c, H, parameter_values=x)
+    ref = StatevectorEstimator(bk).gradient(c, H, parameter_values=x, method="psr")
+
+    assert got.method == "psr"
+    assert np.allclose(got.gradient, ref.gradient, atol=1e-5)

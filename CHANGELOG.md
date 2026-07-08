@@ -6,19 +6,22 @@
 
 ### Added
 
-- **MPS 引擎支持 Ascend NPU（端到端可微）。** `NPUBackend.svd` 由
+- **MPS 引擎支持 Ascend NPU 前向 + 参数移位梯度。** `NPUBackend.svd` 由
   `NotImplementedError` 改为 real-embedding 实现（`[[Re,-Im],[Im,Re]]` 实块跑 NPU 原生实数
-  SVD 后重建复数因子，autograd 可反传）；新增 `Backend.mul`/`div` 原语（numpy/gpu 为
-  `*`//`，NPU 走 real/imag 分解，`_NpuMulFn` 自定义 autograd Function）；`mps.py` 的复数
-  乘/除改走 backend 原语。配套 `demos/demo_npu_mps.py`（真机验收）与 NPU 门控测试。CPU/GPU
-  结果不变。
+  SVD 后重建复数因子）；新增 `Backend.mul`/`div` 原语（numpy/gpu 为
+  `*` 和 `/`，NPU 走 real/imag 分解，`_NpuMulFn` 自定义 autograd Function）；`mps.py` 的复数
+  乘/除改走 backend 原语。NPU 上 `mps_statevector`/`mps_expectation`/`MPSEstimator` 前向可用，
+  `MPSEstimator.gradient` 默认走 `psr` 参数移位；直接 autograd（`mps_expectation.backward`）
+  仅 CPU/GPU 支持，Ascend 缺少 complex64 梯度累加内核。配套 `demos/demo_npu_mps.py`
+  （真机验收）与 NPU 门控测试。CPU/GPU 结果不变。
 - **`aicir.simulator` MPS（矩阵乘积态）近似模拟引擎（Spec 2）：`mps_statevector` /
   `mps_expectation`，并为 `Measure.run` 增加 `method="mps"`。** bond 截断由
   `max_bond_dim`（硬上限）+ `cutoff`（相对奇异值阈值，默认 1e-10）共同控制；正交
   中心 + SVD 的 TEBD 式演化，单比特门就地作用、相邻双比特门 SVD 截断、非相邻双比特
-  门自动 SWAP 并跟踪逻辑↔物理置换。新增 `Backend.svd` 原语（NumPy/GPU 实现，NPU 因
-  complex64 限制 `NotImplementedError`）。`mps_expectation` 对 `Hamiltonian`/
-  `PauliString` 走 transfer 收缩不稠密化、GPU 上对参数门可微。新增
+  门自动 SWAP 并跟踪逻辑↔物理置换。新增 `Backend.svd` 原语（NumPy/GPU 实现；NPU
+  后续由 real-embedding 支持前向，见上条）。`mps_expectation` 对 `Hamiltonian`/
+  `PauliString` 走 transfer 收缩不稠密化、GPU 上对参数门可微。NPU 梯度经
+  `MPSEstimator.gradient(method="psr")` 参数移位。新增
   `aicir.primitives.MPSEstimator`（可注入 `BasicVQE(energy_estimator=...)`）。仅纯态、
   无噪声、1/2 比特门（≥3 比特门先经 `DecomposePass`）。
 
