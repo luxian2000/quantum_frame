@@ -26,8 +26,10 @@ def test_gpu_svd_reconstructs():
     assert torch.allclose(recon, m, atol=1e-4)
 
 
-def test_npu_svd_real_matrix():
-    """Test that NPUBackend.svd works for real matrices (falls back to parent)."""
+def test_npu_svd_cpu_device_falls_back_to_parent():
+    """NPUBackend.svd() on a non-npu device (here cpu) skips real-embedding and
+    falls back to GPUBackend.svd (torch.linalg.svd directly) — real-embedding only
+    triggers when _is_npu_complex(matrix) is True (device.type == 'npu')."""
     torch = pytest.importorskip("torch")
     from aicir.backends.npu_backend import NPUBackend
 

@@ -537,8 +537,9 @@ def _real_embedding_svd(matrix):
     for i in range(p):
         avr = ar @ vr[:, i] - ai @ vi[:, i]  # A v_i 的实/虚部
         avi = ar @ vi[:, i] + ai @ vr[:, i]
-        ur_cols.append(avr / S[i])  # U 列 = A v_i / σ_i
-        ui_cols.append(avi / S[i])
+        denom = torch.clamp(S[i], min=torch.finfo(S.dtype).eps)  # 避免 σ_i=0 时 0/0=NaN
+        ur_cols.append(avr / denom)  # U 列 = A v_i / σ_i
+        ui_cols.append(avi / denom)
     U = torch.complex(torch.stack(ur_cols, dim=1), torch.stack(ui_cols, dim=1))  # (m, p)
     Vh = torch.complex(vr.transpose(0, 1), -vi.transpose(0, 1))  # V^H (p, n)
     return U, S, Vh
