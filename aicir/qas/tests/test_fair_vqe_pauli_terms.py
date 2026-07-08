@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from aicir.qas.core._types import ArchitectureSpec
 from aicir.qas.problems.hamiltonians import VQEProblem
-from aicir.qas.vqe_loop.fair_vqe import evaluate_vqe_energy, optimize_vqe_energy
+from aicir.qas.vqe_loop.fair_vqe import _numpy_pauli_expectation, evaluate_vqe_energy, optimize_vqe_energy
 
 
 class FairVqePauliTermsTest(unittest.TestCase):
@@ -39,6 +39,21 @@ class FairVqePauliTermsTest(unittest.TestCase):
         self.assertAlmostEqual(result.energy, 1.0, places=6)
         self.assertEqual(result.evaluations, 1)
 
+    def test_numpy_pauli_expectation_rejects_backend_tensor_like_input(self):
+        class BackendTensorLike:
+            device = "npu:0"
+
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            def __array__(self, dtype=None):
+                raise AssertionError("implicit NumPy conversion should not be attempted")
+
+        with self.assertRaisesRegex(TypeError, "backend tensor"):
+            _numpy_pauli_expectation(BackendTensorLike(), [(0, 0, 0, 1.0, 0.0)])
 
 if __name__ == "__main__":
     unittest.main()

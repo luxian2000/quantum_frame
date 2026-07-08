@@ -10,6 +10,7 @@ optimization even starts.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Sequence
@@ -135,6 +136,29 @@ def _simulate_statevector(circuit: Circuit, *, backend: Backend):
     return state.reshape(-1)
 
 
+def _is_backend_tensor_like(value: Any) -> bool:
+    if torch is not None:
+        try:
+            if torch.is_tensor(value):
+                return True
+        except Exception:
+            pass
+    return (
+        not isinstance(value, np.ndarray)
+        and hasattr(value, "detach")
+        and hasattr(value, "cpu")
+        and hasattr(value, "device")
+    )
+
+
+def _torch_inference_context():
+    if torch is None:
+        return nullcontext()
+    context = getattr(torch, "inference_mode", None)
+    if callable(context):
+        return context()
+    return torch.no_grad()
+
 def _torch_pauli_signs(basis_indices, sign_mask: int):
     if sign_mask == 0:
         return None
@@ -189,6 +213,8 @@ def _torch_pauli_expectation(state, pauli_cache, *, backend: Backend):
 
 
 def _numpy_pauli_expectation(state: np.ndarray, pauli_cache) -> float:
+    if _is_backend_tensor_like(state):
+        raise TypeError("Refusing to evaluate a backend tensor through NumPy Pauli expectation; use the torch/NPU path")
     flat = np.asarray(state, dtype=np.complex128).reshape(-1)
     basis_indices = np.arange(flat.size, dtype=np.int64)
     state_conj = np.conjugate(flat)
@@ -223,12 +249,15 @@ def _evaluate_pauli_state_energy(
     theta = np.asarray(parameters, dtype=float).reshape(-1)
     bound = _bind_parameters(architecture.circuit, theta) if n_params else architecture.circuit
     bound = Circuit(*list(circuit_instructions(bound)), n_qubits=bound.n_qubits, backend=backend)
-    state = _simulate_statevector(bound, backend=backend)
     pauli_cache = _pauli_term_cache(problem.hamiltonian, n_qubits=problem.n_qubits)
-    if torch is not None and isinstance(state, torch.Tensor):
-        value = _torch_pauli_expectation(state, pauli_cache, backend=backend)
-        return float(np.asarray(backend.to_numpy(value)).reshape(()))
-    return _numpy_pauli_expectation(state, pauli_cache)
+    with _torch_inference_context():
+        state = _simulate_statevector(bound, backend=backend)
+        if _is_backend_tensor_like(state):
+            if torch is None:
+                raise TypeError("Backend returned a tensor-like state, but torch is not importable")
+            value = _torch_pauli_expectation(state, pauli_cache, backend=backend)
+            return float(np.asarray(backend.to_numpy(value)).reshape(()))
+        return _numpy_pauli_expectation(state, pauli_cache)
 
 
 def evaluate_vqe_energy(
