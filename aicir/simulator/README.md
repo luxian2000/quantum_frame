@@ -1,6 +1,6 @@
 # aicir.simulator — 精确张量网络模拟引擎
 
-本模块把电路的每个门当作张量，沿电路的操作顺序把它们缩并（contract）成末态或振幅，而不是维护一份显式的 `2^n` 态矢量。适合只需要少量振幅、或电路结构带来较优缩并路径（树宽较小）时，避免整段态矢量演化的内存/算力开销。收缩建立在 `Backend` 的张量原语（`tensordot`/`transpose`/`reshape`/`conj`）之上，因此与 `NumpyBackend`/`GPUBackend`/`NPUBackend` 均兼容；在 torch/NPU 后端上，参数门保留计算图，期望值可微。
+本模块把电路的每个门当作张量，沿电路的操作顺序把它们缩并（contract）成末态或振幅，而不是维护一份显式的 `2^n` 态矢量。适合只需要少量振幅、或电路结构带来较优缩并路径（树宽较小）时，避免整段态矢量演化的内存/算力开销。收缩建立在 `Backend` 的张量原语（`tensordot`/`transpose`/`reshape`/`conj`）之上，因此与 `NumpyBackend`/`GPUBackend`/`NPUBackend` 均兼容；精确张量网络期望在 torch/NPU 后端上保留计算图，MPS 的 NPU 梯度走 `MPSEstimator.gradient(method="psr")` 参数移位。
 
 ---
 
@@ -81,7 +81,7 @@
 - 仅接受 1/2 比特门；≥3 比特门需先经 `aicir.transpile.DecomposePass` 分解。
 - 非相邻双比特门自动插入 SWAP 网络，并跟踪逻辑↔物理置换（`site_permutation` 属性）。
 - 仅支持纯态、无噪声、无经典控制流（`ControlFlow`）。
-- 后端支持 NumPy/GPU/NPU；GPU 与 NPU 上对参数门可微。NPU 上 `NPUBackend.svd` 走 real-embedding（Ascend 无原生 complex64 SVD），复数乘/除经 real/imag 分解，真机验收见 `demos/demo_npu_mps.py`。
+- 后端支持 NumPy/GPU/NPU；NPU 支持 `mps_statevector`、`mps_expectation` 与 `MPSEstimator` 前向，梯度通过 `MPSEstimator.gradient(method="psr")` 参数移位获得。直接 autograd（`mps_expectation(...).backward()`）仅作为 CPU/GPU 能力；Ascend 缺少 complex64 梯度累加所需内核。NPU 上 `NPUBackend.svd` 走 real-embedding（Ascend 无原生 complex64 SVD），复数乘/除经 real/imag 分解，真机验收见 `demos/demo_npu_mps.py`。
 
 ### `mps_expectation(circuit, observable, *, max_bond_dim=None, cutoff=1e-10, backend=None)`
 
@@ -90,7 +90,7 @@
 - **`Hamiltonian`/`PauliString`**：用 transfer 张量网络缩并路径求解，避免稠密化，效率最优。
 - **任意稠密矩阵**：回退到 `.to_statevector()` 还原后用 `backend.expectation_sv` 求解。
 
-在 `GPUBackend` 上，若电路参数是 Torch 张量（`requires_grad=True`），返回值保留计算图，可 `.backward()` 得参数梯度。
+在 `GPUBackend` 上，若电路参数是 Torch 张量（`requires_grad=True`），返回值保留计算图，可 `.backward()` 得参数梯度。NPU 上请用 `MPSEstimator.gradient(method="psr")`，该路径只需前向计算。
 
 ### `Measure.run(circuit, method="mps", ..., max_bond_dim=..., cutoff=...)`
 

@@ -1,4 +1,4 @@
-"""真实 Ascend NPU 上 MPS 引擎验收：NPU-vs-CPU 平价 + 期望值可微。
+"""真实 Ascend NPU 上 MPS 引擎验收：NPU-vs-CPU 平价 + 参数移位梯度。
 
     python demos/demo_npu_mps.py                     # 严格要求 NPU
     python demos/demo_npu_mps.py --allow-cpu-fallback # 无 NPU 时回退 CPU（开发调试）
@@ -33,6 +33,7 @@ def run_checks(allow_cpu_fallback: bool = False) -> bool:
     from aicir.backends import NumpyBackend
     from aicir.backends.npu_backend import NPUBackend, is_npu_available
     from aicir.core.operators import Hamiltonian
+    from aicir.primitives import MPSEstimator
     from aicir.simulator import mps_statevector, mps_expectation
 
     if is_npu_available():
@@ -63,20 +64,22 @@ def run_checks(allow_cpu_fallback: bool = False) -> bool:
     passed = passed and ok_e
 
     try:
-        import torch
         from aicir.core import Circuit
         from aicir import rx, cnot
+        from aicir import Parameter
 
-        theta = torch.tensor(0.7, dtype=torch.float32, device=bk._device, requires_grad=True)
+        theta = Parameter("theta")
         cc = Circuit(n_qubits=2)
         cc.append(rx(theta, 0))
         cc.append(cnot(1, [0]))
-        mps_expectation(cc, Hamiltonian([("ZI", 1.0)]), backend=bk).backward()
-        ok_g = theta.grad is not None and abs(float(theta.grad.cpu()) - (-np.sin(0.7))) < 1e-3
-        print(f"[check] expectation gradient: {'OK' if ok_g else 'FAIL'}")
+        grad = MPSEstimator(backend=bk).gradient(
+            cc, Hamiltonian([("ZI", 1.0)]), parameter_values=[0.7]
+        )
+        ok_g = abs(float(grad.gradient[0]) - (-np.sin(0.7))) < 1e-3
+        print(f"[check] parameter-shift gradient: {'OK' if ok_g else 'FAIL'}")
         passed = passed and ok_g
     except Exception as exc:  # noqa: BLE001
-        print(f"[check] expectation gradient: FAIL ({exc})")
+        print(f"[check] parameter-shift gradient: FAIL ({exc})")
         passed = False
 
     print(f"[result] {'ALL PASSED' if passed else 'FAILED'}")

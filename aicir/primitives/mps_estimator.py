@@ -36,6 +36,15 @@ class MPSEstimator(BaseEstimator):
         value, _err = self._expectation(circuit, hamiltonian)
         return _EnergyResult(value)
 
+    def gradient(self, circuit, observable, *, parameter_values, shots=None, method="psr"):
+        return super().gradient(
+            circuit,
+            observable,
+            parameter_values=parameter_values,
+            shots=shots,
+            method=method,
+        )
+
     def run(self, circuits, observables, *, shots=None, parameter_values=None):
         if shots is not None:
             raise ValueError("MPSEstimator 为（近似）精确路径，不接受 shots")
