@@ -45,6 +45,14 @@ class SharedRowHelpersTest(unittest.TestCase):
             self.assertEqual(rows, [{"a": "1", "b": "2"}, {"a": "3", "b": ""}])
             self.assertEqual(read_csv_rows(path), rows)
 
+    def test_csv_rows_read_large_hamiltonian_terms_field(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rows.csv"
+            large_terms = json.dumps([[1.0, "Z" * 18]] * 6000)
+            self.assertGreater(len(large_terms), 131072)
+            write_csv_rows(path, [{"architecture_id": "large", "hamiltonian_terms": large_terms}])
+            self.assertEqual(read_csv_rows(path)[0]["hamiltonian_terms"], large_terms)
+
     def test_decoded_ansatz_gene_payload_handles_double_encoded_json(self) -> None:
         payload = {"kind": "operator_sequence", "n_qubits": 2, "operators": ["XI"]}
         row = {"ansatz_gene": json.dumps(json.dumps(payload))}
