@@ -94,6 +94,7 @@ def plan_p1_round(
     batch_id: str = "p1_round1",
     protocol_version: str = "fair_vqe_protocol_v2",
     mutation_types: Sequence[str] = ("gate_mutation", "connectivity_mutation", "layer_mutation", "depth_mutation"),
+    mutation_weights: Mapping[str, float] | None = None,
     operator_pool: Sequence[str] | None = None,
     seed: int = 0,
     baseline_selector_fields: Sequence[str] = ("E2", "E5"),
@@ -129,6 +130,7 @@ def plan_p1_round(
         parents,
         children_per_parent=int(children_per_parent),
         mutation_types=tuple(mutation_types),
+        mutation_weights=mutation_weights,
         operator_pool=operator_pool,
         seed=int(seed),
     )
@@ -424,6 +426,7 @@ __all__ = [
     "plan_p1_round",
     "write_p1_round_outputs",
 ]
+
 
 
 

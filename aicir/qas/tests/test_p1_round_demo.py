@@ -589,5 +589,35 @@ class P1RoundDemoTests(unittest.TestCase):
         self.assertNotIn("E5", result["comparison"]["strategies"])
 
 
+
+    def test_demo_accepts_growth_route_weight_controls(self):
+        from aicir.qas.demos.run_p1_round_demo import build_arg_parser
+
+        args = build_arg_parser().parse_args(
+            [
+                "--bootstrap-labels-csv",
+                "bootstrap.csv",
+                "--growth-route",
+                "line_b_chemistry_excitation",
+                "--operator-genetic-weight",
+                "0.25",
+                "--operator-adapt-growth-weight",
+                "0.75",
+                "--chemistry-genetic-weight",
+                "0.4",
+                "--chemistry-adapt-growth-weight",
+                "0.6",
+                "--chemistry-growth-mode",
+                "mixed",
+            ]
+        )
+
+        self.assertEqual(args.growth_route, "line_b_chemistry_excitation")
+        self.assertEqual(args.operator_genetic_weight, 0.25)
+        self.assertEqual(args.operator_adapt_growth_weight, 0.75)
+        self.assertEqual(args.chemistry_genetic_weight, 0.4)
+        self.assertEqual(args.chemistry_adapt_growth_weight, 0.6)
+        self.assertEqual(args.chemistry_growth_mode, "mixed")
 if __name__ == "__main__":
     unittest.main()
+

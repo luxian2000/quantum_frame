@@ -391,7 +391,86 @@ class P1VariationTests(unittest.TestCase):
         self.assertEqual(children[0]["n_params"], "2")
         self.assertEqual(child_gene.layers, 2)
         self.assertEqual(child_gene.hf_occupied_qubits, (1, 3))
+
+    def test_chemistry_adapt_growth_scans_pool_and_picks_best_excitation(self):
+        from aicir.qas.vqe_loop.p1_evolution import mutate_gene
+
+        parent = ChemistryExcitationAnsatzGene(
+            n_qubits=4,
+            hf_occupied_qubits=(1, 3),
+            excitations=(),
+            active_electrons=2,
+            active_spatial_orbitals=2,
+        )
+        seen = []
+
+        def scorer(gene, candidate):
+            seen.append((tuple(gene.excitations), candidate["type"], tuple(candidate["qubits"])))
+            return {
+                ("single_excitation", (2, 3)): -0.5,
+                ("single_excitation", (0, 1)): -0.2,
+                ("double_excitation", (0, 2, 1, 3)): -2.0,
+            }[(candidate["type"], tuple(candidate["qubits"]))]
+
+        result = mutate_gene(
+            parent,
+            mutation_type="chemistry_adapt_growth",
+            chemistry_growth_evaluator=scorer,
+        )
+
+        self.assertEqual(result.mutation_type, "chemistry_adapt_growth")
+        self.assertEqual(result.child.excitations, ({"type": "double_excitation", "qubits": [0, 2, 1, 3]},))
+        self.assertEqual(
+            [item[1:] for item in seen],
+            [
+                ("single_excitation", (2, 3)),
+                ("single_excitation", (0, 1)),
+                ("double_excitation", (0, 2, 1, 3)),
+            ],
+        )
+
+    def test_chemistry_adapt_growth_avoids_repeating_existing_excitation(self):
+        from aicir.qas.vqe_loop.p1_evolution import mutate_gene
+
+        existing = {"type": "single_excitation", "qubits": [2, 3]}
+        parent = ChemistryExcitationAnsatzGene(
+            n_qubits=4,
+            hf_occupied_qubits=(1, 3),
+            excitations=(existing,),
+            active_electrons=2,
+            active_spatial_orbitals=2,
+        )
+
+        def scorer(_gene, candidate):
+            return -10.0 if candidate == existing else -1.0
+
+        result = mutate_gene(
+            parent,
+            mutation_type="chemistry_adapt_growth",
+            chemistry_growth_evaluator=scorer,
+        )
+
+        self.assertNotEqual(result.child.excitations[-1], existing)
+        self.assertEqual(result.child.layers, 2)
+
+    def test_operator_adapt_growth_defaults_to_hamiltonian_guided_pool(self):
+        from aicir.qas.vqe_loop.p1_evolution import generate_mutation_children
+
+        parent = row("operator_parent", make_operator_gene(("XI",)), fair=-1.0)
+        parent["hamiltonian_terms"] = json.dumps([[1.0, "XY"]])
+        children = generate_mutation_children(
+            [parent],
+            children_per_parent=1,
+            mutation_types=("operator_adapt_growth",),
+            seed=7,
+        )
+
+        child_gene = OperatorSequenceAnsatzGene.from_jsonable(json.loads(children[0]["ansatz_gene"]))
+        self.assertEqual(children[0]["mutation_type"], "operator_adapt_growth")
+        self.assertEqual(child_gene.operators, ("XI", "XY"))
 if __name__ == "__main__":
     unittest.main()
+
+
 
 
