@@ -55,10 +55,20 @@ try:
     from .noise import (
         AmplitudeDampingChannel,
         BitFlipChannel,
+        CorrelatedTwoQubitPauliChannel,
         DepolarizingChannel,
+        ErasureChannel,
+        GeneralizedAmplitudeDampingChannel,
+        KrausChannel,
         NoiseChannel,
         NoiseModel,
+        PauliChannel,
+        PhaseDampingChannel,
         PhaseFlipChannel,
+        ReadoutErrorChannel,
+        ResetChannel,
+        ThermalRelaxationChannel,
+        TwoQubitDepolarizingChannel,
     )
 except ModuleNotFoundError as exc:
     if not _is_missing_torch(exc):
@@ -72,6 +82,16 @@ else:
             "BitFlipChannel",
             "PhaseFlipChannel",
             "AmplitudeDampingChannel",
+            "PauliChannel",
+            "PhaseDampingChannel",
+            "GeneralizedAmplitudeDampingChannel",
+            "TwoQubitDepolarizingChannel",
+            "KrausChannel",
+            "ResetChannel",
+            "ErasureChannel",
+            "ReadoutErrorChannel",
+            "CorrelatedTwoQubitPauliChannel",
+            "ThermalRelaxationChannel",
         ]
     )
 

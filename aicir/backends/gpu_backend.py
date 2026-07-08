@@ -112,6 +112,12 @@ class GPUBackend(Backend):
     def add(self, a, b):
         return a + b
 
+    def mul(self, a, b):
+        return a * b
+
+    def div(self, a, b):
+        return a / b
+
     def abs_sq(self, tensor):
         return torch.abs(tensor) ** 2
 
