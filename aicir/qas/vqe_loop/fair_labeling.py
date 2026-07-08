@@ -22,29 +22,52 @@ import numpy as np
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+
+def _early_label_trace(message: str) -> None:
+    if str(os.environ.get("AICIR_QAS_LABEL_TRACE", "1")).strip().lower() not in {"0", "false", "no", "off"}:
+        print(f"[fair_label_import_trace] {message}", flush=True)
+
+
+_early_label_trace("stage=module_import_begin module=aicir.qas.vqe_loop.fair_labeling")
+_early_label_trace("stage=import_begin module=aicir.qas.library.ansatz")
 from aicir.qas.library.ansatz import HEAMask, architecture_from_hea_mask
+_early_label_trace("stage=import_end module=aicir.qas.library.ansatz")
+_early_label_trace("stage=import_begin module=aicir.qas.core.backend_utils")
 from aicir.qas.core.backend_utils import resolve_qas_backend
+_early_label_trace("stage=import_end module=aicir.qas.core.backend_utils")
+_early_label_trace("stage=import_begin module=aicir.qas.vqe_loop.benchmark_table.architecture")
 from aicir.qas.vqe_loop.benchmark_table import architecture_from_candidate_row
+_early_label_trace("stage=import_end module=aicir.qas.vqe_loop.benchmark_table.architecture")
+_early_label_trace("stage=import_begin module=aicir.qas.vqe_loop.benchmark_table.csv")
 from aicir.qas.vqe_loop.benchmark_table import read_csv_rows, write_csv_rows
+_early_label_trace("stage=import_end module=aicir.qas.vqe_loop.benchmark_table.csv")
+_early_label_trace("stage=import_begin module=aicir.qas.vqe_loop.benchmark_table.problem")
 from aicir.qas.vqe_loop.benchmark_table import problem_from_row_terms, row_hamiltonian_terms
+_early_label_trace("stage=import_end module=aicir.qas.vqe_loop.benchmark_table.problem")
+_early_label_trace("stage=import_begin module=aicir.qas.vqe_loop.fair_vqe")
 from aicir.qas.vqe_loop.fair_vqe import (
     fair_vqe_final_maxfev,
     optimize_vqe_energy,
 )
+_early_label_trace("stage=import_end module=aicir.qas.vqe_loop.fair_vqe")
+_early_label_trace("stage=import_begin module=aicir.metrics.circuit_structure")
 from aicir.metrics.circuit_structure import parameter_count
+_early_label_trace("stage=import_end module=aicir.metrics.circuit_structure")
+_early_label_trace("stage=import_begin module=aicir.qas.problems.hamiltonians")
 from aicir.qas.problems.hamiltonians import (
     VQEProblem,
     tfim_chain_demo_problem,
 )
+_early_label_trace("stage=import_end module=aicir.qas.problems.hamiltonians")
+_early_label_trace("stage=import_begin module=aicir.qas.vqe_loop.benchmark_table.schema")
 from aicir.qas.vqe_loop.benchmark_table import (
     BENCHMARK_TABLE_FIELDS,
     LabelStatus,
     next_label_status_after_failure,
     load_fair_label_protocol,
 )
-
-
-
+_early_label_trace("stage=import_end module=aicir.qas.vqe_loop.benchmark_table.schema")
+_early_label_trace("stage=module_import_end module=aicir.qas.vqe_loop.fair_labeling")
 
 def _label_trace_enabled() -> bool:
     return str(os.environ.get("AICIR_QAS_LABEL_TRACE", "1")).strip().lower() not in {"0", "false", "no", "off"}
