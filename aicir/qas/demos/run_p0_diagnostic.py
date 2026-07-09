@@ -99,10 +99,33 @@ def load_hamiltonian_terms(
     """
     if hamiltonian_file:
         loaded = json.loads(Path(hamiltonian_file).read_text(encoding="utf-8-sig"))
-        terms = tuple((float(coeff), str(pauli)) for coeff, pauli in loaded)
-        n_qubits = len(terms[0][1])
-        reference_energy = float(reference_energy_override) if reference_energy_override is not None else float("nan")
-        return terms, n_qubits, reference_energy
+        if isinstance(loaded, list):
+            terms = tuple((float(coeff), str(pauli)) for coeff, pauli in loaded)
+            n_qubits = len(terms[0][1])
+            reference_energy = float(reference_energy_override) if reference_energy_override is not None else float("nan")
+            return terms, n_qubits, reference_energy
+
+        from aicir.chemistry.spec import load_hamiltonian_input
+
+        generated = load_hamiltonian_input(hamiltonian_file)
+        terms = tuple((float(coeff), str(pauli)) for coeff, pauli in generated.terms)
+        n_qubits = int(generated.n_qubits)
+        metadata = dict(getattr(generated, "metadata", {}) or {})
+        reference_energy = reference_energy_override
+        if reference_energy is None:
+            for key in (
+                "reference_energy",
+                "electronic_reference_energy",
+                "electronic_reference_energy_old_thread",
+                "fci_energy",
+                "exact_energy",
+            ):
+                value = metadata.get(key)
+                if value is not None and str(value).strip():
+                    reference_energy = float(value)
+                    break
+        reference = float(reference_energy) if reference_energy is not None else float("nan")
+        return terms, n_qubits, reference
 
     from aicir.chemistry.spec import generate_hamiltonian
     generated = generate_hamiltonian({"preset": preset})
