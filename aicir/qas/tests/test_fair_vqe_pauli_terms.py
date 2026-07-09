@@ -104,6 +104,35 @@ class FairVqePauliTermsTest(unittest.TestCase):
         self.assertAlmostEqual(energy, float(CPU_PAULI_EXPECTATION_MIN_TERMS))
 
 
+    def test_numpy_pauli_expectation_traces_progress(self):
+        state = np.asarray([1.0 + 0.0j, 0.0 + 0.0j], dtype=np.complex128)
+        pauli_cache = [(0, 0, 0, 1.0, 0.0)] * 3
+        stream = StringIO()
+
+        with patch("sys.stdout", stream), patch("aicir.qas.vqe_loop.fair_vqe._fair_trace_enabled", return_value=True):
+            energy = _numpy_pauli_expectation(state, pauli_cache)
+
+        self.assertAlmostEqual(energy, 3.0)
+        output = stream.getvalue()
+        self.assertIn("stage=numpy_pauli_expectation_begin", output)
+        self.assertIn("stage=numpy_pauli_expectation_progress", output)
+        self.assertIn("term_index=3", output)
+        self.assertIn("stage=numpy_pauli_expectation_end", output)
+
+    def test_numpy_pauli_expectation_error_trace_identifies_term(self):
+        state = np.asarray([1.0 + 0.0j, 0.0 + 0.0j], dtype=np.complex128)
+        pauli_cache = [(999, 0, 0, 1.0, 0.0)]
+        stream = StringIO()
+
+        with patch("sys.stdout", stream), patch("aicir.qas.vqe_loop.fair_vqe._fair_trace_enabled", return_value=True):
+            with self.assertRaises(IndexError):
+                _numpy_pauli_expectation(state, pauli_cache)
+
+        output = stream.getvalue()
+        self.assertIn("stage=numpy_pauli_expectation_term_error", output)
+        self.assertIn("term_index=1", output)
+        self.assertIn("flip_mask=999", output)
+
     def test_fair_vqe_trace_prints_gate_and_expectation_stages(self):
         architecture = ArchitectureSpec.from_gates("x_1q", [{"type": "pauli_x", "qubits": [0]}], n_qubits=1)
         problem = VQEProblem(

@@ -330,23 +330,44 @@ def _numpy_pauli_expectation(state: np.ndarray, pauli_cache) -> float:
     basis_indices = np.arange(flat.size, dtype=np.int64)
     state_conj = np.conjugate(flat)
     energy = 0.0 + 0.0j
-    for flip_mask, sign_mask, y_phase, coefficient_real, coefficient_imag in pauli_cache:
-        mapped = flat[np.bitwise_xor(basis_indices, np.int64(flip_mask))] if flip_mask else flat
-        term = state_conj * mapped
-        if sign_mask:
-            parity = np.zeros(flat.size, dtype=bool)
-            bit = 0
-            mask = int(sign_mask)
-            while mask:
-                if mask & 1:
-                    parity ^= ((basis_indices >> bit) & 1).astype(bool)
-                mask >>= 1
-                bit += 1
-            term = np.where(parity, -term, term)
-        if y_phase:
-            term = term * (1j ** int(y_phase))
-        energy += complex(coefficient_real, coefficient_imag) * np.sum(term)
-    return float(np.real(energy))
+    total_terms = len(pauli_cache)
+    progress_interval = max(1, int(os.environ.get("AICIR_QAS_FAIR_TRACE_PAULI_INTERVAL", "512")))
+    _fair_trace(
+        f"stage=numpy_pauli_expectation_begin terms={total_terms} state_size={flat.size} progress_interval={progress_interval}"
+    )
+    for term_index, (flip_mask, sign_mask, y_phase, coefficient_real, coefficient_imag) in enumerate(pauli_cache, start=1):
+        try:
+            mapped = flat[np.bitwise_xor(basis_indices, np.int64(flip_mask))] if flip_mask else flat
+            term = state_conj * mapped
+            if sign_mask:
+                parity = np.zeros(flat.size, dtype=bool)
+                bit = 0
+                mask = int(sign_mask)
+                while mask:
+                    if mask & 1:
+                        parity ^= ((basis_indices >> bit) & 1).astype(bool)
+                    mask >>= 1
+                    bit += 1
+                term = np.where(parity, -term, term)
+            if y_phase:
+                term = term * (1j ** int(y_phase))
+            term_energy = complex(coefficient_real, coefficient_imag) * np.sum(term)
+            energy += term_energy
+        except BaseException as exc:
+            _fair_trace(
+                "stage=numpy_pauli_expectation_term_error "
+                f"term_index={term_index} terms={total_terms} flip_mask={flip_mask} sign_mask={sign_mask} "
+                f"y_phase={y_phase} coeff=({coefficient_real},{coefficient_imag}) error={exc!r}"
+            )
+            raise
+        if term_index == total_terms or term_index % progress_interval == 0:
+            _fair_trace(
+                "stage=numpy_pauli_expectation_progress "
+                f"term_index={term_index} terms={total_terms} partial_energy={float(np.real(energy))}"
+            )
+    result = float(np.real(energy))
+    _fair_trace(f"stage=numpy_pauli_expectation_end terms={total_terms} energy={result}")
+    return result
 
 
 def _evaluate_pauli_state_energy(
