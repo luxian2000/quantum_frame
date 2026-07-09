@@ -3,7 +3,7 @@
 `aicir.chemistry` 提供两条互补的路径：
 
 - **固定预置**（本 README 第 2 节）：小型、零额外依赖的分子 qubit Hamiltonian，主要用于 VQE 示例、单元测试和算法原型验证。系数预先算好、写死在 `molecules/` 模块里。
-- **`build_molecule` 现算流水线**（第 3 节）：给定任意分子几何、基组、映射方式，现场调用 Qiskit Nature（内部驱动 PySCF）算出 qubit Hamiltonian，并在 Jordan-Wigner 映射下附带 HF 占据/激发元数据，可直接桥接 `aicir.ansatze.uccsd`。这条路径需要可选依赖，见第 3 节的 `chem` extra。
+- **`build_molecule` 现算流水线**（第 3 节）：给定任意分子几何、基组、映射方式，现场调用 Qiskit Nature（内部驱动 PySCF）算出 qubit Hamiltonian，并为 Jordan-Wigner、Parity、Bravyi-Kitaev 映射附带 HF 占据/激发元数据。Parity/BK 的激发元数据用于结构桥接，不声明 mapper-correct 化学 UCCSD。该路径需要可选依赖，见第 3 节的 `chem` extra。
 
 两条路径并列：预置覆盖“常用小分子、免安装、免计算”场景；流水线覆盖“任意分子、需要现算”场景。
 
@@ -19,7 +19,7 @@
 | `molecule_hamiltonian(name)` | `Hamiltonian` | 构造新的 `aicir.operators.Hamiltonian` |
 | `molecule_matrix(name, backend=None)` | `np.ndarray` | 返回 dense_matrix 哈密顿量 |
 | `iter_molecules(names=None)` | `tuple[MoleculeHamiltonian, ...]` | 批量读取 preset |
-| `build_molecule(geometry, ...)` | `MoleculeHamiltonian` | 现算任意分子的 qubit Hamiltonian（需 `chem` extra），JW 映射下附带 HF/激发元数据 |
+| `build_molecule(geometry, ...)` | `MoleculeHamiltonian` | 现算任意分子的 qubit Hamiltonian（需 `chem` extra），三种 mapper 均附带结构元数据 |
 
 ---
 
@@ -63,17 +63,19 @@ hamiltonian = mol.to_hamiltonian()
 
 `build_molecule` 内部用 `PySCFDriver` 算分子积分，再用 Qiskit Nature 的 mapper（`jordan_wigner`/`parity`/`bravyi_kitaev`）把费米子哈密顿量映到 qubit 空间，返回一个与预置同构的 `MoleculeHamiltonian`。可选 `active_electrons`/`active_orbitals` 做 active-space 裁剪，`charge`/`spin` 指定电荷与自旋多重度，`two_qubit_reduction` 仅对 `parity` 映射生效。
 
-### JW 专属元数据
+### 分子元数据
 
-只有 `mapping="jordan_wigner"`（默认）时才会填充以下三个字段（`parity`/`bravyi_kitaev` 下均为 `None`，Hamiltonian 本身仍可用）：
+`mapping="jordan_wigner"`（默认）、`"parity"` 和 `"bravyi_kitaev"` 均会填充以下三个字段。JW 下 `hf_occupation` 的 1-bit 数等于电子数，`excitations` 是直接的费米子激发 qubit 索引；Parity/BK 下 `hf_occupation` 是 mapper 变换后的计算基 bitstring，1-bit 数不等于电子数，`excitations` 是经过目标 qubit 数过滤的结构索引，保证 `uccsd(...)` 输入校验与小线路构造可运行，但不宣称对应 mapper 的物理 UCCSD 激发算符。
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
 | `n_electrons` | `int` | 总电子数 |
-| `hf_occupation` | `tuple[int, ...]`，长度 `n_qubits` | HF 参考态各 qubit 的占据（0/1），比特序与 `terms` 一致 |
-| `excitations` | `tuple[(str, tuple[int, ...]), ...]` | singles + doubles 费米子激发，`("single", (i, a))` / `("double", (i, j, a, b))`，qubit 索引与 `terms`/`hf_occupation` 同一比特序 |
+| `hf_occupation` | `tuple[int, ...]`，长度 `n_qubits` | HF 参考态 bitstring（0/1），比特序与 `terms` 一致；Parity/BK 下是变换后 bitstring |
+| `excitations` | `tuple[(str, tuple[int, ...]), ...]` | singles + doubles 结构索引；JW 下是物理 UCCSD 激发索引，Parity/BK 下仅保证结构有效 |
 
 ### 桥接 UCCSD
+
+现有 `aicir.ansatze.uccsd` 使用 JW-string/fSWAP 激发电路。物理化学意义上的 UCCSD 桥接应使用 `mapping="jordan_wigner"`；Parity/BK 元数据只保证结构可校验，不代表 mapper-aware UCCSD。
 
 ```python
 from aicir.chemistry import build_molecule
