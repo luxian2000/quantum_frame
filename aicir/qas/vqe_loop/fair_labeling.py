@@ -230,18 +230,31 @@ def _label_row(
     queue_path: Path,
 ) -> dict[str, Any]:
     start = perf_counter()
+    architecture_id = _architecture_row_id(row)
+    _label_trace(f"stage=label_row_begin architecture_id={architecture_id} family={row.get('family', '')} backend={backend_kind} dtype={dtype}")
+    _label_trace(f"stage=architecture_from_row_begin architecture_id={architecture_id} ansatz_gene_bytes={len(str(row.get('ansatz_gene', '') or ''))}")
     architecture = _architecture_from_row(row)
+    _label_trace(f"stage=architecture_from_row_end architecture_id={architecture_id} n_qubits={architecture.n_qubits}")
     n_qubits = int(row.get("n_qubits") or architecture.n_qubits)
+    _label_trace(f"stage=problem_from_row_begin architecture_id={architecture_id} n_qubits={n_qubits} hamiltonian_terms_bytes={len(str(row.get('hamiltonian_terms', '') or ''))}")
     problem = _problem_from_row_or_protocol(row, n_qubits=n_qubits, protocol=protocol)
+    _label_trace(f"stage=problem_from_row_end architecture_id={architecture_id} terms={_safe_len(problem.hamiltonian)} reference={problem.reference_energy}")
+    _label_trace(f"stage=backend_resolve_begin architecture_id={architecture_id} backend={backend_kind} dtype={dtype}")
     backend = resolve_qas_backend(kind=backend_kind, fallback_to_cpu=False, dtype=dtype)
+    _label_trace(f"stage=backend_resolve_end architecture_id={architecture_id} backend_type={type(backend).__name__}")
+    _label_trace(f"stage=parameter_count_begin architecture_id={architecture_id}")
     n_params = parameter_count(architecture.circuit)
+    _label_trace(f"stage=parameter_count_end architecture_id={architecture_id} n_params={n_params}")
     max_evals = int(max_evals_override) if max_evals_override is not None else fair_vqe_final_maxfev(n_params)
+    _label_trace(f"stage=warm_start_begin architecture_id={architecture_id}")
     warm_start, warm_start_status = _load_warm_start_vector(row, queue_path=queue_path, n_params=n_params)
+    _label_trace(f"stage=warm_start_end architecture_id={architecture_id} status={warm_start_status}")
 
     energies: list[float] = []
     nfev_total = 0
     best_trace: list[dict[str, Any]] = []
     for seed_index in range(max(1, int(n_seeds))):
+        _label_trace(f"stage=optimize_begin architecture_id={architecture_id} seed_index={seed_index} seed={int(seed) + seed_index} max_evals={max_evals} n_params={n_params}")
         result = optimize_vqe_energy(
             architecture,
             problem,
@@ -255,6 +268,7 @@ def _label_row(
             init_scale=float(np.pi),
             initial_parameters=warm_start,
         )
+        _label_trace(f"stage=optimize_end architecture_id={architecture_id} seed_index={seed_index} energy={result.energy} nfev={result.evaluations}")
         energies.append(float(result.energy))
         nfev_total += int(result.evaluations)
         best_trace.append(
@@ -302,6 +316,7 @@ def _label_row(
 
 
 def main() -> None:
+    _label_trace("stage=main_begin")
     parser = argparse.ArgumentParser(description="Run fair VQE labels for a Stage-1.5 queue")
     parser.add_argument("--queue", required=True)
     parser.add_argument("--output", required=True)
@@ -326,13 +341,22 @@ def main() -> None:
     parser.add_argument("--dtype", default="complex128")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    _label_trace(f"stage=parse_args_end queue={args.queue} output={args.output} backend={args.backend} dtype={args.dtype} max_evals={args.max_evals}")
 
     queue_path = Path(args.queue)
+    _label_trace(f"stage=read_queue_begin queue={queue_path}")
     rows = read_csv_rows(queue_path)
+    _label_trace(f"stage=read_queue_end rows={len(rows)}")
+    _label_trace(f"stage=load_protocol_begin protocol={args.protocol}")
     protocol = load_fair_label_protocol(args.protocol)
+    _label_trace(f"stage=load_protocol_end version={protocol.get('protocol_version', '')}")
+    _label_trace("stage=validate_protocol_begin")
     _validate_queue_protocol_versions(rows, str(protocol["protocol_version"]))
+    _label_trace("stage=validate_protocol_end")
     completed = 0
+    _label_trace("stage=label_loop_begin")
     for index, row in enumerate(rows):
+        _label_trace(f"stage=row_visit index={index} status={row.get('label_status', '')} architecture_id={_architecture_row_id(row)}")
         if row.get("label_status") not in {"", LabelStatus.PENDING.value, LabelStatus.FAILED_RETRYABLE.value}:
             continue
         if args.limit is not None and completed >= int(args.limit):
@@ -344,8 +368,11 @@ def main() -> None:
             completed += 1
             continue
         row["label_status"] = LabelStatus.RUNNING.value
+        _label_trace(f"stage=write_running_begin index={index} output={args.output}")
         write_csv_rows(Path(args.output), rows, fieldnames=BENCHMARK_TABLE_FIELDS)
+        _label_trace(f"stage=write_running_end index={index}")
         try:
+            _label_trace(f"stage=call_label_row_begin index={index} architecture_id={_architecture_row_id(row)}")
             rows[index] = _label_row(
                 row,
                 protocol=protocol,
@@ -363,7 +390,9 @@ def main() -> None:
                 dtype=args.dtype,
                 queue_path=queue_path,
             )
+            _label_trace(f"stage=call_label_row_end index={index} architecture_id={_architecture_row_id(rows[index])}")
         except Exception as exc:  # pragma: no cover - exercised by real runners.
+            _label_trace(f"stage=call_label_row_error index={index} error={exc!r}")
             retry_count = int(row.get("retry_count") or 0) + 1
             row["retry_count"] = retry_count
             row["label_status"] = next_label_status_after_failure(retry_count=retry_count).value
