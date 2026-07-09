@@ -1,6 +1,24 @@
 """Quantum machine learning utilities."""
 
-from .deriv import auto, psr, spsr, spsa, mpsr, fd, ad, qng, bdqng, kqng, dqng, rotosolve
+from .deriv import (
+    auto,
+    psr,
+    spsr,
+    spsa,
+    mpsr,
+    hessian,
+    fd,
+    ad,
+    qfim,
+    metric_tensor,
+    qfim_diag,
+    qfim_blocks,
+    qng,
+    bdqng,
+    kqng,
+    dqng,
+    rotosolve,
+)
 from .diff import (
     DiffMethod,
     canonical_diff,
@@ -24,8 +42,13 @@ __all__ = [
     "spsr",
     "spsa",
     "mpsr",
+    "hessian",
     "fd",
     "ad",
+    "qfim",
+    "metric_tensor",
+    "qfim_diag",
+    "qfim_blocks",
     "qng",
     "bdqng",
     "kqng",

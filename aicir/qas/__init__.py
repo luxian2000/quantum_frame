@@ -100,6 +100,7 @@ try:
     from .algorithms.supernet import (
         Architecture,
         LayerArchitecture,
+        NoiseConfig,
         Supernet,
         SupernetConfig,
         SupernetResult,
@@ -122,6 +123,7 @@ else:
             "DQASResult",
             "DifferentiableQAS",
             "LayerArchitecture",
+            "NoiseConfig",
             "PPRDQLConfig",
             "PPRDQLPolicy",
             "PPRDQLResult",
