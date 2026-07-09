@@ -9,6 +9,7 @@ import unittest
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
@@ -73,6 +74,33 @@ class SharedRowHelpersTest(unittest.TestCase):
         self.assertEqual(problem.name, "toy")
         operator_hamiltonian = hamiltonian_from_terms(terms, n_qubits=2)
         self.assertEqual(operator_hamiltonian.n_qubits, 2)
+
+    def test_large_literal_hamiltonian_requires_reference_energy(self) -> None:
+        row = {
+            "n_qubits": "18",
+            "hamiltonian_id": "ch4_18q",
+            "hamiltonian_terms": json.dumps([[1.0, "Z" * 18]]),
+        }
+        with patch(
+            "aicir.qas.vqe_loop.benchmark_table.exact_ground_energy",
+            side_effect=AssertionError("must not exact-diagonalize large literal Hamiltonians"),
+        ):
+            with self.assertRaisesRegex(ValueError, "reference_energy.*large literal Hamiltonian"):
+                problem_from_row_terms(row, n_qubits=18)
+
+    def test_large_literal_hamiltonian_uses_row_reference_energy(self) -> None:
+        row = {
+            "n_qubits": "18",
+            "hamiltonian_id": "ch4_18q",
+            "hamiltonian_terms": json.dumps([[1.0, "Z" * 18]]),
+            "reference_energy": "-53.276955083160",
+        }
+        with patch(
+            "aicir.qas.vqe_loop.benchmark_table.exact_ground_energy",
+            side_effect=AssertionError("must not exact-diagonalize when reference is provided"),
+        ):
+            problem = problem_from_row_terms(row, n_qubits=18)
+        self.assertEqual(problem.reference_energy, -53.276955083160)
 
 
 if __name__ == "__main__":

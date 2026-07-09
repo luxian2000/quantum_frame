@@ -35,6 +35,9 @@ from aicir.qas.library.ansatz import (
 from aicir.qas.problems.hamiltonians import VQEProblem, exact_ground_energy
 
 
+MAX_EXACT_REFERENCE_QUBITS = 12
+
+
 def _raise_csv_field_size_limit() -> None:
     limit = sys.maxsize
     while True:
@@ -388,9 +391,18 @@ def problem_from_terms(
     name: str,
     reference_energy: float | None = None,
 ) -> VQEProblem:
-    validate_term_widths(terms, n_qubits=int(n_qubits))
-    ref = exact_ground_energy(terms) if reference_energy is None else float(reference_energy)
-    return VQEProblem(name=str(name), n_qubits=int(n_qubits), hamiltonian=tuple(terms), reference_energy=ref)
+    resolved_n_qubits = int(n_qubits)
+    validate_term_widths(terms, n_qubits=resolved_n_qubits)
+    if reference_energy is None:
+        if resolved_n_qubits > MAX_EXACT_REFERENCE_QUBITS:
+            raise ValueError(
+                "reference_energy is required for large literal Hamiltonian rows; "
+                f"refusing exact_ground_energy for n_qubits={resolved_n_qubits}, terms={len(terms)}"
+            )
+        ref = exact_ground_energy(terms)
+    else:
+        ref = float(reference_energy)
+    return VQEProblem(name=str(name), n_qubits=resolved_n_qubits, hamiltonian=tuple(terms), reference_energy=ref)
 
 
 def problem_from_row_terms(
