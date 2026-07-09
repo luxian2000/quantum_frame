@@ -164,6 +164,58 @@ class P1RoundDemoTests(unittest.TestCase):
             {"E2", "VQE_TASK_PROXY", "GNN_PROXY", "ENSEMBLE"},
         )
 
+    def test_real_e2_registry_scores_chemistry_rows_without_supernet_e5_path(self):
+        from aicir.qas.demos import run_p1_round_demo as demo
+
+        args = demo.build_arg_parser().parse_args(
+            [
+                "--bootstrap-labels-csv",
+                "bootstrap.csv",
+                "--growth-route",
+                "line_b_chemistry_excitation",
+                "--selector",
+                "e2",
+                "--baseline-selectors",
+                "E2",
+                "--e2-max-evals",
+                "1",
+            ]
+        )
+        row = {
+            "architecture_id": "chem_parent",
+            "family": "chemistry_excitation",
+            "n_qubits": "2",
+            "hamiltonian_id": "toy_chem",
+            "hamiltonian_terms": json.dumps([[1.0, "ZI"]]),
+            "reference_energy": "-1.0",
+            "ansatz_gene": json.dumps(
+                {
+                    "kind": "chemistry_excitation",
+                    "n_qubits": 2,
+                    "hf_occupied_qubits": [1],
+                    "excitations": [{"type": "single_excitation", "qubits": [0, 1]}],
+                    "active_electrons": 1,
+                    "active_spatial_orbitals": 1,
+                }
+            ),
+        }
+
+        class FakeResult:
+            energy = -0.75
+            evaluations = 1
+            n_starts = 1
+            best_parameters = [0.0]
+            metadata = {"budget_per_start": 1}
+
+        with patch("aicir.qas.demos.run_p1_round_demo.optimize_vqe_energy", return_value=FakeResult(), create=True), patch(
+            "aicir.qas.demos.run_p0_diagnostic._run_torch_pauli_proxy",
+            side_effect=AssertionError("chemistry E2 must not use the supernet torch_pauli proxy"),
+        ):
+            registry = demo.build_real_evaluator_registry(args, [(1.0, "ZI")], 2, -1.0)
+            scored = registry["E2"](row)
+
+        self.assertEqual(scored["E2"], -0.75)
+        self.assertEqual(scored["E2_nfev"], 1)
     def test_real_labeling_runner_uses_architecture_stable_seed_mode(self):
         from aicir.qas.demos.run_p1_round_demo import run_labeling_queue
 
