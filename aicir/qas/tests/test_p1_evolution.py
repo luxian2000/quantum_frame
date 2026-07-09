@@ -429,6 +429,64 @@ class P1VariationTests(unittest.TestCase):
             ],
         )
 
+    def test_chemistry_adapt_growth_can_append_top_k_excitations(self):
+        from aicir.qas.vqe_loop.p1_evolution import mutate_gene
+
+        parent = ChemistryExcitationAnsatzGene(
+            n_qubits=4,
+            hf_occupied_qubits=(1, 3),
+            excitations=(),
+            active_electrons=2,
+            active_spatial_orbitals=2,
+        )
+
+        scores = {
+            ("single_excitation", (2, 3)): -0.5,
+            ("single_excitation", (0, 1)): -3.0,
+            ("double_excitation", (0, 2, 1, 3)): -2.0,
+        }
+
+        result = mutate_gene(
+            parent,
+            mutation_type="chemistry_adapt_growth",
+            chemistry_growth_evaluator=lambda _gene, candidate: scores[(candidate["type"], tuple(candidate["qubits"]))],
+            chemistry_adapt_append_k=2,
+            max_layers=2,
+        )
+
+        self.assertEqual(result.child.layers, 2)
+        self.assertEqual(
+            result.child.excitations,
+            (
+                {"type": "single_excitation", "qubits": [0, 1]},
+                {"type": "double_excitation", "qubits": [0, 2, 1, 3]},
+            ),
+        )
+    def test_chemistry_adapt_pool_limit_keeps_singles_and_doubles(self):
+        from aicir.qas.vqe_loop.p1_evolution import mutate_gene
+
+        parent = ChemistryExcitationAnsatzGene(
+            n_qubits=6,
+            hf_occupied_qubits=(1, 2, 4, 5),
+            excitations=(),
+            active_electrons=4,
+            active_spatial_orbitals=3,
+        )
+        seen = []
+
+        def scorer(_gene, candidate):
+            seen.append(candidate["type"])
+            return -1.0
+
+        mutate_gene(
+            parent,
+            mutation_type="chemistry_adapt_growth",
+            chemistry_growth_evaluator=scorer,
+            chemistry_adapt_pool_limit=2,
+        )
+
+        self.assertIn("single_excitation", seen)
+        self.assertIn("double_excitation", seen)
     def test_chemistry_adapt_growth_avoids_repeating_existing_excitation(self):
         from aicir.qas.vqe_loop.p1_evolution import mutate_gene
 

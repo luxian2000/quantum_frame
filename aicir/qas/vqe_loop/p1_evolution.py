@@ -582,11 +582,39 @@ def _canonical_excitation(excitation: Mapping[str, Any]) -> tuple[str, tuple[int
     return str(excitation.get("type", "")).strip().lower(), tuple(int(qubit) for qubit in excitation.get("qubits", ()))
 
 
-def _select_adapt_growth_excitation(
+def _limit_chemistry_candidates_by_type(
+    candidates: Sequence[Mapping[str, Any]],
+    pool_limit: int | None,
+) -> list[dict[str, Any]]:
+    items = [dict(candidate) for candidate in candidates]
+    if pool_limit is None or int(pool_limit) <= 0 or len(items) <= int(pool_limit):
+        return items
+    limit = int(pool_limit)
+    singles = [item for item in items if str(item.get("type", "")).lower() == "single_excitation"]
+    doubles = [item for item in items if str(item.get("type", "")).lower() == "double_excitation"]
+    if not singles or not doubles or limit < 2:
+        return items[:limit]
+    single_quota = max(1, limit // 2)
+    double_quota = max(1, limit - single_quota)
+    selected = singles[:single_quota] + doubles[:double_quota]
+    selected_keys = {_canonical_excitation(item) for item in selected}
+    for item in items:
+        if len(selected) >= limit:
+            break
+        key = _canonical_excitation(item)
+        if key not in selected_keys:
+            selected.append(dict(item))
+            selected_keys.add(key)
+    return selected[:limit]
+
+def _select_adapt_growth_excitations(
     gene: ChemistryExcitationAnsatzGene,
     pool: Sequence[Mapping[str, Any]],
     evaluator: ChemistryGrowthEvaluator | None,
-) -> dict[str, Any]:
+    *,
+    count: int = 1,
+    pool_limit: int | None = None,
+) -> tuple[dict[str, Any], ...]:
     candidates = [dict(item) for item in pool]
     if not candidates:
         raise MutationUnavailable("chemistry_adapt_growth requires a non-empty chemistry excitation pool")
@@ -594,21 +622,35 @@ def _select_adapt_growth_excitation(
     novel_candidates = [candidate for candidate in candidates if _canonical_excitation(candidate) not in existing]
     if novel_candidates:
         candidates = novel_candidates
+    candidates = _limit_chemistry_candidates_by_type(candidates, pool_limit)
+    take = max(1, min(int(count), len(candidates)))
     if evaluator is None:
-        return dict(candidates[0])
+        return tuple(dict(candidate) for candidate in candidates[:take])
     scored: list[tuple[float, int, dict[str, Any]]] = []
     for index, candidate in enumerate(candidates):
         scored.append((_growth_score_value(evaluator(gene, candidate)), index, dict(candidate)))
     scored.sort(key=lambda item: (item[0], item[1]))
-    return dict(scored[0][2])
+    return tuple(dict(item[2]) for item in scored[:take])
+
+
+def _select_adapt_growth_excitation(
+    gene: ChemistryExcitationAnsatzGene,
+    pool: Sequence[Mapping[str, Any]],
+    evaluator: ChemistryGrowthEvaluator | None,
+) -> dict[str, Any]:
+    return dict(_select_adapt_growth_excitations(gene, pool, evaluator, count=1)[0])
+
+
 def _mutate_chemistry_excitation(
     gene: ChemistryExcitationAnsatzGene,
     mutation_type: str,
     rng: random.Random,
     *,
     chemistry_growth_evaluator: ChemistryGrowthEvaluator | None,
-    min_layers: int,
-    max_layers: int | None,
+    chemistry_adapt_append_k: int = 1,
+    chemistry_adapt_pool_limit: int | None = None,
+    min_layers: int = 1,
+    max_layers: int | None = None,
 ) -> ChemistryExcitationAnsatzGene:
     excitations = [dict(excitation) for excitation in gene.excitations]
     pool = list(_chemistry_excitation_pool(gene))
@@ -619,8 +661,21 @@ def _mutate_chemistry_excitation(
     if mutation_type == "chemistry_adapt_growth":
         if max_depth is not None and len(excitations) >= max_depth:
             raise MutationUnavailable("chemistry_adapt_growth cannot exceed max_layers")
+        append_count = max(1, int(chemistry_adapt_append_k))
+        if max_depth is not None:
+            append_count = min(append_count, max_depth - len(excitations))
+        if append_count <= 0:
+            raise MutationUnavailable("chemistry_adapt_growth cannot exceed max_layers")
         child = list(excitations)
-        child.append(_select_adapt_growth_excitation(gene, pool, chemistry_growth_evaluator))
+        child.extend(
+            _select_adapt_growth_excitations(
+                gene,
+                pool,
+                chemistry_growth_evaluator,
+                count=append_count,
+                pool_limit=chemistry_adapt_pool_limit,
+            )
+        )
     elif mutation_type == "chemistry_insert":
         if max_depth is not None and len(excitations) >= max_depth:
             raise MutationUnavailable("chemistry_insert cannot exceed max_layers")
@@ -656,6 +711,8 @@ def _mutate_chemistry_excitation(
         active_spatial_orbitals=gene.active_spatial_orbitals,
         name=gene.name,
     )
+
+
 def mutate_gene(
     gene: MutableGene,
     *,
@@ -667,6 +724,8 @@ def mutate_gene(
     operator_pool: Sequence[str] | None = None,
     operator_growth_evaluator: OperatorGrowthEvaluator | None = None,
     chemistry_growth_evaluator: ChemistryGrowthEvaluator | None = None,
+    chemistry_adapt_append_k: int = 1,
+    chemistry_adapt_pool_limit: int | None = None,
     min_layers: int = 1,
     max_layers: int | None = None,
 ) -> MutationResult:
@@ -684,6 +743,8 @@ def mutate_gene(
             normalized,
             local_rng,
             chemistry_growth_evaluator=chemistry_growth_evaluator,
+            chemistry_adapt_append_k=int(chemistry_adapt_append_k),
+            chemistry_adapt_pool_limit=chemistry_adapt_pool_limit,
             min_layers=int(min_layers),
             max_layers=max_layers,
         )
@@ -726,7 +787,6 @@ def mutate_gene(
     if child == gene:
         raise MutationUnavailable(f"{normalized} produced no structural change")
     return MutationResult(parent=gene, child=child, mutation_type=normalized)
-
 
 def _mutate_operator_sequence(
     gene: OperatorSequenceAnsatzGene,
@@ -896,6 +956,8 @@ def generate_mutation_children(
     operator_pool: Sequence[str] | None = None,
     operator_growth_evaluator: OperatorGrowthEvaluator | None = None,
     chemistry_growth_evaluator: ChemistryGrowthEvaluator | None = None,
+    chemistry_adapt_append_k: int = 1,
+    chemistry_adapt_pool_limit: int | None = None,
     min_layers: int = 1,
     max_layers: int | None = None,
     mutation_weights: Mapping[str, float] | None = None,
@@ -932,6 +994,8 @@ def generate_mutation_children(
                         operator_pool=row_operator_pool,
                         operator_growth_evaluator=row_growth_evaluator,
                         chemistry_growth_evaluator=row_chemistry_growth_evaluator,
+                        chemistry_adapt_append_k=int(chemistry_adapt_append_k),
+                        chemistry_adapt_pool_limit=chemistry_adapt_pool_limit,
                         min_layers=min_layers,
                         max_layers=max_layers,
                     )

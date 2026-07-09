@@ -24,17 +24,20 @@ ACTIVE_SPATIAL_ORBITALS=${ACTIVE_SPATIAL_ORBITALS:-9}
 
 # P0 seeds: HF/excitation bootstrap. Keep this modest; P1 does the iterative growth.
 P0_CANDIDATES=${P0_CANDIDATES:-64}
-P0_MAX_EXCITATIONS=${P0_MAX_EXCITATIONS:-2}
+P0_MAX_EXCITATIONS=${P0_MAX_EXCITATIONS:-6}
 P0_SEED=${P0_SEED:-17}
 
 # LineB P1 defaults for 18q: more ADAPT than genetic, wider than smoke defaults.
-ROUNDS=${ROUNDS:-10}
+ROUNDS=${ROUNDS:-6}
 PARENT_COUNT=${PARENT_COUNT:-8}
 CHILDREN_PER_PARENT=${CHILDREN_PER_PARENT:-16}
 FAIR_TOP_K=${FAIR_TOP_K:-8}
 CHEMISTRY_GENETIC_WEIGHT=${CHEMISTRY_GENETIC_WEIGHT:-0.3}
 CHEMISTRY_ADAPT_GROWTH_WEIGHT=${CHEMISTRY_ADAPT_GROWTH_WEIGHT:-0.7}
 CHEMISTRY_GROWTH_MODE=${CHEMISTRY_GROWTH_MODE:-mixed}
+CHEMISTRY_ADAPT_APPEND_K=${CHEMISTRY_ADAPT_APPEND_K:-4}
+CHEMISTRY_ADAPT_POOL_LIMIT=${CHEMISTRY_ADAPT_POOL_LIMIT:-24}
+CHEMISTRY_MAX_EXCITATIONS=${CHEMISTRY_MAX_EXCITATIONS:-32}
 MUTATION_TYPES=${MUTATION_TYPES:-chemistry_insert,chemistry_change,chemistry_swap,chemistry_delete,chemistry_adapt_growth}
 SELECTOR=${SELECTOR:-e2}
 BASELINE_SELECTORS=${BASELINE_SELECTORS:-E2}
@@ -176,6 +179,9 @@ for round in $(seq 1 "$ROUNDS"); do
     --chemistry-growth-mode "$CHEMISTRY_GROWTH_MODE" \
     --chemistry-genetic-weight "$CHEMISTRY_GENETIC_WEIGHT" \
     --chemistry-adapt-growth-weight "$CHEMISTRY_ADAPT_GROWTH_WEIGHT" \
+    --chemistry-adapt-append-k "$CHEMISTRY_ADAPT_APPEND_K" \
+    --chemistry-adapt-pool-limit "$CHEMISTRY_ADAPT_POOL_LIMIT" \
+    --max-layers "$CHEMISTRY_MAX_EXCITATIONS" \
     --mutation-types "$MUTATION_TYPES" \
     --selector "$SELECTOR" \
     --baseline-selectors "$BASELINE_SELECTORS" \
@@ -266,6 +272,9 @@ cat > "$OUT_DIR/run_summary.json" <<EOF
   "selector": "$SELECTOR",
   "chemistry_genetic_weight": $CHEMISTRY_GENETIC_WEIGHT,
   "chemistry_adapt_growth_weight": $CHEMISTRY_ADAPT_GROWTH_WEIGHT,
+  "chemistry_adapt_append_k": $CHEMISTRY_ADAPT_APPEND_K,
+  "chemistry_adapt_pool_limit": $CHEMISTRY_ADAPT_POOL_LIMIT,
+  "chemistry_max_excitations": $CHEMISTRY_MAX_EXCITATIONS,
   "rounds_requested": $ROUNDS,
   "fair_calls_so_far": $fair_calls_so_far,
   "best_energy": "${best_energy:-}",
@@ -276,3 +285,4 @@ EOF
 
 echo "final_table=$CURRENT_LABELS"
 echo "summary=$OUT_DIR/run_summary.json"
+

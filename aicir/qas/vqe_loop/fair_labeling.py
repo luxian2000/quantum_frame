@@ -264,7 +264,7 @@ def _label_row(
             max_evaluations=max_evals,
             budget_override=max_evals,
             backend=backend,
-            init_mode="random_uniform_pi",
+            init_mode="zero_then_random",
             init_scale=float(np.pi),
             initial_parameters=warm_start,
         )
