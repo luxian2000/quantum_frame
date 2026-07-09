@@ -36,6 +36,15 @@ def test_load_hamiltonian_input_supports_legacy_term_list(tmp_path):
     assert generated.terms == ((1.0, "ZI"), (-0.5, "IX"))
 
 
+def test_qiskit_sparse_pauli_terms_are_converted_to_qas_qubit_order():
+    from aicir.chemistry.spec import _sparse_pauli_terms
+
+    class FakeSparsePauliOp:
+        def to_list(self):
+            return [("IZ", 1.0), ("XY", -0.5)]
+
+    assert _sparse_pauli_terms(FakeSparsePauliOp()) == ((1.0, "ZI"), (-0.5, "YX"))
+
 def test_molecular_spec_requires_optional_qiskit_nature_when_not_installed(monkeypatch):
     from aicir.chemistry.spec import MolecularSpec, generate_hamiltonian
 
