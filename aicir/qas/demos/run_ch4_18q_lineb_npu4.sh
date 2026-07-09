@@ -52,6 +52,7 @@ LABEL_N_SEEDS=${LABEL_N_SEEDS:-3}
 FAIR_MAX_EVALS=${FAIR_MAX_EVALS:-1000}
 SUCCESS_DELTA_REF=${SUCCESS_DELTA_REF:-0.02}
 PROTOCOL=${PROTOCOL:-default}
+REFERENCE_ENERGY=${REFERENCE_ENERGY:-}
 
 # Cheap selector settings. E2 is a selector only; final comparison uses fair_best_energy.
 LIGHT_EVALUATOR=${LIGHT_EVALUATOR:-torch_pauli}
@@ -72,13 +73,14 @@ P0_WORK_DIR="$OUT_DIR/p0_npu4_shards"
 P0_SUMMARY="$OUT_DIR/p0_npu4_shard_summary.json"
 CURRENT_LABELS="$OUT_DIR/current_labeled_rows.csv"
 
-export OUT_DIR HAM_PATH ACTIVE_ELECTRONS ACTIVE_SPATIAL_ORBITALS P0_CANDIDATES P0_MAX_EXCITATIONS P0_SEED
+export OUT_DIR HAM_PATH ACTIVE_ELECTRONS ACTIVE_SPATIAL_ORBITALS P0_CANDIDATES P0_MAX_EXCITATIONS P0_SEED REFERENCE_ENERGY
 
 "$PYTHON" - <<'PY'
 import os
 from pathlib import Path
 
 from aicir.chemistry.spec import load_hamiltonian_input
+from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS, read_csv_rows, write_csv_rows
 from aicir.qas.vqe_loop.p0_bootstrap_fair import ClosedLoopConfig, write_chemistry_excitation_bootstrap_queue
 
 hamiltonian = load_hamiltonian_input(os.environ["HAM_PATH"])
@@ -99,6 +101,32 @@ config = ClosedLoopConfig(
     chemistry_excitation_seed=int(os.environ["P0_SEED"]),
 )
 queue_path, oracle_path, summary_path = write_chemistry_excitation_bootstrap_queue(config, output_dir=output_dir)
+
+reference_energy = os.environ.get("REFERENCE_ENERGY", "").strip()
+metadata = dict(getattr(hamiltonian, "metadata", {}) or {})
+if not reference_energy:
+    for key in (
+        "reference_energy",
+        "electronic_reference_energy",
+        "electronic_reference_energy_old_thread",
+        "fci_energy",
+        "exact_energy",
+    ):
+        value = metadata.get(key)
+        if value is not None and str(value).strip():
+            reference_energy = str(value).strip()
+            break
+if reference_energy:
+    reference_energy = f"{float(reference_energy):.12f}"
+    for path in (queue_path, oracle_path):
+        rows = read_csv_rows(path)
+        for row in rows:
+            row["reference_energy"] = reference_energy
+        write_csv_rows(path, rows, fieldnames=BENCHMARK_TABLE_FIELDS)
+    print(f"reference_energy={reference_energy}")
+else:
+    print("reference_energy=missing; large literal Hamiltonians will fail before exact diagonalization")
+
 print(f"p0_queue={queue_path}")
 print(f"p0_oracle_records={oracle_path}")
 print(f"p0_summary={summary_path}")
