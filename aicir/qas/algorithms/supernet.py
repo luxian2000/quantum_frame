@@ -56,8 +56,9 @@ from ...core.circuit import (
 )
 from ...core.gates import apply_gate_to_state, gate_to_matrix
 from ...gates import canonical_gate_name, get_gate_spec
-from ...ir import circuit_instructions
+from ...ir import circuit_instructions, instruction_name
 from ...qml.deriv import psr
+from ...noise import DepolarizingChannel, AmplitudeDampingChannel, NoiseModel
 from ..core.sharding import (
     shard_context,
     owned_indices,
@@ -209,10 +210,12 @@ def _normalize_two_qubit_choice(value: Any) -> str:
 
 @dataclass(frozen=True)
 class NoiseConfig:
-    """Placeholder for future noisy differentiable QAS support."""
+    """Differentiable supernet 的简化噪声配置。"""
 
     enabled: bool = False
-    description: str = "Differentiable noisy supernet QAS is not implemented."
+    probability: float = 0.01
+    channel: str = "depolarizing"
+    after_gates: tuple[str, ...] | None = None
 
 
 @dataclass
@@ -242,6 +245,8 @@ class SupernetConfig:
     track_best_validation: bool = True
     ranking_strategy: str = "random"
     use_evolutionary_ranking: bool = False
+    ranking_generations: int = 4
+    ranking_mutation_rate: float = 0.2
     noise_mode: str = "none"
     shard_mode: str = "safe"
     noise_config: NoiseConfig | None = None
@@ -361,6 +366,7 @@ class Supernet:
         self._hamiltonian_cache: dict[int, torch.Tensor] = {}
         self._basis_index_cache: dict[int, torch.Tensor] = {}
         self._pauli_expectation_cache: dict[int, list[tuple[int, int, int, float, float]]] = {}
+        self._cached_noise_model: NoiseModel | None | bool = False
 
         # 共享参数与每 supernet 优化器都按需懒建（见模块顶部内存说明）：构造时不枚举
         # gates**n_qubits 的布局空间。优化器初始为 None，首个参数出现时建立、之后
@@ -373,13 +379,20 @@ class Supernet:
 
     def _validate_config(self) -> None:
         cfg = self.config
-        if str(cfg.noise_mode).strip().lower() != "none":
-            raise NotImplementedError("Noisy differentiable supernet is not implemented yet; use noise_mode='none'.")
-        if cfg.noise_config is not None and cfg.noise_config.enabled:
-            raise NotImplementedError("Noisy differentiable supernet is not implemented yet.")
         ranking_strategy = str(cfg.ranking_strategy).strip().lower()
         if ranking_strategy not in {"random", "evolutionary"}:
             raise ValueError("ranking_strategy must be 'random' or 'evolutionary'")
+        if cfg.ranking_generations < 0:
+            raise ValueError("ranking_generations must be non-negative")
+        if not (0.0 <= float(cfg.ranking_mutation_rate) <= 1.0):
+            raise ValueError("ranking_mutation_rate must be in [0, 1]")
+        noise_mode = str(cfg.noise_mode).strip().lower()
+        if noise_mode not in {"none", "depolarizing", "amplitude_damping"}:
+            raise ValueError("noise_mode must be 'none', 'depolarizing', or 'amplitude_damping'")
+        if cfg.noise_config is not None:
+            p = float(cfg.noise_config.probability)
+            if not (0.0 <= p <= 1.0):
+                raise ValueError("noise_config.probability must be in [0, 1]")
         shard_mode = str(cfg.shard_mode).strip().lower()
         if shard_mode not in {"safe", "aggressive"}:
             raise ValueError("shard_mode must be 'safe' or 'aggressive'")
@@ -766,6 +779,53 @@ class Supernet:
     def simulate_state(self, circuit: Circuit, initial_state: torch.Tensor | None = None) -> torch.Tensor:
         return self._simulate_gates(circuit_instructions(circuit), initial_state=initial_state)
 
+    def _noise_model(self) -> NoiseModel | None:
+        if self._cached_noise_model is not False:
+            return self._cached_noise_model
+        cfg = self.config
+        mode = str(cfg.noise_mode).strip().lower()
+        noise_cfg = cfg.noise_config
+        enabled = mode != "none" or (noise_cfg is not None and noise_cfg.enabled)
+        if not enabled:
+            self._cached_noise_model = None
+            return None
+        if noise_cfg is None:
+            noise_cfg = NoiseConfig(enabled=True, channel=mode)
+        channel_name = mode if mode != "none" else str(noise_cfg.channel).strip().lower()
+        probability = float(noise_cfg.probability)
+        model = NoiseModel()
+        after_gates = noise_cfg.after_gates
+        for qubit in range(self.config.n_qubits):
+            if channel_name == "depolarizing":
+                channel = DepolarizingChannel(target_qubit=qubit, p=probability)
+            elif channel_name == "amplitude_damping":
+                channel = AmplitudeDampingChannel(target_qubit=qubit, gamma=probability)
+            else:
+                raise ValueError("unsupported noise channel")
+            model.add_channel(channel, after_gates=after_gates)
+        self._cached_noise_model = model
+        return model
+
+    def _has_noise(self) -> bool:
+        return self._noise_model() is not None
+
+    def _simulate_density(self, circuit: Circuit) -> torch.Tensor:
+        state = self.backend.zeros_state(self.config.n_qubits)
+        rho = self.backend.matmul(state, self.backend.dagger(state))
+        noise_model = self._noise_model()
+        for gate in circuit_instructions(circuit):
+            unitary = gate_to_matrix(gate, cir_qubits=self.config.n_qubits, backend=self.backend)
+            rho = self.backend.matmul(self.backend.matmul(unitary, rho), self.backend.dagger(unitary))
+            if noise_model is not None:
+                rho = noise_model.apply(
+                    rho,
+                    n_qubits=self.config.n_qubits,
+                    backend=self.backend,
+                    gate_type=instruction_name(gate),
+                    gate=gate,
+                )
+        return rho
+
     def _readout_indices(self, qubit: int = 0) -> torch.Tensor:
         qubit = int(qubit)
         if qubit not in self._readout_index_cache:
@@ -926,6 +986,10 @@ class Supernet:
         return self.backend.expectation_sv(state, self._hamiltonian_matrix(hamiltonian))
 
     def _h2_energy(self, circuit: Circuit, hamiltonian: Hamiltonian | np.ndarray | torch.Tensor | None) -> torch.Tensor:
+        if self._has_noise():
+            rho = self._simulate_density(circuit)
+            operator = self._hamiltonian_matrix(hamiltonian)
+            return self.backend.expectation_dm(rho, operator)
         state = self.simulate_state(circuit)
         return self._hamiltonian_expectation(state, hamiltonian)
 
@@ -1039,6 +1103,94 @@ class Supernet:
                 losses.append(_float_value(loss))
         selected = min(range(len(losses)), key=losses.__getitem__)
         return selected, losses
+
+    def _ranking_record(
+        self,
+        candidate_index: int,
+        architecture: Architecture,
+        selected_id: int,
+        losses: list[float],
+    ) -> dict[str, Any]:
+        return {
+            "candidate_index": candidate_index,
+            "architecture": architecture,
+            "architecture_indices": self.encode_architecture(architecture),
+            "selected_supernet_id": selected_id,
+            "score": losses[selected_id],
+            "candidate_losses": losses,
+            "cnot_count": self.cnot_count(architecture),
+            "two_qubit_count": self.two_qubit_count(architecture),
+            "four_qubit_count": self.four_qubit_count(architecture),
+            "excitation_count": self.excitation_count(architecture),
+        }
+
+    def _mutate_architecture(self, architecture: Architecture) -> Architecture:
+        cfg = self.config
+        rows = [list(row) for row in self.encode_architecture(architecture)]
+        ranges: list[tuple[int, int, int]] = []
+        two_start = cfg.n_qubits
+        four_start = cfg.n_qubits + len(cfg.two_qubit_pairs)
+        for layer_id in range(cfg.layers):
+            if cfg.search_single_qubit_gates:
+                for slot in range(cfg.n_qubits):
+                    ranges.append((layer_id, slot, len(cfg.single_qubit_gates)))
+            if cfg.search_two_qubit_gates:
+                for offset in range(len(cfg.two_qubit_pairs)):
+                    ranges.append((layer_id, two_start + offset, len(self._two_qubit_choice_alphabet)))
+            if cfg.search_four_qubit_gates:
+                for offset in range(len(cfg.four_qubit_groups)):
+                    ranges.append((layer_id, four_start + offset, len(self._four_qubit_choice_alphabet)))
+        if not ranges:
+            return architecture
+
+        rate = float(cfg.ranking_mutation_rate)
+        mutated = False
+        for layer_id, slot, alphabet_size in ranges:
+            if self._rng.random() > rate:
+                continue
+            current = rows[layer_id][slot]
+            if alphabet_size > 1:
+                choices = [idx for idx in range(alphabet_size) if idx != current]
+                rows[layer_id][slot] = self._rng.choice(choices)
+            mutated = True
+        if not mutated and rate > 0.0:
+            layer_id, slot, alphabet_size = self._rng.choice(ranges)
+            if alphabet_size > 1:
+                current = rows[layer_id][slot]
+                choices = [idx for idx in range(alphabet_size) if idx != current]
+                rows[layer_id][slot] = self._rng.choice(choices)
+        return self.decode_architecture(tuple(tuple(row) for row in rows))
+
+    def _evolutionary_candidates(
+        self,
+        objective: ObjectiveFn | str | None,
+        dataset: Any,
+        hamiltonian: Any,
+        split: str,
+        candidates: Sequence[Architecture] | None,
+    ) -> list[Architecture]:
+        population = list(candidates) if candidates is not None else [
+            self.sample_architecture() for _ in range(self.config.ranking_num)
+        ]
+        if not population:
+            raise ValueError("ranking requires at least one candidate architecture")
+
+        for _ in range(self.config.ranking_generations):
+            scored = []
+            for architecture in population:
+                selected_id, losses = self.select_supernet(
+                    architecture, objective, dataset, hamiltonian, split=split
+                )
+                scored.append((losses[selected_id], architecture))
+            scored.sort(key=lambda item: item[0])
+            survivor_count = max(1, min(len(scored), math.ceil(len(population) / 2)))
+            survivors = [architecture for _, architecture in scored[:survivor_count]]
+            next_population = list(survivors)
+            while len(next_population) < self.config.ranking_num:
+                parent = self._rng.choice(survivors)
+                next_population.append(self._mutate_architecture(parent))
+            population = next_population
+        return population[: self.config.ranking_num]
 
     def _snapshot_shared_parameters(self) -> dict[ParameterKey, torch.Tensor]:
         return {key: value.detach().clone() for key, value in self.shared_parameters.items()}
@@ -1267,7 +1419,7 @@ class Supernet:
             # 全零参数架构（仅 i/h/cx）无参数、无优化器，同样跳过。
             if optimizer is None or (safe_sharded and ctx.rank != 0):
                 grad_norm = 0.0
-            elif self.config.use_parameter_shift:
+            elif self.config.use_parameter_shift or self._has_noise():
                 grad_norm = self._parameter_shift_update(active_tensors, optimizer, loss_closure)
             else:
                 optimizer.zero_grad(set_to_none=True)
@@ -1314,13 +1466,16 @@ class Supernet:
     ) -> list[dict[str, Any]]:
         strategy = "evolutionary" if self.config.use_evolutionary_ranking else self.config.ranking_strategy.lower()
         if strategy == "evolutionary":
-            raise NotImplementedError(
-                "Evolutionary ranking from the Supplementary Information is not implemented yet; "
-                "use ranking_strategy='random'."
+            candidates = self._evolutionary_candidates(
+                objective,
+                dataset,
+                hamiltonian,
+                split,
+                candidates,
             )
-        if strategy != "random":
+        elif strategy != "random":
             raise ValueError("ranking_strategy must be 'random' or 'evolutionary'")
-        if candidates is None:
+        elif candidates is None:
             candidates = [self.sample_architecture() for _ in range(self.config.ranking_num)]
         if not candidates:
             raise ValueError("ranking requires at least one candidate architecture")
@@ -1339,20 +1494,7 @@ class Supernet:
             selected_id, losses = self.select_supernet(
                 architecture, objective, dataset, hamiltonian, split=split,
             )
-            local_records.append(
-                {
-                    "candidate_index": index,
-                    "architecture": architecture,
-                    "architecture_indices": self.encode_architecture(architecture),
-                    "selected_supernet_id": selected_id,
-                    "score": losses[selected_id],
-                    "candidate_losses": losses,
-                    "cnot_count": self.cnot_count(architecture),
-                    "two_qubit_count": self.two_qubit_count(architecture),
-                    "four_qubit_count": self.four_qubit_count(architecture),
-                    "excitation_count": self.excitation_count(architecture),
-                }
-            )
+            local_records.append(self._ranking_record(index, architecture, selected_id, losses))
 
         if ctx.is_sharded:
             merged: list[dict[str, Any]] = []
@@ -1417,7 +1559,7 @@ class Supernet:
         for step in range(self.config.finetune_steps if optimizer is not None else 0):
             loss = loss_closure()
             active = list(parameters.values())
-            if self.config.use_parameter_shift:
+            if self.config.use_parameter_shift or self._has_noise():
                 grad_norm = self._parameter_shift_update(active, optimizer, loss_closure)
             else:
                 optimizer.zero_grad(set_to_none=True)
@@ -1578,7 +1720,7 @@ class Supernet:
             loss = energy_closure()
             best_energy = min(best_energy, _float_value(loss))
             optimizer.zero_grad(set_to_none=True)
-            if self.config.use_parameter_shift:
+            if self.config.use_parameter_shift or self._has_noise():
                 self._parameter_shift_update(parameters, optimizer, energy_closure)
             else:
                 loss.backward()
@@ -2006,6 +2148,7 @@ def supernet_qas(
 
 
 __all__ = [
+    "NoiseConfig",
     "SupernetConfig",
     "LayerArchitecture",
     "Architecture",

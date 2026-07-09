@@ -2,6 +2,14 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-09
+
+### Added
+
+- **QML 二阶与几何公开接口。** 新增 `aicir.qml.hessian`，支持 Pauli 旋转目标的二阶参数移位/`mpsr` 混合偏导，以及任意黑盒目标的有限差分 Hessian；新增 `qfim`/`metric_tensor`、`qfim_diag`、`qfim_blocks`，复用 QNG 内部 Fubini-Study QFIM 估计路径并支持 NumPy 与 Torch-family 状态返回。
+- **Supernet QAS 补全 evolutionary ranking 与 noisy VQE 路径。** `SupernetConfig` 新增 `ranking_generations`、`ranking_mutation_rate`；`ranking_strategy="evolutionary"` 现在用采样种群、突变和截断选择生成候选，再走与随机 ranking 相同的 scoring/record schema。`NoiseConfig` 由占位扩展为可用配置，`noise_mode="depolarizing"` / `"amplitude_damping"` 在 VQE/H2 目标下走密度矩阵期望。
+- **Chemistry mapper metadata parity。** `build_molecule(..., mapping="parity"|"bravyi_kitaev")` 现在填充 `n_electrons`、mapper-derived `hf_occupation` 和结构化 `excitations` 元数据；Parity two-qubit reduction 也返回可校验的 HF 元数据。Parity/BK excitation 元数据用于结构桥接，不宣称 mapper-correct 化学 UCCSD。
+
 ## 2026-07-06
 
 ### Added

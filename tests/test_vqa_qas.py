@@ -7,7 +7,7 @@ import torch
 
 from aicir.core.operators import Hamiltonian
 from aicir.backends.gpu_backend import TorchBackend
-from aicir.qas.algorithms.supernet import h2_hamiltonian, prepare_classification_dataset
+from aicir.qas.algorithms.supernet import NoiseConfig, h2_hamiltonian, prepare_classification_dataset
 from aicir.qas import (
     Architecture,
     LayerArchitecture,
@@ -265,6 +265,9 @@ def test_supplementary_config_fields_are_available():
     assert config.ranking_strategy == "random"
     assert config.use_evolutionary_ranking is False
     assert config.noise_mode == "none"
+    assert config.ranking_generations == 4
+    assert math.isclose(config.ranking_mutation_rate, 0.2)
+    assert NoiseConfig(enabled=True, probability=0.05).probability == 0.05
 
 
 def test_architecture_sampling_returns_valid_architecture():
@@ -410,11 +413,111 @@ def test_ranking_returns_lowest_loss_architecture_among_candidates():
     assert records[1]["architecture"] == with_cnot
 
 
-def test_evolutionary_ranking_extension_raises_clear_error():
-    qas = Supernet(_h2_config(ranking_strategy="evolutionary"))
+def test_evolutionary_ranking_returns_sorted_records():
+    qas = Supernet(
+        _h2_config(
+            n_qubits=2,
+            layers=1,
+            single_qubit_gates=("i", "h"),
+            two_qubit_gates=("cx",),
+            two_qubit_pairs=((0, 1),),
+            ranking_strategy="evolutionary",
+            ranking_num=4,
+            ranking_generations=2,
+            ranking_mutation_rate=0.5,
+            task="custom",
+        )
+    )
 
-    with pytest.raises(NotImplementedError, match="Evolutionary ranking"):
-        qas.rank_architectures(lambda **_: 0.0)
+    def objective(architecture, qas, **_):
+        return torch.tensor(float(qas.cnot_count(architecture)))
+
+    records = qas.rank_architectures(objective)
+
+    assert len(records) == 4
+    assert [record["rank"] for record in records] == [1, 2, 3, 4]
+    assert records == sorted(records, key=lambda item: (item["score"], item["candidate_index"]))
+    assert records[0]["score"] <= records[-1]["score"]
+    for record in records:
+        assert isinstance(record["architecture"], Architecture)
+        assert "candidate_losses" in record
+        assert qas.decode_architecture(record["architecture_indices"]) == record["architecture"]
+
+
+def test_noisy_vqe_density_path_changes_energy_monotonically():
+    hamiltonian = np.diag([1.0, -1.0]).astype(np.complex64)
+    base_config = _h2_config(
+        n_qubits=1,
+        layers=1,
+        single_qubit_gates=("i",),
+        two_qubit_pairs=(),
+        hf_occupied_qubits=(0,),
+        task="h2_vqe",
+    )
+    architecture = Architecture((LayerArchitecture(("i",), ()),))
+    noiseless = Supernet(base_config)
+    low_noise = Supernet(
+        _h2_config(
+            n_qubits=1,
+            layers=1,
+            single_qubit_gates=("i",),
+            two_qubit_pairs=(),
+            hf_occupied_qubits=(0,),
+            task="h2_vqe",
+            noise_mode="depolarizing",
+            noise_config=NoiseConfig(enabled=True, probability=0.02),
+        )
+    )
+    high_noise = Supernet(
+        _h2_config(
+            n_qubits=1,
+            layers=1,
+            single_qubit_gates=("i",),
+            two_qubit_pairs=(),
+            hf_occupied_qubits=(0,),
+            task="h2_vqe",
+            noise_mode="depolarizing",
+            noise_config=NoiseConfig(enabled=True, probability=0.75),
+        )
+    )
+
+    e0 = float(noiseless._loss(architecture, 0, "vqe", hamiltonian=hamiltonian)[0])
+    e_low = float(low_noise._loss(architecture, 0, "vqe", hamiltonian=hamiltonian)[0])
+    e_high = float(high_noise._loss(architecture, 0, "vqe", hamiltonian=hamiltonian)[0])
+
+    assert e_low == pytest.approx(e0, abs=0.1)
+    assert not math.isclose(e_low, e0, abs_tol=1e-4)
+    assert e_high > e_low
+
+
+def test_noisy_vqe_training_forces_parameter_shift(monkeypatch):
+    hamiltonian = np.diag([1.0, -1.0]).astype(np.complex64)
+    qas = Supernet(
+        _h2_config(
+            n_qubits=1,
+            layers=1,
+            single_qubit_gates=("ry",),
+            two_qubit_pairs=(),
+            supernet_steps=1,
+            finetune_steps=1,
+            task="h2_vqe",
+            use_parameter_shift=False,
+            noise_mode="depolarizing",
+            noise_config=NoiseConfig(enabled=True, probability=0.05),
+        )
+    )
+    calls = {"count": 0}
+
+    def fake_parameter_shift(parameters, optimizer, loss_closure):
+        calls["count"] += 1
+        return 0.0
+
+    monkeypatch.setattr(qas, "_parameter_shift_update", fake_parameter_shift)
+    qas.optimize_supernet("vqe", hamiltonian=hamiltonian)
+    architecture = Architecture((LayerArchitecture(("ry",), ()),))
+    qas.finetune_architecture(architecture, 0, "vqe", hamiltonian=hamiltonian)
+
+    assert calls["count"] == 2
 
 
 def test_supplementary_classification_dataset_has_expected_split_and_labels():
