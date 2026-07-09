@@ -248,7 +248,8 @@ def _sparse_pauli_terms(qubit_op: Any) -> tuple[PauliTerm, ...]:
     for label, coefficient in qubit_op.to_list():
         coeff = _real_float(coefficient)
         if abs(coeff) > 1.0e-14:
-            raw_terms.append((coeff, str(label)))
+            # Qiskit labels are left-to-right q[n-1]..q[0]; QAS uses q[0]..q[n-1].
+            raw_terms.append((coeff, str(label)[::-1]))
     return _normalize_terms(raw_terms)
 
 
