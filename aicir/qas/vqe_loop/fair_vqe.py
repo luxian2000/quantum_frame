@@ -500,6 +500,23 @@ def optimize_vqe_energy(
     best_params = np.zeros(n_params, dtype=float)
     total_evals = 0
     per_start: List[Dict[str, Any]] = []
+    zero_candidate: Dict[str, Any] = {"included": False}
+
+    if n_params > 0:
+        zero_start = np.zeros(n_params, dtype=float)
+        zero_time = perf_counter()
+        zero_energy = evaluate_vqe_energy(architecture, problem, zero_start, backend=backend)
+        total_evals += 1
+        zero_candidate = {
+            "included": True,
+            "energy": float(zero_energy),
+            "nfev": 1,
+            "walltime_s": float(perf_counter() - zero_time),
+            "init_mode": "zero_parameter_candidate",
+        }
+        if float(zero_energy) < best_energy:
+            best_energy = float(zero_energy)
+            best_params = zero_start.copy()
 
     for start_index, start in enumerate(starts):
         start_time = perf_counter()
@@ -553,6 +570,7 @@ def optimize_vqe_energy(
             "budget_per_start": budget,
             "nfev": total_evals,
             "per_start": per_start,
+            "zero_parameter_candidate": zero_candidate,
             "theta_init_mode": mode,
             "cobyla_rhobeg": COBYLA_RHOBEG,
             "cobyla_tol": COBYLA_TOL,

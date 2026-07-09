@@ -259,7 +259,7 @@ def _build_shared_vqe_e2_evaluator(
             max_evaluations=max_evals,
             budget_override=max_evals,
             backend=backend,
-            init_mode="random_uniform_pi",
+            init_mode="zero_then_random",
         )
         return {
             "E2": float(result.energy),
@@ -575,6 +575,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chemistry-genetic-weight", type=float, default=0.5)
     parser.add_argument("--chemistry-adapt-growth-weight", type=float, default=0.5)
     parser.add_argument("--chemistry-growth-mode", choices=("genetic", "adapt", "mixed"), default="mixed")
+    parser.add_argument("--chemistry-adapt-append-k", type=int, default=1)
+    parser.add_argument("--chemistry-adapt-pool-limit", type=int, default=None)
+    parser.add_argument("--max-layers", type=int, default=None)
     parser.add_argument("--k-min", type=int, default=3)
     parser.add_argument("--d-max", type=float, default=0.1)
     parser.add_argument(
@@ -718,6 +721,9 @@ def main(
             mutation_types=mutation_types,
             mutation_weights=mutation_weights,
             operator_pool=operator_pool or None,
+            chemistry_adapt_append_k=int(args.chemistry_adapt_append_k),
+            chemistry_adapt_pool_limit=args.chemistry_adapt_pool_limit,
+            max_layers=args.max_layers,
             seed=int(args.seed) + round_index,
             baseline_selector_fields=baseline_selectors,
             previous_oracle_trusted_fair_mean=previous_oracle_trusted_fair_mean,

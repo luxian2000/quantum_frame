@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from io import StringIO
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -47,6 +48,42 @@ class FairVqePauliTermsTest(unittest.TestCase):
         self.assertAlmostEqual(energy, 1.0, places=6)
         self.assertAlmostEqual(result.energy, 1.0, places=6)
         self.assertEqual(result.evaluations, 1)
+
+    def test_optimizer_always_keeps_zero_parameter_candidate(self):
+        architecture = ArchitectureSpec.from_gates(
+            "rx_1q",
+            [{"type": "rx", "target_qubit": 0, "parameter": 0.123}],
+            n_qubits=1,
+        )
+        problem = VQEProblem(name="z0_1q", n_qubits=1, hamiltonian=((1.0, "Z"),), reference_energy=-1.0)
+
+        class BadCoblya:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def minimize(self, _objective, start):
+                return SimpleNamespace(fun=-24.0, x=start, best_fun=-24.0, best_x=start, nfev=1)
+
+        def fake_energy(_architecture, _problem, parameters, *, backend):
+            return -53.0 if np.allclose(parameters, [0.0]) else -24.0
+
+        with patch("aicir.qas.vqe_loop.fair_vqe.COBYLA", BadCoblya), patch(
+            "aicir.qas.vqe_loop.fair_vqe._evaluate_pauli_state_energy",
+            side_effect=fake_energy,
+        ):
+            result = optimize_vqe_energy(
+                architecture,
+                problem,
+                seed=7,
+                n_starts=1,
+                max_evaluations=1,
+                budget_override=1,
+                init_mode="random_uniform_pi",
+            )
+
+        self.assertAlmostEqual(result.energy, -53.0)
+        self.assertEqual(result.best_parameters, [0.0])
+        self.assertTrue(result.metadata["zero_parameter_candidate"]["included"])
 
     def test_numpy_pauli_expectation_rejects_backend_tensor_like_input(self):
         class BackendTensorLike:

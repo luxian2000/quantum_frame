@@ -96,6 +96,9 @@ def plan_p1_round(
     mutation_types: Sequence[str] = ("gate_mutation", "connectivity_mutation", "layer_mutation", "depth_mutation"),
     mutation_weights: Mapping[str, float] | None = None,
     operator_pool: Sequence[str] | None = None,
+    chemistry_adapt_append_k: int = 1,
+    chemistry_adapt_pool_limit: int | None = None,
+    max_layers: int | None = None,
     seed: int = 0,
     baseline_selector_fields: Sequence[str] = ("E2", "E5"),
     previous_oracle_trusted_fair_mean: float | None = None,
@@ -132,6 +135,9 @@ def plan_p1_round(
         mutation_types=tuple(mutation_types),
         mutation_weights=mutation_weights,
         operator_pool=operator_pool,
+        chemistry_adapt_append_k=int(chemistry_adapt_append_k),
+        chemistry_adapt_pool_limit=chemistry_adapt_pool_limit,
+        max_layers=max_layers,
         seed=int(seed),
     )
     dedup = deduplicate_children(
