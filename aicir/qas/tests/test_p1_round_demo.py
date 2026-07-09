@@ -49,6 +49,30 @@ def write_bootstrap_labels(path: Path) -> None:
 
 
 class P1RoundDemoTests(unittest.TestCase):
+    def test_load_hamiltonian_for_demo_supports_pauli_terms_spec_file(self):
+        from aicir.qas.demos.run_p1_round_demo import load_hamiltonian_for_demo
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "ham.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "kind": "pauli_terms",
+                        "terms": [[1.0, "ZI"], [-0.5, "IZ"]],
+                        "metadata": {"electronic_reference_energy_old_thread": -3.25},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            terms, n_qubits, reference_energy = load_hamiltonian_for_demo(
+                "custom",
+                hamiltonian_file=str(path),
+            )
+
+        self.assertEqual(terms, ((1.0, "ZI"), (-0.5, "IZ")))
+        self.assertEqual(n_qubits, 2)
+        self.assertEqual(reference_energy, -3.25)
+
     def test_demo_defaults_to_e5_fallback_selector(self):
         from aicir.qas.demos.run_p1_round_demo import build_arg_parser
 
