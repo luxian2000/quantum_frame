@@ -28,7 +28,9 @@ from aicir.qas.vqe_loop.graph_predictor import build_graph_predictor_evaluator
 from aicir.qas.vqe_loop.p1_round import plan_p1_round, write_p1_round_outputs
 from aicir.qas.vqe_loop.p1_selection import choose_p1_auto_selector
 from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS
+from aicir.qas.vqe_loop.benchmark_table import architecture_from_candidate_row, problem_from_row_terms, problem_from_terms
 from aicir.qas.vqe_loop.benchmark_table import as_float as _as_float
+from aicir.qas.vqe_loop.fair_vqe import optimize_vqe_energy
 
 
 DEFAULT_PRESET = "h2_sto3g_jw_r0735_4q"
@@ -214,6 +216,61 @@ def _route_mutation_weights(args: argparse.Namespace, mutation_types: Sequence[s
         return weights or None
     return None
 
+def _build_shared_vqe_e2_evaluator(
+    args: argparse.Namespace,
+    terms: Sequence[tuple[float, str]],
+    n_qubits: int,
+    reference_energy: float,
+) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
+    """Low-budget shared VQE selector for non-supernet ansatz families."""
+
+    from aicir.qas.core.backend_utils import resolve_qas_backend
+
+    default_problem = problem_from_terms(
+        terms,
+        n_qubits=int(n_qubits),
+        name=str(getattr(args, "preset", "p1_e2")),
+        reference_energy=float(reference_energy),
+    )
+    seed_offsets = _parse_int_tuple(args.proxy_seed_offsets)
+    starts = max(1, len(seed_offsets))
+    max_evals = max(1, int(args.e2_max_evals))
+
+    def evaluator(row: Mapping[str, Any]) -> Mapping[str, Any]:
+        mutable_row = dict(row)
+        architecture = architecture_from_candidate_row(mutable_row)
+        problem = problem_from_row_terms(
+            mutable_row,
+            n_qubits=int(mutable_row.get("n_qubits") or architecture.n_qubits),
+            default_problem=default_problem,
+            default_name_prefix="p1_e2",
+        )
+        backend = resolve_qas_backend(
+            kind=str(getattr(args, "backend", None) or "numpy"),
+            fallback_to_cpu=False,
+            dtype=str(getattr(args, "dtype", None) or "complex128"),
+        )
+        result = optimize_vqe_energy(
+            architecture,
+            problem,
+            seed=int(args.seed),
+            n_starts=starts,
+            evals_per_param=10,
+            max_evaluations=max_evals,
+            budget_override=max_evals,
+            backend=backend,
+            init_mode="random_uniform_pi",
+        )
+        return {
+            "E2": float(result.energy),
+            "E2_nfev": int(result.evaluations),
+            "E2_n_starts": int(result.n_starts),
+            "E2_budget_per_start": result.metadata.get("budget_per_start", max_evals),
+            "E2_selector_engine": "shared_vqe_low_budget",
+        }
+
+    return evaluator
+
 def build_real_evaluator_registry(
     args: argparse.Namespace,
     terms: Sequence[tuple[float, str]],
@@ -222,12 +279,12 @@ def build_real_evaluator_registry(
 ) -> dict[str, Callable[[Mapping[str, Any]], Mapping[str, Any]]]:
     """Build real E2/E5 evaluators for H2/LiH/larger molecular presets."""
 
-    del terms, n_qubits, reference_energy
     from aicir.qas.demos.run_p0_diagnostic import (
         SINGLE_QUBIT_CHOICES,
         build_light_vqe_evaluator_registry,
         build_torch_pauli_evaluator_registry,
     )
+    from aicir.qas.vqe_loop.ansatz_family import ansatz_family_from_row
     from aicir.qas.vqe_loop.p0_supernet_native import build_native_supernet_e5_evaluator
     from aicir.qas.vqe_loop.task_proxy import build_vqe_task_proxy_evaluator
 
@@ -257,7 +314,16 @@ def build_real_evaluator_registry(
                 n_starts=1,
                 proxy_seed_offsets=proxy_seed_offsets,
             )
-        registry["E2"] = light_registry["E2"]
+        supernet_e2 = light_registry["E2"]
+        shared_vqe_e2 = _build_shared_vqe_e2_evaluator(args, terms, n_qubits, reference_energy)
+
+        def e2(row: Mapping[str, Any]) -> Mapping[str, Any]:
+            family = ansatz_family_from_row(row)
+            if family in {"chemistry_excitation", "operator_sequence", "explicit_gate_sequence"}:
+                return shared_vqe_e2(row)
+            return supernet_e2(row)
+
+        registry["E2"] = e2
 
     if "E5" in needed:
         registry["E5"] = build_native_supernet_e5_evaluator(
