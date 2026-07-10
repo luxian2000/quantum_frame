@@ -81,6 +81,7 @@ Everything is built on a backend abstraction so upper layers (`StateVector`, `Ci
 
 ## Conventions
 
+- Never add `Co-Authored-By: Claude ...` (or any Anthropic/Claude attribution) trailers to commit messages in this repo — the user wants no AI attribution appearing in commit history or the GitHub Contributors graph.
 - Run everything from the repo root with `PYTHONPATH=.` (no installed package).
 - Comments/docstrings/READMEs are Chinese — follow the surrounding style.
 - Preset/config names use short canonical forms; old long aliases are intentionally not kept (see CHANGELOG).
