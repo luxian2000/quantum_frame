@@ -1,6 +1,7 @@
 import json
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
 
@@ -391,6 +392,165 @@ class P1VariationTests(unittest.TestCase):
         self.assertEqual(children[0]["n_params"], "2")
         self.assertEqual(child_gene.layers, 2)
         self.assertEqual(child_gene.hf_occupied_qubits, (1, 3))
+
+    def test_generate_mutation_children_caches_chemistry_growth_scores_per_parent(self):
+        from aicir.qas.vqe_loop.p1_evolution import generate_mutation_children
+
+        parent_gene = ChemistryExcitationAnsatzGene(
+            n_qubits=4,
+            hf_occupied_qubits=(1, 3),
+            excitations=(),
+            active_electrons=2,
+            active_spatial_orbitals=2,
+        )
+        parent = row("chem_parent", parent_gene, fair=-1.0)
+        calls = []
+
+        def scorer(gene, candidate):
+            calls.append((tuple(gene.excitations), candidate["type"], tuple(candidate["qubits"])))
+            return -float(len(calls))
+
+        children = generate_mutation_children(
+            [parent],
+            children_per_parent=3,
+            mutation_types=("chemistry_adapt_growth",),
+            chemistry_growth_evaluator=scorer,
+            chemistry_adapt_pool_limit=2,
+            seed=7,
+        )
+
+        self.assertEqual(len(children), 3)
+        self.assertEqual(len(calls), 2)
+
+    def test_chemistry_growth_score_cache_freezes_mutable_mapping_results(self):
+        from aicir.qas.vqe_loop.p1_evolution import generate_mutation_children
+
+        parent_gene = ChemistryExcitationAnsatzGene(
+            n_qubits=4,
+            hf_occupied_qubits=(1, 3),
+            excitations=(),
+            active_electrons=2,
+            active_spatial_orbitals=2,
+        )
+        parent = row("chem_parent", parent_gene, fair=-1.0)
+        shared_score = {}
+        scores = {
+            ("single_excitation", (2, 3)): -1.0,
+            ("single_excitation", (0, 1)): -3.0,
+            ("double_excitation", (0, 2, 1, 3)): -2.0,
+        }
+
+        def scorer(_gene, candidate):
+            shared_score["gradient_proxy"] = scores[(candidate["type"], tuple(candidate["qubits"]))]
+            return shared_score
+
+        children = generate_mutation_children(
+            [parent],
+            children_per_parent=2,
+            mutation_types=("chemistry_adapt_growth",),
+            chemistry_growth_evaluator=scorer,
+            seed=7,
+        )
+
+        self.assertEqual(children[0]["ansatz_gene"], children[1]["ansatz_gene"])
+
+    def test_chemistry_growth_evaluator_reuses_parent_energy(self):
+        from aicir.qas.vqe_loop.p1_evolution import _chemistry_growth_evaluator_from_row
+
+        parent_gene = make_chemistry_gene()
+        parent = row("chem_parent", parent_gene, fair=-1.0)
+        parent["hamiltonian_terms"] = json.dumps([[1.0, "ZIII"]])
+        parent["best_trace"] = json.dumps([{"best_parameters": [1.25]}])
+        evaluator = _chemistry_growth_evaluator_from_row(parent)
+        calls = []
+
+        def fake_energy(architecture, _problem, *, parameters):
+            calls.append((architecture.name, list(parameters)))
+            return float(sum(parameters))
+
+        candidates = (
+            {"type": "single_excitation", "qubits": [2, 3]},
+            {"type": "double_excitation", "qubits": [0, 2, 1, 3]},
+        )
+        with patch("aicir.qas.vqe_loop.fair_vqe.evaluate_vqe_energy", side_effect=fake_energy):
+            for candidate in candidates:
+                evaluator(parent_gene, candidate)
+
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(
+            [parameters for _architecture_name, parameters in calls],
+            [
+                [1.25],
+                [1.25, 0.05],
+                [1.25, -0.05],
+                [1.25, 0.05],
+                [1.25, -0.05],
+            ],
+        )
+
+    def test_chemistry_growth_evaluator_caches_parent_energy_failure(self):
+        from aicir.qas.vqe_loop.p1_evolution import _chemistry_growth_evaluator_from_row
+
+        parent_gene = make_chemistry_gene()
+        parent = row("chem_parent", parent_gene, fair=-1.0)
+        parent["hamiltonian_terms"] = json.dumps([[1.0, "ZIII"]])
+        evaluator = _chemistry_growth_evaluator_from_row(parent)
+        candidates = (
+            {"type": "single_excitation", "qubits": [2, 3]},
+            {"type": "double_excitation", "qubits": [0, 2, 1, 3]},
+        )
+
+        with patch(
+            "aicir.qas.vqe_loop.fair_vqe.evaluate_vqe_energy",
+            side_effect=RuntimeError("base evaluation failed"),
+        ) as mocked_energy:
+            scores = [evaluator(parent_gene, candidate) for candidate in candidates]
+
+        self.assertEqual(scores, [float("inf"), float("inf")])
+        self.assertEqual(mocked_energy.call_count, 1)
+
+    def test_chemistry_energy_cache_uses_full_architecture_payload(self):
+        from aicir.qas.vqe_loop.p1_evolution import _chemistry_growth_evaluator_from_row
+
+        parent_gene = make_chemistry_gene()
+        parent = row("chem_parent", parent_gene, fair=-1.0)
+        parent["hamiltonian_terms"] = json.dumps([[1.0, "ZIII"]])
+        parent["best_trace"] = json.dumps([{"best_parameters": [1.25]}])
+        evaluator = _chemistry_growth_evaluator_from_row(parent)
+        base_payload = parent_gene.to_jsonable()
+        trial_payloads = [
+            {**base_payload, "excitations": base_payload["excitations"] + [candidate]}
+            for candidate in (
+                {"type": "single_excitation", "qubits": [2, 3]},
+                {"type": "double_excitation", "qubits": [0, 2, 1, 3]},
+            )
+        ]
+        architectures = iter(
+            [
+                SimpleNamespace(name="forced_collision", metadata={"ansatz_gene": base_payload}),
+                SimpleNamespace(name="forced_collision", metadata={"ansatz_gene": trial_payloads[0]}),
+                SimpleNamespace(name="forced_collision", metadata={"ansatz_gene": base_payload}),
+                SimpleNamespace(name="forced_collision", metadata={"ansatz_gene": trial_payloads[1]}),
+            ]
+        )
+        calls = []
+
+        def fake_energy(_architecture, _problem, *, parameters):
+            calls.append(list(parameters))
+            return float(sum(parameters))
+
+        candidates = (
+            {"type": "single_excitation", "qubits": [2, 3]},
+            {"type": "double_excitation", "qubits": [0, 2, 1, 3]},
+        )
+        with patch(
+            "aicir.qas.library.ansatz.architecture_from_chemistry_excitation_gene",
+            side_effect=lambda _gene: next(architectures),
+        ), patch("aicir.qas.vqe_loop.fair_vqe.evaluate_vqe_energy", side_effect=fake_energy):
+            for candidate in candidates:
+                evaluator(parent_gene, candidate)
+
+        self.assertEqual(len(calls), 5)
 
     def test_chemistry_adapt_growth_scans_pool_and_picks_best_excitation(self):
         from aicir.qas.vqe_loop.p1_evolution import mutate_gene

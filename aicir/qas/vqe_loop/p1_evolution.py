@@ -510,6 +510,7 @@ def _finite_difference_chemistry_growth_score(
     *,
     prefix_parameters: Sequence[float] | None = None,
     epsilon: float = 0.05,
+    energy_cache: dict[tuple[str, tuple[float, ...]], float | Exception] | None = None,
 ) -> float:
     from aicir.qas.library.ansatz import architecture_from_chemistry_excitation_gene
     from aicir.qas.problems.hamiltonians import VQEProblem
@@ -535,10 +536,36 @@ def _finite_difference_chemistry_growth_score(
     prefix = parsed_prefix[: gene.layers]
     if len(prefix) < gene.layers:
         prefix.extend([0.0] * (gene.layers - len(prefix)))
+
+    def evaluate(architecture, parameters: Sequence[float]) -> float:
+        parsed_parameters = tuple(float(value) for value in parameters)
+        metadata = dict(getattr(architecture, "metadata", {}) or {})
+        ansatz_payload = metadata.get("ansatz_gene")
+        architecture_key = (
+            json.dumps(ansatz_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            if ansatz_payload is not None
+            else str(architecture.name)
+        )
+        key = (architecture_key, parsed_parameters)
+        if energy_cache is not None and key in energy_cache:
+            cached = energy_cache[key]
+            if isinstance(cached, Exception):
+                raise cached
+            return float(cached)
+        try:
+            energy = float(evaluate_vqe_energy(architecture, problem, parameters=parsed_parameters))
+        except Exception as exc:
+            if energy_cache is not None:
+                energy_cache[key] = exc
+            raise
+        if energy_cache is not None:
+            energy_cache[key] = energy
+        return energy
+
     try:
-        base = evaluate_vqe_energy(base_architecture, problem, parameters=prefix)
-        plus = evaluate_vqe_energy(trial_architecture, problem, parameters=prefix + [float(epsilon)])
-        minus = evaluate_vqe_energy(trial_architecture, problem, parameters=prefix + [-float(epsilon)])
+        base = evaluate(base_architecture, prefix)
+        plus = evaluate(trial_architecture, prefix + [float(epsilon)])
+        minus = evaluate(trial_architecture, prefix + [-float(epsilon)])
     except Exception:
         return float("inf")
     gradient = abs((float(plus) - float(minus)) / (2.0 * float(epsilon)))
@@ -551,6 +578,7 @@ def _chemistry_growth_evaluator_from_row(row: Mapping[str, Any]) -> ChemistryGro
     if not terms:
         return None
     prefix_parameters = _best_parameters_from_row(row)
+    energy_cache: dict[tuple[str, tuple[float, ...]], float | Exception] = {}
 
     def evaluate(gene: ChemistryExcitationAnsatzGene, candidate_excitation: Mapping[str, Any]) -> float:
         return _finite_difference_chemistry_growth_score(
@@ -558,6 +586,7 @@ def _chemistry_growth_evaluator_from_row(row: Mapping[str, Any]) -> ChemistryGro
             candidate_excitation,
             terms,
             prefix_parameters=prefix_parameters,
+            energy_cache=energy_cache,
         )
 
     return evaluate
@@ -580,6 +609,25 @@ def _chemistry_excitation_pool(gene: ChemistryExcitationAnsatzGene) -> tuple[dic
 
 def _canonical_excitation(excitation: Mapping[str, Any]) -> tuple[str, tuple[int, ...]]:
     return str(excitation.get("type", "")).strip().lower(), tuple(int(qubit) for qubit in excitation.get("qubits", ()))
+
+
+def _memoized_chemistry_growth_evaluator(
+    evaluator: ChemistryGrowthEvaluator | None,
+) -> ChemistryGrowthEvaluator | None:
+    if evaluator is None:
+        return None
+    score_cache: dict[tuple[str, tuple[str, tuple[int, ...]]], float] = {}
+
+    def evaluate(
+        gene: ChemistryExcitationAnsatzGene,
+        candidate_excitation: Mapping[str, Any],
+    ) -> float | Mapping[str, Any]:
+        key = (gene.label(), _canonical_excitation(candidate_excitation))
+        if key not in score_cache:
+            score_cache[key] = _growth_score_value(evaluator(gene, candidate_excitation))
+        return score_cache[key]
+
+    return evaluate
 
 
 def _limit_chemistry_candidates_by_type(
@@ -972,7 +1020,9 @@ def generate_mutation_children(
     for parent_index, parent_row in enumerate(parent_rows):
         parent_gene = _gene_from_row(parent_row)
         row_growth_evaluator = operator_growth_evaluator or _operator_growth_evaluator_from_row(parent_row)
-        row_chemistry_growth_evaluator = chemistry_growth_evaluator or _chemistry_growth_evaluator_from_row(parent_row)
+        row_chemistry_growth_evaluator = _memoized_chemistry_growth_evaluator(
+            chemistry_growth_evaluator or _chemistry_growth_evaluator_from_row(parent_row)
+        )
         row_operator_pool = operator_pool or _operator_pool_from_row_hamiltonian(parent_row, parent_gene.n_qubits)
         for child_index in range(int(children_per_parent)):
             result: MutationResult | None = None
