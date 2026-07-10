@@ -16,6 +16,28 @@ REPO_ROOT=$(cd "$SCRIPT_DIR/../../.." && pwd)
 cd "$REPO_ROOT"
 
 PYTHON=${PYTHON:-python}
+if [[ "${ROUNDS:-}" != "0" ]]; then
+eval "$($PYTHON - <<'PY'
+from aicir.qas.vqe_loop.growth_routes import LINE_B_CHEMISTRY_EXCITATION as config
+
+print(f"ROUTE_ROUNDS={config.rounds}")
+print(f"ROUTE_PARENT_COUNT={config.parent_count}")
+print(f"ROUTE_CHILDREN_PER_PARENT={config.children_per_parent}")
+print(f"ROUTE_FAIR_TOP_K={config.fair_top_k}")
+print(f"ROUTE_GENETIC_WEIGHT={config.genetic_weight}")
+print(f"ROUTE_ADAPT_WEIGHT={config.adapt_growth_weight}")
+print(f"ROUTE_ADAPT_APPEND_K={config.chemistry_adapt_append_k}")
+print(f"ROUTE_ADAPT_POOL_LIMIT={config.chemistry_adapt_pool_limit}")
+print(f"ROUTE_MAX_LAYERS={config.max_layers}")
+print(f"ROUTE_MUTATION_TYPES={','.join(config.mutation_types)}")
+print(f"ROUTE_SELECTOR={config.selector}")
+print(f"ROUTE_BASELINE_SELECTORS={','.join(config.baseline_selectors)}")
+print(f"ROUTE_EARLY_STOP_EPSILON={config.early_stop_epsilon}")
+print(f"ROUTE_EARLY_STOP_PATIENCE={config.early_stop_patience}")
+print(f"ROUTE_MAX_TOTAL_FAIR_CALLS={config.max_total_fair_calls}")
+PY
+)"
+fi
 HAM_PATH=${1:-${HAM_PATH:-}}
 OUT_DIR=${OUT_DIR:-outputs/ch4_18q_lineb_npu4}
 SKIP_P0=${SKIP_P0:-0}
@@ -30,23 +52,23 @@ P0_MAX_EXCITATIONS=${P0_MAX_EXCITATIONS:-6}
 P0_SEED=${P0_SEED:-17}
 
 # LineB P1 defaults for 18q: more ADAPT than genetic, wider than smoke defaults.
-ROUNDS=${ROUNDS:-6}
-PARENT_COUNT=${PARENT_COUNT:-8}
-CHILDREN_PER_PARENT=${CHILDREN_PER_PARENT:-16}
-FAIR_TOP_K=${FAIR_TOP_K:-8}
-CHEMISTRY_GENETIC_WEIGHT=${CHEMISTRY_GENETIC_WEIGHT:-0.3}
-CHEMISTRY_ADAPT_GROWTH_WEIGHT=${CHEMISTRY_ADAPT_GROWTH_WEIGHT:-0.7}
+ROUNDS=${ROUNDS:-${ROUTE_ROUNDS:-0}}
+PARENT_COUNT=${PARENT_COUNT:-${ROUTE_PARENT_COUNT:-0}}
+CHILDREN_PER_PARENT=${CHILDREN_PER_PARENT:-${ROUTE_CHILDREN_PER_PARENT:-0}}
+FAIR_TOP_K=${FAIR_TOP_K:-${ROUTE_FAIR_TOP_K:-0}}
+CHEMISTRY_GENETIC_WEIGHT=${CHEMISTRY_GENETIC_WEIGHT:-${ROUTE_GENETIC_WEIGHT:-0.0}}
+CHEMISTRY_ADAPT_GROWTH_WEIGHT=${CHEMISTRY_ADAPT_GROWTH_WEIGHT:-${ROUTE_ADAPT_WEIGHT:-0.0}}
 CHEMISTRY_GROWTH_MODE=${CHEMISTRY_GROWTH_MODE:-mixed}
-CHEMISTRY_ADAPT_APPEND_K=${CHEMISTRY_ADAPT_APPEND_K:-4}
-CHEMISTRY_ADAPT_POOL_LIMIT=${CHEMISTRY_ADAPT_POOL_LIMIT:-24}
-CHEMISTRY_MAX_EXCITATIONS=${CHEMISTRY_MAX_EXCITATIONS:-32}
-MUTATION_TYPES=${MUTATION_TYPES:-chemistry_insert,chemistry_change,chemistry_swap,chemistry_delete,chemistry_adapt_growth}
-SELECTOR=${SELECTOR:-e2}
-BASELINE_SELECTORS=${BASELINE_SELECTORS:-E2}
+CHEMISTRY_ADAPT_APPEND_K=${CHEMISTRY_ADAPT_APPEND_K:-${ROUTE_ADAPT_APPEND_K:-1}}
+CHEMISTRY_ADAPT_POOL_LIMIT=${CHEMISTRY_ADAPT_POOL_LIMIT:-${ROUTE_ADAPT_POOL_LIMIT:-0}}
+CHEMISTRY_MAX_EXCITATIONS=${CHEMISTRY_MAX_EXCITATIONS:-${ROUTE_MAX_LAYERS:-0}}
+MUTATION_TYPES=${MUTATION_TYPES:-${ROUTE_MUTATION_TYPES:-chemistry_adapt_growth}}
+SELECTOR=${SELECTOR:-${ROUTE_SELECTOR:-e2}}
+BASELINE_SELECTORS=${BASELINE_SELECTORS:-${ROUTE_BASELINE_SELECTORS:-E2}}
 
-EARLY_STOP_EPSILON=${EARLY_STOP_EPSILON:-1e-4}
-EARLY_STOP_PATIENCE=${EARLY_STOP_PATIENCE:-3}
-MAX_TOTAL_FAIR_CALLS=${MAX_TOTAL_FAIR_CALLS:-100}
+EARLY_STOP_EPSILON=${EARLY_STOP_EPSILON:-${ROUTE_EARLY_STOP_EPSILON:-1e-4}}
+EARLY_STOP_PATIENCE=${EARLY_STOP_PATIENCE:-${ROUTE_EARLY_STOP_PATIENCE:-0}}
+MAX_TOTAL_FAIR_CALLS=${MAX_TOTAL_FAIR_CALLS:-${ROUTE_MAX_TOTAL_FAIR_CALLS:-0}}
 
 NUM_SHARDS=${NUM_SHARDS:-4}
 DEVICE_OFFSET=${DEVICE_OFFSET:-0}
@@ -171,7 +193,22 @@ PY
 cp "$P0_LABELS" "$CURRENT_LABELS"
 fi
 
+export CURRENT_LABELS
 best_energy=""
+if [[ "$ROUNDS" -gt 0 ]]; then
+best_energy="$($PYTHON - <<'PY'
+import os
+from aicir.qas.vqe_loop.benchmark_table import as_float, read_csv_rows
+
+energies = [
+    float(row["fair_best_energy"])
+    for row in read_csv_rows(os.environ["CURRENT_LABELS"])
+    if as_float(row.get("fair_best_energy")) is not None
+]
+print("" if not energies else f"{min(energies):.12f}")
+PY
+)"
+fi
 plateau_count=0
 fair_calls_so_far=0
 stop_reason="max_rounds"
@@ -181,6 +218,11 @@ for round in $(seq 1 "$ROUNDS"); do
     stop_reason="max_total_fair_calls"
     break
   fi
+  remaining_fair_calls=$((MAX_TOTAL_FAIR_CALLS - fair_calls_so_far))
+  round_fair_top_k="$FAIR_TOP_K"
+  if [[ "$round_fair_top_k" -gt "$remaining_fair_calls" ]]; then
+    round_fair_top_k="$remaining_fair_calls"
+  fi
 
   ROUND_DIR="$OUT_DIR/p1_round${round}"
   mkdir -p "$ROUND_DIR"
@@ -189,11 +231,12 @@ for round in $(seq 1 "$ROUNDS"); do
     --preset ch4_18q \
     --hamiltonian-file "$HAM_PATH" \
     --bootstrap-labels-csv "$CURRENT_LABELS" \
+    --known-unlabeled-csv "$CURRENT_LABELS" \
     --output-dir "$ROUND_DIR" \
     --rounds 1 \
     --parent-count "$PARENT_COUNT" \
     --children-per-parent "$CHILDREN_PER_PARENT" \
-    --fair-top-k "$FAIR_TOP_K" \
+    --fair-top-k "$round_fair_top_k" \
     --growth-route line_b_chemistry_excitation \
     --chemistry-growth-mode "$CHEMISTRY_GROWTH_MODE" \
     --chemistry-genetic-weight "$CHEMISTRY_GENETIC_WEIGHT" \
@@ -209,6 +252,8 @@ for round in $(seq 1 "$ROUNDS"); do
     --device "$DEVICE" \
     --e1-max-evals "$E1_MAX_EVALS" \
     --e2-max-evals "$E2_MAX_EVALS" \
+    --backend "$BACKEND" \
+    --dtype "$DTYPE" \
     --seed $((P0_SEED + round)) \
     --batch-id "ch4_18q_lineb_r${round}" \
     --disable-training-free-pruning
@@ -217,6 +262,11 @@ for round in $(seq 1 "$ROUNDS"); do
   LABELS="$ROUND_DIR/labels_p1.csv"
   WORK_DIR="$ROUND_DIR/p1_npu4_shards"
   SUMMARY="$ROUND_DIR/p1_npu4_shard_summary.json"
+
+  if [[ ! -f "$QUEUE" ]]; then
+    stop_reason="no_new_child"
+    break
+  fi
 
   "$PYTHON" -m aicir.qas.vqe_loop.shard_scheduler \
     --queue "$QUEUE" \
@@ -254,7 +304,7 @@ old_best_raw = os.environ.get("best_energy", "")
 old_best = None if old_best_raw == "" else float(old_best_raw)
 epsilon = float(os.environ["EARLY_STOP_EPSILON"])
 plateau = int(os.environ.get("plateau_count", "0"))
-fair_calls = int(os.environ.get("fair_calls_so_far", "0")) + len(energies)
+fair_calls = int(os.environ.get("fair_calls_so_far", "0")) + len(labels)
 if round_best is not None:
     if old_best is None:
         new_best = round_best

@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
-from aicir.qas.library.ansatz import OperatorSequenceAnsatzGene, SupernetAnsatzGene
+from aicir.qas.library.ansatz import ChemistryExcitationAnsatzGene, OperatorSequenceAnsatzGene, SupernetAnsatzGene
 
 
 def make_gene(layers=2):
@@ -85,6 +85,41 @@ def control_row(architecture_id, score="-10.0"):
 
 
 class P1RoundTests(unittest.TestCase):
+    def test_chemistry_route_rejects_non_family_aware_task_proxy(self):
+        from aicir.qas.vqe_loop.p1_round import plan_p1_round
+
+        gene = ChemistryExcitationAnsatzGene(
+            n_qubits=4,
+            hf_occupied_qubits=(1, 3),
+            excitations=(),
+            active_electrons=2,
+            active_spatial_orbitals=2,
+        )
+        parent = {
+            "architecture_id": "chem_parent",
+            "canonical_arch_hash": json.dumps(gene.to_jsonable(), sort_keys=True),
+            "protocol_version": "fair_vqe_protocol_v2",
+            "label_status": "completed",
+            "n_qubits": "4",
+            "hamiltonian_id": "toy_chem",
+            "hamiltonian_class": "molecular",
+            "hamiltonian_terms": json.dumps([[-1.0, "ZIII"]]),
+            "family": "chemistry_excitation",
+            "ansatz_gene": json.dumps(gene.to_jsonable()),
+            "fair_best_energy": "-1.0",
+        }
+
+        with self.assertRaisesRegex(ValueError, "not family-aware for chemistry_excitation"):
+            plan_p1_round(
+                labeled_rows=[parent],
+                parent_count=1,
+                children_per_parent=1,
+                fair_top_k=1,
+                selector="task_proxy",
+                mutation_types=("chemistry_insert",),
+                baseline_selector_fields=(),
+            )
+
     def test_protocol_schema_preserves_p1_metadata_columns(self):
         from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS
 
@@ -132,6 +167,53 @@ class P1RoundTests(unittest.TestCase):
         self.assertIn("YY", child_gene.operators)
         self.assertEqual(plan.queue_rows[0]["source"], "p1_fallback")
 
+    def test_operator_route_filters_out_lower_energy_supernet_parent(self):
+        from aicir.qas.vqe_loop.p1_round import plan_p1_round
+
+        plan = plan_p1_round(
+            labeled_rows=[
+                labeled_row("wrong_family_but_lower_energy", -100.0),
+                operator_labeled_row("operator_parent", -1.0, operators=("XI",)),
+            ],
+            parent_count=1,
+            children_per_parent=1,
+            fair_top_k=1,
+            evaluator_registry={"E2": lambda _row: {"E2": -1.0}},
+            selector="e2",
+            cheap_eval_selector="e2",
+            mutation_types=("operator_insert",),
+            operator_pool=("YY",),
+            k_min=99,
+            selection_policy="no_regret",
+            baseline_selector_fields=("E2",),
+        )
+
+        self.assertEqual(plan.child_rows[0]["parent_architecture_id"], "operator_parent")
+
+    def test_plan_rejects_multiple_hamiltonian_scopes_for_active_family(self):
+        from aicir.qas.vqe_loop.p1_round import plan_p1_round
+
+        first = operator_labeled_row("operator_a", -2.0, operators=("XI",))
+        first["hamiltonian_id"] = "task_a"
+        second = operator_labeled_row("operator_b", -1.0, operators=("XI",))
+        second["hamiltonian_id"] = "task_b"
+
+        with self.assertRaisesRegex(ValueError, "multiple Hamiltonian task scopes"):
+            plan_p1_round(
+                labeled_rows=[first, second],
+                parent_count=1,
+                children_per_parent=1,
+                fair_top_k=1,
+                evaluator_registry={"E2": lambda _row: {"E2": -1.0}},
+                selector="e2",
+                cheap_eval_selector="e2",
+                mutation_types=("operator_insert",),
+                operator_pool=("YY",),
+                k_min=99,
+                selection_policy="no_regret",
+                baseline_selector_fields=("E2",),
+            )
+
     def test_operator_sequence_selector_e5_downgrades_to_e2_when_e5_is_not_applicable(self):
         from aicir.qas.vqe_loop.p1_round import plan_p1_round
 
@@ -164,6 +246,28 @@ class P1RoundTests(unittest.TestCase):
         self.assertEqual(plan.fallback_rows[0]["fallback_selector"], "E2")
         self.assertEqual(plan.summary["cheap_eval"]["p1_fallback_field"], "E5")
         self.assertEqual(plan.summary["cheap_eval"]["p1_fallback_downgrade_calls"], 1)
+
+    def test_operator_route_deduplicates_e5_baseline_that_downgrades_to_e2(self):
+        from aicir.qas.vqe_loop.p1_round import plan_p1_round
+
+        plan = plan_p1_round(
+            labeled_rows=[operator_labeled_row("parent", -1.0)],
+            parent_count=1,
+            children_per_parent=1,
+            fair_top_k=1,
+            evaluator_registry={"E2": lambda _row: {"E2": -2.0}},
+            selector="e2",
+            cheap_eval_selector="e2",
+            mutation_types=("operator_insert",),
+            operator_pool=("YY",),
+            k_min=99,
+            selection_policy="no_regret",
+            baseline_selector_fields=("E2", "E5"),
+        )
+
+        self.assertEqual(set(plan.baseline_queues), {"random", "E2"})
+        self.assertEqual(plan.summary["baseline_selectors"]["requested"], ["E2", "E5"])
+        self.assertEqual(plan.summary["baseline_selectors"]["effective"], ["E2"])
 
     def test_plan_p1_round_accepts_task_proxy_as_independent_selector(self):
         from aicir.qas.vqe_loop.p1_round import plan_p1_round

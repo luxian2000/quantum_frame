@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from aicir.qas.vqe_loop.ansatz_family import summarize_ansatz_families
+from aicir.qas.vqe_loop.ansatz_family import (
+    ansatz_family_capabilities,
+    ansatz_family_from_row,
+    summarize_ansatz_families,
+)
 from aicir.qas.vqe_loop.benchmark_table import write_csv_rows
 from aicir.qas.vqe_loop.oracle import predict_fair_energy
 from aicir.qas.vqe_loop.p1_selection import (
@@ -34,6 +38,7 @@ from aicir.qas.vqe_loop.benchmark_table import (
     merge_quota_candidates,
     rank_with_zero_cost_soft_prefilter,
     resolve_p1_selector_fields,
+    task_key,
 )
 from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS, LabelSource, LabelStatus, ZeroCostStatus
 from aicir.qas.vqe_loop.training_free import annotate_training_free_rows
@@ -52,6 +57,44 @@ class P1RoundPlan:
     fallback_rows: list[dict[str, Any]]
     baseline_queues: dict[str, list[dict[str, Any]]]
     summary: dict[str, Any]
+
+
+def _mutation_family(mutation_types: Sequence[str]) -> str:
+    families: set[str] = set()
+    for mutation_type in mutation_types:
+        normalized = str(mutation_type).strip().lower()
+        if normalized.startswith("operator_"):
+            families.add("operator_sequence")
+        elif normalized.startswith("chemistry_"):
+            families.add("chemistry_excitation")
+        else:
+            families.add("supernet_native")
+    if len(families) != 1:
+        raise ValueError(f"mutation types must belong to one ansatz family, got {sorted(families)}")
+    return next(iter(families))
+
+
+def _scope_active_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    family: str,
+    active_task: str | None = None,
+) -> list[dict[str, Any]]:
+    scoped = [dict(row) for row in rows if ansatz_family_from_row(row) == family]
+    if active_task is not None:
+        scoped = [row for row in scoped if task_key(row) == active_task]
+    return scoped
+
+
+def _effective_baseline_fields(fields: Sequence[str], *, family: str) -> tuple[str, ...]:
+    effective: list[str] = []
+    for field in fields:
+        normalized = str(field).strip().upper()
+        if normalized == "E5" and family != "supernet_native":
+            normalized = "E2"
+        if normalized and normalized not in effective:
+            effective.append(normalized)
+    return tuple(effective)
 
 
 
@@ -84,6 +127,7 @@ def plan_p1_round(
     known_unlabeled_rows: Sequence[Mapping[str, Any]] = (),
     control_rows: Sequence[Mapping[str, Any]] = (),
     parent_count: int,
+    diversity_count: int = 0,
     children_per_parent: int,
     fair_top_k: int,
     selector: str = "e2",
@@ -96,8 +140,11 @@ def plan_p1_round(
     mutation_types: Sequence[str] = ("gate_mutation", "connectivity_mutation", "layer_mutation", "depth_mutation"),
     mutation_weights: Mapping[str, float] | None = None,
     operator_pool: Sequence[str] | None = None,
+    operator_pool_limit: int | None = None,
     chemistry_adapt_append_k: int = 1,
     chemistry_adapt_pool_limit: int | None = None,
+    growth_backend: Any | None = None,
+    min_layers: int = 1,
     max_layers: int | None = None,
     seed: int = 0,
     baseline_selector_fields: Sequence[str] = ("E2", "E5"),
@@ -127,23 +174,56 @@ def plan_p1_round(
     if normalized_selection_policy not in {"no_regret", "no_regret_lite", "quota"}:
         raise ValueError(f"unsupported P1 selection_policy: {selection_policy}")
     oracle_extra_k = max(0, int(oracle_extra_top_k)) if normalized_selection_policy == "no_regret_lite" else 0
-    task = _task_context(list(labeled_rows) + list(known_unlabeled_rows))
-    parents = select_parent_rows(labeled_rows, count=int(parent_count))
+    active_family = _mutation_family(mutation_types)
+    requested_baseline_fields = tuple(str(field).strip().upper() for field in baseline_selector_fields if str(field).strip())
+    baseline_selector_fields = _effective_baseline_fields(requested_baseline_fields, family=active_family)
+    family_labeled_rows = _scope_active_rows(labeled_rows, family=active_family)
+    task_scopes = {task_key(row) for row in family_labeled_rows if _as_float(row.get("fair_best_energy")) is not None}
+    if len(task_scopes) > 1:
+        raise ValueError(
+            "P1 input contains multiple Hamiltonian task scopes for the active ansatz family; "
+            "filter the bootstrap table to one task before planning"
+        )
+    active_task = next(iter(task_scopes), None)
+    scoped_labeled_rows = _scope_active_rows(
+        family_labeled_rows,
+        family=active_family,
+        active_task=active_task,
+    )
+    scoped_known_unlabeled_rows = _scope_active_rows(
+        known_unlabeled_rows,
+        family=active_family,
+        active_task=active_task,
+    )
+    scoped_control_rows = _scope_active_rows(
+        control_rows,
+        family=active_family,
+        active_task=active_task,
+    )
+    task = _task_context(scoped_labeled_rows + scoped_known_unlabeled_rows)
+    parents = select_parent_rows(
+        scoped_labeled_rows,
+        count=int(parent_count),
+        diversity_count=int(diversity_count),
+    )
     child_rows = generate_mutation_children(
         parents,
         children_per_parent=int(children_per_parent),
         mutation_types=tuple(mutation_types),
         mutation_weights=mutation_weights,
         operator_pool=operator_pool,
+        operator_pool_limit=operator_pool_limit,
         chemistry_adapt_append_k=int(chemistry_adapt_append_k),
         chemistry_adapt_pool_limit=chemistry_adapt_pool_limit,
+        growth_backend=growth_backend,
+        min_layers=int(min_layers),
         max_layers=max_layers,
         seed=int(seed),
     )
     dedup = deduplicate_children(
         child_rows,
-        labeled_rows=labeled_rows,
-        known_unlabeled_rows=known_unlabeled_rows,
+        labeled_rows=scoped_labeled_rows,
+        known_unlabeled_rows=scoped_known_unlabeled_rows,
     )
     annotated_children = (
         annotate_training_free_rows(
@@ -181,7 +261,7 @@ def plan_p1_round(
     for child in active_children:
         prediction = predict_fair_energy(
             child,
-            labeled_rows=labeled_rows,
+            labeled_rows=scoped_labeled_rows,
             k_min=int(k_min),
             d_max=float(d_max),
             max_neighbor_std=oracle_max_neighbor_std,
@@ -209,9 +289,26 @@ def plan_p1_round(
             abstain_rows.append(enriched)
 
     selector_fields = resolve_p1_selector_fields(selector, cheap_eval_selector=cheap_eval_selector)
+    family_evaluators = ansatz_family_capabilities(active_family)["evaluators"]
+    for selector_field in selector_fields:
+        required_fields = (
+            ("E2", "VQE_TASK_PROXY", "GNN_PROXY")
+            if selector_field == "ENSEMBLE"
+            else (selector_field,)
+        )
+        unsupported = [
+            field
+            for field in required_fields
+            if field in {"VQE_TASK_PROXY", "GNN_PROXY"} and not family_evaluators.get(field, False)
+        ]
+        if unsupported:
+            raise ValueError(
+                f"selector {selector_field} is not family-aware for {active_family}: "
+                f"unsupported components {unsupported}"
+            )
     fallback_field = selector_fields[0]
     score_cache: dict[tuple[str, str], dict[str, Any]] = {}
-    baseline_candidate_pool = _candidate_pool(active_children, control_rows)
+    baseline_candidate_pool = _candidate_pool(active_children, scoped_control_rows)
     quota = choose_quota(
         k,
         oracle_trusted_count=len(oracle_rows),
@@ -367,6 +464,10 @@ def plan_p1_round(
         "planned_total": len(queue_rows),
         "source_counts": _source_counts(queue_rows),
         "baseline_candidate_pool_size": cheap_eval_baseline_pool_size,
+        "baseline_selectors": {
+            "requested": list(requested_baseline_fields),
+            "effective": list(baseline_selector_fields),
+        },
         "ansatz_families": summarize_ansatz_families(active_children),
         "budget": budget_summary,
         "cheap_eval": {

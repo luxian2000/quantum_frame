@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
 from aicir.qas.library.ansatz import SupernetAnsatzGene
-from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS
+from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS, read_csv_rows, write_csv_rows
 
 
 def make_gene():
@@ -49,6 +49,37 @@ def write_bootstrap_labels(path: Path) -> None:
 
 
 class P1RoundDemoTests(unittest.TestCase):
+    def test_queue_paths_include_effective_downgraded_baseline(self):
+        from aicir.qas.demos.run_p1_round_demo import _queue_paths
+
+        paths = {
+            "queue": Path("p1.csv"),
+            "baseline_random": Path("random.csv"),
+            "baseline_E2": Path("e2.csv"),
+        }
+
+        queues = _queue_paths(paths, ("E5",))
+
+        self.assertEqual(queues, {"p1": "p1.csv", "random": "random.csv", "E2": "e2.csv"})
+
+    def test_failed_label_rows_are_added_to_task_scoped_known_unlabeled(self):
+        from aicir.qas.demos.run_p1_round_demo import _append_unique_known_unlabeled
+
+        known = []
+        failed_a = {
+            "architecture_id": "failed_a",
+            "canonical_arch_hash": "same",
+            "hamiltonian_id": "task_a",
+            "protocol_version": "fair_vqe_protocol_v2",
+            "family": "operator_sequence",
+            "label_status": "failed_retryable",
+        }
+        completed = {**failed_a, "architecture_id": "completed", "fair_best_energy": "-2.0"}
+        failed_b = {**failed_a, "architecture_id": "failed_b", "hamiltonian_id": "task_b"}
+
+        _append_unique_known_unlabeled(known, [failed_a, completed, failed_a, failed_b])
+
+        self.assertEqual([row["architecture_id"] for row in known], ["failed_a", "failed_b"])
     def test_load_hamiltonian_for_demo_supports_pauli_terms_spec_file(self):
         from aicir.qas.demos.run_p1_round_demo import load_hamiltonian_for_demo
 
@@ -415,6 +446,8 @@ class P1RoundDemoTests(unittest.TestCase):
                     str(output),
                     "--rounds",
                     "3",
+                    "--early-stop-patience",
+                    "0",
                     "--parent-count",
                     "1",
                     "--children-per-parent",
@@ -495,7 +528,7 @@ class P1RoundDemoTests(unittest.TestCase):
                 hamiltonian_loader=lambda *_args, **_kwargs: (((-1.0, "ZI"), (-0.5, "IZ")), 2, -3.0),
             )
 
-        self.assertEqual(len(result["rounds"]), 3)
+        self.assertEqual(len(result["rounds"]), 2)
         self.assertEqual(result["summary"]["stop_reason"], "plateau")
 
     def test_no_regret_lite_multi_round_summary_uses_actual_plan_fair_calls(self):
@@ -592,6 +625,8 @@ class P1RoundDemoTests(unittest.TestCase):
                     str(root / "demo"),
                     "--rounds",
                     "5",
+                    "--early-stop-patience",
+                    "0",
                     "--parent-count",
                     "1",
                     "--children-per-parent",
@@ -612,6 +647,141 @@ class P1RoundDemoTests(unittest.TestCase):
         self.assertEqual(len(result["rounds"]), 2)
         self.assertEqual(result["summary"]["stop_reason"], "max_total_fair_calls")
         self.assertEqual(result["summary"]["actual_fair_calls_per_strategy"]["p1"], 2)
+
+    def test_demo_shrinks_last_round_to_remaining_fair_budget(self):
+        from aicir.qas.demos import run_p1_round_demo as demo
+
+        def evaluator_builder(_args, _terms, _n_qubits, _reference_energy):
+            return {"E2": lambda _row: {"E2": -1.0}, "E5": lambda _row: {"E5": -1.0}}
+
+        def labeling_runner(*, queue_path, output_path, **_kwargs):
+            rows = read_csv_rows(queue_path)
+            for row in rows:
+                row["label_status"] = "completed"
+                row["fair_best_energy"] = "-2.0"
+            write_csv_rows(output_path, rows, fieldnames=BENCHMARK_TABLE_FIELDS)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bootstrap = root / "bootstrap_labels.csv"
+            write_bootstrap_labels(bootstrap)
+            result = demo.main(
+                [
+                    "--bootstrap-labels-csv", str(bootstrap),
+                    "--output-dir", str(root / "demo"),
+                    "--rounds", "2",
+                    "--parent-count", "1",
+                    "--children-per-parent", "4",
+                    "--fair-top-k", "3",
+                    "--baseline-selectors", "",
+                    "--run-labeling",
+                    "--max-total-fair-calls", "2",
+                    "--label-n-seeds", "1",
+                ],
+                evaluator_registry_builder=evaluator_builder,
+                labeling_runner=labeling_runner,
+                hamiltonian_loader=lambda *_args, **_kwargs: (((-1.0, "ZI"), (-0.5, "IZ")), 2, -3.0),
+            )
+
+        self.assertEqual(result["summary"]["rounds_completed"], 1)
+        self.assertEqual(result["summary"]["p1_plan_fair_calls_by_round"], [2])
+        self.assertEqual(result["summary"]["actual_fair_calls_per_strategy"]["p1"], 2)
+        self.assertEqual(result["summary"]["stop_reason"], "max_total_fair_calls")
+
+    def test_demo_zero_fair_budget_stops_without_round_result_crash(self):
+        from aicir.qas.demos import run_p1_round_demo as demo
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bootstrap = root / "bootstrap_labels.csv"
+            write_bootstrap_labels(bootstrap)
+            result = demo.main(
+                [
+                    "--bootstrap-labels-csv", str(bootstrap),
+                    "--output-dir", str(root / "demo"),
+                    "--rounds", "2",
+                    "--selector", "e2",
+                    "--run-labeling",
+                    "--max-total-fair-calls", "0",
+                ],
+                evaluator_registry_builder=lambda *_args: {"E2": lambda _row: {"E2": -1.0}},
+                labeling_runner=lambda **_kwargs: self.fail("labeling must not run"),
+                hamiltonian_loader=lambda *_args, **_kwargs: (((-1.0, "ZI"), (-0.5, "IZ")), 2, -3.0),
+            )
+
+        self.assertEqual(result["rounds"], [])
+        self.assertEqual(result["queues"], {})
+        self.assertEqual(result["summary"]["stop_reason"], "max_total_fair_calls")
+
+    def test_demo_counts_failed_label_rows_against_fair_budget(self):
+        from aicir.qas.demos import run_p1_round_demo as demo
+
+        def labeling_runner(*, queue_path, output_path, **_kwargs):
+            rows = read_csv_rows(queue_path)
+            for index, row in enumerate(rows):
+                row["label_status"] = "completed" if index == 0 else "failed_retryable"
+                row["fair_best_energy"] = "-2.0" if index == 0 else ""
+            write_csv_rows(output_path, rows, fieldnames=BENCHMARK_TABLE_FIELDS)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bootstrap = root / "bootstrap_labels.csv"
+            write_bootstrap_labels(bootstrap)
+            result = demo.main(
+                [
+                    "--bootstrap-labels-csv", str(bootstrap),
+                    "--output-dir", str(root / "demo"),
+                    "--rounds", "2",
+                    "--parent-count", "1",
+                    "--children-per-parent", "2",
+                    "--fair-top-k", "2",
+                    "--selector", "e2",
+                    "--baseline-selectors", "",
+                    "--run-labeling",
+                    "--max-total-fair-calls", "2",
+                ],
+                evaluator_registry_builder=lambda *_args: {"E2": lambda _row: {"E2": -1.0}},
+                labeling_runner=labeling_runner,
+                hamiltonian_loader=lambda *_args, **_kwargs: (((-1.0, "ZI"), (-0.5, "IZ")), 2, -3.0),
+            )
+
+        self.assertEqual(result["summary"]["actual_fair_calls_per_strategy"]["p1"], 2)
+        self.assertEqual(result["summary"]["stop_reason"], "max_total_fair_calls")
+
+    def test_demo_early_stop_compares_first_round_against_bootstrap_best(self):
+        from aicir.qas.demos import run_p1_round_demo as demo
+
+        def labeling_runner(*, queue_path, output_path, **_kwargs):
+            rows = read_csv_rows(queue_path)
+            for row in rows:
+                row["label_status"] = "completed"
+                row["fair_best_energy"] = "-2.0"
+            write_csv_rows(output_path, rows, fieldnames=BENCHMARK_TABLE_FIELDS)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bootstrap = root / "bootstrap_labels.csv"
+            write_bootstrap_labels(bootstrap)
+            result = demo.main(
+                [
+                    "--bootstrap-labels-csv", str(bootstrap),
+                    "--output-dir", str(root / "demo"),
+                    "--rounds", "5",
+                    "--parent-count", "1",
+                    "--children-per-parent", "1",
+                    "--fair-top-k", "1",
+                    "--selector", "e2",
+                    "--baseline-selectors", "",
+                    "--run-labeling",
+                    "--early-stop-patience", "1",
+                ],
+                evaluator_registry_builder=lambda *_args: {"E2": lambda _row: {"E2": -1.0}},
+                labeling_runner=labeling_runner,
+                hamiltonian_loader=lambda *_args, **_kwargs: (((-1.0, "ZI"), (-0.5, "IZ")), 2, -3.0),
+            )
+
+        self.assertEqual(result["summary"]["rounds_completed"], 1)
+        self.assertEqual(result["summary"]["stop_reason"], "plateau")
 
     def test_demo_continues_when_baseline_labeling_fails(self):
         from aicir.qas.demos import run_p1_round_demo as demo
@@ -694,6 +864,87 @@ class P1RoundDemoTests(unittest.TestCase):
         self.assertEqual(args.chemistry_genetic_weight, 0.4)
         self.assertEqual(args.chemistry_adapt_growth_weight, 0.6)
         self.assertEqual(args.chemistry_growth_mode, "mixed")
+
+    def test_line_b_route_defaults_match_formal_ch4_contract(self):
+        from aicir.qas.demos.run_p1_round_demo import _apply_growth_route_defaults, build_arg_parser
+
+        argv = [
+            "--bootstrap-labels-csv",
+            "bootstrap.csv",
+            "--growth-route",
+            "line_b_chemistry_excitation",
+        ]
+        args = build_arg_parser().parse_args(argv)
+        _apply_growth_route_defaults(args, argv)
+
+        self.assertEqual(args.rounds, 6)
+        self.assertEqual(args.parent_count, 8)
+        self.assertEqual(args.children_per_parent, 16)
+        self.assertEqual(args.fair_top_k, 8)
+        self.assertEqual(args.selector, "e2")
+        self.assertEqual(args.baseline_selectors, "E2")
+        self.assertEqual(args.min_layers, 0)
+        self.assertEqual(args.max_layers, 32)
+        self.assertEqual(args.chemistry_adapt_append_k, 4)
+        self.assertEqual(args.chemistry_adapt_pool_limit, 24)
+        self.assertEqual(args.chemistry_genetic_weight, 0.3)
+        self.assertEqual(args.chemistry_adapt_growth_weight, 0.7)
+        self.assertEqual(args.early_stop_epsilon, 1e-4)
+        self.assertEqual(args.early_stop_patience, 3)
+        self.assertEqual(args.max_total_fair_calls, 100)
+
+    def test_explicit_cli_values_override_route_defaults(self):
+        from aicir.qas.demos.run_p1_round_demo import _apply_growth_route_defaults, build_arg_parser
+
+        argv = [
+            "--bootstrap-labels-csv", "bootstrap.csv",
+            "--growth-route", "line_b_chemistry_excitation",
+            "--rounds", "2",
+            "--selector", "e5",
+            "--max-layers", "7",
+        ]
+        args = build_arg_parser().parse_args(argv)
+        _apply_growth_route_defaults(args, argv)
+
+        self.assertEqual(args.rounds, 2)
+        self.assertEqual(args.selector, "e5")
+        self.assertEqual(args.max_layers, 7)
+
+    def test_route_mutation_weights_keep_documented_inner_proportions(self):
+        from aicir.qas.demos.run_p1_round_demo import (
+            _apply_growth_route_defaults,
+            _route_mutation_weights,
+            build_arg_parser,
+        )
+
+        argv = [
+            "--bootstrap-labels-csv",
+            "bootstrap.csv",
+            "--growth-route",
+            "line_b_chemistry_excitation",
+        ]
+        args = build_arg_parser().parse_args(argv)
+        _apply_growth_route_defaults(args, argv)
+        mutation_types = (
+            "chemistry_insert",
+            "chemistry_delete",
+            "chemistry_swap",
+            "chemistry_change",
+            "chemistry_adapt_growth",
+        )
+
+        weights = _route_mutation_weights(args, mutation_types)
+
+        self.assertEqual(
+            weights,
+            {
+                "chemistry_insert": 0.12,
+                "chemistry_delete": 0.045,
+                "chemistry_swap": 0.045,
+                "chemistry_change": 0.09,
+                "chemistry_adapt_growth": 0.7,
+            },
+        )
 if __name__ == "__main__":
     unittest.main()
 

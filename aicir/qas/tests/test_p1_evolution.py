@@ -289,6 +289,56 @@ class P1VariationTests(unittest.TestCase):
         self.assertEqual(child_gene.layers, 2)
         self.assertEqual(set(child_gene.operators), {"XI", "YY"})
 
+    def test_mutation_child_does_not_inherit_parent_measurements(self):
+        from aicir.qas.vqe_loop.p1_evolution import generate_mutation_children
+
+        parent = row("operator_parent", make_operator_gene(("XI",)), fair=-1.0)
+        parent.update(
+            {
+                "label_status": "completed",
+                "fair_mean_energy": "-0.9",
+                "fair_std_energy": "0.1",
+                "delta_ref": "0.2",
+                "best_trace": "parent trace",
+                "E1": "-10.0",
+                "E2": "-9.0",
+                "E5": "-8.0",
+                "VQE_TASK_PROXY": "-7.0",
+                "GNN_PROXY": "-6.0",
+                "ENSEMBLE": "-5.0",
+                "fallback_score": "-4.0",
+                "screening_energy": "-3.0",
+                "predicted_fair_energy": "-2.0",
+            }
+        )
+
+        child = generate_mutation_children(
+            [parent],
+            children_per_parent=1,
+            mutation_types=("operator_insert",),
+            operator_pool=("YY",),
+            seed=7,
+        )[0]
+
+        for field in (
+            "label_status",
+            "fair_best_energy",
+            "fair_mean_energy",
+            "fair_std_energy",
+            "delta_ref",
+            "best_trace",
+            "E1",
+            "E2",
+            "E5",
+            "VQE_TASK_PROXY",
+            "GNN_PROXY",
+            "ENSEMBLE",
+            "fallback_score",
+            "screening_energy",
+            "predicted_fair_energy",
+        ):
+            self.assertNotIn(field, child, field)
+
     def test_operator_adapt_growth_scans_pool_and_picks_best_scored_operator(self):
         from aicir.qas.vqe_loop.p1_evolution import mutate_gene
 
@@ -345,6 +395,65 @@ class P1VariationTests(unittest.TestCase):
 
         self.assertEqual(calls, [[1.25], [1.25, 0.05], [1.25, -0.05]])
         self.assertAlmostEqual(score, -4.6)
+
+    def test_operator_growth_evaluator_reuses_parent_energy(self):
+        from aicir.qas.vqe_loop.p1_evolution import _operator_growth_evaluator_from_row
+
+        parent_gene = make_operator_gene(("XI",))
+        parent = row("operator_parent", parent_gene, fair=-1.0)
+        parent["hamiltonian_terms"] = json.dumps([[1.0, "ZI"]])
+        parent["best_trace"] = json.dumps([{"best_parameters": [1.25]}])
+        evaluator = _operator_growth_evaluator_from_row(parent)
+        calls = []
+
+        def fake_energy(architecture, _problem, *, parameters):
+            calls.append((architecture.name, list(parameters)))
+            return float(sum(parameters))
+
+        with patch("aicir.qas.vqe_loop.fair_vqe.evaluate_vqe_energy", side_effect=fake_energy):
+            evaluator(parent_gene, "YY")
+            evaluator(parent_gene, "ZZ")
+
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(
+            [parameters for _architecture_name, parameters in calls],
+            [[1.25], [1.25, 0.05], [1.25, -0.05], [1.25, 0.05], [1.25, -0.05]],
+        )
+
+    def test_generate_mutation_children_caches_operator_growth_scores_per_parent(self):
+        from aicir.qas.vqe_loop.p1_evolution import generate_mutation_children
+
+        parent = row("operator_parent", make_operator_gene(("XI",)), fair=-1.0)
+        calls = []
+
+        def scorer(gene, candidate):
+            calls.append((tuple(gene.operators), candidate))
+            return {"YY": -2.0, "ZZ": -1.0}[candidate]
+
+        children = generate_mutation_children(
+            [parent],
+            children_per_parent=3,
+            mutation_types=("operator_adapt_growth",),
+            operator_pool=("YY", "ZZ"),
+            operator_growth_evaluator=scorer,
+            seed=7,
+        )
+
+        self.assertEqual(len(children), 3)
+        self.assertEqual(len(calls), 2)
+
+    def test_operator_adapt_growth_stops_when_pool_is_exhausted(self):
+        from aicir.qas.vqe_loop.p1_evolution import MutationUnavailable, mutate_gene
+
+        parent = make_operator_gene(("XI", "YY"))
+
+        with self.assertRaisesRegex(MutationUnavailable, "no novel operator"):
+            mutate_gene(
+                parent,
+                mutation_type="operator_adapt_growth",
+                operator_pool=("XI", "YY"),
+                operator_growth_evaluator=lambda _gene, _candidate: -1.0,
+            )
 
 
     def test_operator_adapt_growth_prefers_larger_energy_drop_when_gradient_ties(self):
@@ -487,6 +596,24 @@ class P1VariationTests(unittest.TestCase):
                 [1.25, -0.05],
             ],
         )
+
+    def test_chemistry_growth_evaluator_uses_configured_backend(self):
+        from aicir.qas.vqe_loop.p1_evolution import _chemistry_growth_evaluator_from_row
+
+        parent_gene = make_chemistry_gene()
+        parent = row("chem_parent", parent_gene, fair=-1.0)
+        parent["hamiltonian_terms"] = json.dumps([[1.0, "ZIII"]])
+        backend = object()
+        evaluator = _chemistry_growth_evaluator_from_row(parent, backend=backend)
+
+        def fake_energy(_architecture, _problem, *, parameters, backend=None):
+            self.assertIs(backend, expected_backend)
+            return float(sum(parameters))
+
+        expected_backend = backend
+        candidate = {"type": "single_excitation", "qubits": [2, 3]}
+        with patch("aicir.qas.vqe_loop.fair_vqe.evaluate_vqe_energy", side_effect=fake_energy):
+            evaluator(parent_gene, candidate)
 
     def test_chemistry_growth_evaluator_caches_parent_energy_failure(self):
         from aicir.qas.vqe_loop.p1_evolution import _chemistry_growth_evaluator_from_row
@@ -671,6 +798,43 @@ class P1VariationTests(unittest.TestCase):
         self.assertNotEqual(result.child.excitations[-1], existing)
         self.assertEqual(result.child.layers, 2)
 
+    def test_chemistry_adapt_growth_stops_when_pool_is_exhausted(self):
+        from aicir.qas.vqe_loop.p1_evolution import MutationUnavailable, mutate_gene
+
+        parent = ChemistryExcitationAnsatzGene(
+            n_qubits=4,
+            hf_occupied_qubits=(1, 3),
+            excitations=(
+                {"type": "single_excitation", "qubits": [2, 3]},
+                {"type": "single_excitation", "qubits": [0, 1]},
+                {"type": "double_excitation", "qubits": [0, 2, 1, 3]},
+            ),
+            active_electrons=2,
+            active_spatial_orbitals=2,
+        )
+
+        with self.assertRaisesRegex(MutationUnavailable, "no novel excitation"):
+            mutate_gene(
+                parent,
+                mutation_type="chemistry_adapt_growth",
+                chemistry_growth_evaluator=lambda _gene, _candidate: -1.0,
+            )
+
+    def test_generate_mutation_children_returns_empty_when_no_mutation_is_available(self):
+        from aicir.qas.vqe_loop.p1_evolution import generate_mutation_children
+
+        parent = row("operator_parent", make_operator_gene(("XI",)), fair=-1.0)
+
+        children = generate_mutation_children(
+            [parent],
+            children_per_parent=2,
+            mutation_types=("operator_adapt_growth",),
+            operator_pool=("XI",),
+            seed=7,
+        )
+
+        self.assertEqual(children, [])
+
     def test_operator_adapt_growth_defaults_to_hamiltonian_guided_pool(self):
         from aicir.qas.vqe_loop.p1_evolution import generate_mutation_children
 
@@ -686,6 +850,26 @@ class P1VariationTests(unittest.TestCase):
         child_gene = OperatorSequenceAnsatzGene.from_jsonable(json.loads(children[0]["ansatz_gene"]))
         self.assertEqual(children[0]["mutation_type"], "operator_adapt_growth")
         self.assertEqual(child_gene.operators, ("XI", "XY"))
+
+    def test_operator_hamiltonian_pool_limit_keeps_largest_coefficients(self):
+        from aicir.qas.vqe_loop.p1_evolution import generate_mutation_children
+
+        parent = row("operator_parent", make_operator_gene(("XI",)), fair=-1.0)
+        parent["hamiltonian_terms"] = json.dumps(
+            [[0.1, "XY"], [3.0, "ZZ"], [-2.0, "YY"], [0.5, "XX"]]
+        )
+        seen = []
+
+        generate_mutation_children(
+            [parent],
+            children_per_parent=1,
+            mutation_types=("operator_adapt_growth",),
+            operator_growth_evaluator=lambda _gene, candidate: seen.append(candidate) or -1.0,
+            operator_pool_limit=2,
+            seed=7,
+        )
+
+        self.assertEqual(seen, ["ZZ", "YY"])
 if __name__ == "__main__":
     unittest.main()
 

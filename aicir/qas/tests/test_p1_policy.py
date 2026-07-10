@@ -47,6 +47,32 @@ class P1PolicyTests(unittest.TestCase):
         self.assertEqual([row["architecture_id"] for row in result.new_children], ["child_new"])
         self.assertEqual(result.skipped_duplicate_architecture_ids, ["child_pending_dup", "child_new_dup"])
 
+    def test_deduplicate_children_does_not_reuse_architecture_from_other_task(self):
+        from aicir.qas.vqe_loop.benchmark_table import deduplicate_children
+
+        labeled = [
+            {
+                "architecture_id": "labeled_a",
+                "canonical_arch_hash": "same_architecture",
+                "hamiltonian_id": "task_a",
+                "protocol_version": "fair_vqe_protocol_v2",
+                "fair_best_energy": "-2.0",
+            }
+        ]
+        children = [
+            {
+                "architecture_id": "child_b",
+                "canonical_arch_hash": "same_architecture",
+                "hamiltonian_id": "task_b",
+                "protocol_version": "fair_vqe_protocol_v2",
+            }
+        ]
+
+        result = deduplicate_children(children, labeled_rows=labeled)
+
+        self.assertEqual([row["architecture_id"] for row in result.new_children], ["child_b"])
+        self.assertEqual(result.reused_labeled, [])
+
     def test_p1_both_selector_delegates_to_configured_cheap_selector(self):
         from aicir.qas.vqe_loop.benchmark_table import resolve_p1_selector_fields
 

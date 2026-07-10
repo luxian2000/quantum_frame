@@ -22,9 +22,10 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from aicir.qas.library.ansatz import SupernetAnsatzGene
-from aicir.qas.vqe_loop.benchmark_table import architecture_key, resolve_p1_selector_fields
+from aicir.qas.vqe_loop.benchmark_table import architecture_key, resolve_p1_selector_fields, scoped_architecture_key
 from aicir.qas.vqe_loop.benchmark_table import read_csv_rows, write_csv_rows
 from aicir.qas.vqe_loop.graph_predictor import build_graph_predictor_evaluator
+from aicir.qas.vqe_loop.growth_routes import get_growth_route_config
 from aicir.qas.vqe_loop.p1_round import plan_p1_round, write_p1_round_outputs
 from aicir.qas.vqe_loop.p1_selection import choose_p1_auto_selector
 from aicir.qas.vqe_loop.benchmark_table import BENCHMARK_TABLE_FIELDS
@@ -188,17 +189,67 @@ def _needed_registry_fields(args: argparse.Namespace) -> tuple[str, ...]:
     return tuple(sorted(normalized))
 
 
+def _option_is_explicit(argv: Sequence[str], option: str) -> bool:
+    return any(str(token) == option or str(token).startswith(f"{option}=") for token in argv)
+
+
+def _apply_growth_route_defaults(args: argparse.Namespace, argv: Sequence[str]) -> None:
+    if not _option_is_explicit(argv, "--growth-route"):
+        return
+    config = get_growth_route_config(args.growth_route)
+    defaults = (
+        ("--rounds", "rounds", config.rounds),
+        ("--early-stop-epsilon", "early_stop_epsilon", config.early_stop_epsilon),
+        ("--early-stop-patience", "early_stop_patience", config.early_stop_patience),
+        ("--max-total-fair-calls", "max_total_fair_calls", config.max_total_fair_calls),
+        ("--parent-count", "parent_count", config.parent_count),
+        ("--diversity-count", "diversity_count", config.diversity_count),
+        ("--children-per-parent", "children_per_parent", config.children_per_parent),
+        ("--fair-top-k", "fair_top_k", config.fair_top_k),
+        ("--selector", "selector", config.selector),
+        ("--baseline-selectors", "baseline_selectors", ",".join(config.baseline_selectors)),
+        ("--mutation-types", "mutation_types", ",".join(config.mutation_types)),
+        ("--min-layers", "min_layers", config.min_layers),
+        ("--max-layers", "max_layers", config.max_layers),
+        ("--operator-pool-limit", "operator_pool_limit", config.operator_pool_limit),
+        ("--chemistry-adapt-append-k", "chemistry_adapt_append_k", config.chemistry_adapt_append_k),
+        ("--chemistry-adapt-pool-limit", "chemistry_adapt_pool_limit", config.chemistry_adapt_pool_limit),
+    )
+    for option, destination, value in defaults:
+        if not _option_is_explicit(argv, option):
+            setattr(args, destination, value)
+    if config.name == "line_a_operator_sequence":
+        if not _option_is_explicit(argv, "--operator-genetic-weight"):
+            args.operator_genetic_weight = config.genetic_weight
+        if not _option_is_explicit(argv, "--operator-adapt-growth-weight"):
+            args.operator_adapt_growth_weight = config.adapt_growth_weight
+    else:
+        if not _option_is_explicit(argv, "--chemistry-genetic-weight"):
+            args.chemistry_genetic_weight = config.genetic_weight
+        if not _option_is_explicit(argv, "--chemistry-adapt-growth-weight"):
+            args.chemistry_adapt_growth_weight = config.adapt_growth_weight
+
+
 def _route_mutation_weights(args: argparse.Namespace, mutation_types: Sequence[str]) -> dict[str, float] | None:
     mutation_set = tuple(str(item).strip().lower() for item in mutation_types if str(item).strip())
     if not mutation_set:
         return None
     route = str(args.growth_route).strip().lower()
+    config = get_growth_route_config(route)
+    documented_genetic_weights = config.genetic_weights()
     if route == "line_a_operator_sequence":
         genetic = tuple(item for item in mutation_set if item.startswith("operator_") and item != "operator_adapt_growth")
         weights: dict[str, float] = {}
         if genetic and float(args.operator_genetic_weight) > 0.0:
-            share = float(args.operator_genetic_weight) / float(len(genetic))
-            weights.update({item: share for item in genetic})
+            total = sum(documented_genetic_weights.get(item, 0.0) for item in genetic)
+            if total > 0.0:
+                weights.update(
+                    {
+                        item: float(args.operator_genetic_weight) * documented_genetic_weights[item] / total
+                        for item in genetic
+                        if item in documented_genetic_weights
+                    }
+                )
         if "operator_adapt_growth" in mutation_set and float(args.operator_adapt_growth_weight) > 0.0:
             weights["operator_adapt_growth"] = float(args.operator_adapt_growth_weight)
         return weights or None
@@ -209,8 +260,15 @@ def _route_mutation_weights(args: argparse.Namespace, mutation_types: Sequence[s
         genetic = tuple(item for item in mutation_set if item.startswith("chemistry_") and item != "chemistry_adapt_growth")
         weights: dict[str, float] = {}
         if genetic and genetic_weight > 0.0:
-            share = genetic_weight / float(len(genetic))
-            weights.update({item: share for item in genetic})
+            total = sum(documented_genetic_weights.get(item, 0.0) for item in genetic)
+            if total > 0.0:
+                weights.update(
+                    {
+                        item: genetic_weight * documented_genetic_weights[item] / total
+                        for item in genetic
+                        if item in documented_genetic_weights
+                    }
+                )
         if "chemistry_adapt_growth" in mutation_set and adapt_weight > 0.0:
             weights["chemistry_adapt_growth"] = adapt_weight
         return weights or None
@@ -471,7 +529,13 @@ def _load_bootstrap_labels(args: argparse.Namespace) -> list[dict[str, str]]:
 
 def _queue_paths(paths: Mapping[str, Path], baseline_selectors: Sequence[str]) -> dict[str, str]:
     queues = {"p1": str(paths["queue"]), "random": str(paths["baseline_random"])}
-    for selector in baseline_selectors:
+    discovered = [
+        key.removeprefix("baseline_")
+        for key in paths
+        if key.startswith("baseline_") and key != "baseline_random"
+    ]
+    selectors = dict.fromkeys([str(selector) for selector in baseline_selectors] + discovered)
+    for selector in selectors:
         key = f"baseline_{selector}"
         if key in paths:
             queues[str(selector)] = str(paths[key])
@@ -482,16 +546,35 @@ def _append_unique_completed_labels(
     labeled_rows: list[dict[str, Any]],
     new_rows: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    existing = {architecture_key(row) for row in labeled_rows if architecture_key(row)}
+    existing = {scoped_architecture_key(row) for row in labeled_rows if architecture_key(row)}
     appended: list[dict[str, Any]] = []
     for row in new_rows:
         if _as_float(row.get("fair_best_energy")) is None:
             continue
-        key = architecture_key(row)
+        key = scoped_architecture_key(row)
         if not key or key in existing:
             continue
         copied = dict(row)
         labeled_rows.append(copied)
+        appended.append(copied)
+        existing.add(key)
+    return appended
+
+
+def _append_unique_known_unlabeled(
+    known_rows: list[dict[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    existing = {scoped_architecture_key(row) for row in known_rows if architecture_key(row)}
+    appended: list[dict[str, Any]] = []
+    for row in rows:
+        if _as_float(row.get("fair_best_energy")) is not None:
+            continue
+        key = scoped_architecture_key(row)
+        if not architecture_key(row) or key in existing:
+            continue
+        copied = dict(row)
+        known_rows.append(copied)
         appended.append(copied)
         existing.add(key)
     return appended
@@ -546,6 +629,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-total-fair-calls", type=int, default=None)
     parser.add_argument("--depth", type=int, default=3)
     parser.add_argument("--parent-count", type=int, default=4)
+    parser.add_argument("--diversity-count", type=int, default=0)
     parser.add_argument("--children-per-parent", type=int, default=8)
     parser.add_argument("--control-count", type=int, default=0)
     parser.add_argument("--fair-top-k", type=int, default=4)
@@ -569,6 +653,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="",
         help="Comma-separated Pauli strings used by operator_insert/operator_big_mutation, e.g. XI,YY,ZZ.",
     )
+    parser.add_argument("--operator-pool-limit", type=int, default=None)
     parser.add_argument("--growth-route", choices=("line_a_operator_sequence", "line_b_chemistry_excitation"), default="line_a_operator_sequence")
     parser.add_argument("--operator-genetic-weight", type=float, default=0.5)
     parser.add_argument("--operator-adapt-growth-weight", type=float, default=0.5)
@@ -577,6 +662,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chemistry-growth-mode", choices=("genetic", "adapt", "mixed"), default="mixed")
     parser.add_argument("--chemistry-adapt-append-k", type=int, default=1)
     parser.add_argument("--chemistry-adapt-pool-limit", type=int, default=None)
+    parser.add_argument("--min-layers", type=int, default=1)
     parser.add_argument("--max-layers", type=int, default=None)
     parser.add_argument("--k-min", type=int, default=3)
     parser.add_argument("--d-max", type=float, default=0.1)
@@ -638,7 +724,9 @@ def main(
     hamiltonian_loader: Callable[..., tuple[Sequence[tuple[float, str]], int, float]] = load_hamiltonian_for_demo,
 ) -> dict[str, Any]:
     parser = build_arg_parser()
-    args = parser.parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(raw_argv)
+    _apply_growth_route_defaults(args, raw_argv)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -675,6 +763,13 @@ def main(
         seed=int(args.seed) + 7919,
     )
     registry = dict(evaluator_registry_builder(args, terms, int(n_qubits), float(reference_energy)))
+    from aicir.qas.core.backend_utils import resolve_qas_backend
+
+    growth_backend = resolve_qas_backend(
+        kind=str(args.backend),
+        fallback_to_cpu=False,
+        dtype=str(args.dtype),
+    )
     rounds = max(1, int(args.rounds))
     if rounds > 1 and not args.run_labeling:
         raise ValueError("--rounds > 1 requires --run-labeling so P1 fair labels can feed the next round")
@@ -686,7 +781,12 @@ def main(
     label_seeds: dict[str, int] = {}
     label_errors: list[dict[str, Any]] = []
     p1_fair_calls_so_far = 0
-    best_p1_energy: float | None = None
+    bootstrap_energies = [
+        float(row["fair_best_energy"])
+        for row in current_labeled_rows
+        if _as_float(row.get("fair_best_energy")) is not None
+    ]
+    best_p1_energy: float | None = min(bootstrap_energies) if bootstrap_energies else None
     plateau_count = 0
     stop_reason: str | None = None
     fair_best_by_round: list[float | None] = []
@@ -701,6 +801,19 @@ def main(
     for round_index in range(rounds):
         round_number = round_index + 1
 
+        round_fair_top_k = max(0, int(args.fair_top_k))
+        round_oracle_extra_top_k = max(0, int(args.oracle_extra_top_k))
+        if args.max_total_fair_calls is not None:
+            remaining_fair_calls = max(0, int(args.max_total_fair_calls) - p1_fair_calls_so_far)
+            if remaining_fair_calls <= 0:
+                stop_reason = "max_total_fair_calls"
+                break
+            round_fair_top_k = min(round_fair_top_k, remaining_fair_calls)
+            round_oracle_extra_top_k = min(
+                round_oracle_extra_top_k,
+                max(0, remaining_fair_calls - round_fair_top_k),
+            )
+
         round_output_dir = output_dir if rounds == 1 else output_dir / f"round{round_number}"
         round_batch_id = str(args.batch_id) if rounds == 1 else f"{args.batch_id}_r{round_number}"
         labeled_count_before_round = len(current_labeled_rows)
@@ -709,8 +822,9 @@ def main(
             known_unlabeled_rows=known_unlabeled_rows,
             control_rows=control_rows,
             parent_count=args.parent_count,
+            diversity_count=args.diversity_count,
             children_per_parent=args.children_per_parent,
-            fair_top_k=args.fair_top_k,
+            fair_top_k=round_fair_top_k,
             selector=args.selector,
             cheap_eval_selector=args.cheap_eval_selector,
             evaluator_registry=registry,
@@ -721,8 +835,11 @@ def main(
             mutation_types=mutation_types,
             mutation_weights=mutation_weights,
             operator_pool=operator_pool or None,
+            operator_pool_limit=args.operator_pool_limit,
             chemistry_adapt_append_k=int(args.chemistry_adapt_append_k),
             chemistry_adapt_pool_limit=args.chemistry_adapt_pool_limit,
+            growth_backend=growth_backend,
+            min_layers=args.min_layers,
             max_layers=args.max_layers,
             seed=int(args.seed) + round_index,
             baseline_selector_fields=baseline_selectors,
@@ -733,7 +850,7 @@ def main(
             training_free_soft_prefilter_multiplier=args.training_free_soft_prefilter_multiplier,
             fallback_audit_multiplier=args.fallback_audit_multiplier,
             selection_policy=args.selection_policy,
-            oracle_extra_top_k=args.oracle_extra_top_k,
+            oracle_extra_top_k=round_oracle_extra_top_k,
             min_previous_oracle_hit_rate=args.min_previous_oracle_hit_rate,
             oracle_max_neighbor_std=args.oracle_max_neighbor_std,
             trainability_soft_quantile=args.trainability_soft_quantile,
@@ -745,8 +862,11 @@ def main(
             max_two_q=args.max_two_q,
         )
         planned_p1_fair_calls = int(plan.summary.get("budget", {}).get("total_fair_calls", len(plan.queue_rows)))
-        if args.max_total_fair_calls is not None and p1_fair_calls_so_far + planned_p1_fair_calls > int(args.max_total_fair_calls):
-            stop_reason = "max_total_fair_calls"
+        if not plan.child_rows:
+            stop_reason = "no_new_child"
+            break
+        if planned_p1_fair_calls <= 0:
+            stop_reason = "no_fair_candidates"
             break
         paths = write_p1_round_outputs(plan, round_output_dir)
         round_queues = _queue_paths(paths, baseline_selectors)
@@ -783,15 +903,22 @@ def main(
                             "error": str(exc),
                         }
                     )
+                    if str(name) == "p1" and output_path.exists():
+                        _append_unique_known_unlabeled(known_unlabeled_rows, read_csv_rows(output_path))
                     continue
                 round_label_paths[str(name)] = str(output_path)
                 aggregate_label_paths.setdefault(str(name), []).append(str(output_path))
+            p1_fair_calls_so_far += planned_p1_fair_calls
 
         p1_labels_added: list[dict[str, Any]] = []
         round_p1_best: float | None = None
         round_improvement: float | None = None
         if args.run_labeling and "p1" in round_label_paths:
-            round_p1_rows = _completed_rows(round_label_paths["p1"])
+            round_p1_output_rows = read_csv_rows(round_label_paths["p1"])
+            _append_unique_known_unlabeled(known_unlabeled_rows, round_p1_output_rows)
+            round_p1_rows = [
+                row for row in round_p1_output_rows if _as_float(row.get("fair_best_energy")) is not None
+            ]
             feedback = _source_energy_feedback(round_p1_rows)
             previous_oracle_trusted_fair_mean = feedback["oracle_mean"]
             previous_fallback_fair_mean = feedback["fallback_mean"]
@@ -804,7 +931,6 @@ def main(
                 for row in round_p1_rows
                 if _as_float(row.get("fair_best_energy")) is not None
             ]
-            p1_fair_calls_so_far += len(round_energies)
             round_p1_best = min(round_energies) if round_energies else None
             p1_labels_added = _append_unique_completed_labels(
                 current_labeled_rows,
@@ -860,9 +986,11 @@ def main(
     queues: dict[str, str]
     label_paths: dict[str, str] = {}
     comparison: dict[str, Any] | None = None
-    if rounds == 1:
+    if rounds == 1 and round_results:
         queues = dict(round_results[0]["queues"])
         label_paths = dict(round_results[0]["labels"])
+    elif rounds == 1:
+        queues = {}
     else:
         queues = {
             name: _aggregate_csvs(
@@ -886,7 +1014,7 @@ def main(
         write_csv_rows(output_dir / "p1_benchmark_table.csv", current_labeled_rows, fieldnames=BENCHMARK_TABLE_FIELDS)
 
     actual_fair_calls = {
-        name: len(_completed_rows(path))
+        name: len(read_csv_rows(path))
         for name, path in label_paths.items()
     } if args.run_labeling else {}
     p1_plan_fair_calls_by_round = [
@@ -936,7 +1064,7 @@ def main(
         "label_seeds": label_seeds,
         "label_errors": label_errors,
         "comparison": comparison,
-        "summary": round_results[0]["summary"] if rounds == 1 else multi_round_summary,
+        "summary": round_results[0]["summary"] if rounds == 1 and round_results else multi_round_summary,
         "rounds": round_results,
         "requested_selector": requested_selector,
         "resolved_selector": str(args.selector),

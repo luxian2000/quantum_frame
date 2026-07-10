@@ -684,17 +684,17 @@ def _append_cx(gates: List[Dict[str, Any]], control: int, target: int) -> None:
 
 def _append_pauli_basis_forward(gates: List[Dict[str, Any]], symbol: str, qubit: int) -> None:
     if symbol == "X":
-        gates.append({"type": "h", "target_qubit": qubit})
+        gates.append({"type": "hadamard", "target_qubit": qubit})
     elif symbol == "Y":
         gates.extend({"type": "s_gate", "target_qubit": qubit} for _ in range(3))
-        gates.append({"type": "h", "target_qubit": qubit})
+        gates.append({"type": "hadamard", "target_qubit": qubit})
 
 
 def _append_pauli_basis_inverse(gates: List[Dict[str, Any]], symbol: str, qubit: int) -> None:
     if symbol == "X":
-        gates.append({"type": "h", "target_qubit": qubit})
+        gates.append({"type": "hadamard", "target_qubit": qubit})
     elif symbol == "Y":
-        gates.append({"type": "h", "target_qubit": qubit})
+        gates.append({"type": "hadamard", "target_qubit": qubit})
         gates.append({"type": "s_gate", "target_qubit": qubit})
 
 

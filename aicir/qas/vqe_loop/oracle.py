@@ -271,7 +271,11 @@ def predict_fair_energy(
     if query_gene is None:
         return OraclePrediction(None, False, "missing_gene", 0, float("inf"), float("inf"), mutation_type)
 
-    neighbors = _gene_neighbors(query_gene, labeled_rows)
+    from aicir.qas.vqe_loop.benchmark_table import task_key
+
+    query_task = task_key(query_row)
+    scoped_labeled_rows = [row for row in labeled_rows if task_key(row) == query_task]
+    neighbors = _gene_neighbors(query_gene, scoped_labeled_rows)
     if not neighbors:
         return OraclePrediction(None, False, "no_labeled_neighbors", 0, float("inf"), float("inf"), mutation_type)
 
