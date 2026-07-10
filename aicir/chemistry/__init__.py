@@ -1,7 +1,4 @@
-"""aicir.chemistry
-
-量子化学工具模块（电子结构、哈密顿映射、分子算符构建）。
-"""
+"""Chemistry helpers and molecular Hamiltonian presets."""
 
 from .molecules import (
     BEH2_321G_JW_16Q,
@@ -22,6 +19,15 @@ from .molecules import (
     register_molecule,
 )
 from .pipeline import build_molecule
+from .spec import (
+    GeneratedHamiltonian,
+    MolecularSpec,
+    PauliTermsSpec,
+    PresetSpec,
+    generate_hamiltonian,
+    load_hamiltonian_input,
+    spec_from_mapping,
+)
 
 __all__ = [
     "MoleculeHamiltonian",
@@ -41,4 +47,11 @@ __all__ = [
     "molecule_hamiltonian",
     "molecule_matrix",
     "build_molecule",
+    "GeneratedHamiltonian",
+    "MolecularSpec",
+    "PauliTermsSpec",
+    "PresetSpec",
+    "generate_hamiltonian",
+    "load_hamiltonian_input",
+    "spec_from_mapping",
 ]

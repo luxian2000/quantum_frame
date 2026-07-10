@@ -51,8 +51,16 @@ def _load(module: str, name: str) -> Callable[[], Callable[..., Any]]:
 
     return loader
 
+def _load_vqe_loop() -> Callable[[], Callable[..., Any]]:
+    def loader() -> Callable[..., Any]:
+        import importlib
 
-# 方法名 → 分发规格。``run`` 完全由此表驱动，无 if 链。
+        return getattr(importlib.import_module("..vqe_loop", __package__), "run_vqe_qas_closed_loop")
+
+    return loader
+
+
+# Method name -> dispatch spec. `run` is table-driven.
 _TABLE: dict[str, _Spec] = {
     "supernet": _Spec(_load("supernet", "train_supernet"), ("objective", "config", "dataset", "hamiltonian")),
     "supernet_classification": _Spec(_load("supernet", "classification_supernet"), ("config",)),
@@ -65,6 +73,7 @@ _TABLE: dict[str, _Spec] = {
     "pprdql": _Spec(_load("pprdql", "train_ppr_dql"), ("target_state", "config", "policy_library"), ("target_state",)),
     "crlqas": _Spec(_load("crlqas", "train_crlqas"), ("hamiltonian", "config"), ("hamiltonian",)),
     "qdrats": _Spec(_load("qdrats", "train_qdrats"), ("hamiltonian", "config"), ("hamiltonian",)),
+    "vqe_loop": _Spec(_load_vqe_loop(), ("config",), ("config",)),
 }
 
 

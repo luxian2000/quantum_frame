@@ -8,7 +8,7 @@ warm-start parameters, best traces, retry status, and backend/dtype metadata.
 from __future__ import annotations
 
 import argparse
-import csv
+import hashlib
 import json
 import os
 import sys
@@ -22,45 +22,71 @@ import numpy as np
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from aicir.qas.library.ansatz import (
-    HEAMask,
-    LayerwiseAnsatzGene,
-    architecture_from_layerwise_gene,
-    architecture_from_hea_mask,
-)
+
+def _early_label_trace(message: str) -> None:
+    if str(os.environ.get("AICIR_QAS_LABEL_TRACE", "1")).strip().lower() not in {"0", "false", "no", "off"}:
+        print(f"[fair_label_import_trace] {message}", flush=True)
+
+
+_early_label_trace("stage=module_import_begin module=aicir.qas.vqe_loop.fair_labeling")
+_early_label_trace("stage=import_begin module=aicir.qas.library.ansatz")
+from aicir.qas.library.ansatz import HEAMask, architecture_from_hea_mask
+_early_label_trace("stage=import_end module=aicir.qas.library.ansatz")
+_early_label_trace("stage=import_begin module=aicir.qas.core.backend_utils")
 from aicir.qas.core.backend_utils import resolve_qas_backend
+_early_label_trace("stage=import_end module=aicir.qas.core.backend_utils")
+_early_label_trace("stage=import_begin module=aicir.qas.vqe_loop.benchmark_table.architecture")
+from aicir.qas.vqe_loop.benchmark_table import architecture_from_candidate_row
+_early_label_trace("stage=import_end module=aicir.qas.vqe_loop.benchmark_table.architecture")
+_early_label_trace("stage=import_begin module=aicir.qas.vqe_loop.benchmark_table.csv")
+from aicir.qas.vqe_loop.benchmark_table import read_csv_rows, write_csv_rows
+_early_label_trace("stage=import_end module=aicir.qas.vqe_loop.benchmark_table.csv")
+_early_label_trace("stage=import_begin module=aicir.qas.vqe_loop.benchmark_table.problem")
+from aicir.qas.vqe_loop.benchmark_table import problem_from_row_terms, row_hamiltonian_terms
+_early_label_trace("stage=import_end module=aicir.qas.vqe_loop.benchmark_table.problem")
+_early_label_trace("stage=import_begin module=aicir.qas.vqe_loop.fair_vqe")
 from aicir.qas.vqe_loop.fair_vqe import (
     fair_vqe_final_maxfev,
     optimize_vqe_energy,
 )
+_early_label_trace("stage=import_end module=aicir.qas.vqe_loop.fair_vqe")
+_early_label_trace("stage=import_begin module=aicir.metrics.circuit_structure")
 from aicir.metrics.circuit_structure import parameter_count
+_early_label_trace("stage=import_end module=aicir.metrics.circuit_structure")
+_early_label_trace("stage=import_begin module=aicir.qas.problems.hamiltonians")
 from aicir.qas.problems.hamiltonians import (
     VQEProblem,
-    exact_ground_energy,
     tfim_chain_demo_problem,
 )
-from aicir.qas.vqe_loop.protocol import (
+_early_label_trace("stage=import_end module=aicir.qas.problems.hamiltonians")
+_early_label_trace("stage=import_begin module=aicir.qas.vqe_loop.benchmark_table.schema")
+from aicir.qas.vqe_loop.benchmark_table import (
     BENCHMARK_TABLE_FIELDS,
     LabelStatus,
     next_label_status_after_failure,
+    load_fair_label_protocol,
 )
-from aicir.qas.vqe_loop.geometry import parse_pauli_hamiltonian_terms
+_early_label_trace("stage=import_end module=aicir.qas.vqe_loop.benchmark_table.schema")
+_early_label_trace("stage=module_import_end module=aicir.qas.vqe_loop.fair_labeling")
+
+def _label_trace_enabled() -> bool:
+    return str(os.environ.get("AICIR_QAS_LABEL_TRACE", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
 
-def _read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8-sig") as handle:
-        return list(csv.DictReader(handle))
+def _label_trace(message: str) -> None:
+    if _label_trace_enabled():
+        print(f"[fair_label_trace] {message}", flush=True)
 
 
-def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(BENCHMARK_TABLE_FIELDS)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row.get(field, "") for field in fieldnames})
+def _safe_len(value: Any) -> str:
+    try:
+        return str(len(value))
+    except Exception:
+        return "unknown"
 
+
+def _architecture_row_id(row: dict[str, Any]) -> str:
+    return str(row.get("architecture_id", "") or row.get("canonical_arch_hash", "") or "unknown")
 
 def _load_warm_start_vector(
     row: dict[str, Any],
@@ -145,7 +171,7 @@ def _mask_from_row(row: dict[str, str]) -> HEAMask:
 def _architecture_from_row(row: dict[str, str]):
     raw_gene = row.get("ansatz_gene", "")
     if raw_gene and str(raw_gene).strip() not in {"", '""', "null"}:
-        return architecture_from_layerwise_gene(LayerwiseAnsatzGene.from_jsonable(raw_gene))
+        return architecture_from_candidate_row(row)
     return architecture_from_hea_mask(_mask_from_row(row))
 
 
@@ -160,37 +186,35 @@ def _tfim_problem_from_protocol(n_qubits: int, protocol: dict[str, Any]):
     )
 
 
-def _load_literal_hamiltonian_terms(row: dict[str, Any]) -> tuple[tuple[float, str], ...]:
-    raw = row.get("hamiltonian_terms", "")
-    if raw is None or str(raw).strip() == "":
-        return ()
-    try:
-        loaded = json.loads(str(raw))
-    except json.JSONDecodeError as exc:
-        raise ValueError("hamiltonian_terms must be a JSON list of Pauli terms") from exc
-    terms = parse_pauli_hamiltonian_terms(loaded)
-    if not terms:
-        raise ValueError("hamiltonian_terms must contain at least one Pauli term")
-    return terms
-
-
 def _problem_from_row_or_protocol(row: dict[str, Any], *, n_qubits: int, protocol: dict[str, Any]) -> VQEProblem:
-    terms = _load_literal_hamiltonian_terms(row)
+    terms = row_hamiltonian_terms(row)
     if not terms:
         return _tfim_problem_from_protocol(n_qubits, protocol)
+    return problem_from_row_terms(row, n_qubits=int(n_qubits), default_name_prefix="custom_pauli")
 
-    widths = {len(pauli) for _coeff, pauli in terms}
-    if widths != {int(n_qubits)}:
-        raise ValueError(
-            f"hamiltonian_terms width must match queue n_qubits={int(n_qubits)}; "
-            f"found widths={sorted(widths)}"
-        )
-    return VQEProblem(
-        name=str(row.get("hamiltonian_id") or f"custom_pauli_{int(n_qubits)}q"),
-        n_qubits=int(n_qubits),
-        hamiltonian=terms,
-        reference_energy=exact_ground_energy(terms),
-    )
+
+def _architecture_seed_key(row: dict[str, Any]) -> str:
+    for field in ("canonical_arch_hash", "ansatz_gene", "architecture_id"):
+        value = str(row.get(field, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _label_seed_for_row(
+    *,
+    base_seed: int,
+    row_index: int,
+    row: dict[str, Any],
+    seed_index_offset: int = 0,
+    seed_by_architecture_id: bool = False,
+) -> int:
+    if seed_by_architecture_id:
+        key = _architecture_seed_key(row)
+        if key:
+            digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+            return int(base_seed) + int(digest[:12], 16) % 1_000_000_000
+    return int(base_seed) + (int(seed_index_offset) + int(row_index)) * 1000
 
 
 def _label_row(
@@ -206,18 +230,31 @@ def _label_row(
     queue_path: Path,
 ) -> dict[str, Any]:
     start = perf_counter()
+    architecture_id = _architecture_row_id(row)
+    _label_trace(f"stage=label_row_begin architecture_id={architecture_id} family={row.get('family', '')} backend={backend_kind} dtype={dtype}")
+    _label_trace(f"stage=architecture_from_row_begin architecture_id={architecture_id} ansatz_gene_bytes={len(str(row.get('ansatz_gene', '') or ''))}")
     architecture = _architecture_from_row(row)
+    _label_trace(f"stage=architecture_from_row_end architecture_id={architecture_id} n_qubits={architecture.n_qubits}")
     n_qubits = int(row.get("n_qubits") or architecture.n_qubits)
+    _label_trace(f"stage=problem_from_row_begin architecture_id={architecture_id} n_qubits={n_qubits} hamiltonian_terms_bytes={len(str(row.get('hamiltonian_terms', '') or ''))}")
     problem = _problem_from_row_or_protocol(row, n_qubits=n_qubits, protocol=protocol)
+    _label_trace(f"stage=problem_from_row_end architecture_id={architecture_id} terms={_safe_len(problem.hamiltonian)} reference={problem.reference_energy}")
+    _label_trace(f"stage=backend_resolve_begin architecture_id={architecture_id} backend={backend_kind} dtype={dtype}")
     backend = resolve_qas_backend(kind=backend_kind, fallback_to_cpu=False, dtype=dtype)
+    _label_trace(f"stage=backend_resolve_end architecture_id={architecture_id} backend_type={type(backend).__name__}")
+    _label_trace(f"stage=parameter_count_begin architecture_id={architecture_id}")
     n_params = parameter_count(architecture.circuit)
+    _label_trace(f"stage=parameter_count_end architecture_id={architecture_id} n_params={n_params}")
     max_evals = int(max_evals_override) if max_evals_override is not None else fair_vqe_final_maxfev(n_params)
+    _label_trace(f"stage=warm_start_begin architecture_id={architecture_id}")
     warm_start, warm_start_status = _load_warm_start_vector(row, queue_path=queue_path, n_params=n_params)
+    _label_trace(f"stage=warm_start_end architecture_id={architecture_id} status={warm_start_status}")
 
     energies: list[float] = []
     nfev_total = 0
     best_trace: list[dict[str, Any]] = []
     for seed_index in range(max(1, int(n_seeds))):
+        _label_trace(f"stage=optimize_begin architecture_id={architecture_id} seed_index={seed_index} seed={int(seed) + seed_index} max_evals={max_evals} n_params={n_params}")
         result = optimize_vqe_energy(
             architecture,
             problem,
@@ -227,10 +264,11 @@ def _label_row(
             max_evaluations=max_evals,
             budget_override=max_evals,
             backend=backend,
-            init_mode="random_uniform_pi",
+            init_mode="zero_then_random",
             init_scale=float(np.pi),
             initial_parameters=warm_start,
         )
+        _label_trace(f"stage=optimize_end architecture_id={architecture_id} seed_index={seed_index} energy={result.energy} nfev={result.evaluations}")
         energies.append(float(result.energy))
         nfev_total += int(result.evaluations)
         best_trace.append(
@@ -278,10 +316,11 @@ def _label_row(
 
 
 def main() -> None:
+    _label_trace("stage=main_begin")
     parser = argparse.ArgumentParser(description="Run fair VQE labels for a Stage-1.5 queue")
     parser.add_argument("--queue", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--protocol", default="aicir/qas/vqe_loop/fair_label_protocol.json")
+    parser.add_argument("--protocol", default="default")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument(
@@ -290,6 +329,11 @@ def main() -> None:
         default=0,
         help="Offset added to the queue row index when deriving per-row VQE seeds; used by sharded runners.",
     )
+    parser.add_argument(
+        "--seed-by-architecture-id",
+        action="store_true",
+        help="Derive per-row seeds from architecture identity instead of queue row index.",
+    )
     parser.add_argument("--n-seeds", type=int, default=3)
     parser.add_argument("--success-delta-ref", type=float, default=0.02)
     parser.add_argument("--max-evals", type=int, default=None)
@@ -297,13 +341,22 @@ def main() -> None:
     parser.add_argument("--dtype", default="complex128")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    _label_trace(f"stage=parse_args_end queue={args.queue} output={args.output} backend={args.backend} dtype={args.dtype} max_evals={args.max_evals}")
 
     queue_path = Path(args.queue)
-    rows = _read_csv(queue_path)
-    protocol = _load_protocol(Path(args.protocol))
+    _label_trace(f"stage=read_queue_begin queue={queue_path}")
+    rows = read_csv_rows(queue_path)
+    _label_trace(f"stage=read_queue_end rows={len(rows)}")
+    _label_trace(f"stage=load_protocol_begin protocol={args.protocol}")
+    protocol = load_fair_label_protocol(args.protocol)
+    _label_trace(f"stage=load_protocol_end version={protocol.get('protocol_version', '')}")
+    _label_trace("stage=validate_protocol_begin")
     _validate_queue_protocol_versions(rows, str(protocol["protocol_version"]))
+    _label_trace("stage=validate_protocol_end")
     completed = 0
+    _label_trace("stage=label_loop_begin")
     for index, row in enumerate(rows):
+        _label_trace(f"stage=row_visit index={index} status={row.get('label_status', '')} architecture_id={_architecture_row_id(row)}")
         if row.get("label_status") not in {"", LabelStatus.PENDING.value, LabelStatus.FAILED_RETRYABLE.value}:
             continue
         if args.limit is not None and completed >= int(args.limit):
@@ -315,12 +368,21 @@ def main() -> None:
             completed += 1
             continue
         row["label_status"] = LabelStatus.RUNNING.value
-        _write_csv(Path(args.output), rows)
+        _label_trace(f"stage=write_running_begin index={index} output={args.output}")
+        write_csv_rows(Path(args.output), rows, fieldnames=BENCHMARK_TABLE_FIELDS)
+        _label_trace(f"stage=write_running_end index={index}")
         try:
+            _label_trace(f"stage=call_label_row_begin index={index} architecture_id={_architecture_row_id(row)}")
             rows[index] = _label_row(
                 row,
                 protocol=protocol,
-                seed=int(args.seed) + (int(args.seed_index_offset) + index) * 1000,
+                seed=_label_seed_for_row(
+                    base_seed=int(args.seed),
+                    row_index=index,
+                    row=row,
+                    seed_index_offset=int(args.seed_index_offset),
+                    seed_by_architecture_id=bool(args.seed_by_architecture_id),
+                ),
                 n_seeds=int(args.n_seeds),
                 success_delta_ref=float(args.success_delta_ref),
                 max_evals_override=args.max_evals,
@@ -328,18 +390,22 @@ def main() -> None:
                 dtype=args.dtype,
                 queue_path=queue_path,
             )
+            _label_trace(f"stage=call_label_row_end index={index} architecture_id={_architecture_row_id(rows[index])}")
         except Exception as exc:  # pragma: no cover - exercised by real runners.
+            _label_trace(f"stage=call_label_row_error index={index} error={exc!r}")
             retry_count = int(row.get("retry_count") or 0) + 1
             row["retry_count"] = retry_count
             row["label_status"] = next_label_status_after_failure(retry_count=retry_count).value
             row["failure_reason"] = type(exc).__name__
             row["last_error_digest"] = traceback.format_exc()[-4000:]
         completed += 1
-        _write_csv(Path(args.output), rows)
+        write_csv_rows(Path(args.output), rows, fieldnames=BENCHMARK_TABLE_FIELDS)
 
-    _write_csv(Path(args.output), rows)
+    write_csv_rows(Path(args.output), rows, fieldnames=BENCHMARK_TABLE_FIELDS)
     print(json.dumps({"rows": len(rows), "attempted": completed, "output": str(args.output)}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     main()
+
+

@@ -60,6 +60,47 @@ def test_generated_maxcut_circuit_metrics_match_checked_in_artifact():
     assert metrics["achieved_cut"] <= metrics["max_cut"] + 1e-6
 
 
+def test_qaoa_baseline_uses_basic_qaoa_and_reports_cut_metrics(monkeypatch):
+    graph = nx.Graph()
+    graph.add_edge(0, 1, weight=1.0)
+    hamiltonian, _ = maxcut.build_ising_hamiltonian(graph)
+    calls = {}
+
+    class FakeQAOA:
+        def __init__(self, *, problem_hamiltonian, p, seed):
+            calls["problem_hamiltonian"] = problem_hamiltonian
+            calls["p"] = p
+            calls["seed"] = seed
+
+        def run(self, *, max_iters, lr, backend, seed):
+            calls["run"] = {"max_iters": max_iters, "lr": lr, "backend": backend, "seed": seed}
+            return SimpleNamespace(parameters=[0.1, 0.2], energy=-1.0, energy_history=[0.0, -1.0])
+
+        def build_circuit(self, parameters, *, backend):
+            calls["parameters"] = list(parameters)
+            return Circuit(hadamard(0), hadamard(1), n_qubits=2)
+
+    monkeypatch.setattr(maxcut, "BasicQAOA", FakeQAOA)
+
+    baseline = maxcut.run_qaoa_baseline(
+        graph,
+        hamiltonian,
+        NumpyBackend(),
+        p=1,
+        max_iters=2,
+        lr=0.05,
+        seed=9,
+    )
+
+    assert calls["problem_hamiltonian"] is hamiltonian
+    assert calls["p"] == 1
+    assert calls["run"]["max_iters"] == 2
+    assert baseline["qaoa_energy"] == -1.0
+    assert baseline["expected_cut"] == pytest.approx(0.5)
+    assert baseline["achieved_cut"] == pytest.approx(1.0)
+    assert baseline["energy_history"] == [0.0, -1.0]
+
+
 def test_maxcut_cli_can_disable_rzz(monkeypatch, tmp_path):
     captured = {}
 

@@ -1,27 +1,62 @@
 # VQE-QAS Closed Loop
 
-`aicir.qas.vqe_loop` implements the closed-loop VQE-QAS workflow:
+`aicir.qas.vqe_loop` implements the current VQE-QAS evaluation spine:
 
 ```text
-Stage 0/1 preparation
+P0 bootstrap candidate generation
+  -> optional zero-cost structural screen
   -> fair VQE labels
-  -> Stage-2 oracle + MoG-EA next-batch search
-  -> label feedback
-  -> oracle calibration
+  -> P1 mutation/oracle/fallback planning
+  -> fair-label feedback
 ```
 
-The default user entry point is:
+The central rule is unchanged: cheap evaluators and zero-cost filters only
+screen candidates.  Final comparisons use the shared COBYLA fair-label protocol
+and the primary metric remains `fair_best_energy`.
+
+## Entry Points
+
+Run P0 bootstrap plus fair labels through the package entry point:
 
 ```bash
 python -m aicir.qas.vqe_loop \
-  --hamiltonian h2_terms.json \
-  --output-dir outputs/qas_h2_loop \
-  --rounds auto \
-  --backend numpy \
-  --dtype complex128
+  --hamiltonian lih_hamiltonian.json \
+  --initial-labels 0 \
+  --rounds 0 \
+  --use-chemistry-excitation-pool \
+  --active-electrons 2 \
+  --active-spatial-orbitals 3 \
+  --chemistry-excitation-count 12
 ```
 
-`h2_terms.json` should contain literal Pauli terms:
+The Hamiltonian JSON can also be passed positionally:
+
+```bash
+python -m aicir.qas.vqe_loop lih_hamiltonian.json --initial-labels 0 --rounds 0
+```
+
+`--disable-p0-zero-cost` turns off the optional P0 structural annotation path.
+When enabled, bootstrap summaries include a `training_free` block with pass,
+soft-flag, and hard-reject counts.
+
+Run one or more current P1 rounds after bootstrap labels exist:
+
+```bash
+python -m aicir.qas.demos.run_p1_round_demo \
+  --bootstrap-labels-csv outputs/qas_4q/bootstrap_labels.csv \
+  --output-dir outputs/qas_4q/round1 \
+  --batch-id round1 \
+  --mutation-types gate_mutation,connectivity_mutation,layer_mutation,depth_mutation
+```
+
+The P1 summary reports oracle/fallback accounting, `zero_cost_status`, fair
+calls, and cheap-eval calls.  The no-regret-lite policy keeps fallback topK as
+the guardrail while using trusted oracle predictions to widen the candidate pool
+or skip selected cheap evaluations.
+
+## Hamiltonian Input
+
+`--hamiltonian` accepts either a legacy Pauli-term list:
 
 ```json
 [
@@ -31,142 +66,104 @@ python -m aicir.qas.vqe_loop \
 ]
 ```
 
-If `--hamiltonian` is omitted, pass `--n-qubits`; the run then uses the TFIM defaults in `fair_label_protocol.json`.
+or a structured molecule specification:
 
-By default, the one-entry runner uses qubit-scaled budgets:
+```json
+{
+  "molecule": "LiH",
+  "distance": 0.1
+}
+```
 
-| qubits | initial labels | per-round labels | max rounds |
-| --- | ---: | ---: | ---: |
-| `<=4` | 12 | 4 | 4 |
-| `5-8` | 24 | 6 | 4 |
-| `9-12` | 36 | 8 | 2 |
-| `>12` | 48 | 12 | 2 |
+That shorthand expands to Li at `(0, 0, 0)` and H at `(0, 0, distance)`.
+The omitted fields default to `kind=molecular`, `basis=sto3g`, `charge=0`,
+`spin=0`, `unit=angstrom`, `driver=pyscf`, and `mapping=jordan_wigner`.
+For non-diatomic molecules or custom layouts, pass explicit `geometry` instead.
 
-The per-round labels are split across local / boundary / sparse / control
-tracks.  Users can override either the total with `--batch-size` or individual
-quotas with `--local`, `--boundary`, `--sparse`, and `--control`.
+Molecular inputs are resolved once through optional PySCF/Qiskit Nature
+dependencies; fair VQE labels still run on the selected aicir backend.
 
-The loop also stops early when no new best `fair_best_energy` is found for
-`--patience` consecutive rounds.  The default is `--patience 2` and
-`--min-improvement 1e-8`.
-
-After each Stage-2 round, the next round's quota mix is adapted from oracle
-calibration:
-
-- `local`: used only when `overall=true`, enough in-TR holdout exists, the
-  in-TR MAE is clearly better than out-of-TR MAE, and sparse abstain is healthy.
-- `balanced_explore`: used when there is a weak TR signal (`tr_in_count > 0`,
-  `tr_in_mae < tr_out_mae`, and sparse abstain is healthy), but `overall=false`.
-- `explore`: used when the oracle has no reliable TR support, TR error is not
-  better than out-of-TR error, or sparse abstain is poor.
-
-Higher-qubit runs cap the local fraction more aggressively. For example, a 12q
-run with weak TR signal uses `local=1, boundary=2, sparse=3, control=2` for an
-8-label round.
+If `--hamiltonian` is omitted, pass `--n-qubits`; the run then uses the TFIM
+defaults in the built-in fair protocol in `benchmark_table.py`.
 
 ## Main Flow
 
-`python -m aicir.qas.vqe_loop` calls `run_vqe_qas_closed_loop()` in `vqe_qas_loop.py`.
-
-The call order is:
+`python -m aicir.qas.vqe_loop` calls `run_vqe_qas_closed_loop()` in
+`p0_bootstrap_fair.py`.
 
 ```text
-vqe_qas_loop.py
-  -> preparation.py
+p0_bootstrap_fair.py
+  -> p0_chemistry_excitation.py or p0_supernet_native.py
+  -> training_free.py  # optional P0 zero-cost structural annotations
   -> stamp_literal_hamiltonian_terms()
-  -> labeling.py
-  -> stage2.py  # repeated until max rounds or patience stop
-       -> next_batch.py
-            -> selection_ops.py
-       -> labeling.py
-       -> calibration.py
+  -> fair_labeling.py
 ```
 
-Module responsibilities:
+P1 is intentionally routed through `demos/run_p1_round_demo.py` while the
+chemistry excitation path and no-regret-lite summaries settle:
 
-- `vqe_qas_loop.py`: one-call Python API and multi-round orchestration.
+```text
+demos/run_p1_round_demo.py
+  -> p1_round.py
+       -> p1_selection.py
+       -> p1_evolution.py
+       -> oracle.py
+       -> training_free.py
+  -> fair_labeling.py
+```
+
+## Mainline Module Boundaries
+
+- `p1_evolution.py` is the public P1 evolution entry point: parent selection, supernet mutation, chemistry excitation mutation, operator-sequence mutation, optional A1/A2 operator growth, and mutation-row conversion.
+- `p1_round.py` is the public P1 orchestration entry point.
+- `p1_selection.py` owns fallback ranking, baseline selector queues, and P1 queue-row selection helpers.
+- `p0_bootstrap_fair.py` remains a compatibility runner for P0 bootstrap plus fair labels.
+
+## Module Responsibilities
+
+- `p0_bootstrap_fair.py`: P0 bootstrap queue writer plus fair-label one-call API.
 - `__main__.py`: package command-line entry for `python -m aicir.qas.vqe_loop`.
-- `preparation.py`: builds Stage-0 candidates, applies Stage-1 filters/soft flags, and writes the initial fair-label queue.
-- `labeling.py`: turns queue rows into fair VQE benchmark labels.
-- `stage2.py`: runs one Stage-2 loop: plan next batch, label it, append labels, recalibrate oracle.
-- `next_batch.py`: reads candidates and benchmark table, builds the oracle view, and writes the next label queue.
-- `selection_ops.py`: pure Stage-2 selection operators: MoG-EA proposals, farthest-first expansion, and abstain-rate summaries.
-- `calibration.py`: evaluates trust-region oracle quality on holdout rows.
+- `p0_chemistry_excitation.py`: chemistry excitation candidate rows and mutation-space metadata.
+- `p0_supernet_native.py`: generic supernet-native bootstrap rows.
+- `training_free.py`: optional zero-cost structural annotations for P0 and P1 rows.
+- `fair_labeling.py`: turns queue rows into fair VQE benchmark labels.
+- `demos/run_p1_round_demo.py`: current P1 entry point for mutation/oracle/fallback planning, optional fair labeling, and multi-round label feedback.
+- `p1_round.py`: plans one P1 queue plus equal-budget baselines from labeled parents, mutation children, oracle predictions, and fallback E2/E5 scoring.
+- `p1_evolution.py`: P1 parent selection, supernet/chemistry/operator-sequence mutation, optional operator growth, layer crossover, and mutation result rows.
+- `oracle.py`: local/trusted oracle prediction and abstention helpers.
+- `benchmark_table.py`: benchmark-table schema, CSV IO, row-object parsing, built-in fair-label protocol defaults, and row-level P1 policies.
 - `fair_vqe.py`: evaluates and optimizes one architecture on one VQE problem using the frozen fair-label policy.
-- `shard_scheduler.py`: splits a fair-label queue into independent shards for multi-NPU or multi-process runs.
-- `sidecars.py`: converts completed fair labels into supernet warm-start/rank sidecars.
-- `supernet_screening.py`: optional supernet screening sidecar generation.
-- `protocol.py`: benchmark-table schema, label states, append/merge rules, and retry transitions.
-- `geometry.py`: candidate distance, trust-region geometry, split sampling, and Hamiltonian feature distances.
-- `fair_label_protocol.json`: frozen data protocol for fair VQE labels.
+- `sharding.py`: splits a fair-label queue into independent shards for multi-NPU or multi-process runs.
+- `p0_problem_aware.py`: optional P0 diagnostic problem-aware supernet sampler; not part of the core P0/P1/fair path.
 
 ## Protocol Boundaries
 
-`fair_label_protocol.json` answers:
+`benchmark_table.py` answers:
 
 ```text
-How is a fair VQE label generated?
+How are fair-label protocols, benchmark rows, row parsing, and row-level P1 policies represented?
 ```
 
-It freezes the label protocol: unmeasured-state energy evaluation, `shots=null`, optimizer defaults, default TFIM parameters, and required output fields. The file name is stable; the internal `protocol_version` remains the data-compatibility key.
+It defines `DEFAULT_FAIR_LABEL_PROTOCOL`, `BENCHMARK_TABLE_FIELDS`, `LabelStatus`,
+`LabelSource`, CSV read/write helpers, ansatz/Hamiltonian row parsers, append
+rules, retry transitions, and P1 row ranking/dedup/quota helpers. The internal
+`protocol_version` remains the data-compatibility key.
 
-`protocol.py` answers:
+`p1_round.py` answers:
 
 ```text
-How are labels represented, merged, retried, and stored?
+Which mutation children enter fair labeling, and how are oracle/fallback choices summarized?
 ```
-
-It defines `BENCHMARK_TABLE_FIELDS`, `LabelStatus`, `LabelSource`, append rules, and failure retry transitions.
-
-`geometry.py` answers:
-
-```text
-When are candidates or Hamiltonian tasks close enough for the local oracle to trust itself?
-```
-
-It defines candidate records, distance scales, trust-region geometry, Hamiltonian feature extraction, and task-aware distances.
-
-`selection_ops.py` answers:
-
-```text
-Which candidates are selected for Track-A local search or Track-B expansion?
-```
-
-The default local proposal path is MoG-EA/NSGA-II. Farthest-first is used for boundary/sparse expansion, not as a replacement for MoG-EA.
 
 ## Useful Commands
 
-Run an automatic multi-round loop:
+Run fair labels directly:
 
 ```bash
-python -m aicir.qas.vqe_loop \
-  --hamiltonian lih_terms.json \
-  --hamiltonian-id lih_sto3g_jw_r15 \
-  --hamiltonian-class molecular_lih \
-  --output-dir outputs/qas_lih_loop \
-  --rounds auto \
-  --batch-size auto \
-  --patience 2 \
-  --backend npu \
-  --dtype complex64
-```
-
-Prepare initial candidates and queue:
-
-```bash
-python -m aicir.qas.vqe_loop.preparation \
-  --scales 4 \
-  --initial-labels 24 \
-  --output-dir outputs/qas_4q
-```
-
-Run fair labels:
-
-```bash
-python -m aicir.qas.vqe_loop.labeling \
+python -m aicir.qas.vqe_loop.fair_labeling \
   --queue outputs/qas_4q/stage1_5_initial_label_queue.csv \
   --output outputs/qas_4q/benchmark_table_4q_v2.csv \
-  --protocol aicir/qas/vqe_loop/fair_label_protocol.json \
+  --protocol default \
   --backend numpy \
   --dtype complex128
 ```
@@ -174,29 +171,21 @@ python -m aicir.qas.vqe_loop.labeling \
 Run fair labels as independent shards:
 
 ```bash
-python -m aicir.qas.vqe_loop.shard_scheduler \
+python -m aicir.qas.vqe_loop.sharding \
   --queue outputs/qas_stage2/round1/round1_queue.csv \
   --output outputs/qas_stage2/round1/round1_labels.csv \
   --work-dir outputs/qas_stage2/round1/label_shards \
-  --protocol aicir/qas/vqe_loop/fair_label_protocol.json \
+  --protocol default \
   --backend npu \
   --dtype complex64 \
   --num-shards 4
 ```
 
-Run one Stage-2 round:
-
-```bash
-python -m aicir.qas.vqe_loop.stage2 \
-  --candidates outputs/qas_4q/stage0_candidates.csv \
-  --benchmark-table outputs/qas_4q/benchmark_table_4q_v2.csv \
-  --output-dir outputs/qas_4q/round1 \
-  --batch-id round1
-```
-
 ## Notes
 
-- `shard_scheduler.py` is a task-parallel queue runner; it does not change the fair-label protocol.
-- `sidecars.py` and `supernet_screening.py` are optional helpers. They do not produce final labels.
+- `sharding.py` is a task-parallel queue runner; it does not change the fair-label protocol.
 - `fair_vqe.py` is not a general VQE frontend; it is the fair-label execution layer used by VQE-QAS.
-- `next_batch.py` is workflow code. `selection_ops.py` is the small operator library it calls.
+- The old preparation/next-batch/trust-region chain has been removed from this package path.
+
+
+

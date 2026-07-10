@@ -36,8 +36,7 @@ from .circuit import (
     while_,
 )
 from .state import State
-from .batch import BatchSV
-from .classical import ClassicalRegister, Bit, Condition
+from .classical import Bit, ClassicalRegister, Condition
 from .io.json_io import circuit_from_json, circuit_to_json, load_circuit_json, save_circuit_json
 from .io.qasm import (
     circuit_from_qasm,
@@ -55,11 +54,20 @@ from .io.pennylane_io import (
     to_pennylane,
 )
 
+_optional_exports = []
+
+try:
+    from .batch import BatchSV
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+else:
+    _optional_exports.append("BatchSV")
+
 __all__ = [
     "Circuit",
     "Parameter",
     "State",
-    "BatchSV",
     "ClassicalRegister",
     "Bit",
     "Condition",
@@ -118,4 +126,4 @@ __all__ = [
     "circuit_from_wuyue",
     "to_wuyue",
     "from_wuyue",
-]
+] + _optional_exports

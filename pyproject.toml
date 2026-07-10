@@ -27,6 +27,7 @@ torch = ["torch"]
 viz = ["matplotlib"]
 # 科学计算（部分优化器 / 经典优化层）
 sci = ["scipy"]
+chemistry = ["qiskit-nature", "pyscf"]
 # 电子结构流水线（build_molecule；pyscf 为重编译依赖，单列）
 chem = ["qiskit-nature", "pyscf"]
 # 张量网络收缩路径优化 + 切片（cotengra planner）

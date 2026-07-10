@@ -113,7 +113,7 @@
 **`optimize` 参数**（默认 `"auto"`）控制收缩路径寻优来源：
 
 - **`optimize="auto"`**（默认）：网络规模较大（≥24 张量）且已安装 [`cotengra`](https://github.com/jcmgray/cotengra) 时使用 `HyperOptimizer`；否则优先使用 [`opt_einsum`](https://github.com/dgasmith/opt_einsum)（若已安装）的 `opt_path`，最后回退到内置贪心策略。三种路径均保证结果正确性，仅影响耗时与峰值内存。
-  
+
 - **`optimize="cotengra"|"opt_einsum"|"greedy"`**：显式指定路径来源，对应库缺失时抛 `ImportError`。
 
   - `"cotengra"`：需 `pip install -e ".[tn]"`（安装 `cotengra` 与 `opt_einsum` 依赖）；性能最优但耗时。

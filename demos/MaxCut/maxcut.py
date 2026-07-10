@@ -44,6 +44,7 @@ from aicir.core.gates import apply_gate_to_state, gate_to_matrix
 from aicir.core.io.json_io import circuit_from_json, circuit_to_json
 from aicir.core.state import State
 from aicir.qas import supernet_qas
+from aicir.vqc import BasicQAOA
 from aicir.visual import plot
 
 # 生成文件统一写在脚本同目录下。
@@ -145,6 +146,46 @@ def evaluate_vqe_cut_metrics(
         "n_gates": len(circuit.gates),
     }
     return metrics, partition
+
+
+def run_qaoa_baseline(
+    graph: nx.Graph,
+    hamiltonian: Hamiltonian,
+    backend: NumpyBackend,
+    *,
+    p: int = 1,
+    max_iters: int = 80,
+    lr: float = 0.05,
+    seed: int = 11,
+) -> dict:
+    """Run a standard QAOA baseline and report the same MaxCut readout metrics."""
+    qaoa = BasicQAOA(problem_hamiltonian=hamiltonian, p=int(p), seed=int(seed))
+    result = qaoa.run(
+        max_iters=int(max_iters),
+        lr=float(lr),
+        backend=backend,
+        seed=int(seed),
+    )
+    parameters = getattr(result, "parameters", None)
+    if parameters is None:
+        parameters = np.concatenate([
+            np.asarray(getattr(result, "gammas"), dtype=float),
+            np.asarray(getattr(result, "betas"), dtype=float),
+        ])
+    parameters = [float(value) for value in parameters]
+    circuit = qaoa.build_circuit(parameters, backend=backend)
+    metrics, _ = evaluate_vqe_cut_metrics(circuit, graph, hamiltonian, backend)
+    history = getattr(result, "energy_history", []) or []
+    return {
+        "p": int(p),
+        "max_iters": int(max_iters),
+        "lr": float(lr),
+        "seed": int(seed),
+        "qaoa_energy": float(getattr(result, "energy")),
+        "parameters": parameters,
+        "energy_history": [float(value) for value in history],
+        **metrics,
+    }
 
 
 def vqe_cut_partition(
@@ -257,6 +298,7 @@ def render_hamiltonian_module(
     terms: List[tuple],
     circuit_json: dict,
     metrics: dict,
+    qaoa_baseline: dict | None = None,
 ) -> str:
     """渲染 ``maxcut_hamiltonian.py`` 的源码文本。"""
     import pprint
@@ -265,6 +307,7 @@ def render_hamiltonian_module(
     terms_repr = pprint.pformat(terms, width=88, sort_dicts=False)
     circuit_repr = pprint.pformat(circuit_json, width=88, sort_dicts=False)
     metrics_repr = pprint.pformat(metrics, width=88, sort_dicts=False)
+    qaoa_repr = pprint.pformat(qaoa_baseline or {}, width=88, sort_dicts=False)
 
     return f'''"""MaxCut Ising 哈密顿量与对应的 VQE 基态线路（自动生成）。
 
@@ -303,6 +346,9 @@ def build_hamiltonian() -> Hamiltonian:
 # 期望对应的割值，achieved_cut 为概率显著比特串中的最佳读出割值。
 VQE_METRICS = {metrics_repr}
 
+# Standard QAOA baseline using the same Hamiltonian and MaxCut metric evaluator.
+QAOA_BASELINE = {qaoa_repr}
+
 # 线路以 circuit-JSON 形式记录，可用 circuit_from_json 无损重建。
 VQE_CIRCUIT_JSON = {circuit_repr}
 
@@ -326,6 +372,11 @@ def main() -> None:
     parser.add_argument("--ranking-num", type=int, default=40, help="排序阶段采样候选架构数。")
     parser.add_argument("--qas-seed", type=int, default=2, help="QAS 随机种子。")
     parser.add_argument("--device", type=str, default="cpu", help="Torch 设备，如 cpu/cuda/npu:0。")
+    parser.add_argument("--qaoa-p", type=int, default=1, help="QAOA baseline depth p.")
+    parser.add_argument("--qaoa-steps", type=int, default=80, help="QAOA baseline optimizer steps.")
+    parser.add_argument("--qaoa-lr", type=float, default=0.05, help="QAOA baseline optimizer learning rate.")
+    parser.add_argument("--qaoa-seed", type=int, default=11, help="QAOA baseline random seed.")
+    parser.add_argument("--skip-qaoa-baseline", action="store_true", help="Skip the standard QAOA baseline.")
     parser.add_argument("--disable-rzz", action="store_true", help="在 supernet 搜索中禁用 rzz，只保留 cx 双比特门。")
     args = parser.parse_args()
 
@@ -368,9 +419,27 @@ def main() -> None:
     )
 
     # 写入 Hamiltonian + VQE 线路到 maxcut_hamiltonian.py
+    qaoa_baseline = None
+    if not args.skip_qaoa_baseline:
+        qaoa_baseline = run_qaoa_baseline(
+            graph,
+            hamiltonian,
+            backend,
+            p=args.qaoa_p,
+            max_iters=args.qaoa_steps,
+            lr=args.qaoa_lr,
+            seed=args.qaoa_seed,
+        )
+        print(
+            f"       QAOA(p={qaoa_baseline['p']}) energy = {qaoa_baseline['qaoa_energy']:.6f}"
+            f", expected cut = {qaoa_baseline['expected_cut']:.3f}"
+            f", readout cut = {qaoa_baseline['achieved_cut']:.3f}"
+            f", ratio = {qaoa_baseline['approx_ratio']:.4f}"
+        )
+
     circuit_json = circuit_to_json(best_circuit)
     HAMILTONIAN_PY.write_text(
-        render_hamiltonian_module(graph, terms, circuit_json, metrics),
+        render_hamiltonian_module(graph, terms, circuit_json, metrics, qaoa_baseline=qaoa_baseline),
         encoding="utf-8",
     )
     print(f"       已写入 {HAMILTONIAN_PY}")
