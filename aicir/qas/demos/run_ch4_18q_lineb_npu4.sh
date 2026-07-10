@@ -18,6 +18,8 @@ cd "$REPO_ROOT"
 PYTHON=${PYTHON:-python}
 HAM_PATH=${1:-${HAM_PATH:-}}
 OUT_DIR=${OUT_DIR:-outputs/ch4_18q_lineb_npu4}
+SKIP_P0=${SKIP_P0:-0}
+P1_BOOTSTRAP_LABELS_CSV=${P1_BOOTSTRAP_LABELS_CSV:-}
 
 ACTIVE_ELECTRONS=${ACTIVE_ELECTRONS:-10}
 ACTIVE_SPATIAL_ORBITALS=${ACTIVE_SPATIAL_ORBITALS:-9}
@@ -76,7 +78,23 @@ P0_WORK_DIR="$OUT_DIR/p0_npu4_shards"
 P0_SUMMARY="$OUT_DIR/p0_npu4_shard_summary.json"
 CURRENT_LABELS="$OUT_DIR/current_labeled_rows.csv"
 
-export OUT_DIR HAM_PATH ACTIVE_ELECTRONS ACTIVE_SPATIAL_ORBITALS P0_CANDIDATES P0_MAX_EXCITATIONS P0_SEED REFERENCE_ENERGY
+if [[ "$SKIP_P0" != "0" && "$SKIP_P0" != "1" ]]; then
+  echo "SKIP_P0 must be 0 or 1." >&2
+  exit 2
+fi
+
+if [[ "$SKIP_P0" == "1" ]]; then
+  bootstrap_labels=${P1_BOOTSTRAP_LABELS_CSV:-$CURRENT_LABELS}
+  if [[ ! -s "$bootstrap_labels" ]]; then
+    echo "P1 resume requires a non-empty P1_BOOTSTRAP_LABELS_CSV or $CURRENT_LABELS." >&2
+    exit 2
+  fi
+  if [[ "$bootstrap_labels" != "$CURRENT_LABELS" ]]; then
+    cp "$bootstrap_labels" "$CURRENT_LABELS"
+  fi
+  echo "p0=skipped bootstrap_labels=$CURRENT_LABELS"
+else
+  export OUT_DIR HAM_PATH ACTIVE_ELECTRONS ACTIVE_SPATIAL_ORBITALS P0_CANDIDATES P0_MAX_EXCITATIONS P0_SEED REFERENCE_ENERGY
 
 "$PYTHON" - <<'PY'
 import os
@@ -151,6 +169,7 @@ PY
   --dtype "$DTYPE"
 
 cp "$P0_LABELS" "$CURRENT_LABELS"
+fi
 
 best_energy=""
 plateau_count=0
