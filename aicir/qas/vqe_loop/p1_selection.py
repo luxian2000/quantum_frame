@@ -13,6 +13,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from aicir.qas.vqe_loop.benchmark_table import (
     architecture_key,
+    scoped_architecture_key,
     rank_rows,
     rank_with_zero_cost_soft_prefilter,
     take_unique_with_source,
@@ -255,7 +256,7 @@ def _score_row(
     if active_field != requested_field:
         copied["fallback_downgrade_reason"] = f"{requested_field}_not_applicable_for_{_row_gene_kind(copied)}"
     score = _as_float(copied.get(active_field))
-    key = (architecture_key(copied), str(active_field))
+    key = (scoped_architecture_key(copied), str(active_field))
     if score is None:
         if active_field not in evaluator_registry:
             raise KeyError(f"missing evaluator for fallback field: {active_field}")

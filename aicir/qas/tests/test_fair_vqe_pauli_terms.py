@@ -10,6 +10,7 @@ from unittest.mock import patch
 import numpy as np
 
 from aicir.qas.core._types import ArchitectureSpec
+from aicir.qas.library.ansatz import OperatorSequenceAnsatzGene, architecture_from_operator_sequence_gene
 from aicir.qas.problems.hamiltonians import VQEProblem
 from aicir.qas.vqe_loop.fair_vqe import (
     CPU_PAULI_EXPECTATION_MIN_TERMS,
@@ -21,6 +22,21 @@ from aicir.qas.vqe_loop.fair_vqe import (
 
 
 class FairVqePauliTermsTest(unittest.TestCase):
+    def test_operator_sequence_xy_basis_changes_run_in_shared_fair_vqe(self):
+        architecture = architecture_from_operator_sequence_gene(
+            OperatorSequenceAnsatzGene(n_qubits=2, operators=("XY",))
+        )
+        problem = VQEProblem(
+            name="xy_operator_2q",
+            n_qubits=2,
+            hamiltonian=((1.0, "ZI"),),
+            reference_energy=-1.0,
+        )
+
+        energy = evaluate_vqe_energy(architecture, problem, parameters=[0.0])
+
+        self.assertAlmostEqual(energy, 1.0, places=6)
+
     def test_evaluate_pauli_problem_does_not_build_dense_hamiltonian(self):
         n_qubits = 9
         architecture = ArchitectureSpec.from_gates("empty_9q", [], n_qubits=n_qubits)

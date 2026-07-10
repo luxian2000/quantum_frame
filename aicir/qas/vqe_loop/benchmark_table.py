@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import hashlib
 import json
 import sys
 from dataclasses import dataclass, field
@@ -790,6 +791,35 @@ def architecture_key(row: Mapping[str, Any]) -> str:
     return str(row.get("architecture_id", "")).strip()
 
 
+def task_key(row: Mapping[str, Any]) -> str:
+    """Return the Hamiltonian/protocol scope for task-local P1 reuse."""
+
+    hamiltonian_id = str(row.get("hamiltonian_id", "") or "").strip()
+    raw_terms = row.get("hamiltonian_terms")
+    terms_digest = ""
+    if not is_empty(raw_terms):
+        canonical_terms = _canonical_json(raw_terms)
+        terms_digest = hashlib.sha256(canonical_terms.encode("utf-8")).hexdigest()[:24]
+    if not hamiltonian_id:
+        if terms_digest:
+            hamiltonian_id = "terms"
+        else:
+            hamiltonian_class = str(row.get("hamiltonian_class", "") or "").strip()
+            n_qubits = str(row.get("n_qubits", "") or "").strip()
+            hamiltonian_id = f"{hamiltonian_class}:{n_qubits}"
+    if terms_digest:
+        hamiltonian_id = f"{hamiltonian_id}:{terms_digest}"
+    protocol_version = str(row.get("protocol_version", "") or "").strip()
+    return f"{hamiltonian_id}|{protocol_version}"
+
+
+def scoped_architecture_key(row: Mapping[str, Any]) -> str:
+    """Return an architecture identity that cannot cross task or family scope."""
+
+    family = str(row.get("family", "") or "").strip().lower()
+    return f"{task_key(row)}|{family}|{architecture_key(row)}"
+
+
 def _architecture_id(row: Mapping[str, Any], fallback: str) -> str:
     value = str(row.get("architecture_id", "")).strip()
     return value if value else fallback
@@ -808,12 +838,12 @@ def deduplicate_children(
     """
 
     labeled_by_key = {
-        architecture_key(row): dict(row)
+        scoped_architecture_key(row): dict(row)
         for row in labeled_rows
         if architecture_key(row) and not is_empty(row.get("fair_best_energy"))
     }
     blocked_keys = {
-        architecture_key(row)
+        scoped_architecture_key(row)
         for row in known_unlabeled_rows
         if architecture_key(row)
     }
@@ -824,7 +854,7 @@ def deduplicate_children(
     skipped: list[str] = []
 
     for index, child in enumerate(children):
-        key = architecture_key(child)
+        key = scoped_architecture_key(child)
         identifier = _architecture_id(child, f"child:{index}")
         if key in labeled_by_key:
             if key not in reused_keys:
@@ -1042,6 +1072,7 @@ __all__ = [
     "architecture_from_ansatz_gene_payload",
     "architecture_from_candidate_row",
     "architecture_key",
+    "scoped_architecture_key",
     "as_float",
     "benchmark_row_identity",
     "choose_quota",
@@ -1063,6 +1094,7 @@ __all__ = [
     "read_csv_with_fieldnames",
     "resolve_p1_selector_fields",
     "row_hamiltonian_terms",
+    "task_key",
     "union_fieldnames",
     "validate_fair_label_protocol",
     "validate_term_widths",

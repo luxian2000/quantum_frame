@@ -130,6 +130,23 @@ class ChemistryExcitationAnsatzTests(unittest.TestCase):
             self.assertEqual(payload["kind"], "chemistry_excitation")
             self.assertEqual(payload["hf_occupied_qubits"], [1, 3])
 
+    def test_build_chemistry_excitation_rows_starts_with_hf_empty_gene(self):
+        from aicir.qas.vqe_loop.p0_chemistry_excitation import build_chemistry_excitation_rows
+
+        rows, _summary = build_chemistry_excitation_rows(
+            active_electrons=2,
+            active_spatial_orbitals=2,
+            hamiltonian_id="toy",
+            hamiltonian_class="molecular",
+            count=2,
+            max_excitations=1,
+            seed=7,
+        )
+
+        first_gene = json.loads(rows[0]["ansatz_gene"])
+        self.assertEqual(first_gene["excitations"], [])
+        self.assertEqual(rows[0]["depth_group"], "L0")
+
     def test_ansatz_family_capabilities_make_chemistry_boundary_explicit(self):
         from aicir.qas.vqe_loop.ansatz_family import ansatz_family_capabilities, summarize_ansatz_families
 

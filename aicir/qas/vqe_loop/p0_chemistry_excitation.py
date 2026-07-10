@@ -122,11 +122,14 @@ def build_chemistry_excitation_rows(
     rows: list[dict[str, Any]] = []
     seen = set(excluded_ids or set())
 
-    seed_sequences: list[list[dict[str, Any]]] = []
-    for item in pool:
-        seed_sequences.append([dict(item)])
-    for index in range(len(pool)):
-        seed_sequences.append([dict(pool[index]), dict(pool[(index + 1) % len(pool)])])
+    max_depth = max(0, int(max_excitations))
+    seed_sequences: list[list[dict[str, Any]]] = [[]]
+    if max_depth >= 1:
+        for item in pool:
+            seed_sequences.append([dict(item)])
+    if max_depth >= 2:
+        for index in range(len(pool)):
+            seed_sequences.append([dict(pool[index]), dict(pool[(index + 1) % len(pool)])])
 
     attempts = 0
     while len(rows) < int(count) and attempts < max(100, int(count) * 100):
@@ -134,7 +137,9 @@ def build_chemistry_excitation_rows(
         if seed_sequences:
             excitations = seed_sequences.pop(0)
         else:
-            depth = rng.randint(1, max(1, int(max_excitations)))
+            if max_depth <= 0:
+                break
+            depth = rng.randint(1, max_depth)
             excitations = [dict(rng.choice(pool)) for _ in range(depth)]
         gene = ChemistryExcitationAnsatzGene(
             n_qubits=n_qubits,

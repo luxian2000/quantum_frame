@@ -54,6 +54,60 @@ class MutationUnavailable(ValueError):
     """Raised when a requested variation operator cannot change the gene."""
 
 
+ARCHITECTURE_DERIVED_FIELDS = (
+    "label_status",
+    "retry_count",
+    "failure_reason",
+    "last_error_digest",
+    "zero_cost_status",
+    "zero_cost_reasons",
+    "expressibility_score",
+    "trainability_score",
+    "entanglement_score",
+    "zero_cost_feature_score",
+    "zero_cost_score_is_ranking_signal",
+    "p1_selection_source",
+    "predicted_fair_energy",
+    "oracle_reason",
+    "oracle_neighbor_count",
+    "oracle_nearest_distance",
+    "oracle_kth_distance",
+    "oracle_neighbor_target_std",
+    "fallback_selector",
+    "fallback_score",
+    "E1",
+    "E2",
+    "E5",
+    "VQE_TASK_PROXY",
+    "GNN_PROXY",
+    "ENSEMBLE",
+    "predictor_confidence",
+    "task_proxy_hamiltonian_overlap",
+    "task_proxy_gradient_sensitivity",
+    "task_proxy_adapt_growth_potential",
+    "supernet_rank_score",
+    "screening_energy",
+    "screening_energy_is_final_label",
+    "supernet_warm_start_status",
+    "fair_best_energy",
+    "fair_mean_energy",
+    "fair_median_energy",
+    "fair_std_energy",
+    "fair_success_rate",
+    "delta_ref",
+    "optimizer",
+    "n_seeds",
+    "max_evals",
+    "nfev",
+    "walltime_s",
+    "success_delta_ref",
+    "best_trace",
+    "dtype",
+    "backend",
+    "created_at",
+)
+
+
 
 
 OperatorGrowthEvaluator = Callable[[OperatorSequenceAnsatzGene, str], float | Mapping[str, Any]]
@@ -98,6 +152,8 @@ def _finite_difference_operator_growth_score(
     *,
     prefix_parameters: Sequence[float] | None = None,
     epsilon: float = 0.05,
+    energy_cache: dict[tuple[str, tuple[float, ...]], float | Exception] | None = None,
+    backend: Any | None = None,
 ) -> float:
     from aicir.qas.library.ansatz import architecture_from_operator_sequence_gene
     from aicir.qas.problems.hamiltonians import VQEProblem
@@ -120,10 +176,39 @@ def _finite_difference_operator_growth_score(
     prefix = parsed_prefix[: gene.layers]
     if len(prefix) < gene.layers:
         prefix.extend([0.0] * (gene.layers - len(prefix)))
+
+    def evaluate(architecture, parameters: Sequence[float]) -> float:
+        parsed_parameters = tuple(float(value) for value in parameters)
+        metadata = dict(getattr(architecture, "metadata", {}) or {})
+        ansatz_payload = metadata.get("ansatz_gene")
+        architecture_key = (
+            json.dumps(ansatz_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            if ansatz_payload is not None
+            else str(architecture.name)
+        )
+        key = (architecture_key, parsed_parameters)
+        if energy_cache is not None and key in energy_cache:
+            cached = energy_cache[key]
+            if isinstance(cached, Exception):
+                raise cached
+            return float(cached)
+        try:
+            kwargs: dict[str, Any] = {"parameters": parsed_parameters}
+            if backend is not None:
+                kwargs["backend"] = backend
+            energy = float(evaluate_vqe_energy(architecture, problem, **kwargs))
+        except Exception as exc:
+            if energy_cache is not None:
+                energy_cache[key] = exc
+            raise
+        if energy_cache is not None:
+            energy_cache[key] = energy
+        return energy
+
     try:
-        base = evaluate_vqe_energy(base_architecture, problem, parameters=prefix)
-        plus = evaluate_vqe_energy(trial_architecture, problem, parameters=prefix + [float(epsilon)])
-        minus = evaluate_vqe_energy(trial_architecture, problem, parameters=prefix + [-float(epsilon)])
+        base = evaluate(base_architecture, prefix)
+        plus = evaluate(trial_architecture, prefix + [float(epsilon)])
+        minus = evaluate(trial_architecture, prefix + [-float(epsilon)])
     except Exception:
         return float("inf")
     gradient = abs((float(plus) - float(minus)) / (2.0 * float(epsilon)))
@@ -159,13 +244,19 @@ def _best_parameters_from_row(row: Mapping[str, Any]) -> tuple[float, ...]:
     return best_parameters
 
 
-def _operator_pool_from_row_hamiltonian(row: Mapping[str, Any], n_qubits: int) -> tuple[str, ...] | None:
-    pool: list[str] = []
+def _operator_pool_from_row_hamiltonian(
+    row: Mapping[str, Any],
+    n_qubits: int,
+    *,
+    pool_limit: int | None = None,
+) -> tuple[str, ...] | None:
+    ranked: list[tuple[float, int, str]] = []
+    seen: set[str] = set()
     try:
         terms = row_hamiltonian_terms(row)
     except ValueError:
         return None
-    for coeff, pauli in terms:
+    for index, (coeff, pauli) in enumerate(terms):
         candidate = str(pauli).strip().upper()
         if len(candidate) != int(n_qubits):
             continue
@@ -175,16 +266,26 @@ def _operator_pool_from_row_hamiltonian(row: Mapping[str, Any], n_qubits: int) -
             continue
         if float(coeff) == 0.0:
             continue
-        if candidate not in pool:
-            pool.append(candidate)
+        if candidate not in seen:
+            ranked.append((-abs(float(coeff)), index, candidate))
+            seen.add(candidate)
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    pool = [candidate for _coefficient_rank, _index, candidate in ranked]
+    if pool_limit is not None and int(pool_limit) > 0:
+        pool = pool[: int(pool_limit)]
     return tuple(pool) if pool else None
 
 
-def _operator_growth_evaluator_from_row(row: Mapping[str, Any]) -> OperatorGrowthEvaluator | None:
+def _operator_growth_evaluator_from_row(
+    row: Mapping[str, Any],
+    *,
+    backend: Any | None = None,
+) -> OperatorGrowthEvaluator | None:
     terms = row_hamiltonian_terms(row)
     if not terms:
         return None
     prefix_parameters = _best_parameters_from_row(row)
+    energy_cache: dict[tuple[str, tuple[float, ...]], float | Exception] = {}
 
     def evaluate(gene: OperatorSequenceAnsatzGene, candidate_operator: str) -> float:
         return _finite_difference_operator_growth_score(
@@ -192,6 +293,8 @@ def _operator_growth_evaluator_from_row(row: Mapping[str, Any]) -> OperatorGrowt
             candidate_operator,
             terms,
             prefix_parameters=prefix_parameters,
+            energy_cache=energy_cache,
+            backend=backend,
         )
 
     return evaluate
@@ -227,11 +330,12 @@ def _select_adapt_growth_operator(
         for candidate in candidates:
             if candidate not in existing:
                 return candidate
-        return candidates[0]
+        raise MutationUnavailable("operator_adapt_growth has no novel operator remaining")
     existing = set(gene.operators)
     novel_candidates = [candidate for candidate in candidates if candidate not in existing]
-    if novel_candidates:
-        candidates = novel_candidates
+    if not novel_candidates:
+        raise MutationUnavailable("operator_adapt_growth has no novel operator remaining")
+    candidates = novel_candidates
     scored: list[tuple[float, int, str]] = []
     for index, candidate in enumerate(candidates):
         scored.append((_growth_score_value(evaluator(gene, candidate)), index, candidate))
@@ -511,6 +615,7 @@ def _finite_difference_chemistry_growth_score(
     prefix_parameters: Sequence[float] | None = None,
     epsilon: float = 0.05,
     energy_cache: dict[tuple[str, tuple[float, ...]], float | Exception] | None = None,
+    backend: Any | None = None,
 ) -> float:
     from aicir.qas.library.ansatz import architecture_from_chemistry_excitation_gene
     from aicir.qas.problems.hamiltonians import VQEProblem
@@ -553,7 +658,10 @@ def _finite_difference_chemistry_growth_score(
                 raise cached
             return float(cached)
         try:
-            energy = float(evaluate_vqe_energy(architecture, problem, parameters=parsed_parameters))
+            kwargs: dict[str, Any] = {"parameters": parsed_parameters}
+            if backend is not None:
+                kwargs["backend"] = backend
+            energy = float(evaluate_vqe_energy(architecture, problem, **kwargs))
         except Exception as exc:
             if energy_cache is not None:
                 energy_cache[key] = exc
@@ -573,7 +681,11 @@ def _finite_difference_chemistry_growth_score(
     return -(gradient + energy_drop)
 
 
-def _chemistry_growth_evaluator_from_row(row: Mapping[str, Any]) -> ChemistryGrowthEvaluator | None:
+def _chemistry_growth_evaluator_from_row(
+    row: Mapping[str, Any],
+    *,
+    backend: Any | None = None,
+) -> ChemistryGrowthEvaluator | None:
     terms = row_hamiltonian_terms(row)
     if not terms:
         return None
@@ -587,6 +699,7 @@ def _chemistry_growth_evaluator_from_row(row: Mapping[str, Any]) -> ChemistryGro
             terms,
             prefix_parameters=prefix_parameters,
             energy_cache=energy_cache,
+            backend=backend,
         )
 
     return evaluate
@@ -630,6 +743,25 @@ def _memoized_chemistry_growth_evaluator(
     return evaluate
 
 
+def _memoized_operator_growth_evaluator(
+    evaluator: OperatorGrowthEvaluator | None,
+) -> OperatorGrowthEvaluator | None:
+    if evaluator is None:
+        return None
+    score_cache: dict[tuple[str, str], float] = {}
+
+    def evaluate(
+        gene: OperatorSequenceAnsatzGene,
+        candidate_operator: str,
+    ) -> float | Mapping[str, Any]:
+        key = (gene.label(), str(candidate_operator).strip().upper())
+        if key not in score_cache:
+            score_cache[key] = _growth_score_value(evaluator(gene, candidate_operator))
+        return score_cache[key]
+
+    return evaluate
+
+
 def _limit_chemistry_candidates_by_type(
     candidates: Sequence[Mapping[str, Any]],
     pool_limit: int | None,
@@ -668,8 +800,9 @@ def _select_adapt_growth_excitations(
         raise MutationUnavailable("chemistry_adapt_growth requires a non-empty chemistry excitation pool")
     existing = {_canonical_excitation(excitation) for excitation in gene.excitations}
     novel_candidates = [candidate for candidate in candidates if _canonical_excitation(candidate) not in existing]
-    if novel_candidates:
-        candidates = novel_candidates
+    if not novel_candidates:
+        raise MutationUnavailable("chemistry_adapt_growth has no novel excitation remaining")
+    candidates = novel_candidates
     candidates = _limit_chemistry_candidates_by_type(candidates, pool_limit)
     take = max(1, min(int(count), len(candidates)))
     if evaluator is None:
@@ -943,7 +1076,7 @@ def mutation_result_to_row(
     child_payload = result.child.to_jsonable()
     metadata = _architecture_metadata(result.child)
     row = dict(parent_row)
-    for field in ("fair_best_energy", "fair_mean_energy", "fair_median_energy", "label_status"):
+    for field in ARCHITECTURE_DERIVED_FIELDS:
         row.pop(field, None)
     row.update(
         {
@@ -1002,10 +1135,12 @@ def generate_mutation_children(
     single_qubit_gates: Sequence[str] = DEFAULT_SINGLE_QUBIT_GATES,
     two_qubit_gates: Sequence[str] = DEFAULT_TWO_QUBIT_GATES,
     operator_pool: Sequence[str] | None = None,
+    operator_pool_limit: int | None = None,
     operator_growth_evaluator: OperatorGrowthEvaluator | None = None,
     chemistry_growth_evaluator: ChemistryGrowthEvaluator | None = None,
     chemistry_adapt_append_k: int = 1,
     chemistry_adapt_pool_limit: int | None = None,
+    growth_backend: Any | None = None,
     min_layers: int = 1,
     max_layers: int | None = None,
     mutation_weights: Mapping[str, float] | None = None,
@@ -1019,11 +1154,22 @@ def generate_mutation_children(
     children: list[dict[str, Any]] = []
     for parent_index, parent_row in enumerate(parent_rows):
         parent_gene = _gene_from_row(parent_row)
-        row_growth_evaluator = operator_growth_evaluator or _operator_growth_evaluator_from_row(parent_row)
-        row_chemistry_growth_evaluator = _memoized_chemistry_growth_evaluator(
-            chemistry_growth_evaluator or _chemistry_growth_evaluator_from_row(parent_row)
+        row_growth_evaluator = _memoized_operator_growth_evaluator(
+            operator_growth_evaluator or _operator_growth_evaluator_from_row(parent_row, backend=growth_backend)
         )
-        row_operator_pool = operator_pool or _operator_pool_from_row_hamiltonian(parent_row, parent_gene.n_qubits)
+        row_chemistry_growth_evaluator = _memoized_chemistry_growth_evaluator(
+            chemistry_growth_evaluator or _chemistry_growth_evaluator_from_row(parent_row, backend=growth_backend)
+        )
+        if operator_pool:
+            row_operator_pool = tuple(operator_pool)
+            if operator_pool_limit is not None and int(operator_pool_limit) > 0:
+                row_operator_pool = row_operator_pool[: int(operator_pool_limit)]
+        else:
+            row_operator_pool = _operator_pool_from_row_hamiltonian(
+                parent_row,
+                parent_gene.n_qubits,
+                pool_limit=operator_pool_limit,
+            )
         for child_index in range(int(children_per_parent)):
             result: MutationResult | None = None
             for mutation_type in _mutation_order(
@@ -1053,7 +1199,7 @@ def generate_mutation_children(
                 except MutationUnavailable:
                     continue
             if result is None:
-                raise MutationUnavailable("no configured mutation type could change the parent gene")
+                break
             children.append(mutation_result_to_row(parent_row, result))
     return children
 

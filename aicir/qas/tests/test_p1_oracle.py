@@ -75,6 +75,26 @@ class P1OracleTests(unittest.TestCase):
         self.assertEqual(prediction.prediction, -2.5)
         self.assertEqual(prediction.reason, "exact_match")
 
+    def test_oracle_does_not_reuse_exact_match_from_other_task(self):
+        from aicir.qas.vqe_loop.oracle import predict_fair_energy
+
+        parent = make_gene([("ry", "rz")], [("cx",)])
+        query = row("same", parent)
+        query["hamiltonian_id"] = "task_b"
+        labeled = row("labeled", parent, fair=-2.5)
+        labeled["hamiltonian_id"] = "task_a"
+
+        prediction = predict_fair_energy(
+            query,
+            labeled_rows=[labeled],
+            k_min=1,
+            d_max=0.1,
+        )
+
+        self.assertFalse(prediction.trusted)
+        self.assertIsNone(prediction.prediction)
+        self.assertEqual(prediction.reason, "no_labeled_neighbors")
+
     def test_oracle_abstains_when_neighbors_are_insufficient(self):
         from aicir.qas.vqe_loop.oracle import predict_fair_energy
 

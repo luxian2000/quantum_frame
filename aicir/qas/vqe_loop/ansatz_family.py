@@ -47,8 +47,8 @@ _FAMILY_CAPABILITIES: dict[str, dict[str, Any]] = {
         "evaluators": {
             "E2": True,
             "E5": False,
-            "VQE_TASK_PROXY": False,
-            "GNN_PROXY": False,
+            "VQE_TASK_PROXY": True,
+            "GNN_PROXY": True,
             "fair_label": True,
         },
     },
