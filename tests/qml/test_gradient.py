@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from aicir import Circuit, NumpyBackend, Parameter, State, cx, ry
-from aicir.qml import auto, psr, spsr, spsa, mpsr, fd, ad, qng, bdqng, kqng, dqng
+from aicir.qml import auto, psr, spsr, spsa, mpsr, fd, ad, qng, bdqng, kqng, dqng, hessian, qfim, metric_tensor
 
 
 def test_psr_matches_analytic_gradient_for_vector_params():
@@ -180,6 +180,44 @@ def test_mpsr_supports_tuple_indices_for_shaped_params():
 def test_mpsr_rejects_duplicate_indices():
     with pytest.raises(ValueError, match="duplicates"):
         mpsr(lambda theta: np.sum(theta), np.array([0.1, 0.2]), parameter_indices=[0, 0])
+
+
+def test_hessian_psr_matches_analytic_coupled_objective():
+    params = np.array([0.4, -0.2])
+
+    def objective(theta):
+        return np.cos(theta[0]) * np.sin(theta[1])
+
+    matrix = hessian(objective, params)
+    expected = np.array([
+        [-np.cos(params[0]) * np.sin(params[1]), -np.sin(params[0]) * np.cos(params[1])],
+        [-np.sin(params[0]) * np.cos(params[1]), -np.cos(params[0]) * np.sin(params[1])],
+    ])
+
+    assert matrix.shape == (2, 2)
+    assert np.allclose(matrix, expected, atol=1e-8)
+
+
+def test_hessian_fd_matches_single_rotation_expectation():
+    def objective(values):
+        return np.cos(values[0])
+
+    value = np.array([0.5])
+    matrix = hessian(objective, value, method="fd", eps=1e-4)
+
+    assert matrix.shape == (1, 1)
+    assert np.allclose(matrix, [[-np.cos(value[0])]], atol=1e-3)
+
+
+def test_hessian_psr_falls_back_for_non_pauli_frequency():
+    value = np.array([0.37])
+
+    def objective(theta):
+        return np.cos(2.0 * theta[0])
+
+    matrix = hessian(objective, value)
+
+    assert np.allclose(matrix, [[-4.0 * np.cos(2.0 * value[0])]], atol=1e-3)
 
 
 def test_fd_matches_analytic_gradient_for_vector_params():
@@ -495,6 +533,36 @@ def test_qng_matches_single_rotation_natural_gradient():
     assert np.allclose(grad, [-np.sin(theta[0])], atol=1e-5)
     assert np.allclose(qfim, [[1.0]], atol=1e-5)
     assert np.allclose(natural_grad, grad, atol=1e-5)
+
+
+def test_qfim_public_helper_matches_product_ry_metric_numpy():
+    backend = NumpyBackend()
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), ry(theta[1], 1), n_qubits=2)
+        return State.zero_state(2, backend).evolve(circuit.unitary(backend=backend))
+
+    theta = np.array([0.2, -0.4])
+    metric = qfim(state_fn, theta, metric_eps=1e-4)
+
+    assert np.allclose(metric, np.eye(2), atol=5e-4)
+    assert np.allclose(metric_tensor(state_fn, theta, metric_eps=1e-4), metric)
+
+
+def test_qfim_public_helper_accepts_torch_backend_state():
+    pytest.importorskip("torch")
+    from aicir.backends.gpu_backend import TorchBackend
+
+    backend = TorchBackend(device="cpu")
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), ry(theta[1], 1), n_qubits=2)
+        return State.zero_state(2, backend).evolve(circuit.unitary(backend=backend))
+
+    theta = np.array([0.2, -0.4])
+    metric = qfim(state_fn, theta, metric_eps=1e-4, backend=backend)
+
+    assert np.allclose(metric, np.eye(2), atol=5e-4)
 
 
 def test_qng_preconditions_with_supplied_qfim():

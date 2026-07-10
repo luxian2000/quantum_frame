@@ -342,6 +342,41 @@ class _NpuAddFn(torch.autograd.Function):
         return grad_output, grad_output
 
 
+def _reduce_grad(grad, shape):
+    """把广播后的实数梯度按 sum 归约回 shape（自定义 Function 广播反传用）。"""
+    shape = tuple(int(s) for s in shape)
+    while grad.dim() > len(shape):
+        grad = grad.sum(0)
+    for i in range(len(shape)):
+        if shape[i] == 1 and grad.shape[i] != 1:
+            grad = grad.sum(i, keepdim=True)
+    return grad
+
+
+class _NpuMulFn(torch.autograd.Function):
+    """复数逐元素乘的 NPU 自动微分安全包装（real/imag 分解，支持广播）。"""
+
+    @staticmethod
+    def forward(ctx, a, b):
+        ar, ai = torch.real(a), torch.imag(a)
+        br, bi = torch.real(b), torch.imag(b)
+        ctx.save_for_backward(ar, ai, br, bi)
+        ctx.a_shape = tuple(a.shape)
+        ctx.b_shape = tuple(b.shape)
+        return torch.complex(ar * br - ai * bi, ar * bi + ai * br)
+
+    @staticmethod
+    def backward(ctx, grad):
+        ar, ai, br, bi = ctx.saved_tensors
+        gr, gi = torch.real(grad), torch.imag(grad)
+        # grad_a = grad·conj(b), grad_b = grad·conj(a)
+        gar, gai = gr * br + gi * bi, gi * br - gr * bi
+        gbr, gbi = gr * ar + gi * ai, gi * ar - gr * ai
+        ga = torch.complex(_reduce_grad(gar, ctx.a_shape), _reduce_grad(gai, ctx.a_shape))
+        gb = torch.complex(_reduce_grad(gbr, ctx.b_shape), _reduce_grad(gbi, ctx.b_shape))
+        return ga, gb
+
+
 class _NpuLocalGateApplyFn(torch.autograd.Function):
     """局部量子门（gather→matmul→scatter）的 NPU 自动微分安全包装。
 
@@ -441,6 +476,73 @@ class _NpuLocalGateApplyFn(torch.autograd.Function):
 
         grad_flat = torch.complex(grad_flat_re, grad_flat_im)  # 一次构造，非累加
         return grad_flat, grad_local, None  # indices 无梯度
+
+
+class _SplitComplex(torch.autograd.Function):
+    """把复数张量拆成 (real, imag) 两个实张量（单入边 → 反传单次 torch.complex，规避 NPU
+    complex64 梯度累加 aclnnInplaceAdd）。所有 real/imag 分解的入口都应经此，避免复数张量在
+    计算图里 fan-out。"""
+
+    @staticmethod
+    def forward(ctx, z):
+        return torch.real(z).contiguous(), torch.imag(z).contiguous()
+
+    @staticmethod
+    def backward(ctx, gr, gi):
+        if gr is None:
+            gr = torch.zeros_like(gi)
+        if gi is None:
+            gi = torch.zeros_like(gr)
+        return torch.complex(gr, gi)
+
+
+def _real_embedding_svd(matrix):
+    """复数矩阵的 real-embedding 约化 SVD（Ascend 无原生 complex64 SVD）。
+
+    用 [[Re,-Im],[Im,Re]] 实块跑 NPU 原生实数 SVD 得奇异值与右奇异子空间；再用**纯实数算术**
+    的复数 modified Gram-Schmidt（右向量以 (real, imag) 实数对表示）提取 p 个正交归一复数右
+    向量 V，令 U = A V / S、Vh = V^H。对简并/近简并奇异值鲁棒（MPS 的 Bell/GHZ/乘积态常见），
+    A ≈ U diag(S) Vh 且 U/V 列正交归一。
+
+    NPU 安全：全程只用实数 op（NPU 有 complex64 会缺的是 sub/add/mul 等）；复数张量仅在入口
+    经 :class:`_SplitComplex`（单入边）拆一次、在出口用 torch.complex 构造，中途不做复数
+    加/减、也不 fan-out 复数张量——forward 与 backward 都不触碰缺失的 complex64 内核。简并处
+    的选择为数据相关分支，梯度分段定义（SVD-autograd 在简并处本就不光滑，各后端共有）。
+    """
+    m, n = int(matrix.shape[0]), int(matrix.shape[1])
+    p = min(m, n)
+    ar, ai = _SplitComplex.apply(matrix)  # 单入边拆分，反传安全
+    big = torch.cat([torch.cat([ar, -ai], dim=1), torch.cat([ai, ar], dim=1)], dim=0)
+    _ur, sr, vhr = torch.linalg.svd(big, full_matrices=False)  # sr 降序，长 2p
+    kvr, kvi, ks = [], [], []  # 保留右向量的 real/imag 对与对应奇异值
+    for j in range(int(sr.shape[0])):
+        wr, wi = vhr[j, :n], vhr[j, n:]  # 候选右向量的实/虚部（实数对）
+        for kr, ki in zip(kvr, kvi):
+            dr = (kr * wr + ki * wi).sum()  # <k,w> = conj(k)·w 的实/虚部
+            di = (kr * wi - ki * wr).sum()
+            pr = dr * kr - di * ki  # proj = <k,w>·k
+            pi = dr * ki + di * kr
+            wr = wr - pr  # 实数减法（NPU 安全）
+            wi = wi - pi
+        nrm = torch.sqrt((wr * wr + wi * wi).sum())
+        if float(nrm.detach()) > 0.5:  # 分支为控制流，保留张量仍带梯度
+            kvr.append(wr / nrm)
+            kvi.append(wi / nrm)
+            ks.append(sr[j])
+        if len(kvr) == p:
+            break
+    vr, vi = torch.stack(kvr, dim=1), torch.stack(kvi, dim=1)  # (n, p) 实/虚
+    S = torch.stack(ks)  # (p,) 实数降序
+    ur_cols, ui_cols = [], []
+    for i in range(p):
+        avr = ar @ vr[:, i] - ai @ vi[:, i]  # A v_i 的实/虚部
+        avi = ar @ vi[:, i] + ai @ vr[:, i]
+        denom = torch.clamp(S[i], min=torch.finfo(S.dtype).eps)  # 避免 σ_i=0 时 0/0=NaN
+        ur_cols.append(avr / denom)  # U 列 = A v_i / σ_i
+        ui_cols.append(avi / denom)
+    U = torch.complex(torch.stack(ur_cols, dim=1), torch.stack(ui_cols, dim=1))  # (m, p)
+    Vh = torch.complex(vr.transpose(0, 1), -vi.transpose(0, 1))  # V^H (p, n)
+    return U, S, Vh
 
 
 class NPUBackend(GPUBackend):
@@ -827,6 +929,12 @@ class NPUBackend(GPUBackend):
             return _NpuConjFn.apply(a)
         return super().conj(a)
 
+    def svd(self, matrix):
+        """NPU 复数 SVD 走 real-embedding（Ascend 无原生 complex64 SVD）；实数/CPU 回退父类。"""
+        if self._is_npu_complex(matrix):
+            return _real_embedding_svd(matrix)
+        return super().svd(matrix)
+
     def take(self, a, axis, index):
         if self._is_npu_complex(a):
             return _NpuTakeFn.apply(a, int(axis), int(index))
@@ -836,6 +944,19 @@ class NPUBackend(GPUBackend):
         if self._is_npu_complex(a) or self._is_npu_complex(b):
             return _NpuAddFn.apply(a, b)
         return super().add(a, b)
+
+    def mul(self, a, b):
+        if self._is_npu_complex(a) or self._is_npu_complex(b):
+            return _NpuMulFn.apply(self.cast(a), self.cast(b))
+        return super().mul(a, b)
+
+    def div(self, a, b):
+        if self._is_npu_complex(a) or self._is_npu_complex(b):
+            br, bi = _SplitComplex.apply(self.cast(b))     # 单入边拆分，反传安全
+            denom = br * br + bi * bi                       # 实数 |b|^2
+            inv_b = torch.complex(br / denom, -bi / denom)  # conj(b)/|b|^2
+            return self.mul(self.cast(a), inv_b)
+        return super().div(a, b)
 
     def dagger(self, matrix):
         """NPU workaround: conjugate transpose via real/imag split (avoids torch.conj on complex64)."""

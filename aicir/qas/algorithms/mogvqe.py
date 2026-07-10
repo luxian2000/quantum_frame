@@ -21,7 +21,7 @@
 - backend: Optional[Any]。用于构造和仿真线路的 aicir 后端。
 
 输出 (Outputs):
-- run_mog_vqe 返回一个 MOGVQEResult 数据类，包含：
+- mogvqe 返回一个 MOGVQEResult 数据类，包含：
   * best_individual: 搜索到的最优 block 拓扑。
   * best_circuit: 搜索到并绑定最优参数后的 aicir Circuit。
   * best_energy: 最优线路达到的能量值。
@@ -256,7 +256,7 @@ def extract_blocks_from_circuit(
     )
 
 
-def run_mog_vqe(
+def mogvqe(
     initial_ansatz: MOGVQEIndividual | Circuit | Sequence[MOGVQEBlock],
     *,
     hamiltonian: Hamiltonian | np.ndarray | None = None,
@@ -314,6 +314,9 @@ def run_mog_vqe(
         history=history,
         config=cfg,
     )
+
+
+run_mog_vqe = mogvqe
 
 
 def mutate_individual(
@@ -560,7 +563,7 @@ def _resolve_energy_evaluator(
     if energy_evaluator is not None:
         return lambda circuit: float(energy_evaluator(circuit))
     if hamiltonian is None:
-        raise ValueError("run_mog_vqe requires either hamiltonian or energy_evaluator")
+        raise ValueError("mogvqe requires either hamiltonian or energy_evaluator")
 
     if isinstance(hamiltonian, Hamiltonian):
         matrix = hamiltonian.to_matrix(backend)
@@ -836,5 +839,6 @@ __all__ = [
     "non_dominated_sort",
     "nsga_ii_select",
     "pareto_front",
+    "mogvqe",
     "run_mog_vqe",
 ]

@@ -5,6 +5,7 @@ from aicir.qas.algorithms.mogvqe import (
     MOGVQEConfig,
     block_hardware_efficient_ansatz,
     extract_blocks_from_circuit,
+    mogvqe,
     run_mog_vqe,
 )
 
@@ -32,7 +33,7 @@ def test_extract_blocks_from_circuit_uses_existing_cx_topology():
     assert [(block.control, block.target) for block in individual.blocks] == [(0, 1), (1, 2)]
 
 
-def test_run_mog_vqe_returns_modified_circuit_and_pareto_front():
+def test_mogvqe_returns_modified_circuit_and_pareto_front():
     initial = block_hardware_efficient_ansatz(n_qubits=2, layers=1, topology="linear")
     config = MOGVQEConfig(
         population_size=4,
@@ -48,9 +49,13 @@ def test_run_mog_vqe_returns_modified_circuit_and_pareto_front():
     def energy(circuit):
         return -float(sum(1 for gate in circuit.gates if gate["type"] == "cx"))
 
-    result = run_mog_vqe(initial, energy_evaluator=energy, config=config)
+    result = mogvqe(initial, energy_evaluator=energy, config=config)
 
     assert result.best_circuit.n_qubits == 2
     assert result.best_individual.cnot_count >= initial.cnot_count
     assert result.pareto_front
     assert len(result.history) == config.generations + 1
+
+
+def test_run_mog_vqe_remains_compatibility_alias():
+    assert run_mog_vqe is mogvqe

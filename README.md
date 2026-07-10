@@ -26,8 +26,9 @@
 - **灵活测量模型**：支持线路内 Pauli 投影测量、末端读出、shots 采样、精确模式、态快照和偏迹。
 - **经典控制流**：支持由测量结果驱动的 `ClassicalRegister`、`measure(creg=)`、`if_`/`while_`（含 `else`），按每条测量轨迹求值（见 §5.13）。
 - **变分算法**：内置 `BasicVQE`、`run_vqe`、QAOA、VQD、SSVQE，以及 HEA、离子阱 HEA-TI 等 ansatz 模板。
-- **QML 梯度**：支持参数移位（`psr`、`spsr`、`multipsr`，以及激发门四项参数移位 `psr4`）、有限差分、SPSA、量子自然梯度和 PyTorch `autograd`。
-- **量子架构搜索**：支持权重共享 supernet、CRLQAS、PPR\_DQL、PPO\_RB（需要 PyTorch）。
+- **QML 梯度**：支持参数移位（`psr`、`spsr`、`mpsr`，以及激发门四项参数移位 `psr4`）、有限差分、SPSA、量子自然梯度和 PyTorch `autograd`。
+- **量子架构搜索**：支持权重共享 supernet、CRLQAS、`pprdql`、`pporb`（需要 PyTorch；旧名 `ppr_dql` / `ppo_rb` 仍可作为别名使用）。
+- **多种模拟引擎**：态矢量、密度矩阵、精确张量网络（`tn_statevector`/单/部分振幅），以及 bond 截断的 MPS 近似引擎（`mps_statevector`/`mps_expectation`、`Measure.run(method="mps")`、`MPSEstimator`），适合低纠缠、大比特数电路。
 - **噪声模拟**：通过密度矩阵演化支持退相干、比特/相位翻转、振幅阻尼和离子阱噪声。
 - **OpenQASM 输入输出**：支持 OpenQASM 2.0/3.0 导入导出，并提供 Qiskit、PennyLane、WuYue 互操作。
 - **可插拔后端**：`NumpyBackend`（CPU）、`GPUBackend`（PyTorch/CUDA）、`NPUBackend`（Ascend），只需替换一行即可切换。
@@ -116,9 +117,9 @@ aicir/
   qml/           # 参数移位、有限差分、autograd、QNG 等梯度工具
   ansatze/       # HEA、HEA-TI、UCCSD 等可复用 ansatz 模板
   vqc/           # VQE、QAOA、VQD、SSVQE 等变分算法
-  qas/           # supernet、DQAS、CRLQAS、PPR_DQL、PPO_RB 等量子架构搜索
+  qas/           # supernet、DQAS、CRLQAS、pprdql、pporb 等量子架构搜索
   chemistry/     # 分子哈密顿量预置与可选电子结构计算接口
-  simulator/     # 态矢量 / 张量网络模拟入口
+  simulator/     # 态矢量 / 精确张量网络 / MPS 近似模拟入口
   transpile/     # PassManager、线路优化与硬件约束变换
   optimizer/     # 经典参数优化器（Adam、COBYLA、LBFGS、SPSA 等）
   optimization/  # QUBO、Ising 映射等经典优化问题工具
@@ -194,6 +195,16 @@ from aicir import (
     BitFlipChannel,
     PhaseFlipChannel,
     AmplitudeDampingChannel,
+    PauliChannel,
+    PhaseDampingChannel,
+    GeneralizedAmplitudeDampingChannel,
+    TwoQubitDepolarizingChannel,
+    KrausChannel,
+    ResetChannel,
+    ErasureChannel,
+    ReadoutErrorChannel,
+    CorrelatedTwoQubitPauliChannel,
+    ThermalRelaxationChannel,
 )
 
 # OpenQASM 互转
@@ -211,7 +222,7 @@ from aicir import (
 )
 
 # QML 梯度工具
-from aicir.qml import psr, spsr, multipsr
+from aicir.qml import psr, spsr, mpsr
 
 # 线路编译与优化 pass pipeline
 from aicir.transpile import PassManager, optimize, optimize_basic, optimize_circuit
@@ -1154,6 +1165,16 @@ from aicir import (
     BitFlipChannel,
     PhaseFlipChannel,
     AmplitudeDampingChannel,
+    PauliChannel,
+    PhaseDampingChannel,
+    GeneralizedAmplitudeDampingChannel,
+    TwoQubitDepolarizingChannel,
+    KrausChannel,
+    ResetChannel,
+    ErasureChannel,
+    ReadoutErrorChannel,
+    CorrelatedTwoQubitPauliChannel,
+    ThermalRelaxationChannel,
     GPUBackend,
 )
 from aicir.core import State
@@ -1184,13 +1205,14 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 | `aicir/gates`             | [`aicir/gates/README.md`](aicir/gates/README.md)                         | GateSpec 门元信息注册表：目标比特数/参数个数/别名/QASM 名/绘图符号的单一来源。             |
 | `aicir/measure`           | [`aicir/measure/README.md`](aicir/measure/README.md)                     | 测量执行与经典控制流：轨迹路径、`ClassicalRegister`、`measure(creg=)`、`if_`/`while_`、`Result.classical_counts`。 |
 | `aicir/metrics`           | [`aicir/metrics/README.md`](aicir/metrics/README.md)                     | 任务无关的量子线路评分指标，供 QAS、VQE ansatz 筛选等架构层任务复用。                      |
+| `aicir/noise`             | [`aicir/noise/README.md`](aicir/noise/README.md)                         | 噪声通道、门后触发式 `NoiseModel`、密度矩阵噪声敏感性分析、离子阱默认噪声配置和误差预算指标。 |
 | `aicir/optimization/qubo` | [`aicir/optimization/qubo/README.md`](aicir/optimization/qubo/README.md) | QUBO 建模、Ising/Hamiltonian 转换、BasicQAOA 矩阵入口与结果解码。                          |
 | `aicir/optimizer`         | [`aicir/optimizer/README.md`](aicir/optimizer/README.md)                 | VQE/VQA 经典参数优化器（`Adam`/`SPSA`/`minimize` 等）；线路结构优化已迁至 `aicir.transpile`。 |
 | `aicir/primitives`        | [`aicir/primitives/README.md`](aicir/primitives/README.md)               | Sampler/Estimator primitives 统一执行入口与 `SampleResult`/`EstimateResult` 结果对象。 |
 | `aicir/qas`               | [`aicir/qas/README.md`](aicir/qas/README.md)                             | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。                                    |
 | `aicir/qml`               | [`aicir/qml/README.md`](aicir/qml/README.md)                             | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。                   |
-| `aicir/simulator`         | [`aicir/simulator/README.md`](aicir/simulator/README.md)                 | 精确张量网络模拟：`tn_statevector`/单/部分振幅/`tn_expectation`，cotengra 路径+切片（`tn` extra），NPU 上可微。 |
+| `aicir/simulator`         | [`aicir/simulator/README.md`](aicir/simulator/README.md)                 | 精确张量网络模拟：`tn_statevector`/单/部分振幅/`tn_expectation`，cotengra 路径+切片（`tn` extra），NPU 上可微；以及 bond 截断的 MPS 近似引擎 `mps_statevector`/`mps_expectation`（`Measure.run(method="mps")`、`MPSEstimator`）。 |
 | `aicir/transpile`         | [`aicir/transpile/README.md`](aicir/transpile/README.md)                 | 线路编译与优化流水线：`PassManager`、`optimize` 入口、多格式 `optimize_basic`/`optimize_circuit` 与本地化简 pass。 |
 | `aicir/visual`           | [`aicir/visual/README.md`](aicir/visual/README.md)                     | 线路图、态向量/概率分布、密度矩阵热力图，以及 QAS / metrics 结果可视化。 |
 | `aicir/vqc`               | [`aicir/vqc/README.md`](aicir/vqc/README.md)                             | VQE、QAOA、VQD、SSVQE 等基础变分算法编排（ansatz 模板已独立为 `aicir.ansatze`）。          |
-| `demos`                   | [`demos/README.md`](demos/README.md)                                     | 演示 `aicir.visual` 模块的示例脚本，涵盖线路、态向量、密度矩阵和 QAS 结果可视化。        |
+| `demos`                   | [`demos/`](demos/)                                                       | 演示 `aicir.visual` 模块的示例脚本，涵盖线路、态向量、密度矩阵和 QAS 结果可视化。        |

@@ -1,6 +1,6 @@
 # aicir.simulator — 精确张量网络模拟引擎
 
-本模块把电路的每个门当作张量，沿电路的操作顺序把它们缩并（contract）成末态或振幅，而不是维护一份显式的 `2^n` 态矢量。适合只需要少量振幅、或电路结构带来较优缩并路径（树宽较小）时，避免整段态矢量演化的内存/算力开销。收缩建立在 `Backend` 的张量原语（`tensordot`/`transpose`/`reshape`/`conj`）之上，因此与 `NumpyBackend`/`GPUBackend`/`NPUBackend` 均兼容；在 torch/NPU 后端上，参数门保留计算图，期望值可微。
+本模块把电路的每个门当作张量，沿电路的操作顺序把它们缩并（contract）成末态或振幅，而不是维护一份显式的 `2^n` 态矢量。适合只需要少量振幅、或电路结构带来较优缩并路径（树宽较小）时，避免整段态矢量演化的内存/算力开销。收缩建立在 `Backend` 的张量原语（`tensordot`/`transpose`/`reshape`/`conj`）之上，因此与 `NumpyBackend`/`GPUBackend`/`NPUBackend` 均兼容；精确张量网络期望在 torch/NPU 后端上保留计算图，MPS 的 NPU 梯度走 `MPSEstimator.gradient(method="psr")` 参数移位。
 
 ---
 
@@ -24,6 +24,10 @@
 
 只是想用 Measure 的统一入口（shots/exact/末端读出）跑一遍张量网络路径？
   -> Measure.run(circuit, method="tensor", ...)
+
+需要更大比特数的低纠缠电路近似末态/期望（bond 截断，有损）？
+  -> mps_statevector(circuit, max_bond_dim=..., cutoff=...) / mps_expectation(...)
+     或 Measure.run(circuit, method="mps", max_bond_dim=..., cutoff=...)
 ```
 
 ---
@@ -60,7 +64,41 @@
 
 ---
 
-## 3. 比特序与索引约定
+## 3. MPS 近似引擎
+
+### `mps_statevector(circuit, *, max_bond_dim=None, cutoff=1e-10, backend=None) -> MPSState`
+
+用矩阵乘积态（MPS）表示近似末态，适合低纠缠、大比特数的电路。返回 `MPSState` 对象，其中：
+
+- `.to_statevector()` 还原稠密态矢量（`State` 形态，`(2^n, 1)`），用于与其他路径对比或下游消费稠密向量的函数。
+- `.truncation_error` 是 float，记录 SVD 截断过程中累计丢弃的奇异值权重（相对损失）。
+
+**截断参数**：
+- `max_bond_dim`：bond 维度的硬上限（None = 不限，满秩演化）。
+- `cutoff`：相对奇异值截断阈值，默认 `1e-10`；若奇异值比例 `σ_i / σ_max < cutoff`，则丢弃该及后续奇异值。两参数独立生效，取两者给定的更严格截断。
+
+**约束与限制**：
+- 仅接受 1/2 比特门；≥3 比特门需先经 `aicir.transpile.DecomposePass` 分解。
+- 非相邻双比特门自动插入 SWAP 网络，并跟踪逻辑↔物理置换（`site_permutation` 属性）。
+- 仅支持纯态、无噪声、无经典控制流（`ControlFlow`）。
+- 后端支持 NumPy/GPU/NPU；NPU 支持 `mps_statevector`、`mps_expectation` 与 `MPSEstimator` 前向，梯度通过 `MPSEstimator.gradient(method="psr")` 参数移位获得。直接 autograd（`mps_expectation(...).backward()`）仅作为 CPU/GPU 能力；Ascend 缺少 complex64 梯度累加所需内核。NPU 上 `NPUBackend.svd` 走 real-embedding（Ascend 无原生 complex64 SVD），复数乘/除经 real/imag 分解，真机验收见 `demos/demo_npu_mps.py`。
+
+### `mps_expectation(circuit, observable, *, max_bond_dim=None, cutoff=1e-10, backend=None)`
+
+求 MPS 表示的末态对可观测量的期望值 `⟨ψ|O|ψ⟩`。行为根据 `observable` 类型调整：
+
+- **`Hamiltonian`/`PauliString`**：用 transfer 张量网络缩并路径求解，避免稠密化，效率最优。
+- **任意稠密矩阵**：回退到 `.to_statevector()` 还原后用 `backend.expectation_sv` 求解。
+
+在 `GPUBackend` 上，若电路参数是 Torch 张量（`requires_grad=True`），返回值保留计算图，可 `.backward()` 得参数梯度。NPU 上请用 `MPSEstimator.gradient(method="psr")`，该路径只需前向计算。
+
+### `Measure.run(circuit, method="mps", ..., max_bond_dim=..., cutoff=...)`
+
+统一测量入口支持 `method="mps"` 路径，透传 `max_bond_dim` 与 `cutoff` 参数到底层 MPS 引擎；其余 shots/exact、末端读出逻辑与 `method="statevector"` 一致。同样的约束与限制适用（纯态无噪声、1/2 比特门、无 ControlFlow）。
+
+---
+
+## 4. 比特序与索引约定
 
 - **比特序采用 msb 约定**：`qubit 0` 对应最高位（MSB）。`tn_statevector` 返回的 `State` 与直接用 `State.zero_state(...).evolve(circuit.unitary())` 得到的结果比特序一致，可直接互相比较。
 - `single_amplitude` 的 `bitstring` 参数按 `qubit 0, qubit 1, ...` 顺序给出 0/1，即字符串首字符对应 `qubit 0`（MSB）。
@@ -68,7 +106,7 @@
 
 ---
 
-## 4. 收缩路径、切片与可选依赖
+## 5. 收缩路径、切片与可选依赖
 
 ### 路径选择策略
 
@@ -94,7 +132,7 @@
 
 ---
 
-## 5. NPU 远程验证脚本
+## 6. NPU 远程验证脚本
 
 `demos/demo_npu_tensor.py` 是一个独立可执行脚本，用于在真实 Ascend NPU 环境上核对张量网络引擎与态矢量引擎的一致性、单/部分振幅的正确性，以及 `tn_expectation` 在 NPU 上的可微性（若安装了 `torch`）：
 
@@ -107,7 +145,7 @@ python demos/demo_npu_tensor.py --allow-cpu-fallback   # 无 NPU 时允许回退
 
 ---
 
-## 6. 与其他子系统的关系
+## 7. 与其他子系统的关系
 
-- `Measure`（`aicir/measure/`）：`method="tensor"` 复用本模块的 `tn_statevector`，其余聚合/读出逻辑与 `method="statevector"` 一致。
-- `Backend`（`aicir/backends/`）：本模块只依赖 `Backend` 抽象的张量原语，不感知具体后端实现；MPS/张量网络截断近似（有损压缩）不在本模块范围内，属于另一独立规划（Spec 2）。
+- `Measure`（`aicir/measure/`）：`method="tensor"` 与 `method="mps"` 复用本模块的 `tn_statevector` 与 `mps_statevector`，其余聚合/读出逻辑与 `method="statevector"` 一致。
+- `Backend`（`aicir/backends/`）：本模块只依赖 `Backend` 抽象的张量原语，不感知具体后端实现；MPS/张量网络截断近似（有损压缩）见本模块的 `mps_statevector`/`mps_expectation`（Spec 2，已落地）。
