@@ -89,7 +89,7 @@ if [[ "$SKIP_P0" == "1" ]]; then
     echo "P1 resume requires a non-empty P1_BOOTSTRAP_LABELS_CSV or $CURRENT_LABELS." >&2
     exit 2
   fi
-  if [[ "$bootstrap_labels" != "$CURRENT_LABELS" ]]; then
+  if [[ ! "$bootstrap_labels" -ef "$CURRENT_LABELS" ]]; then
     cp "$bootstrap_labels" "$CURRENT_LABELS"
   fi
   echo "p0=skipped bootstrap_labels=$CURRENT_LABELS"
