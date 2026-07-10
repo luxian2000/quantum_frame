@@ -102,11 +102,21 @@ class GPUBackend(Backend):
     def conj(self, a):
         return torch.conj(a)
 
+    def svd(self, matrix):
+        u, s, vh = torch.linalg.svd(matrix, full_matrices=False)
+        return u, s, vh
+
     def take(self, a, axis, index):
         return torch.select(a, int(axis), int(index))
 
     def add(self, a, b):
         return a + b
+
+    def mul(self, a, b):
+        return a * b
+
+    def div(self, a, b):
+        return a / b
 
     def abs_sq(self, tensor):
         return torch.abs(tensor) ** 2

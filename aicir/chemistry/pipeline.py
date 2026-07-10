@@ -41,8 +41,10 @@ def build_molecule(
 ) -> MoleculeHamiltonian:
     """给定分子几何/基组/映射，现算 qubit Hamiltonian。
 
-    仅 ``mapping="jordan_wigner"`` 填充 ``n_electrons``/``hf_occupation``/
-    ``excitations``；``parity``/``bravyi_kitaev`` 仍返回可用 Hamiltonian，但元数据为 None。
+    ``jordan_wigner``/``parity``/``bravyi_kitaev`` 均填充
+    ``n_electrons``/``hf_occupation``/``excitations``。其中 parity/BK 的
+    ``hf_occupation`` 是 mapper 变换后的 bitstring，``excitations`` 是结构索引；
+    二者不声明 mapper-correct 化学 UCCSD 激发。
     """
 
     _require_qiskit_nature()
@@ -79,11 +81,9 @@ def build_molecule(
     terms = _sparse_pauli_to_terms(qubit_op)  # 转 aicir PauliTerm，对齐比特序
     n_qubits = qubit_op.num_qubits
 
-    n_electrons = hf_occupation = excitations = None
-    if mapping_key in ("jordan_wigner", "jw"):
-        n_electrons = sum(problem.num_particles)
-        hf_occupation = _jw_hf_occupation(problem, n_qubits)
-        excitations = _jw_excitations(problem, n_qubits)
+    n_electrons = sum(problem.num_particles)
+    hf_occupation = _mapper_hf_occupation(problem, mapper, n_qubits)
+    excitations = _structural_excitations(problem, n_qubits)
 
     return MoleculeHamiltonian(
         name=name,
@@ -114,23 +114,24 @@ def _sparse_pauli_to_terms(qubit_op):
     return tuple(out)
 
 
-def _jw_hf_occupation(problem, n_qubits):
-    """JW 下 HF 占据 bitstring，元组下标即 aicir 比特序号（与 ``_sparse_pauli_to_terms`` 同一比特序）。"""
+def _mapper_hf_occupation(problem, mapper, n_qubits):
+    """mapper 派生 HF 占据 bitstring，元组下标即 aicir 比特序号。"""
 
     from qiskit_nature.second_q.circuit.library import HartreeFock
-    from qiskit_nature.second_q.mappers import JordanWignerMapper
 
-    hf = HartreeFock(problem.num_spatial_orbitals, problem.num_particles, JordanWignerMapper())
+    hf = HartreeFock(problem.num_spatial_orbitals, problem.num_particles, mapper)
     # HartreeFock._bitstr[i] 是 Qiskit 自旋轨道序（qubit i，label 最右字符）下的占据情况；
     # 而 aicir 的比特序是 leftmost=qubit0=MSB，terms 里的 Pauli label 仍保持 Qiskit
     # 原序未翻转（为复现预置），因此元数据须显式按 n-1-k 反转，才能与 terms 的比特
     # 对齐——否则用 hf_occupation 摆 HF 态、算 ⟨HF|H|HF⟩ 会对错 qubit 施加 X 门。
     qiskit_bits = [int(bit) for bit in hf._bitstr]
+    if len(qiskit_bits) != n_qubits:
+        qiskit_bits = qiskit_bits[:n_qubits]
     return tuple(qiskit_bits[n_qubits - 1 - i] for i in range(n_qubits))
 
 
-def _jw_excitations(problem, n_qubits):
-    """singles+doubles 费米子激发 → aicir qubit 索引元组。"""
+def _structural_excitations(problem, n_qubits):
+    """singles+doubles 费米子激发 → aicir 结构索引元组。"""
 
     from qiskit_nature.second_q.circuit.library.ansatzes.utils import (
         generate_fermionic_excitations,
@@ -142,9 +143,10 @@ def _jw_excitations(problem, n_qubits):
             order, problem.num_spatial_orbitals, problem.num_particles
         )
         for occ, vir in raw:
-            # 同 _jw_hf_occupation：Qiskit 自旋轨道索引 k 需按 n_qubits-1-k 映射为
+            # 同 _mapper_hf_occupation：Qiskit 自旋轨道索引 k 需按 n_qubits-1-k 映射为
             # aicir 比特序号，才能与（未翻转的）terms 对齐；元组内顺序无关紧要，
             # uccsd 会自行排序。
             idx = tuple(n_qubits - 1 - int(i) for i in (*occ, *vir))
-            out.append((kind, idx))
+            if all(0 <= i < n_qubits for i in idx):
+                out.append((kind, idx))
     return tuple(out)

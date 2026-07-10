@@ -65,12 +65,12 @@ _TABLE: dict[str, _Spec] = {
     "supernet": _Spec(_load("supernet", "train_supernet"), ("objective", "config", "dataset", "hamiltonian")),
     "supernet_classification": _Spec(_load("supernet", "classification_supernet"), ("config",)),
     "supernet_h2": _Spec(_load("supernet", "h2_vqe_supernet"), ("config",)),
-    "ppo_rb": _Spec(
+    "pporb": _Spec(
         _load("pporb", "ppo_rb_qas"),
         ("target_density_matrix", "epsilon", "config"),
         ("target_density_matrix", "epsilon"),
     ),
-    "ppr_dql": _Spec(_load("pprdql", "train_ppr_dql"), ("target_state", "config", "policy_library"), ("target_state",)),
+    "pprdql": _Spec(_load("pprdql", "train_ppr_dql"), ("target_state", "config", "policy_library"), ("target_state",)),
     "crlqas": _Spec(_load("crlqas", "train_crlqas"), ("hamiltonian", "config"), ("hamiltonian",)),
     "qdrats": _Spec(_load("qdrats", "train_qdrats"), ("hamiltonian", "config"), ("hamiltonian",)),
     "vqe_loop": _Spec(_load_vqe_loop(), ("config",), ("config",)),
@@ -98,7 +98,7 @@ def run(request: QASRunConfig | QASMethod, **kwargs: Any) -> Any:
 
     Examples:
         ``run("supernet", config=config.supernet(...))``
-        ``run(QASRunConfig(method="ppr_dql", target_state=state))``
+        ``run(QASRunConfig(method="pprdql", target_state=state))``
     """
 
     run_config = _as_run_config(request, kwargs)

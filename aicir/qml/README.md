@@ -1,6 +1,6 @@
 # aicir.qml — 量子机器学习梯度与梯度无关优化工具包
 
-本模块 (`aicir/qml/deriv.py`) 实现了十一种用于量子电路参数梯度估计或预条件的方法，以及一种显式 gradient-free 的坐标精确最小化方法。所有方法均与 `NumpyBackend`、`GPUBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
+本模块 (`aicir/qml/deriv.py`) 实现了量子电路参数梯度、高阶导数、QFIM 几何预条件和显式 gradient-free 坐标精确最小化方法。所有方法均与 `NumpyBackend`、`GPUBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
 
 ---
 
@@ -22,6 +22,9 @@
 需要混合高阶偏导？
   → mpsr
 
+需要完整二阶导数矩阵？
+  → hessian（Pauli 旋转目标用 psr；任意黑盒目标用 fd）
+
 调试/原型/不清楚生成元频谱？
   → fd（无任何假设，任意后端，eps=1e-3 for float32）
 
@@ -30,6 +33,9 @@
 
 希望优化步长适应量子态空间几何？
   → qng（用 QFIM 逆预条件 psr/fd/spsa/auto 或外部梯度）
+
+只需要量子态空间几何本身？
+  → qfim / metric_tensor（返回完整 Fubini-Study QFIM）
 
 参数量较大，但仍希望利用量子态空间几何？
   → bdqng（按 block 近似 QFIM，默认 block_size=1）
@@ -59,8 +65,10 @@
 | `spsr`      | Stochastic PSR                                     | $2K$（$K \leq P$ 次采样）               | 大参数量随机坐标梯度                          |
 | `spsa`      | Simultaneous Perturbation Stochastic Approximation | $2K$（$K$ 个扰动方向）                  | 极大参数量/硬件噪声下的随机全方向梯度         |
 | `mpsr`      | Multi-parameter PSR                                | $2^M$（$M$ 个坐标的混合偏导数）         | 高阶混合偏导                                  |
+| `hessian`   | Hessian                                            | $O(P^2)$ 二阶移位或有限差分              | 完整二阶导数矩阵                              |
 | `fd`        | Finite Difference                                  | $2P$（中心差）或 $P+1$（单侧）          | 任意可微目标，黑盒                            |
 | `ad`        | Adjoint Differentiation                            | $O(P)$ 次门作用，$O(1)$ 额外存储        | 无噪声态向量模拟，效率最高                    |
+| `qfim` / `metric_tensor` | Quantum Fisher Information Matrix | $2P+1$ 次态函数调用                    | 直接读取 Fubini-Study 几何矩阵                |
 | `qng`       | Quantum Natural Gradient                           | 梯度调用 +$2P+1$ 次态函数调用             | 用 QFIM 逆预条件梯度，加速 ansatz 优化        |
 | `bdqng`     | Block-diagonal QNG                                 | 梯度调用 +$2P+1$ 次态函数调用，分块求解   | 按参数块近似 QFIM，适合大参数 ansatz          |
 | `kqng`      | KFAC-style QNG                                     | 梯度调用 + 分块因子估计，Kronecker 因子求解 | 用 Kronecker 因子近似 QFIM block              |
@@ -113,6 +121,14 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | --------------------- | ------------------------------------------------------------------- |
 | `parameter_indices` | 指定混合偏导的坐标：整数、元组索引或其列表；`None` 表示对所有参数 |
 
+#### `hessian(fn, params, *, method="psr", shift=π/2, coefficient=0.5, eps=1e-3)`
+
+| 参数 | 说明 |
+| --- | --- |
+| `method` | `"psr"` 使用二阶参数移位和 `mpsr` 混合偏导；`"fd"` 使用中心有限差分 |
+| `shift` / `coefficient` | `method="psr"` 时的参数移位配置 |
+| `eps` | `method="fd"` 时的二阶差分步长 |
+
 #### `fd(fn, params, *, eps=1e-3, mode="central")`
 
 | 参数     | 说明                                                        |
@@ -128,6 +144,16 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | `observable`   | Hermitian 算符矩阵或`Hamiltonian` 对象                                     |
 | `backend`      | 计算后端（默认`NumpyBackend`）                                             |
 | `return_value` | 若为`True`，同时返回期望值 `⟨O⟩`                                       |
+
+#### `qfim(state_fn, params, *, metric_eps=1e-3, backend=None)` / `metric_tensor(...)`
+
+| 参数 | 说明 |
+| --- | --- |
+| `state_fn` | 接受完整参数数组、返回纯态 ansatz 终态；可返回 `State`、NumPy 数组或 Torch-family 后端张量 |
+| `metric_eps` | 态导数中心差分步长 |
+| `backend` | `state_fn` 返回 Torch/NPU `State` 或张量时用于保持设备/内积语义 |
+
+`qfim_diag(...)` 返回对角线，`qfim_blocks(..., blocks=..., block_size=...)` 返回 block QFIM 列表。
 
 #### `qng(fn, state_fn, params, *, grad=None, qfim=None, gradient_method="psr", gradient_kwargs=None, shift=π/2, coefficient=0.5, metric_eps=1e-3, damping=1e-6, backend=None, return_gradient=False, return_qfim=False)`
 
@@ -1147,4 +1173,3 @@ y = model(torch.randn(8, 4))         # 批量前向 → (8,)
 ```
 
 ---
-

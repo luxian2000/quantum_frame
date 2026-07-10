@@ -82,3 +82,6 @@ def tn_expectation(circuit, observable, *, backend=None, optimize="auto", memory
     else:
         operator = backend.cast(observable)
     return backend.expectation_sv(psi, operator)
+
+
+from .mps import MPSState, mps_statevector, mps_expectation  # noqa: E402

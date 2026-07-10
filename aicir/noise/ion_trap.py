@@ -25,7 +25,7 @@ from . import (
     PhaseFlipChannel,
 )
 
-DEFAULT_MD_NAME = "ion_trap_noise_params.md"
+DEFAULT_MD_NAME = "README.md"
 
 TRUE_VALUES = {"true", "1", "yes", "on"}
 FALSE_VALUES = {"false", "0", "no", "off"}
@@ -373,12 +373,9 @@ class IonTrapNoiseConfig:
         return float(0.5 * (1.0 - math.exp(-duration / t2)))
 
 
-def _load_markdown_parameters(md_path: Path) -> Dict[str, Any]:
-    if not md_path.exists():
-        raise FileNotFoundError(f"找不到 Markdown 参数文件: {md_path}")
-
+def _parse_parameter_lines(lines: Iterable[str], md_path: Path) -> Dict[str, Any]:
     parameters: Dict[str, Any] = {}
-    for raw_line in md_path.read_text(encoding="utf-8").splitlines():
+    for raw_line in lines:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -399,6 +396,39 @@ def _load_markdown_parameters(md_path: Path) -> Dict[str, Any]:
         raise ValueError(f"Markdown 参数文件中没有解析到任何参数: {md_path}")
 
     return parameters
+
+
+def _extract_fenced_parameter_lines(lines: Sequence[str]) -> List[str]:
+    blocks: List[List[str]] = []
+    current: Optional[List[str]] = None
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if stripped.startswith("```"):
+            if current is None:
+                current = []
+            else:
+                blocks.append(current)
+                current = None
+            continue
+        if current is not None:
+            current.append(raw_line)
+
+    for block in blocks:
+        if any(line.strip().startswith("formula_profile:") for line in block):
+            return block
+    return []
+
+
+def _load_markdown_parameters(md_path: Path) -> Dict[str, Any]:
+    if not md_path.exists():
+        raise FileNotFoundError(f"找不到 Markdown 参数文件: {md_path}")
+
+    lines = md_path.read_text(encoding="utf-8").splitlines()
+    fenced_lines = _extract_fenced_parameter_lines(lines)
+    if fenced_lines:
+        return _parse_parameter_lines(fenced_lines, md_path)
+    return _parse_parameter_lines(lines, md_path)
+
 
 def load_ion_trap_noise_config(
     md_path: Optional[str | Path] = None,

@@ -29,6 +29,7 @@ from .estimator import (
     StatevectorEstimator,
     estimator_for_target,
 )
+from .mps_estimator import MPSEstimator
 from .results import EstimateResult, GradientResult, SampleResult
 from .sampler import NoisySampler, ShotSampler, StatevectorSampler
 
@@ -40,6 +41,7 @@ __all__ = [
     "EstimateResult",
     "estimator_for_target",
     "GradientResult",
+    "MPSEstimator",
     "NoisyEstimator",
     "NoisySampler",
     "SampleResult",

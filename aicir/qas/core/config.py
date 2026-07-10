@@ -16,8 +16,10 @@ _ALIASES = {
     "vqa_h2": "supernet_h2",
     "h2": "supernet_h2",
     "h2_vqe": "supernet_h2",
-    "ppo": "ppo_rb",
-    "ppr": "ppr_dql",
+    "ppo": "pporb",
+    "ppo_rb": "pporb",
+    "ppr": "pprdql",
+    "ppr_dql": "pprdql",
     "crl": "crlqas",
     "qdarts": "qdrats",
     "quantumdarts": "qdrats",
@@ -66,7 +68,7 @@ def supernet_h2(**kwargs: Any) -> Any:
     return _build(SupernetConfig, values)
 
 
-def ppo_rb(**kwargs: Any) -> Any:
+def pporb(**kwargs: Any) -> Any:
     """Build a ``PPO_RB`` config with optional field overrides."""
 
     from ..algorithms.pporb import PPORollbackConfig
@@ -74,7 +76,7 @@ def ppo_rb(**kwargs: Any) -> Any:
     return _build(PPORollbackConfig, kwargs)
 
 
-def ppr_dql(**kwargs: Any) -> Any:
+def pprdql(**kwargs: Any) -> Any:
     """Build a ``PPR_DQL`` config with optional field overrides."""
 
     from ..algorithms.pprdql import PPRDQLConfig
@@ -172,8 +174,10 @@ def _build(config_type: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
         raise TypeError(f"{config_type.__name__} does not accept the provided config fields.") from exc
 
 
-ppo = ppo_rb
-ppr = ppr_dql
+ppo_rb = pporb
+ppr_dql = pprdql
+ppo = pporb
+ppr = pprdql
 crl = crlqas
 
 # 规范方法名 -> 配置工厂。方法集合的单一来源（``method_names`` 由此派生）。
@@ -181,8 +185,8 @@ _FACTORIES = {
     "supernet": supernet,
     "supernet_classification": supernet_classification,
     "supernet_h2": supernet_h2,
-    "ppo_rb": ppo_rb,
-    "ppr_dql": ppr_dql,
+    "pporb": pporb,
+    "pprdql": pprdql,
     "crlqas": crlqas,
     "qdrats": qdrats,
     "dqas": dqas,
@@ -200,8 +204,10 @@ __all__ = [
     "method_names",
     "ppo",
     "ppo_rb",
+    "pporb",
     "ppr",
     "ppr_dql",
+    "pprdql",
     "qdrats",
     "supernet",
     "supernet_classification",

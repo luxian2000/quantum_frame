@@ -26,14 +26,31 @@ def test_h2_jw_reproduces_preset_terms():
         assert abs(pm[pauli] - bm[pauli]) < 1e-4
 
 
-def test_jw_populates_metadata():
-    built = build_molecule(_H2_GEOMETRY, basis="sto-3g", mapping="jordan_wigner")
+@pytest.mark.parametrize(
+    ("mapping", "two_qubit_reduction"),
+    [
+        ("jordan_wigner", False),
+        ("parity", False),
+        ("parity", True),
+        ("bravyi_kitaev", False),
+    ],
+)
+def test_mappers_populate_metadata(mapping, two_qubit_reduction):
+    built = build_molecule(
+        _H2_GEOMETRY,
+        basis="sto-3g",
+        mapping=mapping,
+        two_qubit_reduction=two_qubit_reduction,
+    )
     assert built.n_electrons == 2
     assert built.hf_occupation is not None
     assert len(built.hf_occupation) == built.n_qubits
-    assert sum(built.hf_occupation) == 2
+    assert set(built.hf_occupation).issubset({0, 1})
     assert built.excitations is not None
     assert all(kind in ("single", "double") for kind, _ in built.excitations)
+    for kind, indices in built.excitations:
+        assert len(indices) == (2 if kind == "single" else 4)
+        assert all(0 <= index < built.n_qubits for index in indices)
 
 
 def test_hf_occupation_matches_terms_bit_order():
@@ -68,10 +85,11 @@ def test_hf_occupation_matches_terms_bit_order():
     assert energy == pytest.approx(reference_energy, abs=1e-4)
 
 
-def test_parity_mapping_leaves_metadata_none():
+def test_parity_mapping_with_two_qubit_reduction_has_metadata():
     built = build_molecule(
         _H2_GEOMETRY, basis="sto-3g", mapping="parity", two_qubit_reduction=True
     )
-    assert built.hf_occupation is None
-    assert built.excitations is None
+    assert built.n_electrons == 2
+    assert built.hf_occupation is not None
+    assert built.excitations is not None
     assert built.terms  # Hamiltonian 仍可用
