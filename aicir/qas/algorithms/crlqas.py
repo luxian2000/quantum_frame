@@ -505,9 +505,6 @@ def train_crlqas(
     backend = NumpyBackend()
     h_matrix, n_qubits = _resolve_hamiltonian_matrix(hamiltonian, backend=backend)
 
-    np.random.seed(cfg.seed)
-    random.seed(cfg.seed)
-    torch.manual_seed(cfg.seed)
     rng_py = random.Random(cfg.seed)
     rng_np = np.random.default_rng(cfg.seed)
 
@@ -520,6 +517,10 @@ def train_crlqas(
     state_width = (n_qubits + 3) * n_qubits
     state_dim = cfg.n_act * state_width
 
+    # nn.Linear 的默认初始化走 torch 全局 RNG，没有干净的局部生成器路径；
+    # 因此仅在网络构造前保留这一处全局 seeding，其余随机数均走上面的局部
+    # rng_py/rng_np（不再调用 np.random.seed/random.seed 污染全局状态）。
+    torch.manual_seed(cfg.seed)
     q_online = _QNet(state_dim=state_dim, action_dim=action_dim, hidden_dim=cfg.q_hidden_dim)
     q_target = _QNet(state_dim=state_dim, action_dim=action_dim, hidden_dim=cfg.q_hidden_dim)
     q_target.load_state_dict(q_online.state_dict())
