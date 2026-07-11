@@ -7,7 +7,7 @@ simultaneously optimize multiple eigenstates with a shared parameterized unitary
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 
@@ -62,6 +62,25 @@ class SSVQEResult:
     parameters: np.ndarray
     statevectors: np.ndarray
     cost_history: list[float]
+
+    @property
+    def value(self) -> float:
+        """AlgorithmResult 协议别名：主标量目标值，取实际优化的加权代价 weighted_cost
+        （SSVQE 联合子空间目标，而非某单一本征态能量）。"""
+
+        return self.weighted_cost
+
+    @property
+    def history(self) -> list[float]:
+        """AlgorithmResult 协议别名：逐步历史等价于 cost_history。"""
+
+        return self.cost_history
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """AlgorithmResult 协议别名：SSVQEResult 无原生 metadata 字段，返回空字典。"""
+
+        return {}
 
 
 class BasicSSVQE:

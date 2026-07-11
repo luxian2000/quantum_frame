@@ -6,7 +6,7 @@ import numpy as np
 
 from ..backends import NumpyBackend
 from ..measure import Measure
-from ..measure.estimator import PauliEstimator
+from ..measure.estimator import PauliEstimateResult, PauliEstimator
 from .base import BaseEstimator, normalize_run_inputs, pair_observables
 from .results import EstimateResult
 
@@ -32,13 +32,15 @@ class StatevectorEstimator(BaseEstimator):
         return float(np.real(complex(raw)))
 
     def estimate(self, circuit, hamiltonian, **_ignored):
-        """直通精确期望（``BasicVQE(energy_estimator=...)`` 契约）。
+        """直通精确期望（``BasicVQE(energy_estimator=...)`` 契约，已弃用）。
 
-        忽略 shots/initial_state 等密度矩阵/采样相关 kwargs（本路径为精确态向量
-        期望）；供 Target 选中本估计器时让 VQE 经 primitives 求能量。
+        委托 run()（数值路径完全一致，同一次 ``_expectation`` 调用），仅重新
+        打包为 ``_EnergyResult`` 以兼容旧调用方；忽略 shots/initial_state 等
+        密度矩阵/采样相关 kwargs（本路径为精确态向量期望）。新代码请直接消费
+        run() 返回的 ``EstimateResult``。
         """
 
-        return _EnergyResult(self._expectation(circuit, hamiltonian))
+        return _EnergyResult(self.run(circuit, hamiltonian).value)
 
     def run(self, circuits, observables, *, shots: int | None = None, parameter_values=None):
         if shots is not None:
@@ -53,7 +55,11 @@ class StatevectorEstimator(BaseEstimator):
 
 
 class _EnergyResult:
-    """``BasicVQE(energy_estimator=...)`` 契约的最小载体：仅暴露 ``energy``。"""
+    """``BasicVQE(energy_estimator=...)`` 契约的最小载体：仅暴露 ``energy``。
+
+    已弃用：请消费 run() 的 EstimateResult；本类型仅为 estimate() 保留的向后
+    兼容包装（各 Estimator 的 estimate() 现均委托 run() 构造）。
+    """
 
     __slots__ = ("energy",)
 
@@ -90,10 +96,13 @@ class NoisyEstimator(BaseEstimator):
         return float(np.real(complex(result.expectation_values["H"])))
 
     def estimate(self, circuit, hamiltonian, *, shots: int | None = None, **_ignored):
-        """直通期望（BasicVQE energy_estimator 契约）。"""
+        """直通期望（BasicVQE energy_estimator 契约，已弃用）。
 
-        use_shots = self.shots if shots is None else shots
-        return _EnergyResult(self._expectation(circuit, hamiltonian, use_shots))
+        委托 run()（数值路径完全一致：同一份 ``use_shots`` 解析 + ``_expectation``
+        调用），仅重新打包为 ``_EnergyResult``。新代码请消费 run() 的 EstimateResult。
+        """
+
+        return _EnergyResult(self.run(circuit, hamiltonian, shots=shots).value)
 
     def run(self, circuits, observables, *, shots: int | None = None, parameter_values=None):
         use_shots = self.shots if shots is None else shots
@@ -129,10 +138,27 @@ class ShotEstimator(BaseEstimator):
     def shots(self) -> int:
         return self._inner.shots
 
-    def estimate(self, circuit, hamiltonian, **kwargs):
-        """直通底层 PauliEstimator（BasicVQE energy_estimator 契约）。"""
+    def estimate(self, circuit, hamiltonian, *, shots: int | None = None, **_ignored):
+        """直通底层 PauliEstimator（BasicVQE energy_estimator 契约，已弃用）。
 
-        return self._inner.estimate(circuit, hamiltonian, **kwargs)
+        委托 run()：从其 ``EstimateResult.metadata`` 还原 ``groups``/原始
+        metadata，重建 ``PauliEstimateResult`` 以保持旧调用方类型契约；数值
+        与 ``run().value`` 完全一致（同一次底层估计，非重复采样）。新代码
+        请消费 run() 返回的 ``EstimateResult``。
+        """
+
+        result = self.run(circuit, hamiltonian, shots=shots)
+        metadata = dict(result.metadata)
+        groups = metadata.pop("groups")
+        metadata.pop("method", None)
+        return PauliEstimateResult(
+            energy=float(result.value),
+            variance=float(result.variance) if result.variance is not None else 0.0,
+            shots=int(result.shots) if result.shots is not None else 0,
+            groups=groups,
+            term_results=result.term_results if result.term_results is not None else (),
+            metadata=metadata,
+        )
 
     def run(self, circuits, observables, *, shots: int | None = None, parameter_values=None):
         items, single = normalize_run_inputs(circuits, parameter_values)

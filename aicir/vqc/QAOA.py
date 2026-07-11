@@ -304,11 +304,25 @@ class QAOAResult:
     betas: np.ndarray
     statevector: np.ndarray | None
     energy_history: list[float]
+    # parameters 已是 concatenate([gammas, betas])（gammas 在前，见 BasicQAOA.run），
+    # 天然满足 AlgorithmResult 协议的 parameters 语义，故不再另加同名 @property。
     parameters: np.ndarray | None = None
     counts: dict[str, int] | None = None
     optimizer_result: Any = None
     measurement_result: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def value(self) -> float:
+        """AlgorithmResult 协议别名：目标值等价于 energy。"""
+
+        return self.energy
+
+    @property
+    def history(self) -> list[float]:
+        """AlgorithmResult 协议别名：逐步历史等价于 energy_history。"""
+
+        return self.energy_history
 
 
 class BasicQAOA:

@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from ..protocols import HistoryRecord, Optimizer
 from ..qml.deriv import spsa
 from ..qml.diff import get_diff, resolve_diff
 
@@ -72,7 +73,7 @@ class OptimizationResult:
     message: str
     best_x: np.ndarray | None = None
     best_fun: float | None = None
-    history: list[dict[str, Any]] = field(default_factory=list)
+    history: list[Any] = field(default_factory=list)
     raw_result: Any = None
 
     def __post_init__(self) -> None:
@@ -98,6 +99,12 @@ class OptimizationResult:
         """Alias for objective value access."""
 
         return self.fun
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """AlgorithmResult 协议别名：OptimizationResult 无原生 metadata 字段，返回空字典。"""
+
+        return {}
 
 
 def _gradient_from_method(
@@ -158,7 +165,7 @@ class GD:
         params = _as_params(init_params)
         objective = _ObjectiveCounter(fn)
         gradient_method = gradient_fn if gradient_fn is not None else self.gradient_method
-        history: list[dict[str, Any]] = []
+        history: list[HistoryRecord] = []
         best_x = params.copy()
         best_fun = np.inf
         message = "Reached max_iters"
@@ -177,7 +184,7 @@ class GD:
             lr = _schedule_value(self.learning_rate, step, label="learning_rate")
 
             if self.save_history:
-                history.append({"step": step, "fun": value, "grad_norm": grad_norm, "learning_rate": lr})
+                history.append(HistoryRecord(step=step, fun=value, grad_norm=grad_norm, learning_rate=lr))
             _call_callback(callback, step, value, params)
 
             if self.tol is not None and grad_norm <= self.tol:
@@ -254,7 +261,7 @@ class Adam:
         gradient_method = gradient_fn if gradient_fn is not None else self.gradient_method
         m = np.zeros_like(params, dtype=float)
         v = np.zeros_like(params, dtype=float)
-        history: list[dict[str, Any]] = []
+        history: list[HistoryRecord] = []
         best_x = params.copy()
         best_fun = np.inf
         message = "Reached max_iters"
@@ -273,7 +280,7 @@ class Adam:
             lr = _schedule_value(self.learning_rate, step, label="learning_rate")
 
             if self.save_history:
-                history.append({"step": step, "fun": value, "grad_norm": grad_norm, "learning_rate": lr})
+                history.append(HistoryRecord(step=step, fun=value, grad_norm=grad_norm, learning_rate=lr))
             _call_callback(callback, step, value, params)
 
             if self.tol is not None and grad_norm <= self.tol:
@@ -345,7 +352,7 @@ class SPSA:
         params = _as_params(init_params)
         objective = _ObjectiveCounter(fn)
         rng = np.random.default_rng(self.rng)
-        history: list[dict[str, Any]] = []
+        history: list[HistoryRecord] = []
         best_x = params.copy()
         best_fun = np.inf
         message = "Reached max_iters"
@@ -369,13 +376,13 @@ class SPSA:
 
             if self.save_history:
                 history.append(
-                    {
-                        "step": step,
-                        "fun": value,
-                        "grad_norm": grad_norm,
-                        "learning_rate": lr,
-                        "perturbation": eps_value,
-                    }
+                    HistoryRecord(
+                        step=step,
+                        fun=value,
+                        grad_norm=grad_norm,
+                        learning_rate=lr,
+                        extras={"perturbation": eps_value},
+                    )
                 )
             _call_callback(callback, step, value, params)
 
@@ -444,7 +451,7 @@ class ScipyMinimize:
         init = _as_params(init_params)
         shape = init.shape
         objective = _ObjectiveCounter(lambda x: fn(np.asarray(x, dtype=float).reshape(shape)))
-        history: list[dict[str, Any]] = []
+        history: list[HistoryRecord] = []
 
         def flat_objective(x_flat):
             return objective(np.asarray(x_flat, dtype=float))
@@ -469,7 +476,7 @@ class ScipyMinimize:
             value = objective(theta.reshape(-1))
             step = step_counter["step"]
             step_counter["step"] += 1
-            history.append({"step": step, "fun": value})
+            history.append(HistoryRecord(step=step, fun=value))
             _call_callback(callback, step, value, theta)
 
         result = scipy_minimize_impl(
@@ -561,7 +568,7 @@ def minimize(
 
     if optimizer is None:
         return scipy_minimize(fn, init_params, method=method, **kwargs)
-    if not hasattr(optimizer, "minimize"):
+    if not isinstance(optimizer, Optimizer):
         raise TypeError("optimizer must expose a minimize(fn, init_params, ...) method")
     return optimizer.minimize(fn, init_params, **kwargs)
 

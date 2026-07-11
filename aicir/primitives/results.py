@@ -50,3 +50,21 @@ class EstimateResult:
     shots: int | None = None
     term_results: tuple[Any, ...] | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def energy(self) -> float:
+        """AlgorithmResult 协议别名：energy 等价于 value（BasicVQE energy_estimator 契约兼容）。"""
+
+        return self.value
+
+    @property
+    def parameters(self) -> None:
+        """AlgorithmResult 协议别名：单次期望值估计无参数向量语义，返回 None。"""
+
+        return None
+
+    @property
+    def history(self) -> None:
+        """AlgorithmResult 协议别名：单次期望值估计无逐步历史语义，返回 None。"""
+
+        return None

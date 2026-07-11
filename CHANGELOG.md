@@ -4,6 +4,13 @@
 
 ## 2026-07-11
 
+### Added
+
+- **`aicir.protocols`：跨层结果/优化器协议（Phase 1 跨层契约统一）。** 新增 `AlgorithmResult`（`value`/`parameters`/`history`/`metadata` 只读协议，`runtime_checkable`）、`Optimizer`（`minimize(fn, init_params, ...)` 协议）与 `HistoryRecord`（`step`/`fun`/`grad_norm`/`learning_rate`/`extras`，支持 `record["fun"]`/`record.get(...)`/`"key" in record` 兼容旧 dict 键访问）。模块零重依赖（仅 `typing`/`dataclasses`），不从顶层 `aicir/__init__.py` 导出。
+- **Result 词汇表对齐 `value`/`parameters`/`history`/`metadata`。** `VQEResult`/`QAOAResult` 新增 `value`（等价 `energy`）与 `history`（等价 `energy_history`）别名属性；`VQDResult`/`SSVQEResult` 新增 `value`（分别取基态 `energies[0]` 与联合子空间目标 `weighted_cost`）、`history`（对应 `objective_histories[0]`/`cost_history`）与 `metadata`（原无该字段，返回 `{}`）；`OptimizationResult` 补齐 `metadata` 别名（同样返回 `{}`，与既有 `.parameters`/`.value` 别名对齐）；`QAOAResult.parameters` 已是 `concatenate([gammas, betas])`（gammas 在前），天然满足协议语义，未另加同名属性。`aicir.primitives.results.EstimateResult` 新增 `energy`（等价 `value`）以及 `parameters`/`history`（单次期望值估计无此语义，均返回 `None`），使其满足 `AlgorithmResult`。
+- **estimator `estimate()` 改为委托 `run()`。** `aicir.primitives.estimator` 的 `StatevectorEstimator`/`NoisyEstimator`/`ShotEstimator` 的 `estimate()` 均重新实现为对 `run()` 的薄委托（同一次底层数值计算，非重复求值/采样），仅重新打包为旧调用方期望的类型（`_EnergyResult` 或 `PauliEstimateResult`）以保持向后兼容；`_EnergyResult` docstring 标注已弃用，新代码应消费 `run()` 返回的 `EstimateResult`。`BasicVQE._evaluate_circuit` 的注入 `energy_estimator` 消费路径改为优先调用 `run()`（含默认的 `StatevectorEstimator` 内部路径），仅当对象只暴露 `estimate()`（如原生 `PauliEstimator`）时才退回旧契约；`_resolve_energy_estimator` 相应放宽为接受 `run`/`estimate` 任一方法。
+- **optimizer history 改用 `HistoryRecord`。** `GD`/`Adam`/`SPSA`/`ScipyMinimize` 的逐步历史记录从裸 dict 改为 `aicir.protocols.HistoryRecord`（SPSA 的 `perturbation` 等专属字段进入 `extras`）；`HistoryRecord` 的 dict 风格访问（`["fun"]`/`.get(...)`/`in`）保持旧消费方代码不变。`aicir.optimizer.params.minimize()` 调度器的类型检查由 `hasattr(optimizer, "minimize")` 改为 `isinstance(optimizer, Optimizer)`（`aicir.protocols.Optimizer`，效果等价，错误信息不变）；`BasicVQE._run_with_optimizer` 读取 `opt_result.history` 时的过滤条件相应从 `isinstance(entry, dict)` 放宽为 `hasattr(entry, "get")`，以兼容 dict 与 `HistoryRecord` 两种历史记录形态。
+
 ### Fixed
 
 - **`aicir.chemistry.spec` preset 路径修复。** `_generated_from_preset` 内部导入的 `from .molecule import get_molecule` 指向已废弃的单文件模块，preset 分支必然 `ModuleNotFoundError`；改为 `from .molecules import get_molecule`。

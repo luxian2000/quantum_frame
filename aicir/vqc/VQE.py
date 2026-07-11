@@ -88,6 +88,18 @@ class VQEResult:
 
         return self.statevector
 
+    @property
+    def value(self) -> float:
+        """AlgorithmResult 协议别名：目标值等价于 energy。"""
+
+        return self.energy
+
+    @property
+    def history(self) -> list[float]:
+        """AlgorithmResult 协议别名：逐步历史等价于 energy_history。"""
+
+        return self.energy_history
+
 
 class BasicVQE:
     """VQE solver with legacy and circuit-orchestration execution modes.
@@ -233,8 +245,11 @@ class BasicVQE:
             if name != "exact":
                 raise ValueError("energy_estimator string must be 'exact'")
             return "exact"
-        if not hasattr(energy_estimator, "estimate"):
-            raise TypeError("energy_estimator must be 'exact' or expose estimate(circuit, hamiltonian, ...)")
+        if not hasattr(energy_estimator, "estimate") and not hasattr(energy_estimator, "run"):
+            raise TypeError(
+                "energy_estimator must be 'exact' or expose run(circuits, observables, ...) "
+                "or estimate(circuit, hamiltonian, ...)"
+            )
         return energy_estimator
 
     def _energy_estimator_name(self) -> str:
@@ -453,14 +468,27 @@ class BasicVQE:
         if self.shots is not None:
             estimate_kwargs["shots"] = self.shots
 
-        estimator_result = estimator.estimate(circuit, self.observable, **estimate_kwargs)
+        if hasattr(estimator, "run"):
+            # 优先经 primitives run()（消费 EstimateResult.value，phase-1 item 3）；
+            # run() 契约只承载 shots，其余测量相关配置由具体 estimator 自身状态承载
+            # （如 NoisyEstimator 构造时已绑定 noise_model）。
+            run_kwargs: dict[str, Any] = {}
+            if "shots" in estimate_kwargs:
+                run_kwargs["shots"] = estimate_kwargs["shots"]
+            estimator_result = estimator.run(circuit, self.observable, **run_kwargs)
+            energy_value = float(estimator_result.value)
+        else:
+            # 仅暴露 estimate() 的对象（如原生 PauliEstimator）：保留旧契约作为退回路径。
+            estimator_result = estimator.estimate(circuit, self.observable, **estimate_kwargs)
+            energy_value = float(estimator_result.energy)
+
         self._last_circuit = circuit
         self._last_estimator_result = estimator_result
         if return_state:
             _, measurement = self._measure_circuit_exact(params, return_state=True)
-            return float(estimator_result.energy), measurement
+            return energy_value, measurement
         self._last_measurement = None
-        return float(estimator_result.energy), estimator_result
+        return energy_value, estimator_result
 
     def energy(self, params: np.ndarray) -> float:
         if self.cost is not None:
@@ -560,7 +588,8 @@ class BasicVQE:
         history = [
             float(entry["fun"])
             for entry in getattr(opt_result, "history", [])
-            if isinstance(entry, dict) and "fun" in entry
+            # dict 与 HistoryRecord 均支持 get()/in（协议见 aicir.protocols.HistoryRecord）
+            if hasattr(entry, "get") and "fun" in entry
         ]
         return VQEResult(
             energy=best_energy,

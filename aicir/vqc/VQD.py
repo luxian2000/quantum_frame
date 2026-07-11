@@ -7,7 +7,7 @@ adding overlap-penalty terms against previously optimized states.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 
@@ -41,6 +41,24 @@ class VQDResult:
     parameters: np.ndarray
     statevectors: np.ndarray
     objective_histories: list[list[float]]
+
+    @property
+    def value(self) -> float:
+        """AlgorithmResult 协议别名：主标量目标值，取基态（level 0，无重叠罚项）能量。"""
+
+        return float(self.energies[0])
+
+    @property
+    def history(self) -> list[float]:
+        """AlgorithmResult 协议别名：基态（level 0）的逐步优化历史。"""
+
+        return self.objective_histories[0]
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """AlgorithmResult 协议别名：VQDResult 无原生 metadata 字段，返回空字典。"""
+
+        return {}
 
 
 class BasicVQD:

@@ -261,3 +261,40 @@ def test_sampler_binds_parameter_values():
     result = StatevectorSampler().run(template, parameter_values=[np.pi])
     # ry(pi)|0> = |1> → P(|1>) = 1
     assert result.probs["|1>"] == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# estimate() 委托 run()：数值一致性（Phase 1 item 3，_EnergyResult/PauliEstimateResult 已弃用包装）
+# ---------------------------------------------------------------------------
+
+
+def test_statevector_estimator_estimate_matches_run_value():
+    ham = Hamiltonian(n_qubits=1, terms=[("Z", 1.0)])
+    circuit = Circuit(pauli_x(0), n_qubits=1)
+    est = StatevectorEstimator(NumpyBackend())
+
+    assert est.estimate(circuit, ham).energy == pytest.approx(est.run(circuit, ham).value)
+
+
+def test_noisy_estimator_estimate_matches_run_value():
+    ham = Hamiltonian(n_qubits=1, terms=[("Z", 1.0)])
+    circuit = Circuit(ry(0.3, 0), n_qubits=1)
+    est = NoisyEstimator(noise_model=_bitflip(0.25))
+
+    assert est.estimate(circuit, ham).energy == pytest.approx(est.run(circuit, ham).value)
+
+
+def test_shot_estimator_estimate_matches_run_value_and_returns_pauli_estimate_result():
+    from aicir import PauliEstimateResult
+
+    # |1> 是 Z 的本征态，方差为 0：即便 estimate()/run() 各自独立采样，数值仍精确一致
+    ham = Hamiltonian(n_qubits=1, terms=[("Z", 1.0)])
+    circuit = Circuit(pauli_x(0), n_qubits=1)
+    est = ShotEstimator(NumpyBackend(), shots=256)
+
+    estimated = est.estimate(circuit, ham)
+    run_result = est.run(circuit, ham)
+    assert isinstance(estimated, PauliEstimateResult)
+    assert estimated.energy == pytest.approx(run_result.value)
+    assert estimated.shots == run_result.shots
+    assert estimated.variance == pytest.approx(run_result.variance)

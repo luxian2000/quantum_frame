@@ -186,3 +186,48 @@ def test_vqe_default_exact_energy_uses_statevector_estimator():
     assert solver._last_estimator_result is not None
     # 数值与解析一致：<Z> = cos(theta)
     assert np.isclose(solver.energy(np.array([0.7])), np.cos(0.7), atol=1e-7)
+
+
+class _RunOnlyEstimator:
+    """仅暴露 run()（无 estimate()），验证 BasicVQE 的 energy_estimator 优先走 run()
+    的 duck-typed 注入路径（phase-1 item 3）。"""
+
+    def __init__(self, backend=None):
+        from aicir.primitives import StatevectorEstimator
+
+        self._inner = StatevectorEstimator(backend)
+
+    def run(self, circuits, observables, *, shots=None, parameter_values=None):
+        return self._inner.run(circuits, observables, shots=shots, parameter_values=parameter_values)
+
+
+def test_vqe_injected_estimator_with_only_run_method_works():
+    estimator = _RunOnlyEstimator(NumpyBackend())
+    assert not hasattr(estimator, "estimate")
+
+    solver = BasicVQE(
+        _z_hamiltonian_object(),
+        ansatz=_single_ry_template(),
+        backend=NumpyBackend(),
+        energy_estimator=estimator,
+    )
+
+    assert solver.energy(np.array([0.0])) == np.float32(1.0)
+    assert np.isclose(solver.energy(np.array([0.7])), np.cos(0.7), atol=1e-7)
+    assert solver._last_estimator_result is not None
+
+
+def test_vqe_injected_estimator_with_only_estimate_method_still_works():
+    # PauliEstimator（aicir.measure.estimator）只暴露 estimate()，无 run()：
+    # 验证 BasicVQE 保留旧 estimate() 退回路径（duck-typed 外部注入向后兼容）。
+    estimator = PauliEstimator(NumpyBackend(), shots=32)
+    assert not hasattr(estimator, "run")
+
+    solver = BasicVQE(
+        _z_hamiltonian_object(),
+        ansatz=_single_ry_template(),
+        backend=NumpyBackend(),
+        energy_estimator=estimator,
+    )
+
+    assert solver.energy(np.array([0.0])) == np.float32(1.0)
