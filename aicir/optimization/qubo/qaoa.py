@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 
@@ -145,8 +145,18 @@ def run_model_qaoa(
     include_offset: bool = True,
     mixer_hamiltonian: np.ndarray | None = None,
     seed: int | None = None,
+    optimizer: Any = None,
+    shots: int | None = None,
+    backend: Any = None,
+    method: str = "statevector",
+    grad_method: str = "fd",
 ) -> QAOAResult:
-    """Run ``BasicQAOA`` on a QUBO ``Model``."""
+    """Run ``BasicQAOA`` on a QUBO ``Model``.
+
+    ``seed`` 同时用于构造 ``BasicQAOA``（初始参数采样）和转发给
+    ``BasicQAOA.run``（shots 采样等运行期随机性），与 ``BasicQAOA.run`` 的
+    其余可选关键字参数一起原样转发。
+    """
 
     solver = model_to_basic_qaoa(
         model,
@@ -161,6 +171,12 @@ def run_model_qaoa(
         lr=lr,
         init_params=init_params,
         callback=callback,
+        optimizer=optimizer,
+        shots=shots,
+        backend=backend,
+        seed=seed,
+        method=method,
+        grad_method=grad_method,
     )
 
 
