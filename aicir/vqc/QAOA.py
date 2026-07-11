@@ -326,7 +326,7 @@ class BasicQAOA:
 
     def __init__(
         self,
-        problem_hamiltonian: np.ndarray | None = None,
+        problem_hamiltonian: Hamiltonian | np.ndarray | None = None,
         p: int = 1,
         n_qubits: int | None = None,
         mixer_hamiltonian: np.ndarray | None = None,
