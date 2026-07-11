@@ -63,6 +63,23 @@ def test_spsa_optimizer_minimizes_one_dimensional_objective():
     assert np.allclose(result.x, [2.0], atol=1e-3)
 
 
+def test_spsa_optimizer_uses_provided_gradient_fn():
+    fn, grad = _quadratic(np.array([2.0]))
+    calls = []
+
+    def counting_grad(params):
+        calls.append(params.copy())
+        return grad(params)
+
+    optimizer = SPSA(max_iters=80, learning_rate=0.08, perturbation=1e-3, rng=3)
+    result = optimizer.minimize(fn, np.array([0.0]), gradient_fn=counting_grad)
+
+    assert result.success
+    assert result.fun < 1e-8
+    assert np.allclose(result.x, [2.0], atol=1e-4)
+    assert len(calls) == result.nit
+
+
 def test_optimizer_callbacks_receive_copied_params():
     fn, grad = _quadratic(np.array([1.0]))
     seen = []

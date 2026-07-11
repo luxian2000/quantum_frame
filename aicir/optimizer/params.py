@@ -339,6 +339,7 @@ class SPSA:
         fn: ScalarFn,
         init_params: Any,
         *,
+        gradient_fn: GradientFn | None = None,
         callback: Callable[[int, float, np.ndarray], None] | None = None,
     ) -> OptimizationResult:
         params = _as_params(init_params)
@@ -360,7 +361,10 @@ class SPSA:
 
             lr = _schedule_value(self.learning_rate, step, label="learning_rate")
             eps_value = _schedule_value(self.perturbation, step, label="perturbation")
-            grad = spsa(objective, params, eps=eps_value, n_samples=self.n_samples, rng=rng)
+            if gradient_fn is not None:
+                grad = np.asarray(gradient_fn(params), dtype=float).reshape(params.shape)
+            else:
+                grad = spsa(objective, params, eps=eps_value, n_samples=self.n_samples, rng=rng)
             grad_norm = float(np.linalg.norm(grad.reshape(-1)))
 
             if self.save_history:
