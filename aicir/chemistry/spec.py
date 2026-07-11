@@ -292,7 +292,7 @@ def _generated_from_molecular_spec(spec: MolecularSpec) -> GeneratedHamiltonian:
 
 
 def _generated_from_preset(spec: PresetSpec) -> GeneratedHamiltonian:
-    from .molecule import get_molecule
+    from .molecules import get_molecule
 
     preset = get_molecule(spec.name)
     terms = _normalize_terms(preset.terms)
