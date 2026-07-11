@@ -231,3 +231,24 @@ def test_vqe_injected_estimator_with_only_estimate_method_still_works():
     )
 
     assert solver.energy(np.array([0.0])) == np.float32(1.0)
+
+
+def test_vqe_injected_run_capable_estimator_still_applies_vqe_noise_model():
+    # 回归：注入 run()-capable estimator（ShotEstimator）+ VQE 级 noise_model 时，
+    # 噪声配置必须经 estimate(**kwargs) 完整转发，而非被 run() 分支静默丢弃。
+    # theta=0 时无噪声 <Z>=+1；ry 后全概率 bit flip → |1>，<Z>=-1（确定值）。
+    from aicir.primitives import ShotEstimator
+
+    noise = NoiseModel().add_channel(BitFlipChannel(target_qubit=0, p=1.0), after_gates=["ry"])
+    estimator = ShotEstimator(NumpyBackend(), shots=64)
+    assert hasattr(estimator, "run")
+
+    solver = BasicVQE(
+        _z_hamiltonian_object(),
+        ansatz=_single_ry_template(),
+        backend=NumpyBackend(),
+        energy_estimator=estimator,
+        noise_model=noise,
+    )
+
+    assert solver.energy(np.array([0.0])) == np.float32(-1.0)

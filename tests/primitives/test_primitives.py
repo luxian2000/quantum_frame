@@ -298,3 +298,20 @@ def test_shot_estimator_estimate_matches_run_value_and_returns_pauli_estimate_re
     assert estimated.energy == pytest.approx(run_result.value)
     assert estimated.shots == run_result.shots
     assert estimated.variance == pytest.approx(run_result.variance)
+
+
+def test_shot_estimator_estimate_forwards_noise_model_kwarg():
+    from aicir import PauliEstimateResult
+
+    # 回归：estimate() 的非 shots kwargs（noise_model/grouping/initial_state 等）
+    # 必须原样转发底层 PauliEstimator，不得被 run() 委托路径静默丢弃。
+    # ry(0.0)|0> = |0>，无噪声 <Z>=+1；ry 后全概率 bit flip → |1>，<Z>=-1（确定值）。
+    ham = Hamiltonian(n_qubits=1, terms=[("Z", 1.0)])
+    circuit = Circuit(ry(0.0, 0), n_qubits=1)
+    est = ShotEstimator(NumpyBackend(), shots=64)
+
+    noiseless = est.estimate(circuit, ham)
+    noisy = est.estimate(circuit, ham, noise_model=_bitflip(1.0))
+    assert isinstance(noisy, PauliEstimateResult)
+    assert noiseless.energy == pytest.approx(1.0)
+    assert noisy.energy == pytest.approx(-1.0)

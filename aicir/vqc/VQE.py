@@ -468,19 +468,36 @@ class BasicVQE:
         if self.shots is not None:
             estimate_kwargs["shots"] = self.shots
 
-        if hasattr(estimator, "run"):
+        # run() 契约只承载 shots：仅当噪声/初始态/密度矩阵配置均为默认时才可走 run()，
+        # 否则必须经 estimate(**kwargs) 转发全部测量配置，绝不静默丢弃。
+        measurement_config_deviates = (
+            self.noise_model is not None
+            or self.use_density_matrix
+            or self.initial_state is not None
+            or self.initial_density_matrix is not None
+        )
+
+        if hasattr(estimator, "run") and not measurement_config_deviates:
             # 优先经 primitives run()（消费 EstimateResult.value，phase-1 item 3）；
-            # run() 契约只承载 shots，其余测量相关配置由具体 estimator 自身状态承载
-            # （如 NoisyEstimator 构造时已绑定 noise_model）。
+            # estimator 自身状态承载的配置（如 NoisyEstimator 构造时绑定的
+            # noise_model）在 run() 内部生效，不受本分支影响。
             run_kwargs: dict[str, Any] = {}
             if "shots" in estimate_kwargs:
                 run_kwargs["shots"] = estimate_kwargs["shots"]
             estimator_result = estimator.run(circuit, self.observable, **run_kwargs)
             energy_value = float(estimator_result.value)
-        else:
-            # 仅暴露 estimate() 的对象（如原生 PauliEstimator）：保留旧契约作为退回路径。
+        elif hasattr(estimator, "estimate"):
+            # 旧契约路径：仅暴露 estimate() 的对象（如原生 PauliEstimator），或
+            # 噪声/初始态等配置偏离默认、需要完整 kwargs 转发的场景。
             estimator_result = estimator.estimate(circuit, self.observable, **estimate_kwargs)
             energy_value = float(estimator_result.energy)
+        else:
+            # 仅暴露 run() 的注入对象无法承载噪声/初始态配置：显式报错而非静默丢弃。
+            raise TypeError(
+                "energy_estimator 仅暴露 run()，无法转发 noise_model/initial_state/"
+                "initial_density_matrix/use_density_matrix 配置；请提供 estimate() "
+                "或改用支持这些配置的 estimator"
+            )
 
         self._last_circuit = circuit
         self._last_estimator_result = estimator_result

@@ -138,14 +138,19 @@ class ShotEstimator(BaseEstimator):
     def shots(self) -> int:
         return self._inner.shots
 
-    def estimate(self, circuit, hamiltonian, *, shots: int | None = None, **_ignored):
+    def estimate(self, circuit, hamiltonian, *, shots: int | None = None, **kwargs):
         """直通底层 PauliEstimator（BasicVQE energy_estimator 契约，已弃用）。
 
-        委托 run()：从其 ``EstimateResult.metadata`` 还原 ``groups``/原始
-        metadata，重建 ``PauliEstimateResult`` 以保持旧调用方类型契约；数值
-        与 ``run().value`` 完全一致（同一次底层估计，非重复采样）。新代码
-        请消费 run() 返回的 ``EstimateResult``。
+        朴素场景（仅 shots）委托 run()：从其 ``EstimateResult.metadata`` 还原
+        ``groups``/原始 metadata，重建 ``PauliEstimateResult`` 以保持旧调用方
+        类型契约；数值与 ``run().value`` 完全一致（同一次底层估计，非重复采样）。
+        携带其余 kwargs（noise_model/grouping/initial_state/...）时原样转发底层
+        PauliEstimator.estimate（run() 契约不承载这些配置，绝不静默丢弃）。
+        新代码请消费 run() 返回的 ``EstimateResult``。
         """
+
+        if kwargs:
+            return self._inner.estimate(circuit, hamiltonian, shots=shots, **kwargs)
 
         result = self.run(circuit, hamiltonian, shots=shots)
         metadata = dict(result.metadata)
