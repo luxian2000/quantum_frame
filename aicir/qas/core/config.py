@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Any, Callable
 
@@ -168,10 +169,17 @@ def canonical_method(method: QASMethod) -> str:
 
 
 def _build(config_type: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
+    valid_fields = {f.name for f in dataclasses.fields(config_type)}
+    unknown = sorted(set(kwargs) - valid_fields)
+    if unknown:
+        raise TypeError(
+            f"{config_type.__name__} does not accept field(s) {unknown!r}; "
+            f"valid fields are {sorted(valid_fields)!r}."
+        )
     try:
         return config_type(**kwargs)
     except TypeError as exc:
-        raise TypeError(f"{config_type.__name__} does not accept the provided config fields.") from exc
+        raise TypeError(f"{config_type.__name__} does not accept the provided config fields: {exc}") from exc
 
 
 ppo_rb = pporb
