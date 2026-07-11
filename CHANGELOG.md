@@ -2,6 +2,16 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-11
+
+### Fixed
+
+- **`aicir.chemistry.spec` preset 路径修复。** `_generated_from_preset` 内部导入的 `from .molecule import get_molecule` 指向已废弃的单文件模块，preset 分支必然 `ModuleNotFoundError`；改为 `from .molecules import get_molecule`。
+- **`run_model_qaoa` 补齐转发参数。** 新增显式关键字参数 `optimizer=`/`shots=`/`backend=`/`method=`/`grad_method=`（与 `BasicQAOA.run` 默认值一致）并原样转发；原有 `seed=` 同时用于构造 `BasicQAOA`（初始参数采样）与转发给 `BasicQAOA.run`（shots 采样等运行期随机性）。`run_qubo_qaoa` 别名不变。
+- **`SPSA.minimize` 补齐 `gradient_fn=`。** 与 `GD`/`Adam`/`ScipyMinimize` 共享的 `minimize(fn, init_params, *, gradient_fn=None, callback=None)` 签名对齐；提供 `gradient_fn` 时使用其梯度估计替代 SPSA 同步扰动估计，不提供时行为与之前完全一致。
+- **`crlqas` 局部化随机数。** `train_crlqas` 不再调用 `np.random.seed`/`random.seed` 污染全局状态，改为仅使用局部 `random.Random(cfg.seed)`/`np.random.default_rng(cfg.seed)`（原本模块内部随机数已全部走这两个局部生成器，全局 seeding 属冗余污染）；`torch.manual_seed` 因 `nn.Linear` 默认初始化没有干净的局部生成器路径而保留，但收窄到紧邻网络构造之前。**同 seed 的数值序列会发生变化**（不再与之前的全局污染路径等价）。
+- **QAS config 报错信息补充字段名。** `aicir.qas.config` 的 `_build` 在实例化前比对 `dataclasses.fields`，未知字段的 `TypeError` 现在包含具体字段名与合法字段集合；其余 `TypeError`（如字段值类型错误）保留原始异常信息（`from exc` 串联）。
+
 ## 2026-07-09
 
 ### Added
