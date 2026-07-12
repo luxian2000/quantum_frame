@@ -108,3 +108,36 @@ def test_run_problem_field_accepts_prebuilt_qasproblem():
     result = run("dqas", problem=problem, config=_tiny_dqas_config())
 
     assert result.value == pytest.approx(1.0, abs=1e-6)
+
+
+def test_run_does_not_mutate_a_reused_qasrunconfig():
+    # run() must not write back onto a caller-supplied QASRunConfig: reusing the
+    # same request object across two run() calls previously left .problem set
+    # from the first call, which then collided with the still-populated legacy
+    # target_state field on the second call and raised spuriously.
+    pytest.importorskip("torch")
+    from aicir import NumpyBackend, State
+    from aicir.qas import QASRunConfig
+
+    target_state = State.from_array(np.array([0.0, 1.0], dtype=np.complex64), n_qubits=1, backend=NumpyBackend())
+    request = QASRunConfig(
+        method="pprdql",
+        target_state=target_state,
+        config=config.pprdql(
+            max_episodes=1,
+            max_steps_per_episode=1,
+            batch_size=1,
+            replay_capacity=8,
+            warmup_transitions=1,
+            target_update_interval=1,
+            action_gates=[{"type": "pauli_x", "target_qubit": 0}],
+            seed=7,
+        ),
+    )
+
+    first = run(request)
+    second = run(request)
+
+    assert request.problem is None
+    assert first.circuit.n_qubits == 1
+    assert second.circuit.n_qubits == 1

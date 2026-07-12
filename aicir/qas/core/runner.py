@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Any
 
@@ -122,12 +123,16 @@ def run(request: QASRunConfig | QASMethod, **kwargs: Any) -> Any:
 
     run_config = _as_run_config(request, kwargs)
     method = qas_config.canonical_method(run_config.method)
-    run_config.problem = _resolve_problem(run_config)
+    problem = _resolve_problem(run_config)
+    # dataclasses.replace(...) 而非原地赋值：request 可能是调用方传入、打算复用的
+    # QASRunConfig 实例（见 run(QASRunConfig(...))），原地写 .problem 会在第二次
+    # run() 调用时把已归一化的 problem 与仍然非 None 的旧字段一起看到，误判为冲突。
+    dispatch_config = dataclasses.replace(run_config, problem=problem)
 
     strategy = get_strategy(method)
     if strategy is None:
         raise ValueError(f"Unsupported QAS method: {run_config.method!r}")
-    return strategy.run(run_config)
+    return strategy.run(dispatch_config)
 
 
 def _as_run_config(request: QASRunConfig | QASMethod, kwargs: dict[str, Any]) -> QASRunConfig:
