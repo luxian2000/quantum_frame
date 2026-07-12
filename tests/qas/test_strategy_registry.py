@@ -30,16 +30,23 @@ def test_dqas_strategy_registered_as_import_side_effect():
     assert isinstance(get_strategy("dqas"), SearchStrategy)
 
 
-def test_nonmigrated_methods_fall_back_to_table():
-    for method in (
-        "crlqas",
-        "pprdql",
-        "pporb",
-        "supernet_classification",
-        "supernet_h2",
-        "qdrats",
-    ):
-        assert get_strategy(method) is None
+def test_all_factory_methods_are_registered_strategies():
+    # 3b：_TABLE 分发表已删除，core.config._FACTORIES 的全部方法都已迁移为
+    # SearchStrategy 并注册进策略表（runner.run() 只查本注册表）。
+    from aicir.qas.core import config as qas_config
+
+    for method in qas_config.method_names():
+        strategy = get_strategy(method)
+        assert strategy is not None, f"{method} 未注册为 SearchStrategy"
+        assert isinstance(strategy, SearchStrategy)
+
+
+def test_runner_module_no_longer_has_dispatch_table():
+    import aicir.qas.core.runner as runner_module
+
+    assert not hasattr(runner_module, "_TABLE")
+    assert not hasattr(runner_module, "_Spec")
+    assert not hasattr(runner_module, "_load")
 
 
 def test_register_get_unregister_with_alias():

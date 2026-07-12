@@ -150,7 +150,9 @@ def search_ground_state_qas(hamiltonian: Hamiltonian, **overrides) -> SupernetRe
     # 若调用方未显式指定量子比特数，则与输入哈密顿量保持一致。
     overrides.setdefault("n_qubits", hamiltonian.n_qubits)
     config = lih_vqe_qas_config(**overrides)
-    return qas_run("supernet", config=config, hamiltonian=hamiltonian)
+    # qas_run() 统一返回 QASResult（3b breaking change）；本函数对外仍承诺
+    # SupernetResult 契约（``final_metrics`` 等），故取 .raw 还原原始结果对象。
+    return qas_run("supernet", config=config, hamiltonian=hamiltonian).raw
 
 
 # Map each aicir gate dict onto the circuit builder that reconstructs it. Each

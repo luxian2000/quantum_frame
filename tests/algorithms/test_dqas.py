@@ -165,5 +165,6 @@ def test_dqas_config_factory_runner_and_strategy_registration():
     hamiltonian = np.zeros((2, 2), dtype=np.complex64)
     result = run("dqas", hamiltonian=hamiltonian, config=cfg)
 
+    # 3b：run() 统一返回 QASResult；DQASResult.minimum_energy -> result.value。
     assert result.circuit.n_qubits == 1
-    assert result.minimum_energy == pytest.approx(0.0, abs=1e-6)
+    assert result.value == pytest.approx(0.0, abs=1e-6)

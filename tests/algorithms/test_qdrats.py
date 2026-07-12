@@ -112,5 +112,6 @@ def test_qdrats_config_factory_and_runner_aliases():
     hamiltonian = np.zeros((2, 2), dtype=np.complex64)
     result = run("qdrats", hamiltonian=hamiltonian, config=cfg)
 
+    # 3b：run() 统一返回 QASResult；QDRATSResult.minimum_energy -> result.value。
     assert result.circuit.n_qubits == 1
-    assert result.minimum_energy == pytest.approx(0.0, abs=1e-6)
+    assert result.value == pytest.approx(0.0, abs=1e-6)

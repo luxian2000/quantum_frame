@@ -2,7 +2,9 @@ import numpy as np
 import pytest
 
 from aicir import NumpyBackend, State
+from aicir.protocols import AlgorithmResult
 from aicir.qas import (
+    QASResult,
     QASRunConfig,
     available_qas_methods,
     config,
@@ -46,15 +48,19 @@ def _tiny_ppr_config():
 
 
 def test_available_qas_methods_contains_public_names():
+    # 3b：available_qas_methods() 派生自 SearchStrategy 注册表（core.strategies），
+    # 按字典序排列，覆盖全部 10 个 core.config._FACTORIES 方法（含新增的 mogvqe）。
     assert available_qas_methods() == (
+        "crlqas",
+        "dqas",
+        "mogvqe",
+        "pporb",
+        "pprdql",
+        "qdrats",
         "supernet",
         "supernet_classification",
         "supernet_h2",
-        "pporb",
-        "pprdql",
-        "crlqas",
-        "qdrats",
-        "dqas",
+        "vqe_loop",
     )
 
 
@@ -81,9 +87,14 @@ def test_default_qas_config_remains_method_name_wrapper():
 def test_run_dispatches_vqa_classification():
     result = run("VQA_QAS", config=_tiny_vqa_config())
 
-    assert result.best_circuit.n_qubits == 3
-    assert result.best_architecture is not None
-    assert len(result.ranking_records) == 3
+    # 3b：run() 统一返回 QASResult；SupernetResult 特有字段仍可从 raw/metadata 取。
+    assert isinstance(result, QASResult)
+    assert isinstance(result, AlgorithmResult)
+    assert result.method == "supernet"
+    assert result.circuit.n_qubits == 3
+    assert result.raw.best_circuit.n_qubits == 3
+    assert result.metadata["best_architecture"] is not None
+    assert len(result.metadata["ranking_records"]) == 3
 
 
 def test_run_accepts_custom_vqa_objective_keyword():
@@ -102,8 +113,9 @@ def test_run_accepts_custom_vqa_objective_keyword():
 
     result = run("VQA_QAS", objective=lambda circuit, **_: 0.0, config=cfg)
 
-    assert result.best_circuit.n_qubits == 1
-    assert result.best_score == 0.0
+    assert isinstance(result, QASResult)
+    assert result.circuit.n_qubits == 1
+    assert result.value == 0.0
 
 
 def test_run_accepts_request_object_for_pprdql():
@@ -115,8 +127,9 @@ def test_run_accepts_request_object_for_pprdql():
 
     result = run(QASRunConfig(method="ppr", target_state=target_state, config=_tiny_ppr_config()))
 
+    assert isinstance(result, QASResult)
     assert result.circuit.n_qubits == 1
-    assert result.best_fidelity >= 0.99
+    assert result.value >= 0.99
 
 
 def test_legacy_runner_alias_is_not_exported():

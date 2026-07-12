@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 class VQELoopUnifiedInterfaceTests(unittest.TestCase):
     def test_vqe_loop_is_available_through_qas_run_and_config(self):
-        from aicir.qas import config, run, available_qas_methods
+        from aicir.qas import QASResult, config, run, available_qas_methods
         from aicir.qas.vqe_loop import ClosedLoopConfig, ClosedLoopResult, P0BootstrapConfig, P0BootstrapResult
 
         with tempfile.TemporaryDirectory() as temp:
@@ -40,7 +40,12 @@ class VQELoopUnifiedInterfaceTests(unittest.TestCase):
                 result = run("vqe_loop", config=cfg)
 
             runner.assert_called_once_with(config=cfg)
-            self.assertEqual(result, expected)
+            # 3b：run() 统一返回 QASResult；ClosedLoopResult 只有输出路径（无内存态
+            # circuit/energy），完整对象保留在 raw。
+            self.assertIsInstance(result, QASResult)
+            self.assertEqual(result.method, "vqe_loop")
+            self.assertIs(result.raw, expected)
+            self.assertIsNone(result.value)
 
 
 if __name__ == "__main__":
