@@ -7,12 +7,15 @@
 | 统一入口方法名 | 实现文件 | 搜索类型 | 说明 |
 | --- | --- | --- | --- |
 | `supernet` / `supernet_classification` / `supernet_h2` | `algorithms/supernet.py` | 权重共享 supernet | VQA ansatz 架构搜索，支持分类任务、H2 VQE 和自定义 VQE 目标。 |
-| 底层专用接口 `mogvqe` | `algorithms/mogvqe.py` | 多目标遗传搜索 | MoG-VQE，基于 NSGA-II 修改 block-based HEA 拓扑；当前不经过统一 `run(method, ...)` 分发，旧名 `run_mog_vqe` 仍作为别名兼容。 |
+| `mogvqe` | `algorithms/mogvqe.py` | 多目标遗传搜索 | MoG-VQE，基于 NSGA-II 修改 block-based HEA 拓扑；旧名 `run_mog_vqe` 仍作为别名兼容。 |
 | `pporb` | `algorithms/pporb.py` | 强化学习 | Trust Region-based PPO with Rollback，用于目标态制备线路搜索；旧名 `ppo_rb` 仍作为别名兼容。 |
 | `pprdql` | `algorithms/pprdql.py` | 强化学习 | PPR-DQL（Probabilistic Policy Reuse with Deep Q-Learning）；旧名 `ppr_dql` 仍作为别名兼容。 |
 | `crlqas` | `algorithms/crlqas.py` | 强化学习 | 课程学习 + DDQN + Adam-SPSA，面向哈密顿量能量最小化。 |
 | `qdrats` | `algorithms/qdrats.py` | 可微架构搜索 | QDRATS / Quantum DARTS，基于 slot/candidate 的哈密顿量能量最小化。 |
 | `dqas` | `algorithms/dqas.py` | 可微架构搜索 | DQAS，使用 categorical operation pool 与 score-function 架构梯度；不是 RL agent/value-policy 框架。 |
+| `vqe_loop` | `vqe_loop/p0_bootstrap_fair.py` | 闭环编排 | P0 bootstrap + fair-label 主线，产出 benchmark-table CSV（不是内存态的单个电路/能量）。 |
+
+10 个方法（Phase 3b 起）都经过统一 `run(method, ...)` 分发，均返回 `QASResult`（见 §2）。
 
 当前代码分层：
 
@@ -39,28 +42,50 @@
 
 推荐入口：
 
-- `run(method, **kwargs)`：按方法名运行对应 QAS 实现
+- `run(method, **kwargs)`：按方法名运行对应 QAS 实现，**统一返回 `QASResult`**（Phase 3b breaking change，见下）
 - `config.<method>(**kwargs)`：按方法名创建对应配置对象，例如 `config.supernet(...)`、`config.pprdql(...)`
 - `config.create(method, **kwargs)`：当方法名来自字符串或外部配置文件时，按方法名创建配置对象
 - `QASRunConfig`：把方法名、配置和任务输入封装成请求对象后传给 `run`
 - `default_qas_config(method, **kwargs)`：兼容旧入口，内部等价于 `config.create(method, **kwargs)`
-- `available_qas_methods()`：返回当前支持的统一入口方法名
+- `available_qas_methods()`：返回当前支持的统一入口方法名（派生自 `SearchStrategy` 注册表，字典序，10 个）
 
-统一入口支持的方法和参数：
+### 2.0 统一返回值：`QASResult`（Phase 3b Breaking）
 
-| `method`               | 必要参数                                     | 可选参数                                 | 返回值               |
-| ------------------------ | -------------------------------------------- | ---------------------------------------- | -------------------- |
-| `"supernet"`            | `objective` 或在 `config` 中指定内置任务 | `config`、`dataset`、`hamiltonian` | `SupernetResult`     |
-| `"supernet_classification"` | 无                                           | `config`                               | `SupernetResult`     |
-| `"supernet_h2"`             | 无                                           | `config`                               | `SupernetResult`     |
-| `"pporb"`             | `target_density_matrix`、`epsilon`       | `config`                               | `(theta, circuit)` |
-| `"pprdql"`            | `target_state`                             | `config`、`policy_library`           | `PPRDQLResult`     |
-| `"crlqas"`             | `hamiltonian`                              | `config`                               | `CRLQASResult`     |
-| `"qdrats"`             | `hamiltonian`                              | `config`                               | `QDRATSResult`     |
-| `"dqas"`               | `hamiltonian`                              | `config`                               | `DQASResult`       |
-| `"vqe_loop"`           | `config`                                   | 无                                     | `P0BootstrapResult` |
+`run(method, ...)` 现在对**全部**方法统一返回 `aicir.qas.QASResult`（`method`/`value`/`circuit`/`parameters`/`history`/`metadata`/`raw` 七个字段，满足 `aicir.protocols.AlgorithmResult` 协议）。方法专属的原始结果对象（`SupernetResult`/`DQASResult`/`QDRATSResult`/`CRLQASResult`/`PPRDQLResult`/`ClosedLoopResult`，或 `pporb` 的裸 `(theta, circuit)` 元组）完整保留在 `result.raw`，不丢信息；额外的方法专属字段（如 `ranking_records`、`finetune_log`、`curriculum_threshold`）放进 `result.metadata`。
 
-方法名大小写不敏感，也支持常见别名，例如 `"h2"`/`"h2_vqe"`（→ `supernet_h2`）、`"ppr"`/`"ppr_dql"`（→ `pprdql`）、`"crl"`（→ `crlqas`）、`"ppo"`/`"ppo_rb"`（→ `pporb`）、`"differentiable_qas"`（→ `dqas`）、`"vqe_qas"`/`"vqe_closed_loop"`（→ `vqe_loop`）。
+各方法在 `QASResult` 里的字段映射（`value` 为 `None` 表示该方法的底层结果不携带可廉价获取的标量目标值）：
+
+| `method`               | 必要输入                                     | 可选输入                                 | `value`               | `circuit`      | `parameters`     |
+| ------------------------ | -------------------------------------------- | ---------------------------------------- | -------------------- | -------------- | ----------------- |
+| `"supernet"`            | `objective` 或在 `config` 中指定内置任务 | `config`、`dataset`、`problem`（哈密顿量） | `best_score`        | `best_circuit` | `None`（角度已直接写入 circuit 门参数） |
+| `"supernet_classification"` | 无                                           | `config`                               | `best_score`         | `best_circuit` | `None`            |
+| `"supernet_h2"`             | 无                                           | `config`                               | `best_score`         | `best_circuit` | `None`            |
+| `"pporb"`             | `problem`（密度矩阵）、`epsilon`       | `config`                               | `None`（`ppo_rb_qas` 不返回保真度，重算需重跑仿真，不做） | 训练中最佳/贪心线路 | `theta`（策略网络权重） |
+| `"pprdql"`            | `problem`（态）                             | `config`、`policy_library`           | `best_fidelity`     | 最佳线路        | `PPRDQLPolicy`     |
+| `"crlqas"`             | `problem`（哈密顿量）                              | `config`                               | `minimum_energy`    | 最优线路        | 连续参数列表        |
+| `"qdrats"`             | `problem`（哈密顿量）                              | `config`                               | `minimum_energy`    | 离散化线路      | 角度 dict          |
+| `"dqas"`               | `problem`（哈密顿量）                              | `config`                               | `minimum_energy`    | 离散化线路      | 角度 dict          |
+| `"vqe_loop"`           | `config`                                   | `problem`（哈密顿量，覆盖 `config.hamiltonian_terms`） | `None`（产出 benchmark-table CSV，非内存态最优解） | `None`         | `None`             |
+| `"mogvqe"`             | `initial_ansatz`、`problem`（哈密顿量）           | `config`                               | `best_energy`        | `best_circuit` | `best_parameters`  |
+
+迁移表（旧用法 → 新用法）见 `CHANGELOG.md` 2026-07-12 Breaking 条目。
+
+### 2.0.1 统一任务输入：`problem=`（Phase 3b，向后兼容）
+
+`run(method, problem=X, ...)` 的 `problem=` 接受 `aicir.qas.core.problem.normalize_problem()` 支持的任意形态：`Hamiltonian`、`State`、哈密顿量/密度矩阵 `ndarray`、态向量 `ndarray`、`(label, coeff)`/`(coeff, label)` Pauli 项列表，或已构造好的 `QASProblem`。旧的按方法专属命名的关键字参数 `hamiltonian=`/`target_state=`/`target_density_matrix=` 继续可用，内部路由到同一个归一化逻辑；`problem=` 与旧关键字同时传入、或两个旧关键字同时传入，均抛 `ValueError`（避免用户以为两者都生效但实际只有一个被消费）。`mogvqe` 额外需要 `initial_ansatz=`（拓扑起点，不属于 `problem`/`config` 的语义范围）。
+
+```python
+from aicir.qas import config, run
+from aicir.core.operators import Hamiltonian
+
+hamiltonian = Hamiltonian(n_qubits=2, terms=[("ZZ", -1.0), ("XI", 0.5)])
+
+# 新写法：所有哈密顿量类方法统一用 problem=
+result = run("crlqas", problem=hamiltonian, config=config.crlqas(max_episodes=50))
+
+# 旧写法仍然可用（按方法专属关键字路由到同一 problem）
+result = run("crlqas", hamiltonian=hamiltonian, config=config.crlqas(max_episodes=50))
+```
 
 示例：
 
@@ -69,11 +94,15 @@ from aicir.qas import config, run
 
 cfg = config.supernet(task="classification", supernet_steps=20, ranking_num=20, finetune_steps=5)
 result = run("supernet", config=cfg)
+result.circuit.show()
+print(result.value)
 
 # 如果方法名来自外部配置文件，可以用字符串创建配置对象。
 cfg = config.create("supernet", task="classification", supernet_steps=20)
 result = run("supernet", config=cfg)
 ```
+
+方法名大小写不敏感，也支持常见别名，例如 `"h2"`/`"h2_vqe"`（→ `supernet_h2`）、`"ppr"`/`"ppr_dql"`（→ `pprdql`）、`"crl"`（→ `crlqas`）、`"ppo"`/`"ppo_rb"`（→ `pporb`）、`"differentiable_qas"`（→ `dqas`）、`"vqe_qas"`/`"vqe_closed_loop"`（→ `vqe_loop`）。
 
 各方法的配置函数：
 
@@ -86,6 +115,7 @@ result = run("supernet", config=cfg)
 - `config.qdrats(...)`：QDRATS 超参数与搜索门池配置；`gate_pool="generic"` 或 `"excitation"`
 - `config.dqas(...)`：DQAS 超参数与搜索门池配置；`gate_pool` 可传 `"generic"` 或显式门名序列
 - `config.vqe_loop(...)`：VQE-QAS P0 bootstrap + fair-label 主线配置，支持 chemistry excitation pool、zero-cost 状态和统一 benchmark table 输出
+- `config.mogvqe(...)`：MoG-VQE NSGA-II 超参数配置（`population_size`/`generations`/`parameter_optimizer` 等 `MOGVQEConfig` 字段）
 
 底层专用接口仍然保留，适合需要直接控制某个算法实现的用户：
 
@@ -176,21 +206,23 @@ result = run("dqas", hamiltonian=hamiltonian, config=cfg)
 
 DQAS 当前支持的通用门名为 `identity`、`rx`、`ry`、`rz`、`rzryrz`、`cx`。`gate_pool="generic"` 等价于 `("identity", "rzryrz", "cx")`，其中 `cx` 默认展开为所有有向非自环连接；传 `two_qubit_pairs=((control, target), ...)` 可限制 CNOT 搜索连接。`gate_pool="excitation"` 需要传 `single_excitations` 和/或 `double_excitations`，可选 `hf_occupied_qubits`。为了保证 sampled index 可复现，推荐用 tuple/list 表达门池；`pool={...}` 也可作为别名传入，但会按固定门序规范化。旧字段 `operation_pool` 仍作为兼容别名保留。
 
-### 2.3 SearchStrategy 协议与策略注册表（模块化进行中）
+### 2.3 SearchStrategy 协议与策略注册表（Phase 3b 收官）
 
-`run(method, ...)` 的方法分发正从 `runner` 的 `_Spec` 分发表迁移为**策略注册表**，与
-`aicir.qml.diff`（`DiffMethod`）、`aicir.gates`（`GateSpec`）同一习惯：
+`run(method, ...)` 的方法分发是**策略注册表**，与 `aicir.qml.diff`（`DiffMethod`）、
+`aicir.gates`（`GateSpec`）同一习惯；旧 `runner` 的 `_Spec`/`_TABLE`/`_load` 分发表
+已在 Phase 3b 删除，`run()` 只查本注册表。
 
-分两个文件，均从 `aicir.qas.core` 再导出：
+分三个文件，均从 `aicir.qas.core` 再导出：
 
-- `aicir.qas.core.registry`（框架，通常不动）：`SearchStrategy`（抽象基类，每种算法实现 `run(request) -> 结果`）、`StrategySpec`（`name`/`strategy`/`aliases`/`requires_torch`），配套 `register_strategy`/`unregister_strategy`/`get_strategy`/`get_spec`/`registered_strategies`。
-- `aicir.qas.core.strategies`（数据，随算法增长）：内置策略（当前 `SupernetStrategy` 和 `DQASStrategy`）的适配与注册（import 副作用，由 `runner` 触发）。**新增同类算法只改本文件**：写一个 `SearchStrategy` 子类并 `register_strategy(...)` 即可，框架无需改动。该模块同时再导出注册表 API。
+- `aicir.qas.core.registry`（框架，通常不动）：`SearchStrategy`（抽象基类，每种算法实现 `run(request) -> QASResult`）、`StrategySpec`（`name`/`strategy`/`aliases`/`requires_torch`），配套 `register_strategy`/`unregister_strategy`/`get_strategy`/`get_spec`/`registered_strategies`。
+- `aicir.qas.core.adapters`（实现，随算法增长）：每个方法一个 `SearchStrategy` 子类，负责把 `QASRunConfig` 请求（含已归一化的 `QASProblem`，见 §2.0.1）翻译成底层函数调用参数，再把返回值包装成 `QASResult`（见 §2.0）。底层函数签名/返回类型不变——适配器是唯一改动点。
+- `aicir.qas.core.strategies`（注册，数据量小）：`from .adapters import ...` 后逐个 `register_strategy(StrategySpec(name, AdapterInstance(), ...))`（import 副作用，由 `runner` 触发）。**新增同类算法改两处**：在 `adapters.py` 写一个 `SearchStrategy` 子类，再在 `strategies.py` 注册一行；`registry.py` 框架部分不用改。
 
-`run()` 先查注册表：命中（`get_strategy(method)` 非 `None`）则走 `strategy.run(run_config)`，
-未命中回落到 `runner` 的 `_Spec` 分发表。当前 `supernet` 已迁移为 `SupernetStrategy`，
-`dqas` 已迁移为 `DQASStrategy`（均 `requires_torch=True`）；`pporb`/`pprdql`/`crlqas`/`qdrats`/`supernet_classification`/
-`supernet_h2` 仍走分发表，行为不变，后续逐个适配。对用户而言 `run("supernet", ...)` 的
-调用方式与返回值完全不变。
+`core.config._FACTORIES` 的全部 10 个方法（`supernet`/`supernet_classification`/
+`supernet_h2`/`pporb`/`pprdql`/`crlqas`/`qdrats`/`dqas`/`vqe_loop`/`mogvqe`）都已注册为
+`SearchStrategy`；`available_qas_methods()` 与 `registered_strategies()` 返回同一集合
+（字典序）。除 `vqe_loop`/`mogvqe` 外均 `requires_torch=True`（对应底层算法模块在
+import 期硬依赖 torch）。
 
 ## 3. supernet：面向变分量子算法的超网络架构搜索
 
@@ -537,7 +569,7 @@ python demos/BeH2/BeH2_npu.py --allow-cpu-fallback
 
 - D. Chivilikhin, A. Samarin, V. Ulyantsev, I. Iorsh, A. R. Oganov, O. Kyriienko, *MoG-VQE: Multiobjective genetic variational quantum eigensolver*, arXiv:2007.04424, 2020.
 
-当前实现保持 aicir 原生依赖，不强制引入 DEAP 或 CMA-ES。默认参数优化器是轻量的 `separable_es`；若需要严格复现实验中的 CMA-ES，可通过 `energy_evaluator(circuit)` 接入外部优化流程。MoG-VQE 当前作为底层专用接口 `mogvqe(...)` 使用，不经过统一 `run(method, ...)` 分发；旧名 `run_mog_vqe(...)` 仍作为兼容别名保留。
+当前实现保持 aicir 原生依赖，不强制引入 DEAP 或 CMA-ES。默认参数优化器是轻量的 `separable_es`；若需要严格复现实验中的 CMA-ES，可通过 `energy_evaluator(circuit)` 接入外部优化流程。MoG-VQE 既可以直接调用底层专用接口 `mogvqe(...)`（旧名 `run_mog_vqe(...)` 仍作为兼容别名保留），也可以经统一入口 `run("mogvqe", initial_ansatz=..., problem=..., config=config.mogvqe(...))` 调用（见 §2.0/§2.0.1）；统一入口不支持 `energy_evaluator=`/`backend=` 注入，需要这两者时请直接调用 `mogvqe(...)`。
 
 ### 4.1 输入参数（`block_hardware_efficient_ansatz` / `mogvqe`）
 

@@ -19,6 +19,25 @@
 
 - **`spec.py` Breaking：修复与 `pipeline.py`/冻结预置相反的比特序。** `spec._sparse_pauli_terms`（原 ~244-253 行）此前对 Qiskit label 做 `[::-1]` 镜像翻转，与 `pipeline.build_molecule`（不翻转，见其内联注释）及已冻结分子预置的比特序方向相反——对同一分子，`generate_hamiltonian(MolecularSpec(...))` 与 `build_molecule(...)` 会产出镜像对称但不等价的 Hamiltonian。现改为委托 `_qiskit_bridge`，删除该翻转，两条路径的比特序统一为 canonical `qiskit_label`（`GeneratedHamiltonian.metadata["qubit_order"] == "qiskit_label"` 可查）。**迁移说明**：如确实需要旧的镜像比特序，显式调用 `aicir.chemistry._qiskit_bridge.reverse_pauli_labels(terms)` 自行翻转；`spec.py` 的 `PresetSpec`/`PauliTermsSpec` 分支不受影响（前者本就直接透传预置 terms 未翻转，后者是字面量输入）。影响面很小：`spec.py` 的 preset 导入路径在 Phase 0 之前本已因 `ModuleNotFoundError` 断链（见上一节 Fixed），`MolecularSpec` 分支此前几乎不可能被下游依赖到镜像比特序这一具体细节。
 
+### Breaking
+
+- **`aicir.qas`：Phase 3b——QAS 调度迁移到 Phase 3a 基础设施，`run()` 统一返回 `QASResult`。** 承接上一节 Phase 3a（新增基础设施但不改行为）；本次是接线：
+  - **`SearchStrategy` 注册表收官。** `core/config._FACTORIES` 的全部 10 个方法（`supernet`/`supernet_classification`/`supernet_h2`/`pporb`/`pprdql`/`crlqas`/`qdrats`/`dqas`/`vqe_loop`/新增的 `mogvqe`）现在都在 `core/strategies.py` 注册为 `SearchStrategy`（实现拆到新增的 `core/adapters.py`，`strategies.py` 只保留注册）。`runner.py` 的旧 `_Spec`/`_TABLE`/`_load` 分发表已删除；`run()` 只查策略注册表。`available_qas_methods()` 现在派生自注册表（`registered_strategies()`，字典序），不再是 `_FACTORIES` 的插入序。
+  - **`run()` 对全部方法统一返回 `QASResult`。** 之前 `pporb` 返回裸 `(theta, circuit)` 元组、`supernet`/`dqas`/`qdrats`/`crlqas`/`pprdql`/`vqe_loop` 各自返回方法专属结果对象（`SupernetResult`/`DQASResult`/`QDRATSResult`/`CRLQASResult`/`PPRDQLResult`/`ClosedLoopResult`）；现在全部统一包装为 `QASResult`（`method`/`value`/`circuit`/`parameters`/`history`/`metadata`/`raw`），原始对象保留在 `raw` 不丢信息。迁移表：
+
+    | 方法 | 旧用法 | 新用法 |
+    | --- | --- | --- |
+    | `pporb` | `theta, circ = run("pporb", ...)` | `r = run("pporb", ...)`；`r.parameters`（旧 `theta`）、`r.circuit`；`r.value` 恒为 `None`（`ppo_rb_qas` 本就不返回保真度，重算需重跑环境仿真，3b 不做） |
+    | `supernet`/`supernet_classification`/`supernet_h2` | `result.best_circuit`/`result.best_score`/`result.ranking_records` | `r.circuit`（= 旧 `best_circuit`）、`r.value`（= 旧 `best_score`）；`ranking_records`/`best_architecture`/`final_metrics` 移到 `r.metadata`，或整份旧对象走 `r.raw` |
+    | `dqas`/`qdrats` | `result.circuit`/`result.parameters`/`result.minimum_energy` | `r.circuit`、`r.parameters` 字段名不变；`result.minimum_energy` -> `r.value`；`search_log` -> `r.history`；`finetune_log`/架构相关字段移到 `r.metadata` |
+    | `crlqas` | `result.circuit`/`result.parameters`/`result.minimum_energy` | 同上：`r.circuit`/`r.parameters` 不变，`minimum_energy` -> `r.value`，`episode_best_energies` -> `r.history` |
+    | `pprdql` | `result.circuit`/`result.best_fidelity`/`result.policy` | `r.circuit` 不变，`best_fidelity` -> `r.value`，`policy` -> `r.parameters`，`episode_rewards` -> `r.history` |
+    | `vqe_loop` | `result` 直接是 `ClosedLoopResult`（文件路径） | `r.raw` 是原 `ClosedLoopResult`；`r.value`/`r.circuit`/`r.parameters` 恒为 `None`（该方法产出 benchmark-table CSV，没有内存态最优解，解析 CSV 不是廉价操作，3b 不做） |
+
+  - **`run(method, problem=..., **kwargs)`：统一任务输入参数（新增，向后兼容）。** `QASRunConfig` 新增 `problem: Any = None` 字段，接受 `normalize_problem()` 支持的任意形态（`Hamiltonian`/`State`/矩阵/态向量/Pauli 项列表/`QASProblem`）。旧字段 `hamiltonian=`/`target_state=`/`target_density_matrix=` 继续可用并路由到同一个归一化问题；`problem=` 与旧字段同时传入、或两个旧字段同时传入，均报 `ValueError`。`mogvqe` 额外新增 `initial_ansatz` 字段（拓扑起点，不属于 problem/config 语义）。
+  - **可选 `estimator=` 注入点（新增，不改变默认行为）。** `crlqas._energy_of_gates(..., estimator=None)` 与 `vqe_loop.fair_vqe._evaluate_pauli_state_energy`/`evaluate_vqe_energy(..., estimator=None)`：默认 `None` 时数值路径与改造前逐字节一致；传入实现 `aicir.primitives` `BaseEstimator.run(circuit, observable) -> EstimateResult` 契约的对象时，energy 改走 `estimator.run(...).value`。未打通到 `run()` 的 adapter 层（仅在函数级别可用），vqe_loop 的 `optimize_vqe_energy` 内部 COBYLA 目标函数闭包同样未接入。
+  - **清理**：`aicir/qas/algorithms/{supernet,qdrats,dqas}.py` 删除未使用的 `NPUBackend` 死导入（各自委托 `core.backend_utils.make_torch_backend` 后不再直接引用该类型）；`crlqas.py` 的 `_resolve_hamiltonian_matrix(..., backend: NumpyBackend)` 类型注解更正为 `backend: Backend`（该函数经 `_resolve_crlqas_backend` 实际可能收到 `GPUBackend`/`NPUBackend`）。
+
 ## 2026-07-11
 
 ### Added
