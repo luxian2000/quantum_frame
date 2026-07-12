@@ -9,6 +9,9 @@ from __future__ import annotations
 from ._base import MoleculeHamiltonian, register_molecule
 
 
+# n_electrons/hf_occupation/excitations 静态补齐：build_molecule(同几何/基组，
+# active_electrons=4, active_orbitals=3, mapping="jordan_wigner") 现算对照，terms
+# 逐项吻合（误差 <3e-15）。
 H2O_STO3G_JW_6Q = register_molecule(
     MoleculeHamiltonian(
         name="h2o",
@@ -19,6 +22,18 @@ H2O_STO3G_JW_6Q = register_molecule(
         geometry="O 0.000000 0.000000 0.000000; H 0.757160 0.586260 0.000000; H -0.757160 0.586260 0.000000",
         source="PySCF/Qiskit Nature (ActiveSpaceTransformer + JordanWignerMapper)",
         description="H2O 4e/3o active-space Hamiltonian (6 qubits).",
+        n_electrons=4,
+        hf_occupation=(0, 1, 1, 0, 1, 1),
+        excitations=(
+            ("single", (5, 3)),
+            ("single", (4, 3)),
+            ("single", (2, 0)),
+            ("single", (1, 0)),
+            ("double", (5, 2, 3, 0)),
+            ("double", (5, 1, 3, 0)),
+            ("double", (4, 2, 3, 0)),
+            ("double", (4, 1, 3, 0)),
+        ),
         terms=(
             (-4.5241061234101245, "IIIIII"),
             (0.5153159797373158, "IIIIIZ"),

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from . import _qiskit_bridge
 from .molecules._base import MoleculeHamiltonian
 
 _CHEM_INSTALL_HINT = (
@@ -15,11 +16,7 @@ _CHEM_INSTALL_HINT = (
 
 
 def _qiskit_nature_available() -> bool:
-    try:
-        import qiskit_nature  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    return _qiskit_bridge.qiskit_nature_available()
 
 
 def _require_qiskit_nature():
@@ -48,42 +45,27 @@ def build_molecule(
     """
 
     _require_qiskit_nature()
-    from qiskit_nature.second_q.drivers import PySCFDriver
-    from qiskit_nature.second_q.mappers import (
-        BravyiKitaevMapper,
-        JordanWignerMapper,
-        ParityMapper,
-    )
-    from qiskit_nature.second_q.transformers import ActiveSpaceTransformer
 
-    driver = PySCFDriver(atom=geometry, basis=basis, charge=charge, spin=spin)
+    driver = _qiskit_bridge.build_driver(geometry, basis=basis, charge=charge, spin=spin)
     problem = driver.run()
-    if active_electrons is not None and active_orbitals is not None:
-        problem = ActiveSpaceTransformer(active_electrons, active_orbitals).transform(problem)
+    problem = _qiskit_bridge.apply_active_space(
+        problem, active_electrons=active_electrons, active_orbitals=active_orbitals
+    )
 
     second_q_op = problem.hamiltonian.second_q_op()
-
-    mapping_key = mapping.lower()
-    if mapping_key in ("jordan_wigner", "jw"):
-        mapper = JordanWignerMapper()
-    elif mapping_key == "parity":
-        mapper = (
-            ParityMapper(num_particles=problem.num_particles)
-            if two_qubit_reduction
-            else ParityMapper()
-        )
-    elif mapping_key in ("bravyi_kitaev", "bk"):
-        mapper = BravyiKitaevMapper()
-    else:
-        raise ValueError(f"未知 mapping: {mapping!r}")
+    mapper = _qiskit_bridge.select_mapper(
+        mapping,
+        num_particles=problem.num_particles,
+        two_qubit_reduction=two_qubit_reduction,
+    )
 
     qubit_op = mapper.map(second_q_op)
-    terms = _sparse_pauli_to_terms(qubit_op)  # 转 aicir PauliTerm，对齐比特序
+    terms = _qiskit_bridge.sparse_pauli_to_terms(qubit_op)  # 转 aicir PauliTerm，对齐比特序
     n_qubits = qubit_op.num_qubits
 
     n_electrons = sum(problem.num_particles)
-    hf_occupation = _mapper_hf_occupation(problem, mapper, n_qubits)
-    excitations = _structural_excitations(problem, n_qubits)
+    hf_occupation = _qiskit_bridge.hf_occupation_from_mapper(problem, mapper, n_qubits)
+    excitations = _qiskit_bridge.structural_excitations(problem, n_qubits)
 
     return MoleculeHamiltonian(
         name=name,
@@ -98,55 +80,3 @@ def build_molecule(
         hf_occupation=hf_occupation,
         excitations=excitations,
     )
-
-
-def _sparse_pauli_to_terms(qubit_op):
-    """Qiskit SparsePauliOp → aicir PauliTerm 元组。
-
-    经验证：现有 aicir 分子预置（如 ``h2_jw``）直接采用 Qiskit
-    ``SparsePauliOp.to_list()`` 的标签顺序（qubit 0 在字符串最右），并未翻转；
-    为与已提交预置的 ``terms`` 逐项吻合（免费 oracle），此处保持标签原样，不做翻转。
-    """
-
-    out = []
-    for label, coeff in sorted(qubit_op.to_list(), key=lambda t: t[0]):
-        out.append((complex(coeff), label))
-    return tuple(out)
-
-
-def _mapper_hf_occupation(problem, mapper, n_qubits):
-    """mapper 派生 HF 占据 bitstring，元组下标即 aicir 比特序号。"""
-
-    from qiskit_nature.second_q.circuit.library import HartreeFock
-
-    hf = HartreeFock(problem.num_spatial_orbitals, problem.num_particles, mapper)
-    # HartreeFock._bitstr[i] 是 Qiskit 自旋轨道序（qubit i，label 最右字符）下的占据情况；
-    # 而 aicir 的比特序是 leftmost=qubit0=MSB，terms 里的 Pauli label 仍保持 Qiskit
-    # 原序未翻转（为复现预置），因此元数据须显式按 n-1-k 反转，才能与 terms 的比特
-    # 对齐——否则用 hf_occupation 摆 HF 态、算 ⟨HF|H|HF⟩ 会对错 qubit 施加 X 门。
-    qiskit_bits = [int(bit) for bit in hf._bitstr]
-    if len(qiskit_bits) != n_qubits:
-        qiskit_bits = qiskit_bits[:n_qubits]
-    return tuple(qiskit_bits[n_qubits - 1 - i] for i in range(n_qubits))
-
-
-def _structural_excitations(problem, n_qubits):
-    """singles+doubles 费米子激发 → aicir 结构索引元组。"""
-
-    from qiskit_nature.second_q.circuit.library.ansatzes.utils import (
-        generate_fermionic_excitations,
-    )
-
-    out = []
-    for order, kind in ((1, "single"), (2, "double")):
-        raw = generate_fermionic_excitations(
-            order, problem.num_spatial_orbitals, problem.num_particles
-        )
-        for occ, vir in raw:
-            # 同 _mapper_hf_occupation：Qiskit 自旋轨道索引 k 需按 n_qubits-1-k 映射为
-            # aicir 比特序号，才能与（未翻转的）terms 对齐；元组内顺序无关紧要，
-            # uccsd 会自行排序。
-            idx = tuple(n_qubits - 1 - int(i) for i in (*occ, *vir))
-            if all(0 <= i < n_qubits for i in idx):
-                out.append((kind, idx))
-    return tuple(out)

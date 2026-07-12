@@ -9,6 +9,9 @@ from __future__ import annotations
 from ._base import MoleculeHamiltonian, register_molecule
 
 
+# n_electrons/hf_occupation/excitations 静态补齐：build_molecule(同几何/基组，
+# active_electrons=2, active_orbitals=2, mapping="jordan_wigner") 现算对照，terms
+# 逐项吻合（误差 <4e-16）。
 LIH_STO3G_JW_4Q = register_molecule(
     MoleculeHamiltonian(
         name="lih",
@@ -19,6 +22,13 @@ LIH_STO3G_JW_4Q = register_molecule(
         geometry="Li 0.000000 0.000000 0.000000; H 0.000000 0.000000 1.595000",
         source="PySCF/Qiskit Nature (ActiveSpaceTransformer + JordanWignerMapper)",
         description="LiH 2e/2o active-space Hamiltonian (4 qubits).",
+        n_electrons=2,
+        hf_occupation=(0, 1, 0, 1),
+        excitations=(
+            ("single", (3, 2)),
+            ("single", (1, 0)),
+            ("double", (3, 1, 2, 0)),
+        ),
         terms=(
             (-0.705940988128576, "IIII"),
             (0.156139531200633, "IIIZ"),

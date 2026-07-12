@@ -40,6 +40,8 @@
 
 新增分子：在 `molecules/` 下加一个分子式命名的模块，`register_molecule(MoleculeHamiltonian(...))`；小分子（≤6 qubit，dense 构造快）在 `tests/chemistry/test_molecules.py` 的 `_GROUND_ENERGIES` 补一条基态能量守卫，大分子加入 `_STRUCTURAL_ONLY`（≥12 qubit dense 构造过慢/过大，只做结构一致性检查，系数由上游 PySCF/Qiskit Nature 保证）。
 
+`h2`/`h2_jw`/`lih`/`h2o` 四个已做基态能量验证的 preset 已静态补齐 `n_electrons`/`hf_occupation`/`excitations`（用 `build_molecule` 现算同几何/基组/mapping 交叉验证后抄录，见各自模块内的补齐注释），可直接喂给 `uccsd(mol.n_qubits, mol.hf_occupation, mol.excitations)`，不必先跑第 3 节的现算流水线。`h2_tapered`（`TaperedQubitMapper` 无对应现算路径）与 12–16 qubit 结构守卫 preset 保持 `None`。
+
 ---
 
 ## 3. `build_molecule` 电子结构流水线

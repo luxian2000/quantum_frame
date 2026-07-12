@@ -2,6 +2,18 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-12
+
+### Added
+
+- **`aicir.chemistry._qiskit_bridge`：收敛两条 Qiskit Nature 生成路径。** `pipeline.build_molecule` 与 `spec.generate_hamiltonian`（`MolecularSpec` 分支）此前各自维护一份 driver 构造/mapper 选择/active-space 变换/`SparsePauliOp -> terms` 转换逻辑，现统一收敛到新的私有模块 `aicir/chemistry/_qiskit_bridge.py`：`build_driver`、`select_mapper`、`apply_active_space`/`apply_active_space_mapping`、`sparse_pauli_to_terms`、`hf_occupation_from_mapper`、`structural_excitations`，以及显式的 `reverse_pauli_labels`（供需要旧镜像比特序的调用方使用，默认路径不调用）。模块声明 `QUBIT_ORDER = "qiskit_label"`：canonical 比特序是 Qiskit `SparsePauliOp.to_list()` 原样标签，不翻转，与已冻结分子预置一致。`qiskit_nature`/`pyscf` 保持可选依赖，仅在函数体内惰性 import。`pipeline.build_molecule` 的公开签名与输出经回归测试钉住为重构前后字节级一致。
+- **`GeneratedHamiltonian.to_hamiltonian()`。** 与 `MoleculeHamiltonian.to_hamiltonian()` 同名同型，返回 `aicir.core.operators.Hamiltonian`。两个 dataclass 仍不合并（`GeneratedHamiltonian.terms` 是 `float` 系数、JSON 友好；`MoleculeHamiltonian.terms` 是 `complex` 系数），仅在此方法处汇合。
+- **≤6-qubit 预置补齐 `n_electrons`/`hf_occupation`/`excitations` 元数据。** `h2`（ParityMapper 两比特约化）、`h2_jw`、`lih`、`h2o` 四个已做基态能量验证的 preset 现补齐这三个字段，值通过本地 `pyscf`+`qiskit-nature`（现算 `build_molecule` 同几何/基组/mapping，逐项比对 terms 后抄录其元数据输出）交叉验证；`h2_tapered`（`TaperedQubitMapper` 不在 `build_molecule` 支持的三种 mapper 之列，且 tapering 后单比特表示不再与自旋轨道占据数一一对应）与 12–16 qubit 结构守卫 preset（`nh3`/`n2`/`beh2`）保持 `None`，未补齐。冻结的 `terms` 数据本身未改动。这使得文档化的 `uccsd(mol.n_qubits, mol.hf_occupation, mol.excitations)` 桥接现在也能直接吃固定预置，不再必须先跑可选的 `build_molecule` 现算流水线。
+
+### Fixed
+
+- **`spec.py` Breaking：修复与 `pipeline.py`/冻结预置相反的比特序。** `spec._sparse_pauli_terms`（原 ~244-253 行）此前对 Qiskit label 做 `[::-1]` 镜像翻转，与 `pipeline.build_molecule`（不翻转，见其内联注释）及已冻结分子预置的比特序方向相反——对同一分子，`generate_hamiltonian(MolecularSpec(...))` 与 `build_molecule(...)` 会产出镜像对称但不等价的 Hamiltonian。现改为委托 `_qiskit_bridge`，删除该翻转，两条路径的比特序统一为 canonical `qiskit_label`（`GeneratedHamiltonian.metadata["qubit_order"] == "qiskit_label"` 可查）。**迁移说明**：如确实需要旧的镜像比特序，显式调用 `aicir.chemistry._qiskit_bridge.reverse_pauli_labels(terms)` 自行翻转；`spec.py` 的 `PresetSpec`/`PauliTermsSpec` 分支不受影响（前者本就直接透传预置 terms 未翻转，后者是字面量输入）。影响面很小：`spec.py` 的 preset 导入路径在 Phase 0 之前本已因 `ModuleNotFoundError` 断链（见上一节 Fixed），`MolecularSpec` 分支此前几乎不可能被下游依赖到镜像比特序这一具体细节。
+
 ## 2026-07-11
 
 ### Added

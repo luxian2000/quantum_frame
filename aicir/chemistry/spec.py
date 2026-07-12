@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
+from . import _qiskit_bridge
 
 PauliTerm = tuple[float, str]
 GeometryAtom = tuple[str, tuple[float, float, float]]
@@ -54,13 +55,27 @@ class PresetSpec:
 
 @dataclass(frozen=True)
 class GeneratedHamiltonian:
-    """Plain Pauli Hamiltonian plus stable provenance metadata."""
+    """Plain Pauli Hamiltonian plus stable provenance metadata.
+
+    ``terms`` uses plain ``float`` coefficients (JSON-friendly), distinct from
+    :class:`aicir.chemistry.molecules._base.MoleculeHamiltonian` which stores
+    ``complex`` coefficients. The two dataclasses are intentionally not merged;
+    they meet only at :meth:`to_hamiltonian`, which both expose with the same
+    name and return type.
+    """
 
     terms: tuple[PauliTerm, ...]
     n_qubits: int
     hamiltonian_class: str
     hamiltonian_id: str
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_hamiltonian(self):
+        """Build a fresh :class:`aicir.core.operators.Hamiltonian` from ``terms``."""
+
+        from ..core.operators import Hamiltonian
+
+        return Hamiltonian(n_qubits=self.n_qubits, terms=[(pauli, coeff) for coeff, pauli in self.terms])
 
 
 def _canonical_json(value: Any) -> str:
@@ -201,72 +216,42 @@ def _generated_from_pauli_terms(spec: PauliTermsSpec) -> GeneratedHamiltonian:
 
 
 def _qiskit_unit(unit: str):
-    from qiskit_nature.units import DistanceUnit
-
-    key = str(unit).strip().lower()
-    if key in {"angstrom", "ang", "a"}:
-        return DistanceUnit.ANGSTROM
-    if key in {"bohr", "b"}:
-        return DistanceUnit.BOHR
-    raise ValueError(f"Unsupported molecular distance unit {unit!r}")
+    return _qiskit_bridge.qiskit_distance_unit(unit)
 
 
 def _qiskit_mapper(mapping: str):
-    from qiskit_nature.second_q.mappers import BravyiKitaevMapper, JordanWignerMapper, ParityMapper
-
-    key = _normalize_mapping(mapping)
-    if key == "jordan_wigner":
-        return JordanWignerMapper()
-    if key == "parity":
-        return ParityMapper()
-    if key == "bravyi_kitaev":
-        return BravyiKitaevMapper()
-    raise ValueError(f"Unsupported qubit mapper {mapping!r}")
+    return _qiskit_bridge.select_mapper(_normalize_mapping(mapping))
 
 
 def _apply_active_space(problem: Any, active_space: Mapping[str, Any] | None) -> Any:
-    if not active_space:
-        return problem
-    from qiskit_nature.second_q.transformers import ActiveSpaceTransformer
-
-    kwargs: dict[str, Any] = {}
-    if "num_electrons" in active_space:
-        value = active_space["num_electrons"]
-        kwargs["num_electrons"] = tuple(value) if isinstance(value, list) else value
-    if "num_spatial_orbitals" in active_space:
-        kwargs["num_spatial_orbitals"] = int(active_space["num_spatial_orbitals"])
-    if "active_orbitals" in active_space:
-        kwargs["active_orbitals"] = tuple(int(item) for item in active_space["active_orbitals"])
-    transformer = ActiveSpaceTransformer(**kwargs)
-    return transformer.transform(problem)
+    return _qiskit_bridge.apply_active_space_mapping(problem, active_space)
 
 
 def _sparse_pauli_terms(qubit_op: Any) -> tuple[PauliTerm, ...]:
     if not hasattr(qubit_op, "to_list"):
         raise TypeError("Qiskit mapper returned an object without SparsePauliOp.to_list()")
     raw_terms = []
-    for label, coefficient in qubit_op.to_list():
+    # Canonical qubit order is the raw Qiskit label (_qiskit_bridge.QUBIT_ORDER),
+    # not reversed; matches pipeline.build_molecule and the frozen presets.
+    for coefficient, label in _qiskit_bridge.sparse_pauli_to_terms(qubit_op, sort=False):
         coeff = _real_float(coefficient)
         if abs(coeff) > 1.0e-14:
-            # Qiskit labels are left-to-right q[n-1]..q[0]; QAS uses q[0]..q[n-1].
-            raw_terms.append((coeff, str(label)[::-1]))
+            raw_terms.append((coeff, label))
     return _normalize_terms(raw_terms)
 
 
 def _generated_from_molecular_spec(spec: MolecularSpec) -> GeneratedHamiltonian:
     if str(spec.driver).strip().lower() != "pyscf":
         raise ValueError(f"Unsupported molecular driver {spec.driver!r}")
-    try:
-        from qiskit_nature.second_q.drivers import PySCFDriver
-    except ImportError as exc:
+    if not _qiskit_bridge.qiskit_nature_available():
         raise ImportError(
             "Molecular Hamiltonian generation requires optional dependencies qiskit-nature and pyscf. "
             "Install them before resolving MolecularSpec inputs."
-        ) from exc
+        )
 
     payload = _molecular_payload(spec)
-    driver = PySCFDriver(
-        atom=_geometry_to_qiskit_atom(spec.geometry),
+    driver = _qiskit_bridge.build_driver(
+        _geometry_to_qiskit_atom(spec.geometry),
         basis=str(spec.basis),
         charge=int(spec.charge),
         spin=int(spec.spin),
@@ -281,6 +266,7 @@ def _generated_from_molecular_spec(spec: MolecularSpec) -> GeneratedHamiltonian:
         "input_kind": "molecular",
         "qiskit_nature_driver": "PySCFDriver",
         "term_count": len(terms),
+        "qubit_order": _qiskit_bridge.QUBIT_ORDER,
     }
     return GeneratedHamiltonian(
         terms=terms,
