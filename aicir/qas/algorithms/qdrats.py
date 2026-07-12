@@ -27,7 +27,6 @@ from aicir import (
     Circuit,
     GPUBackend,
     Hamiltonian,
-    NPUBackend,
     cx,
     double_excitation,
     pauli_x,

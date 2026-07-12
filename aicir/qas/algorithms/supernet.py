@@ -40,7 +40,6 @@ import numpy as np
 import torch
 
 from ...backends.gpu_backend import GPUBackend
-from ...backends.npu_backend import NPUBackend
 from ...core.operators import Hamiltonian
 from ...core.circuit import (
     Circuit,
