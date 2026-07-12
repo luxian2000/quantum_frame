@@ -139,6 +139,14 @@ def vqe_loop(**kwargs: Any) -> Any:
     return _build(P0BootstrapConfig, values)
 
 
+def mogvqe(**kwargs: Any) -> Any:
+    """Build a ``MoG-VQE`` config with optional field overrides."""
+
+    from ..algorithms.mogvqe import MOGVQEConfig
+
+    return _build(MOGVQEConfig, kwargs)
+
+
 def adam_spsa(**kwargs: Any) -> Any:
     """Build the nested Adam-SPSA config used by ``CRLQAS``."""
 
@@ -235,6 +243,7 @@ _FACTORIES = {
     "qdrats": qdrats,
     "dqas": dqas,
     "vqe_loop": vqe_loop,
+    "mogvqe": mogvqe,
 }
 
 __all__ = [
@@ -246,6 +255,7 @@ __all__ = [
     "dqas",
     "for_method",
     "method_names",
+    "mogvqe",
     "ppo",
     "ppo_rb",
     "pporb",
