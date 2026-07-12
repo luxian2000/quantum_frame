@@ -248,7 +248,9 @@ def main(argv: list[str] | None = None) -> None:
     elapsed = time.time() - start
 
     # result 在所有 rank 上均为全局最优，无需 all-gather。
-    metrics = result.final_metrics
+    # qas_run() 统一返回 QASResult（3b breaking change）：线路走统一字段
+    # result.circuit，方法专属的 final_metrics 从 raw（原 SupernetResult）取。
+    metrics = result.raw.final_metrics
     record = {
         "seed": args.seed,
         "device": device,
@@ -288,7 +290,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"text report saved to: {report_path}")
 
         qasm_path = out_dir / "N2_npu_cir.qasm"
-        saved_qasm, qasm_message = save_qasm3_if_supported(result.best_circuit, qasm_path)
+        saved_qasm, qasm_message = save_qasm3_if_supported(result.circuit, qasm_path)
         if saved_qasm:
             print(f"OpenQASM 3.0 saved to: {qasm_message}")
         else:
@@ -296,7 +298,7 @@ def main(argv: list[str] | None = None) -> None:
 
         py_path = out_dir / "N2_cir_spin.py"
         save_circuit_python(
-            result.best_circuit,
+            result.circuit,
             py_path,
             func_name="build_n2_npu_qas_circuit",
             figure_name="N2_cir_spin.png",
@@ -309,7 +311,7 @@ def main(argv: list[str] | None = None) -> None:
             from aicir.visual import plot
 
             plot(
-                result.best_circuit,
+                result.circuit,
                 png_path,
                 title="N2 supernet ground-state ansatz (spin-preserving, L=%d)" % args.layers,
             )
@@ -318,7 +320,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Circuit figure skipped: {exc}")
 
         # 内联生成分析文件 result_spin.md：精确基态能量 + 复算线路能量对比。
-        # 直接用 result.best_circuit 与内存中的 report，无需解析 output_spin.txt。
+        # 直接用 result.circuit 与内存中的 report，无需解析 output_spin.txt。
         result_report = {
             "world_size": world_size,
             "seed": args.seed,
@@ -340,12 +342,12 @@ def main(argv: list[str] | None = None) -> None:
 
             try:
                 md_path, _, _ = generate_result_md(
-                    result.best_circuit, result_report, backend=backend, device=device
+                    result.circuit, result_report, backend=backend, device=device
                 )
             except Exception as exc:  # 14 比特精确对角化很重，内存不足时退回仅复算线路能量
                 print(f"exact diagonalization failed ({exc}); writing result_spin.md without exact energy")
                 md_path, _, _ = generate_result_md(
-                    result.best_circuit, result_report, backend=backend, device=device, skip_exact=True
+                    result.circuit, result_report, backend=backend, device=device, skip_exact=True
                 )
             print(f"analysis saved to: {md_path}")
         except Exception as exc:

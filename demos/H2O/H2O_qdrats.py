@@ -80,16 +80,18 @@ def main() -> None:
 
     print("\nSearching a ground-state circuit with QDRATS (QuantumDARTS)...")
     print("  (6-qubit H2O; modest config, expect a few minutes on CPU.)")
+    # run() 统一返回 QASResult（3b breaking change）：能量走统一字段 value，
+    # 方法专属的配置/架构标签从 raw（原 QDRATSResult）取。
     result = run("qdrats", hamiltonian=hamiltonian, config=h2o_qdrats_config())
 
-    qdrats_energy = float(result.minimum_energy)
+    qdrats_energy = float(result.value)
     print(f"\n  exact ground energy   : {exact:+.10f}")
     print(f"  QDRATS minimum energy : {qdrats_energy:+.10f}")
     print(f"  |QDRATS - exact|      : {abs(qdrats_energy - exact):.3e} Ha")
-    print(f"  search layers         : {result.config.layers}")
+    print(f"  search layers         : {result.raw.config.layers}")
 
     print("\n  discretised architecture (gate per qubit-layer position):")
-    for layer_index, labels in enumerate(result.architecture_labels):
+    for layer_index, labels in enumerate(result.raw.architecture_labels):
         print(f"    layer {layer_index}: {labels}")
 
     print("\n  searched circuit:")

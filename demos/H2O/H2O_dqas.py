@@ -224,10 +224,12 @@ def main(argv: list[str] | None = None) -> None:
         log("")
         log("Searching a ground-state circuit with DQAS...")
         start = time.perf_counter()
+        # run() 统一返回 QASResult（3b breaking change）：能量走统一字段 value，
+        # 方法专属的架构标签从 raw（原 DQASResult）取。
         result = run("dqas", hamiltonian=hamiltonian, config=cfg)
         elapsed = time.perf_counter() - start
 
-        dqas_energy = float(result.minimum_energy)
+        dqas_energy = float(result.value)
         log("")
         log(f"  exact ground energy : {exact:+.10f}")
         log(f"  DQAS minimum energy : {dqas_energy:+.10f}")
@@ -236,7 +238,7 @@ def main(argv: list[str] | None = None) -> None:
 
         log("")
         log("  discretised architecture (one operation per DQAS placeholder):")
-        for layer_index, label in enumerate(result.architecture_labels):
+        for layer_index, label in enumerate(result.raw.architecture_labels):
             log(f"    placeholder {layer_index}: {label}")
 
         log("")
