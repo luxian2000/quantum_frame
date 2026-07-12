@@ -76,7 +76,7 @@ class CRLQASConfig:
 
     replay_capacity: int = 20_000
     batch_size: int = 64
-    q_hidden_dim: int = 256
+    hidden_dim: int = 256
     q_learning_rate: float = 1e-3
     train_interval: int = 10
     target_update_interval: int = 200
@@ -101,6 +101,10 @@ class CRLQASConfig:
     adam_spsa: AdamSPSAConfig = field(default_factory=AdamSPSAConfig)
     seed: int = 42
     log_interval: int = 0
+
+    # 可选：torch 后端设备（如 "cpu"/"cuda:0"/"npu:0"）。None 时保持向后兼容，
+    # 使用与 supernet/qdrats/dqas 无关的 NumpyBackend（CRLQAS 历史行为）。
+    device: str | None = None
 
 
 @dataclass
@@ -487,6 +491,20 @@ def _train_ddqn_step(
     return float(loss.item())
 
 
+def _resolve_crlqas_backend(device: Optional[str]) -> NumpyBackend:
+    """按 ``CRLQASConfig.device`` 解析训练用后端。
+
+    ``device=None`` 保持历史行为，直接使用 ``NumpyBackend``（向后兼容）；
+    其余取值委托给 ``qas.core.backend_utils.make_torch_backend``，与
+    supernet/qdrats/dqas 的设备解析规则保持一致。
+    """
+    if device is None:
+        return NumpyBackend()
+    from ..core.backend_utils import make_torch_backend
+
+    return make_torch_backend(device)
+
+
 def train_crlqas(
     hamiltonian: np.ndarray | Hamiltonian,
     config: Optional[CRLQASConfig] = None,
@@ -502,7 +520,7 @@ def train_crlqas(
     if cfg.batch_size <= 0:
         raise ValueError("batch_size 必须是正整数")
 
-    backend = NumpyBackend()
+    backend = _resolve_crlqas_backend(cfg.device)
     h_matrix, n_qubits = _resolve_hamiltonian_matrix(hamiltonian, backend=backend)
 
     rng_py = random.Random(cfg.seed)
@@ -521,8 +539,8 @@ def train_crlqas(
     # 因此仅在网络构造前保留这一处全局 seeding，其余随机数均走上面的局部
     # rng_py/rng_np（不再调用 np.random.seed/random.seed 污染全局状态）。
     torch.manual_seed(cfg.seed)
-    q_online = _QNet(state_dim=state_dim, action_dim=action_dim, hidden_dim=cfg.q_hidden_dim)
-    q_target = _QNet(state_dim=state_dim, action_dim=action_dim, hidden_dim=cfg.q_hidden_dim)
+    q_online = _QNet(state_dim=state_dim, action_dim=action_dim, hidden_dim=cfg.hidden_dim)
+    q_target = _QNet(state_dim=state_dim, action_dim=action_dim, hidden_dim=cfg.hidden_dim)
     q_target.load_state_dict(q_online.state_dict())
     q_target.eval()
 

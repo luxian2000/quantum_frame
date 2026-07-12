@@ -118,7 +118,7 @@ class _QNetwork(nn.Module):
 
 @dataclass
 class PPRDQLConfig:
-    episode_num: int = 200
+    max_episodes: int = 200
     max_steps_per_episode: int = 20
     gamma: float = 0.99
     learning_rate: float = 1e-3
@@ -377,8 +377,8 @@ def train_ppr_dql(
 ) -> PPRDQLResult:
     cfg = PPRDQLConfig() if config is None else config
 
-    if cfg.episode_num <= 0:
-        raise ValueError("episode_num 必须是正整数")
+    if cfg.max_episodes <= 0:
+        raise ValueError("max_episodes 必须是正整数")
     if cfg.max_steps_per_episode <= 0:
         raise ValueError("max_steps_per_episode 必须是正整数")
     if not 0.0 < cfg.fidelity_threshold <= 1.0:
@@ -422,7 +422,7 @@ def train_ppr_dql(
     episode_rewards: List[float] = []
     selected_policy_indices: List[int] = []
 
-    for episode_index in range(cfg.episode_num):
+    for episode_index in range(cfg.max_episodes):
         probabilities = _softmax_probabilities(average_returns, temperature)
         selected_index = int(np.random.choice(len(probabilities), p=probabilities))
         reused_policy = archived_policies[selected_index - 1] if selected_index > 0 else None

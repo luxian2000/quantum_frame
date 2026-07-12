@@ -3,10 +3,22 @@
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from pathlib import Path
 from typing import Any, Callable
 
 QASMethod = str
+
+# 字段别名：方法名 -> {旧字段名: 规范字段名}。仅收录含义完全相同的同义写法
+# （见 aicir/qas/README.md 的“词汇对照表”）；语义不同的字段（如
+# q_learning_rate/architecture_learning_rate/supernet_steps/search_epochs）不在此列。
+# 在 ``_build`` 里于“未知字段报错”之前应用：命中别名会把旧字段名重写为规范字段名
+# 并发出 DeprecationWarning，旧关键字参数因此继续可用。
+_FIELD_ALIASES: dict[str, dict[str, str]] = {
+    "pporb": {"episode_num": "max_episodes"},
+    "pprdql": {"episode_num": "max_episodes"},
+    "crlqas": {"q_hidden_dim": "hidden_dim"},
+}
 
 # 非规范名的等价写法 -> 规范方法名。规范名本身（``_FACTORIES`` 的键）无需登记。
 _ALIASES = {
@@ -74,7 +86,7 @@ def pporb(**kwargs: Any) -> Any:
 
     from ..algorithms.pporb import PPORollbackConfig
 
-    return _build(PPORollbackConfig, kwargs)
+    return _build(PPORollbackConfig, kwargs, method="pporb")
 
 
 def pprdql(**kwargs: Any) -> Any:
@@ -82,7 +94,7 @@ def pprdql(**kwargs: Any) -> Any:
 
     from ..algorithms.pprdql import PPRDQLConfig
 
-    return _build(PPRDQLConfig, kwargs)
+    return _build(PPRDQLConfig, kwargs, method="pprdql")
 
 
 def crlqas(**kwargs: Any) -> Any:
@@ -93,7 +105,7 @@ def crlqas(**kwargs: Any) -> Any:
     values = dict(kwargs)
     if isinstance(values.get("adam_spsa"), dict):
         values["adam_spsa"] = adam_spsa(**values["adam_spsa"])
-    return _build(CRLQASConfig, values)
+    return _build(CRLQASConfig, values, method="crlqas")
 
 
 def qdrats(**kwargs: Any) -> Any:
@@ -168,7 +180,31 @@ def canonical_method(method: QASMethod) -> str:
     raise ValueError(f"Unsupported QAS method {method!r}. Available methods: {methods}.")
 
 
-def _build(config_type: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
+def _apply_field_aliases(method: str | None, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """把 ``method`` 对应的旧字段名重写为规范字段名，命中时发出 DeprecationWarning。"""
+
+    aliases = _FIELD_ALIASES.get(method) if method else None
+    if not aliases:
+        return kwargs
+    resolved = dict(kwargs)
+    for alias, canonical in aliases.items():
+        if alias not in resolved:
+            continue
+        if canonical in resolved:
+            raise TypeError(
+                f"不能同时传入别名字段 {alias!r} 与规范字段 {canonical!r}；请只使用其一。"
+            )
+        warnings.warn(
+            f"{alias!r} 已废弃，请改用 {canonical!r}",
+            DeprecationWarning,
+            stacklevel=4,
+        )
+        resolved[canonical] = resolved.pop(alias)
+    return resolved
+
+
+def _build(config_type: Callable[..., Any], kwargs: dict[str, Any], method: str | None = None) -> Any:
+    kwargs = _apply_field_aliases(method, kwargs)
     valid_fields = {f.name for f in dataclasses.fields(config_type)}
     unknown = sorted(set(kwargs) - valid_fields)
     if unknown:

@@ -80,7 +80,7 @@ def main() -> None:
         action_gates=ghz_action_gates,  # 限定 H + 全连接 CX
         terminal_bonus=3.0,             # 到达 GHZ 时额外奖励
         gate_penalty=0.005,             # 每步惩罚适当减小
-        episode_num=1500,               # 4 比特搜索空间更大，适当增加轮数
+        max_episodes=1500,               # 4 比特搜索空间更大，适当增加轮数
         max_steps_per_episode=10,       # GHZ 只需 4 个门，预留余量
         update_timestep=128,
         hidden_dim=128,

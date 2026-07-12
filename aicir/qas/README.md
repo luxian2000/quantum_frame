@@ -658,7 +658,7 @@ print(result.best_circuit.show())
 
 | 字段                      |    默认值 | 说明                                                                              |
 | ------------------------- | --------: | --------------------------------------------------------------------------------- |
-| `episode_num`           |   `200` | 训练总 episode 数。增大通常可提升收敛概率，但耗时增加。                           |
+| `max_episodes`          |   `200` | 训练总 episode 数。增大通常可提升收敛概率，但耗时增加（旧字段名 `episode_num` 仍可用，已废弃，见 §9 词汇对照表）。 |
 | `max_steps_per_episode` |    `20` | 单个 episode 最大门数（最大步数）。过小可能无法达到目标态。                       |
 | `update_timestep`       |    `64` | 每收集多少步轨迹后执行一次 PPO 更新。                                             |
 | `epoch_num`             |     `4` | 每次更新时对同一批轨迹迭代优化的轮数（PPO epoch）。                               |
@@ -697,7 +697,7 @@ target[7, 0] = 1 / np.sqrt(2)
 rho_target = target @ target.conj().T
 
 cfg = config.pporb(
-    episode_num=800,
+    max_episodes=800,
     max_steps_per_episode=8,
     gate_penalty=0.005,
     seed=42,
@@ -745,7 +745,7 @@ print(circuit.show())
 
 | 字段                         |    默认值 | 说明                                                                                       |
 | ---------------------------- | --------: | ------------------------------------------------------------------------------------------ |
-| `episode_num`              |   `200` | 训练总 episode 数。代码要求 `> 0`。                                                      |
+| `max_episodes`             |   `200` | 训练总 episode 数。代码要求 `> 0`（旧字段名 `episode_num` 仍可用，已废弃，见 §9 词汇对照表）。 |
 | `max_steps_per_episode`    |    `20` | 单 episode 最大步数。代码要求 `> 0`。                                                    |
 | `gamma`                    |  `0.99` | DQN 目标中的折扣因子。                                                                     |
 | `learning_rate`            |  `1e-3` | Adam 学习率。                                                                              |
@@ -817,7 +817,7 @@ target[7] = 1 / np.sqrt(2)
 state = State.from_array(target, n_qubits=3, backend=backend)
 
 cfg = config.pprdql(
-    episode_num=800,
+    max_episodes=800,
     max_steps_per_episode=3,
     fidelity_threshold=0.99,
     gate_penalty=0.0,
@@ -873,7 +873,7 @@ print(circuit.show())
 | `epsilon_decay`                |           `0.9995` | 每个 episode 后的探索率衰减。                                                                      |
 | `replay_capacity`              |            `20000` | 回放缓冲区容量。                                                                                   |
 | `batch_size`                   |               `64` | 每次 DDQN 训练的采样 batch。                                                                       |
-| `q_hidden_dim`                 |              `256` | Q 网络隐藏层维度。                                                                                 |
+| `hidden_dim`                   |              `256` | Q 网络隐藏层维度（旧字段名 `q_hidden_dim` 仍可用，已废弃，见 §9 词汇对照表）。                     |
 | `q_learning_rate`              |             `1e-3` | Q 网络优化器学习率。                                                                               |
 | `train_interval`               |               `10` | 每多少环境步执行一次 DDQN 更新。                                                                   |
 | `target_update_interval`       |              `200` | 每多少环境步同步一次目标网络。                                                                     |
@@ -892,6 +892,7 @@ print(circuit.show())
 | `adam_spsa`                    | `AdamSPSAConfig()` | 参数优化器配置。                                                                                   |
 | `seed`                         |               `42` | 随机种子（NumPy / random / PyTorch）。                                                             |
 | `log_interval`                 |                `0` | 日志打印间隔（按 episode，`0` 为关闭）。                                                         |
+| `device`                       |              `None` | 训练用 torch 后端设备（如 `"cpu"`/`"cuda:0"`/`"npu:0"`）。`None` 时保持向后兼容，使用 `NumpyBackend`；给定后通过 `make_torch_backend` 解析为 `GPUBackend`/`NPUBackend`。 |
 
 `adam_spsa` 子配置（`AdamSPSAConfig`）：
 
@@ -956,3 +957,29 @@ print(result.circuit.show())
 python aicir/qas/demos/PPR_DQL_demo_ghz3.py
 python aicir/qas/demos/CRLQAS_demo_h2.py
 ```
+
+## 9. 配置字段词汇对照表（Phase 3a）
+
+各方法的配置 dataclass 独立演化，出现过若干“同义不同名”的字段。`core/config.py`
+的 `_FIELD_ALIASES` 在 `config.<method>(...)`/`config.create(...)` 构造配置时把旧
+字段名重写为规范字段名（发出 `DeprecationWarning`）；直接用 `XxxConfig(...)`
+构造 dataclass 则必须使用规范字段名（别名只在工厂函数这一层生效）。
+
+### 9.1 已归一（规范名 + 旧别名）
+
+| 规范字段名        | 出现于                        | 旧别名（已废弃，仍可用）    | 说明                                     |
+| ------------------ | ------------------------------ | --------------------------- | ---------------------------------------- |
+| `max_episodes`   | `PPORollbackConfig`/`PPRDQLConfig`/`CRLQASConfig` | `episode_num`（前两者） | 训练总 episode 数；三个方法统一到同一字段名。 |
+| `hidden_dim`     | `PPORollbackConfig`/`PPRDQLConfig`/`CRLQASConfig` | `q_hidden_dim`（仅 CRLQASConfig） | 策略/Q 网络隐藏层宽度。                 |
+
+### 9.2 语义不同、故意不合并的相似字段
+
+| 字段                            | 出现于                  | 与谁相似但不同                                  | 区分点                                                                 |
+| ------------------------------- | ----------------------- | ------------------------------------------------ | ----------------------------------------------------------------------- |
+| `q_learning_rate`             | `CRLQASConfig`         | `theta_learning_rate`/`architecture_learning_rate`（DQAS/QDRATS） | CRLQAS 里优化的是 DDQN 动作价值网络；DQAS/QDRATS 里优化的是电路参数/架构权重，三者是不同的可训练对象。 |
+| `architecture_learning_rate`  | `DQASConfig`/`QDRATSConfig` | `theta_learning_rate`（同一配置内）           | 前者更新架构概率分布（哪个门/结构被选中），后者更新已选架构的电路参数（旋转角）。 |
+| `supernet_steps`              | `SupernetConfig`        | `search_epochs`（DQAS/QDRATS）                  | 前者是权重共享超网训练的外层步数；后者是可微分架构搜索（DQAS/QDRATS）的搜索轮数——两者对应不同的搜索范式，量纲不可直接互换。 |
+| `search_epochs`               | `DQASConfig`/`QDRATSConfig` | `supernet_steps`（Supernet）                   | 同上，反向说明。                                                       |
+| `fidelity_threshold`          | `PPRDQLConfig`          | `epsilon`（`ppo_rb_qas` 的位置参数，非 `PPORollbackConfig` 字段） | PPR-DQL 把保真度阈值固化进配置 dataclass；PPO-RB 的对应量是 `ppo_rb_qas(target_density_matrix, epsilon, config=...)` 的独立位置参数，不在 `PPORollbackConfig` 里，因此没有可对齐的字段可改名，予以保留。 |
+
+以上字段均不做别名/改名处理：语义各自独立，强行合并会掩盖算法差异。

@@ -48,7 +48,7 @@ def main() -> None:
         {"type": "cx", "target_qubit": 2, "control_qubits": [0], "control_states": [1]},
     ]
     config = PPRDQLConfig(
-        episode_num=800,
+        max_episodes=800,
         max_steps_per_episode=3,
         batch_size=16,
         replay_capacity=2048,

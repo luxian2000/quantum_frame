@@ -42,7 +42,7 @@ from ...core.state import State
 class PPORollbackConfig:
     """ 超参数配置 """
 
-    episode_num: int = 200
+    max_episodes: int = 200
     max_steps_per_episode: int = 20
     update_timestep: int = 64
     epoch_num: int = 4  # K
@@ -341,7 +341,7 @@ def ppo_rb_qas(
     t = 0
     best_fidelity = 0.0
     best_circuit: Optional[Circuit] = None
-    for _episode in range(cfg.episode_num):
+    for _episode in range(cfg.max_episodes):
         state = env.reset()
 
         for _step in range(cfg.max_steps_per_episode):
@@ -419,7 +419,7 @@ def ppo_rb_qas(
                 break
 
         if cfg.log_interval > 0 and (_episode + 1) % cfg.log_interval == 0:
-            print(f"  episode {_episode + 1:4d}/{cfg.episode_num}  best_fidelity={best_fidelity:.4f}")
+            print(f"  episode {_episode + 1:4d}/{cfg.max_episodes}  best_fidelity={best_fidelity:.4f}")
 
     # 优先返回训练中百实限住的最佳线路；若未找到则回退到随机采样推演
     if best_circuit is None:

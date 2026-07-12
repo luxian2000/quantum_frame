@@ -39,7 +39,7 @@ class TestPPRDQL(unittest.TestCase):
         self.backend = NumpyBackend()
         self.target_state = State.from_array(np.array([0.0, 1.0], dtype=np.complex64), n_qubits=1, backend=self.backend)
         self.config = PPRDQLConfig(
-            episode_num=6,
+            max_episodes=6,
             max_steps_per_episode=1,
             batch_size=1,
             replay_capacity=16,
@@ -61,8 +61,8 @@ class TestPPRDQL(unittest.TestCase):
         self.assertEqual(result.circuit.n_qubits, 1)
         self.assertEqual(len(result.circuit), 1)
         self.assertEqual(result.circuit.gates[0]["type"], "pauli_x")
-        self.assertEqual(len(result.episode_rewards), self.config.episode_num)
-        self.assertEqual(len(result.selected_policy_indices), self.config.episode_num)
+        self.assertEqual(len(result.episode_rewards), self.config.max_episodes)
+        self.assertEqual(len(result.selected_policy_indices), self.config.max_episodes)
         self.assertGreaterEqual(result.best_fidelity, 0.99)
         self.assertGreaterEqual(_fidelity_from_circuit(result.circuit, self.target_state), 0.99)
 
@@ -76,7 +76,7 @@ class TestPPRDQL(unittest.TestCase):
     def test_train_ppr_dql_can_shape_rewards_with_architecture_evaluator(self):
         evaluator = _GateCountEvaluator()
         config = PPRDQLConfig(
-            episode_num=2,
+            max_episodes=2,
             max_steps_per_episode=1,
             batch_size=1,
             replay_capacity=16,

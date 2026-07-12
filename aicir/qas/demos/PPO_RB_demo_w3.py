@@ -163,7 +163,7 @@ def main() -> None:
                 action_gates=stage_action_gates,
                 terminal_bonus=bonus,
                 gate_penalty=gate_penalty,
-                episode_num=episodes,
+                max_episodes=episodes,
                 max_steps_per_episode=12,
                 update_timestep=128,
                 hidden_dim=128,

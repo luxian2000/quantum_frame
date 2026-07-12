@@ -298,10 +298,13 @@ def _make_backend(device: str | torch.device | None) -> GPUBackend:
     arithmetic. CPU/CUDA use the plain ``GPUBackend``. On a machine without a
     real NPU, ``NPUBackend`` transparently falls back to CPU and behaves like
     ``GPUBackend``.
+
+    委托给 ``qas.core.backend_utils.make_torch_backend``（收敛 supernet/qdrats/dqas
+    三份重复实现的单一来源）。
     """
-    if str(device).lower().startswith("npu"):
-        return NPUBackend(device=device)
-    return GPUBackend(device=device)
+    from ..core.backend_utils import make_torch_backend
+
+    return make_torch_backend(device)
 
 
 def _as_torch_scalar(value: torch.Tensor | float, device: torch.device) -> torch.Tensor:

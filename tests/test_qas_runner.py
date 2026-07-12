@@ -67,9 +67,9 @@ def test_config_factory_uses_method_names_without_config_class_imports():
     assert vqa_config.__class__.__name__ == "SupernetConfig"
     assert vqa_config.supernet_steps == 0
     assert ppr_config.__class__.__name__ == "PPRDQLConfig"
-    assert ppr_config.episode_num == 1
+    assert ppr_config.max_episodes == 1
     assert ppr_legacy_alias_config.__class__.__name__ == "PPRDQLConfig"
-    assert ppr_legacy_alias_config.episode_num == 2
+    assert ppr_legacy_alias_config.max_episodes == 2
     assert crl_config.adam_spsa.iterations == 2
 
 

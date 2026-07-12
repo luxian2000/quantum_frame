@@ -41,7 +41,7 @@ def _make_config(*, noise_aware: bool, backend: NumpyBackend) -> PPRDQLConfig:
     )
 
     return PPRDQLConfig(
-        episode_num=6,
+        max_episodes=6,
         max_steps_per_episode=1,
         batch_size=1,
         replay_capacity=32,

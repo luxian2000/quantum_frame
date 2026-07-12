@@ -66,6 +66,25 @@ def resolve_qas_backend(
     raise ValueError(f"Unsupported QAS backend: {backend_kind!r}. Use numpy, cpu, torch, or npu.")
 
 
+def make_torch_backend(device: Any = None) -> Backend:
+    """按 ``device`` 前缀在 ``GPUBackend``/``NPUBackend`` 之间选择 torch 后端。
+
+    收敛 ``supernet.py``/``qdrats.py``/``dqas.py`` 里原本三份重复的
+    ``_make_backend``：``device`` 字符串以 ``"npu"`` 开头（大小写不敏感）时选择
+    ``NPUBackend``，否则一律使用 ``GPUBackend``（包含 ``device=None`` 的默认情形，
+    与三份原实现行为逐字节一致）。这三个模块本身在导入时已硬依赖 torch，因此这里
+    直接要求 torch 可用；``resolve_qas_backend`` 才是 numpy 默认、torch 可选的入口。
+    """
+
+    if str(device).lower().startswith("npu"):
+        if NPUBackend is None:
+            raise RuntimeError("NPUBackend is unavailable; install torch_npu or use a non-npu device.")
+        return NPUBackend(device=device)
+    if TorchBackend is None:
+        raise RuntimeError("GPUBackend requires torch; install torch to use make_torch_backend.")
+    return TorchBackend(device=device)
+
+
 def backend_runtime_metadata(backend: Backend) -> dict[str, Any]:
     """Return actual backend provenance for result manifests."""
 
@@ -79,4 +98,4 @@ def backend_runtime_metadata(backend: Backend) -> dict[str, Any]:
     }
 
 
-__all__ = ["backend_runtime_metadata", "resolve_qas_backend"]
+__all__ = ["backend_runtime_metadata", "make_torch_backend", "resolve_qas_backend"]

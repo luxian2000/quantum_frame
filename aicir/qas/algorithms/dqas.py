@@ -90,9 +90,11 @@ class DQASResult:
 
 
 def _make_backend(device: str | torch.device | None) -> GPUBackend:
-    if str(device).lower().startswith("npu"):
-        return NPUBackend(device=device)
-    return GPUBackend(device=device)
+    """委托给 ``qas.core.backend_utils.make_torch_backend``（收敛 supernet/qdrats/dqas
+    三份重复实现的单一来源）。"""
+    from ..core.backend_utils import make_torch_backend
+
+    return make_torch_backend(device)
 
 
 def _infer_n_qubits_from_matrix(matrix: np.ndarray) -> int:

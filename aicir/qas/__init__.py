@@ -30,6 +30,7 @@ from .algorithms.mogvqe import (
     run_mog_vqe,
 )
 from .core.reward import RewardComposer, RewardWeights
+from .core.results import QASResult
 from .core.search_env import NoisyQASEnv, QASState
 from .library.ansatz import (
     HEAMask,
@@ -176,6 +177,7 @@ __all__ = [
     "NoiseAdaptiveQAS",
     "NoiseSensitivityResult",
     "NoisyQASEnv",
+    "QASResult",
     "QASRunConfig",
     "QASState",
     "RewardComposer",
