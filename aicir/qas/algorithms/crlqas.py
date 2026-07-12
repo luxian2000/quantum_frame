@@ -37,6 +37,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from ...backends.base import Backend
 from ...backends.numpy_backend import NumpyBackend
 from ...core.operators import Hamiltonian
 from ...core.circuit import Circuit
@@ -145,7 +146,7 @@ def _infer_n_qubits_from_hamiltonian_array(matrix: np.ndarray) -> int:
 
 def _resolve_hamiltonian_matrix(
     hamiltonian: np.ndarray | Hamiltonian,
-    backend: NumpyBackend,
+    backend: Backend,
 ) -> Tuple[np.ndarray, int]:
     if isinstance(hamiltonian, Hamiltonian):
         n_qubits = int(hamiltonian.n_qubits)
@@ -281,7 +282,23 @@ def _energy_of_gates(
     hamiltonian_matrix: np.ndarray,
     n_qubits: int,
     backend: NumpyBackend,
+    estimator: Any = None,
 ) -> float:
+    """按当前门序列计算哈密顿量期望能量。
+
+    ``estimator=None``（默认）时行为与之前逐字节一致：直接态向量演化 +
+    ``State.expectation``。传入 ``estimator``（``aicir.primitives`` 的
+    ``BaseEstimator`` 契约，见 Phase 1）时改走
+    ``estimator.run(circuit, hamiltonian_matrix).value``——``EstimateResult``
+    的可观测量入参既接受 ``Hamiltonian`` 也接受稠密矩阵，``hamiltonian_matrix``
+    可直接作为 observable 传入，无需转换。此路径是 3b 新增的可选注入点，
+    Adam-SPSA 热循环（``_adam_spsa_optimize``）默认仍走 ``estimator=None``，
+    不改变默认数值路径。
+    """
+
+    if estimator is not None:
+        circuit = Circuit(*gates, n_qubits=n_qubits, backend=backend)
+        return float(estimator.run(circuit, hamiltonian_matrix).value)
     state = _build_state_from_gates(gates, n_qubits=n_qubits, backend=backend)
     h_backend = backend.cast(hamiltonian_matrix)
     return float(state.expectation(h_backend))

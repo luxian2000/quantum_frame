@@ -376,7 +376,20 @@ def _evaluate_pauli_state_energy(
     parameters: Sequence[float],
     *,
     backend: Backend,
+    estimator: Any = None,
 ) -> float:
+    """按 fair-label 协议评估某个架构在给定参数下的能量。
+
+    ``estimator=None``（默认）时行为与之前逐字节一致：走本模块的 Pauli-term
+    重实现（态向量 + ``_evaluate_state_pauli_energy``）。传入 ``estimator``
+    （``aicir.primitives`` 的 ``BaseEstimator`` 契约，见 Phase 1）时改走
+    ``estimator.run(circuit, hamiltonian).value``——``problem.hamiltonian`` 是
+    ``(coeff, label)`` 项列表，经 ``hamiltonian_matrix()`` 转成稠密矩阵后作为
+    observable 传入（``EstimateResult`` 的可观测量入参既接受 ``Hamiltonian``
+    也接受稠密矩阵）。此路径是 3b 新增的可选注入点，``optimize_vqe_energy``
+    内部的 COBYLA 目标函数闭包默认仍走 ``estimator=None``，不改变默认数值路径。
+    """
+
     n_params = parameter_count(architecture.circuit)
     theta = np.asarray(parameters, dtype=float).reshape(-1)
     _fair_trace(
@@ -385,6 +398,9 @@ def _evaluate_pauli_state_energy(
     bound = _bind_parameters(architecture.circuit, theta) if n_params else architecture.circuit
     bound = Circuit(*list(circuit_instructions(bound)), n_qubits=bound.n_qubits, backend=backend)
     _fair_trace(f"stage=bind_end gates={len(list(circuit_instructions(bound)))}")
+    if estimator is not None:
+        observable = hamiltonian_matrix(problem.hamiltonian)
+        return float(estimator.run(bound, observable).value)
     pauli_cache = _pauli_term_cache(problem.hamiltonian, n_qubits=problem.n_qubits)
     _fair_trace(f"stage=pauli_cache_end terms={len(pauli_cache)}")
     try:
@@ -401,6 +417,7 @@ def evaluate_vqe_energy(
     problem: VQEProblem,
     parameters: Optional[Sequence[float]] = None,
     backend: Optional[Backend] = None,
+    estimator: Any = None,
 ) -> float:
     """Evaluate an architecture energy through the shared fair Pauli-term path."""
 
@@ -411,7 +428,12 @@ def evaluate_vqe_energy(
     params = [0.0] * n_params if parameters is None else list(parameters)
     if len(params) != n_params:
         raise ValueError(f"Expected {n_params} parameters, got {len(params)}")
-    return _evaluate_pauli_state_energy(architecture, problem, params, backend=backend)
+    # estimator=None 时不转发该关键字参数，保持默认路径调用形态与注入前逐字节一致
+    # （不仅是数值路径一致——调用签名本身也不变，兼容对 _evaluate_pauli_state_energy
+    # 做严格签名 mock 的既有测试）。
+    if estimator is None:
+        return _evaluate_pauli_state_energy(architecture, problem, params, backend=backend)
+    return _evaluate_pauli_state_energy(architecture, problem, params, backend=backend, estimator=estimator)
 
 
 def evaluate_h2_energy(
