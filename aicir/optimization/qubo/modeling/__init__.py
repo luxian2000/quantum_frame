@@ -6,7 +6,7 @@
     decode_best_solutions,
     qubo_energy,
 )
-from .backends import IsingModel, QAOATerm, qubo_to_ising_indices
+from .backends import IsingExport, IsingModel, QAOATerm, qubo_to_ising_indices
 from .builder import QuboBuilder
 from .constraints import (
     Constraint,
@@ -50,6 +50,7 @@ __all__ = [
     "DecodedSolution",
     "EncodedInteger",
     "Integer",
+    "IsingExport",
     "IsingModel",
     "Linear",
     "LinearExpression",

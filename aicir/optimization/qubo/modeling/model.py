@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 
-from .backends import IsingModel, QAOATerm
+from .backends import IsingExport, IsingModel, QAOATerm
 from .builder import QuboBuilder
 from .constraints import Constraint
 from .matrix import SparseMatrixCOO
@@ -68,5 +68,23 @@ class Model:
         return self.to_qubo_builder().to_qaoa_terms(compact=compact)
 
     def to_ising(self) -> dict[str, object]:
+        """按变量名映射的 Ising 模型 dict（``h``/``J``/``offset``）。
+
+        已弃用（deprecated）：新代码请使用类型化的 :meth:`to_ising_export`，字段语义完全一致。
+        """
         return self.to_ising_indices(compact=False).named()
+
+    def to_ising_export(self) -> IsingExport:
+        """``to_ising()`` 的强类型版本：``linear``/``quadratic`` 按变量名映射，语义与 dict 版一致。"""
+        ising = self.to_ising_indices(compact=False)
+        named = ising.named()
+        return IsingExport(
+            linear=named["h"],
+            quadratic=named["J"],
+            offset=named["offset"],
+            variable_names=tuple(ising.variable_names) if ising.variable_names is not None else None,
+            variable_metadata=(
+                tuple(ising.variable_metadata) if ising.variable_metadata is not None else None
+            ),
+        )
 
