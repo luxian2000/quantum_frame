@@ -30,7 +30,7 @@ def _tiny_vqa_config():
 
 def _tiny_ppr_config():
     return config.pprdql(
-        episode_num=3,
+        max_episodes=3,
         max_steps_per_episode=1,
         batch_size=1,
         replay_capacity=8,
@@ -66,8 +66,8 @@ def test_available_qas_methods_contains_public_names():
 
 def test_config_factory_uses_method_names_without_config_class_imports():
     vqa_config = config.supernet(supernet_steps=0)
-    ppr_config = config.create("PPRDQL", episode_num=1)
-    ppr_legacy_alias_config = config.create("PPR_DQL", episode_num=2)
+    ppr_config = config.create("PPRDQL", max_episodes=1)
+    ppr_legacy_alias_config = config.create("PPR_DQL", max_episodes=2)
     crl_config = config.crlqas(adam_spsa={"iterations": 2})
 
     assert vqa_config.__class__.__name__ == "SupernetConfig"
