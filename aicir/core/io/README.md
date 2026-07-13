@@ -46,8 +46,13 @@
 | `crx(θ)` / `cry(θ)` / `crz(θ)` | `crx` / `cry` / `crz` |
 | `swap` | `swap` |
 | `ccx` | `toffoli` / `ccnot` |
+| `p(θ)` / `u1(θ)`（仅导入） | `rz` |
 
-> **当前不支持**：`if`、`reset`、`opaque`、自定义 `gate`、`cp`/`cu` 系列门。`measure` 和 `barrier` 语句在导入时会被跳过。
+> 门名与 QASM 发射名的对应关系以 `aicir.gates`（GateSpec 注册表）中每个门的 `qasm_name` 为单一来源；`qasm.py` 只在此基础上区分“单比特无参 / 带参 / 双引用 / 三引用”几类发射形态，不单独维护第二份门名表。
+>
+> **当前不支持**：`if`、`reset`、`opaque`、自定义 `gate`、`cp`/`cu` 系列门、未绑定符号参数（导出前必须先调用 `circuit.bind_parameters(...)` 完成绑定，否则抛出 `TypeError`）。`measure` 和 `barrier` 语句在导入时会被跳过（不会重建为 Circuit 中的测量指令）。
+>
+> **`measure` 导出**：单比特 Z 基、不带 `id` 的 `measure(...)` 标记可导出为标准 QASM——`circuit_to_qasm` 会按需自动声明经典寄存器（2.0 为 `creg c[N]`，3.0 为 `bit[N] c`）并追加对应的 `measure`/`c[i] = measure` 语句；联合多比特测量、非 Z 基测量或带 `id` 的测量无法用标准 QASM 表达，导出时抛出 `NotImplementedError`（请改用 JSON 格式）。由于导入方向会跳过 `measure` 语句，QASM 往返对 `measure` 标记不是双向保真的。
 
 ### 1.3  2.0 vs 3.0 格式差异
 

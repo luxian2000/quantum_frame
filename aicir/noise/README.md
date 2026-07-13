@@ -80,7 +80,7 @@ print(report.summary())
 | `TwoQubitDepolarizingChannel` | `qubit_1`, `qubit_2`, `p` | 双量子比特退极化，`p=1` 时目标子系统完全混合 |
 | `CorrelatedTwoQubitPauliChannel` | `probabilities` | 显式相关的双量子比特 Pauli 错误 |
 | `ThermalRelaxationChannel` | `t1`, `t2`, `gate_time`, `excited_population` | 由 T1/T2 和门时长推导的热弛豫 |
-| `KrausChannel` | `kraus_ops`, `target_qubits` | 用户自定义 Kraus 通道 |
+| `KrausChannel` | `kraus_ops`, `target_qubits`, `channel_name`（可选，默认 `"kraus"`） | 用户自定义 Kraus 通道 |
 
 参数 `p`、`px`、`py`、`pz`、`gamma` 和 `p_excited` 都要求位于 `[0, 1]`，且
 `PauliChannel` 要求 `px + py + pz <= 1`。通道会被嵌入到全系统维度，因此当前实现适合
@@ -157,8 +157,10 @@ config = load_ion_trap_noise_config(
 返回值包括一个 `[0, 1]` 分数和详细预算字典。
 
 ```python
+from aicir import Circuit, cnot, hadamard
 from aicir.noise import ion_trap_error_budget_proxy
 
+circuit = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
 score, details = ion_trap_error_budget_proxy(circuit)
 print(score)
 print(details["total_error_budget"])

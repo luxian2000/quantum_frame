@@ -23,10 +23,13 @@
 | `num_params` | `int \| None` | 参数个数（符号 `Parameter` 计为 1）；`None` = 可变（`unitary` 占位场景可缺省） |
 | `aliases` | `tuple[str, ...]` | 等价的 `type` 写法，如 `"X"` / `"cnot"` / `"ccnot"` |
 | `controlled` | `bool` | 是否必须携带至少一个控制位 |
+| `num_controls` | `int` | 控制位数量；满足 `controlled == (num_controls > 0)` |
 | `qasm_name` | `str \| None` | OpenQASM 导出名（`core/io/qasm.py` 的导出表由此派生）；`None` = 暂未约定 |
 | `symbol` | `str \| None` | ASCII / matplotlib 绘图显示符号（受控门为目标位符号）；`None` = 特殊绘制或退回通用 fallback |
 | `generator` | `str \| None` | 单参数旋转门的 Pauli 生成元标签（`U = exp(-i θ G / 2)`），如 `rx`→`"X"`、`rzz`→`"ZZ"`；受控旋转记目标位生成元。`None` = 非标准 Pauli 旋转。供 QML 自省能否用解析参数移位 |
+| `shift_rule` | `str \| None` | 参数移位规则类别，`"two_term"` / `"four_term"`；`None` = 未指定（标准 Pauli 旋转走默认两项规则）。供后续按门选择移位规则 |
 | `decomposition` | `Callable \| None` | 分解到更基础门集的规则，签名 `(qubits, controls, control_states, params) -> list[dict] \| None`（返回 `None` 表示当前形态不适用）。供 `transpile.DecomposePass` 驱动；`None` = 无内置规则 |
+| `matrix` | `Callable \| None` | 构造该门**局部**稠密幺正矩阵的后端感知可调用，签名 `(params, backend) -> 局部矩阵`，作用于 `num_qubits` 个目标比特（比特顺序 = 门的比特列表顺序；无参门忽略 `params`）。标准门的构造器由 `aicir.core.gates` 在导入时经 `set_gate_matrix` 附加；`None` = 无局部矩阵（如受控门、`measure`/`reset`） |
 
 ---
 
@@ -40,8 +43,11 @@
 | `unregister_gate(name)` | 移除已注册门（含全部别名）；未注册时静默返回 |
 | `registered_gate_names()` | 返回全部已注册门的规范名元组 |
 | `gate_generator(name)` | 返回门的 Pauli 生成元标签（`rx`→`"X"`、`rzz`→`"ZZ"`）；无生成元或未注册返回 `None` |
+| `gate_shift_rule(name)` | 返回门的参数移位规则类别（`"two_term"` / `"four_term"` / `None`）；未注册返回 `None` |
 | `parametric_pauli_gates()` | 返回所有带 Pauli 生成元的门规范名集合（即解析参数移位适用门） |
 | `gate_decomposition(name)` | 返回门的分解规则可调用；无规则或未注册返回 `None` |
+| `gate_matrix(name, params=(), backend=None)` | 返回门的局部稠密幺正矩阵；`backend` 非空时返回后端张量；无构造器或未注册返回 `None`。首次调用前若构造器尚未附加，会惰性触发 `aicir.core.gates` 导入 |
+| `set_gate_matrix(name, builder)` | 为已注册门附加局部矩阵构造器（写入 `GateSpec.matrix`）；`GateSpec` 为冻结数据类，内部经 `dataclasses.replace` 重注册；未注册门静默忽略 |
 
 ```python
 from aicir.gates import GateSpec, get_gate_spec, canonical_gate_name
@@ -105,6 +111,15 @@ canonical_gate_name("my_gate")    # "my_gate"（未注册，原样返回）
 | `rzz` | 2 | 1 | `rzz` | （专用形状） | 生成元 ZZ |
 | `rxx` | 2 | 1 | `rxx` | （专用形状） | 生成元 XX |
 
+### 3.4b  激发门
+
+| 规范名 | 别名 | 比特数 | 参数数 | QASM 名 | 移位规则 |
+| --- | --- | :---: | :---: | --- | :---: |
+| `single_excitation` | `givens` | 2 | 1 | — | `four_term` |
+| `double_excitation` | — | 4 | 1 | — | `four_term` |
+
+> `double_excitation` 作用于 4 个比特，不属于双比特门；两者均无 `decomposition`（`GateSpec.decomposition` 为 `None`），`DecomposePass` 不会对其展开。
+
 ### 3.5  特殊指令
 
 | 规范名 | 别名 | 比特数 | 参数数 | 绘图符号 |
@@ -145,7 +160,7 @@ unregister_gate("my_iswap")
 | `aicir.transpile.ValidatePass` | 结合 `n_qubits` 做越界 / 冲突 / 重复比特检查 |
 | `aicir.transpile.CanonicalizePass` | 把别名（`X` / `cnot` / `ccnot`）重写为规范名 |
 | `aicir.core.io.qasm` | QASM 导出名以 `GateSpec.qasm_name` 为单一来源；别名经 `canonical_gate_name` 归一 |
-| `aicir.core.gates`（`gate_to_matrix` 等） | 入口经 `canonical_gate_name` 归一后按规范名分发，别名与规范名共享矩阵缓存 |
+| `aicir.core.gates`（`gate_to_matrix` 等） | 入口经 `canonical_gate_name` 归一后按规范名分发，别名与规范名共享矩阵缓存；导入时经 `set_gate_matrix` 为标准门附加局部矩阵构造器（`GateSpec.matrix`），供 `gate_matrix()` 访问器读取 |
 | `aicir.core.circuit`（ASCII 绘图） | 显示符号由 `GateSpec.symbol` 与规范名派生 |
 | `aicir.visual.plot`（matplotlib 绘图） | 配色族与显示符号由规范名派生；注册自定义门时携带 `symbol` 即可直接显示 |
 | `aicir.transpile.DecomposePass` | 分解规则由 `gate_decomposition`（`GateSpec.decomposition`）驱动；注册自定义门携带 `decomposition` 即被自动识别 |
@@ -157,5 +172,4 @@ unregister_gate("my_iswap")
 
 ## 6  后续方向（尚未实现）
 
-- `matrix` 字段（矩阵构造仍由 `gate_to_matrix` 负责）。
 - `metrics` / `qas` 评分中的别名容忍集合（`DEFAULT_NATIVE_GATES`、双比特门判定等）属评分语义，留待单独处理。

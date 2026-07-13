@@ -17,7 +17,7 @@ aicir 提供三种可互换的计算后端，都实现统一的 `Backend` 抽象
 9. [BatchSV — 批量态矢量路径](#9--batchsv)
 10. [Backend 抽象接口参考](#10--backend-抽象接口参考)
 11. [NPU complex64 兼容性详解](#11--npu-complex64-兼容性详解)
-12. [硬件能力探测（npu_probe）](#53--硬件能力探测npu_probe)
+12. [硬件能力探测（npu_probe，§5.3）](#53--硬件能力探测npu_probe)
 
 ---
 
@@ -51,7 +51,7 @@ cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2, backend=backend)
 
 # 测量
 result = Measure(backend).run(cir, shots=1024)
-print(result.backend_name, result.counts)
+print(result.backend_name, result.counts(-1))  # counts(-1) 取末端测量计数
 ```
 
 ---
@@ -278,7 +278,7 @@ result = measure.run(cir, shots=2048)
 
 print(f"backend : {backend.name}")
 print(f"probs   : {result.probabilities}")
-print(f"counts  : {result.counts}")
+print(f"counts  : {result.counts(-1)}")  # counts(-1) 取末端测量计数
 print(f"summary : {result.summary()}")
 ```
 
@@ -289,7 +289,7 @@ print(f"summary : {result.summary()}")
 | # | 现象 | 根因 | 修复 | 代码位置 |
 | --- | --- | --- | --- | --- |
 | 1 | 进入搜索约 12 min 被 `SIGKILL`（cgroup OOM，单 rank ~238 GB RSS） | `Supernet` 构造期枚举整个单比特布局空间 `product(gates, repeat=n_qubits)` = `5**16 ≈ 1.5e11` 并为每布局预建参数 | 布局**懒采样**（采下标再解码，与旧 `choice` 字节等价）+ 共享参数**首次访问懒建**；内存降为 `O(supernet_steps×layers×n_qubits)` | `aicir/qas/algorithms/supernet.py`（顶部内存说明、`sample_architecture`、`_shared_param`） |
-| 2 | `--gradient ad` 在 `loss.backward()` 报 `aclnnAdd ... DT_COMPLEX64 not implemented` | autograd 梯度累加触发 complex64 `add`，Ascend 无此算子 | 默认 `--gradient psr`（参数移位，`no_grad` 黑盒求值，不建反向图）；complex64-free autodiff 为待验证候选（§5.6） | `supernet.py:712`、`_parameter_shift_update` |
+| 2 | `--gradient ad` 在 `loss.backward()` 报 `aclnnAdd ... DT_COMPLEX64 not implemented` | autograd 梯度累加触发 complex64 `add`，Ascend 无此算子 | 当时改用 `--gradient psr`（参数移位，`no_grad` 黑盒求值，不建反向图）规避；根因后经 `_NpuHamiltonianExpectationFn` 修复，`--gradient ad` 现为默认（见下文「梯度方法」） | `supernet.py:712`、`_parameter_shift_update` |
 | 3 | 内存修复后进入搜索约 148 s 报 `HcclBroadcast error code 6 / EI0006 socket timeout`（>默认 `HCCL_CONNECT_TIMEOUT=120 s`） | `safe` 分片下**仅 rank 0 算 psr 梯度**（2·P 次移位×1313 项×首次 TBE 编译，常数分钟），rank 1/2/3 在 `broadcast_parameters` 屏障空等超时 | 临时：`HCCL_CONNECT_TIMEOUT=1800`；正解（待办）：psr 移位评估分片到各 rank + 一次 `all_reduce` 汇总 | `supernet.py:1085`（仅 rank 0 梯度步）、`aicir/qas/core/sharding.py`（`broadcast_parameters`） |
 
 三项修复组合后全链路跑通（详见本节末「全链路验证结果」）。各问题的完整排查过程见下。
@@ -349,7 +349,11 @@ NPU 版目前默认 `--gradient psr`（参数移位）：
 这意味着 `--gradient ad` 理论上可在 Ascend 上工作，只需确保整个前向链路无 complex64 节点残留。
 这是比 psr 梯度分片更高优的探索方向：autodiff 每步只需一次前向 + 一次 backward，而 psr 需 2·P 次前向。
 
-**当前选择**：维持 psr 作为可靠基线；complex64-free autodiff 路径作为 §5.6 候选优化项待实现和验证。
+**现状**：`_NpuHamiltonianExpectationFn`（`aicir/backends/npu_backend.py`）已实现，把 1313 项 Pauli
+Hamiltonian 期望值的梯度累加整体包成一个 autograd 节点、全程 float32 完成，消除了 `aclnnAdd
+(DT_COMPLEX64)` 瓶颈。`SupernetConfig.use_parameter_shift` 默认为 `False`，`demos/BeH2/BeH2_npu.py`
+现默认 `--gradient ad`（每步 1 次前向 + 1 次 backward），已在真实 Ascend 硬件上验证通过；
+`--gradient psr`（参数移位）仍可选用，作为逐位可复现的确定性基线。
 
 #### HCCL broadcast 屏障超时
 
@@ -453,7 +457,7 @@ result = Measure(backend).run(cir, shots=1024)
 
 **推荐绑定到 `Circuit` 的原因**：
 
-- 当电路具有 `gates` 序列时，`Measure` 会逐门调用 `gate_to_matrix(..., backend=resolved_backend)` 在目标设备上构造并作用门矩阵，减少主机 ↔ 设备数据搬运。
+- 当电路具有 `gates` 序列时，`Measure` 会逐门在目标设备上构造并作用门矩阵，减少主机 ↔ 设备数据搬运：纯态且无噪声时优先走 `apply_gate_to_state`（局部态更新，见 §10「Local Statevector Kernel Hook」）；密度矩阵路径、噪声路径，或局部更新不适用时回退到 `gate_to_matrix(..., backend=resolved_backend)` 构造门矩阵后作用。
 - 若 `Circuit` 未绑定后端，可能回退到 NumPy 在 CPU 上拼装整条电路的全局矩阵，再 `backend.cast` 到设备，引起大规模数据迁移。
 - 对于 `GPUBackend`，参数化门的 Torch 标量张量会通过 Torch 运算构造矩阵，从而保留 autograd 计算图。
 
@@ -465,9 +469,9 @@ result = Measure(backend).run(cir, shots=1024)
 
 | 阶段 | 行为 |
 | --- | --- |
-| **构建阶段** | `hadamard(0)` 等生成门描述字典（如 `{"type": "hadamard", "target_qubit": 0}`），`Circuit.__init__` 只存储描述，不生成数值矩阵 |
-| **执行阶段（逐门路径）** | `Measure.run` / `run_density_matrix` 检测到 `gates` 序列时，按门依次作用到态 / 密度矩阵（**推荐**，内存友好） |
-| **执行阶段（全矩阵路径）** | 若电路不提供 `gates` 序列，回退到 `Circuit.unitary()` 拼装完整 2ⁿ×2ⁿ 矩阵后一次性作用（兼容外部实现） |
+| **构建阶段** | `hadamard(0)` 等门工厂生成 typed `Operation` 指令（经 `aicir.ir.as_instruction(...)` 归一化），`Circuit.__init__` 只存储指令，不生成数值矩阵；dict 形式（如 `{"type": "hadamard", "target_qubit": 0}`）只是 `to_gate_dicts()`/`legacy_gates`/JSON、QASM 互操作用的导出格式 |
+| **执行阶段（逐门路径）** | `Measure.run` 通过 `circuit_instructions(circuit)`（读取 `operations` / `ir` / `gates`，三者皆缺失则抛 `TypeError`）逐门作用到态 / 密度矩阵；纯态无噪声时优先走局部态更新（`apply_gate_to_state`），密度矩阵/噪声路径或局部更新不适用时按需构造单门矩阵（`gate_to_matrix`）（**推荐**，内存友好） |
+| **手动全矩阵路径** | `Circuit.unitary()` / `Circuit.matrix()` 把整条电路拼装成完整 2ⁿ×2ⁿ 矩阵一次性返回，供 `state.evolve(circuit.unitary())` 等手动组合使用（诊断 / 兼容外部实现，非 `Measure.run` 的自动回退） |
 
 **性能建议**：对大比特数电路，优先绑定后端走逐门路径，避免组装完整矩阵造成的内存开销和设备迁移。
 
