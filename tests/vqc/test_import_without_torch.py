@@ -35,6 +35,14 @@ import aicir  # noqa: E402
 
 assert "torch" not in sys.modules, "import aicir must not pull in torch"
 
+# 顶层命名空间不能因为缺少 torch 而被静默削减：纯 numpy 路径的核心导出必须仍在。
+for _name in ("Circuit", "Parameter", "pauli_x", "cnot", "rx", "Hamiltonian", "Measure",
+              "circuit_to_qasm", "circuit_to_json", "NumpyBackend"):
+    assert hasattr(aicir, _name), f"aicir.{_name} must exist without torch"
+
+# torch 专属导出则应当缺席（而不是牵连上面的核心导出一起消失）。
+assert not hasattr(aicir, "BatchSV"), "BatchSV is torch-only and must be absent without torch"
+
 from aicir.vqc import BasicVQE  # noqa: E402
 from aicir.backends import NumpyBackend  # noqa: E402
 from aicir.core.operators import Hamiltonian  # noqa: E402

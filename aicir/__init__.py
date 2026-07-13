@@ -97,7 +97,6 @@ else:
 
 try:
     from .core.state import State
-    from .core.batch import BatchSV
     from .core import (
         Circuit,
         Parameter,
@@ -165,7 +164,6 @@ else:
     _export(
         [
             "State",
-            "BatchSV",
             "Circuit",
             "Parameter",
             "ClassicalRegister",
@@ -226,6 +224,16 @@ else:
             "from_wuyue",
         ]
     )
+
+# BatchSV 是 torch 专属的批量态矢量实现，单独守卫：缺少 torch 时只让它缺席，
+# 不能牵连上面的 Circuit / 门工厂 / QASM-JSON I/O 等纯 numpy 路径。
+try:
+    from .core.batch import BatchSV
+except ModuleNotFoundError as exc:
+    if not _is_missing_torch(exc):
+        raise
+else:
+    _export(["BatchSV"])
 
 try:
     from .measure import PauliEstimateResult, PauliEstimator
