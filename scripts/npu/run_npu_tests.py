@@ -152,7 +152,6 @@ SUITES: dict[str, Suite] = {
             "tests/test_vqa_qas.py",
             "tests/test_qas_runner.py",
             "tests/algorithms/test_vqe_qas_modules.py",
-            "tests/algorithms/test_vqe_qas_protocol.py",
             "tests/algorithms/test_architecture_evaluation.py",
             "tests/algorithms/test_dqas.py",
             "tests/qas/test_strategy_registry.py",

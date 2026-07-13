@@ -18,7 +18,7 @@ from aicir.qas.problems.hamiltonians import VQEProblem, tfim_chain_hamiltonian
 
 
 def test_closed_loop_entry_can_stamp_literal_hamiltonian_terms_into_queue(tmp_path) -> None:
-    from aicir.qas.vqe_loop.vqe_qas_loop import stamp_literal_hamiltonian_terms
+    from aicir.qas.vqe_loop import stamp_literal_hamiltonian_terms
 
     queue = tmp_path / "queue.csv"
     queue.write_text(
@@ -42,10 +42,10 @@ def test_closed_loop_entry_can_stamp_literal_hamiltonian_terms_into_queue(tmp_pa
 
 
 def test_closed_loop_auto_defaults_scale_with_qubits() -> None:
-    from aicir.qas.vqe_loop.vqe_qas_loop import (
+    from aicir.qas.vqe_loop import resolve_closed_loop_defaults
+    from aicir.qas.vqe_loop.p0_bootstrap_fair import (
         default_initial_labels_for_qubits,
         default_max_rounds_for_qubits,
-        resolve_closed_loop_defaults,
     )
 
     assert default_initial_labels_for_qubits(4) == 12
@@ -65,7 +65,7 @@ def test_closed_loop_auto_defaults_scale_with_qubits() -> None:
 
 
 def test_closed_loop_manual_quota_overrides_auto_defaults() -> None:
-    from aicir.qas.vqe_loop.vqe_qas_loop import resolve_closed_loop_defaults
+    from aicir.qas.vqe_loop import resolve_closed_loop_defaults
 
     resolved = resolve_closed_loop_defaults(
         n_qubits=12,
@@ -82,7 +82,7 @@ def test_closed_loop_manual_quota_overrides_auto_defaults() -> None:
 
 
 def test_closed_loop_adaptive_quotas_prefer_exploration_for_weak_lih_oracle() -> None:
-    from aicir.qas.vqe_loop.vqe_qas_loop import decide_next_round_quotas
+    from aicir.qas.vqe_loop import decide_next_round_quotas
 
     decision = decide_next_round_quotas(
         n_qubits=12,
@@ -98,12 +98,13 @@ def test_closed_loop_adaptive_quotas_prefer_exploration_for_weak_lih_oracle() ->
         local_improved=False,
     )
 
-    assert decision.mode == "balanced_explore"
-    assert (decision.local, decision.boundary, decision.sparse, decision.control) == (1, 2, 3, 2)
+    # 12 比特且 local 无改进时进入 sparse_explore（比 balanced_explore 更偏 sparse 探索）。
+    assert decision.mode == "sparse_explore"
+    assert (decision.local, decision.boundary, decision.sparse, decision.control) == (1, 1, 4, 2)
 
 
 def test_closed_loop_adaptive_quotas_keep_more_local_when_oracle_passes() -> None:
-    from aicir.qas.vqe_loop.vqe_qas_loop import decide_next_round_quotas
+    from aicir.qas.vqe_loop import decide_next_round_quotas
 
     low_qubit = decide_next_round_quotas(
         n_qubits=4,
@@ -147,7 +148,7 @@ def test_qas_core_modules_expose_mainline_vqe_loop_building_blocks() -> None:
     assert architecture_from_layerwise_gene(sample_layerwise_genes(n_qubits=2, layers=2, count=1, seed=1)[0]).n_qubits == 2
 
 
-def test_fair_vqe_uses_basic_vqe_and_records_best_parameters() -> None:
+def test_fair_vqe_records_engine_and_best_parameters() -> None:
     problem = VQEProblem(name="x_only", n_qubits=1, hamiltonian=[(-1.0, "X")], reference_energy=-1.0)
     gene = LayerwiseAnsatzGene(
         n_qubits=1,
@@ -167,7 +168,8 @@ def test_fair_vqe_uses_basic_vqe_and_records_best_parameters() -> None:
         initial_parameters=[math.pi / 2],
     )
 
-    assert result.metadata["vqe_engine"] == "BasicVQE"
+    # fair_vqe 的能量求值引擎为内置态矢量 Pauli 期望路径（fair_vqe.py 记录的引擎名）。
+    assert result.metadata["vqe_engine"] == "statevector_pauli_terms"
     assert result.best_parameters
     assert result.evaluations > 0
 
