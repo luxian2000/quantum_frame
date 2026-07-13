@@ -27,7 +27,8 @@
 - **经典控制流**：支持由测量结果驱动的 `ClassicalRegister`、`measure(creg=)`、`if_`/`while_`（含 `else`），按每条测量轨迹求值（见 §5.13）。
 - **变分算法**：内置 `BasicVQE`、`run_vqe`、QAOA、VQD、SSVQE，以及 HEA、离子阱 HEA-TI 等 ansatz 模板。
 - **QML 梯度**：支持参数移位（`psr`、`spsr`、`mpsr`，以及激发门四项参数移位 `psr4`）、有限差分、SPSA、量子自然梯度和 PyTorch `autograd`。
-- **量子架构搜索**：支持权重共享 supernet、CRLQAS、`pprdql`、`pporb`（需要 PyTorch；旧名 `ppr_dql` / `ppo_rb` 仍可作为别名使用）。
+- **量子架构搜索**：统一入口 `aicir.qas.run(method, problem=..., **kwargs)`，覆盖权重共享 supernet、CRLQAS、`pprdql`、`pporb` 等 10 种方法（需要 PyTorch；旧名 `ppr_dql` / `ppo_rb` 仍可作为别名使用）。
+- **统一结果词汇表**：`aicir.protocols` 定义 `AlgorithmResult`（`value`/`parameters`/`history`/`metadata`）协议，VQE/QAOA/VQD/SSVQE/QAS/primitives 的结果对象都满足它，`r.value` 在各算法结果上统一可用（见 §7.1）。
 - **多种模拟引擎**：态矢量、密度矩阵、精确张量网络（`tn_statevector`/单/部分振幅），以及 bond 截断的 MPS 近似引擎（`mps_statevector`/`mps_expectation`、`Measure.run(method="mps")`、`MPSEstimator`），适合低纠缠、大比特数电路。
 - **噪声模拟**：通过密度矩阵演化支持退相干、比特/相位翻转、振幅阻尼和离子阱噪声。
 - **OpenQASM 输入输出**：支持 OpenQASM 2.0/3.0 导入导出，并提供 Qiskit、PennyLane、WuYue 互操作。
@@ -117,7 +118,8 @@ aicir/
   qml/           # 参数移位、有限差分、autograd、QNG 等梯度工具
   ansatze/       # HEA、HEA-TI、UCCSD 等可复用 ansatz 模板
   vqc/           # VQE、QAOA、VQD、SSVQE 等变分算法
-  qas/           # supernet、DQAS、CRLQAS、pprdql、pporb 等量子架构搜索
+  qas/           # supernet、DQAS、CRLQAS、pprdql、pporb 等量子架构搜索，统一 run()/config
+  protocols.py   # 跨算法结果/优化器协议与统一词汇表（value/parameters/history/metadata）
   chemistry/     # 分子哈密顿量预置与可选电子结构计算接口
   simulator/     # 态矢量 / 精确张量网络 / MPS 近似模拟入口
   transpile/     # PassManager、线路优化与硬件约束变换
@@ -232,6 +234,9 @@ from aicir.gates import GateSpec, get_gate_spec, register_gate, canonical_gate_n
 
 # Sampler / Estimator primitives（统一执行入口）
 from aicir.primitives import ShotSampler, StatevectorEstimator, ShotEstimator
+
+# 跨算法结果/优化器协议与统一词汇表（详见 §7.1）
+from aicir.protocols import AlgorithmResult, Optimizer, HistoryRecord
 ```
 
 ---
@@ -989,12 +994,15 @@ sample = ShotSampler(shots=1024).run(bell)
 
 exact = StatevectorEstimator().run(Circuit(pauli_x(0), n_qubits=1), ham)
 # EstimateResult(value=-1.0, shots=None)  # 精确路径
+print(exact.value, exact.energy)   # -1.0 -1.0 —— energy 是 value 的只读别名（AlgorithmResult 词汇表）
 
 noisy = ShotEstimator(shots=4096).run(Circuit(pauli_x(0), n_qubits=1), ham)
 # EstimateResult(value≈-1.0, variance=..., shots=4096, term_results=(...))
 ```
 
-约定：接收**已绑定参数**的电路；单个电路入参返回单个结果，序列入参返回结果列表；Estimator 支持单个可观测量广播到多个电路。`ShotEstimator` 包装 `PauliEstimator`（qubit-wise commuting 分组、基变换测量、shot 分配），并暴露 `estimate(circuit, hamiltonian)` 直通方法，可直接作为 `BasicVQE(energy_estimator=...)` 注入。详见 [`aicir/primitives/README.md`](aicir/primitives/README.md)。
+约定：`run(...)` 是接收**已绑定参数**电路的规范路径，返回 `EstimateResult`（`.value` 为期望值，`.energy` 为等价别名）；单个电路入参返回单个结果，序列入参返回结果列表；Estimator 支持单个可观测量广播到多个电路。`ShotEstimator` 包装 `PauliEstimator`（qubit-wise commuting 分组、基变换测量、shot 分配）；`estimate(circuit, hamiltonian)` 是各 Estimator 上保留的注入 shim，专供 `BasicVQE(energy_estimator=...)` 这类旧契约调用。
+
+按硬件能力自动选型可用 `estimator_for_target(target, backend=..., noise_model=..., shots=...)`：给定 `noise_model` 选 `NoisyEstimator`，给定 `shots` 选 `ShotEstimator`，否则按 `target.supports_statevector`/`supports_shots` 依次退化；`target` 不支持任何路径时抛 `ValueError`。详见 [`aicir/primitives/README.md`](aicir/primitives/README.md)。
 
 ### 5.12 输入检查与报错
 
@@ -1194,25 +1202,56 @@ rho_noisy = model.apply(rho.data, n_qubits=2, backend=backend)
 
 ## 7. 子包说明索引
 
+### 7.1 统一结果与优化器协议
+
+`aicir/protocols.py` 定义了跨算法层的最小结果词汇表，只依赖 `typing`/`dataclasses`，可在任意层安全导入：
+
+- `AlgorithmResult`：`runtime_checkable` 的 `Protocol`，只要求 `value`（目标值/能量）、`parameters`（最优参数）、`history`（逐步记录）、`metadata`（附加信息字典）四个只读成员存在（`isinstance` 检查只验证 `hasattr`，不检查类型或签名）。`VQEResult`/`QAOAResult`/`VQDResult`/`SSVQEResult`/`QASResult`/`OptimizationResult`/`EstimateResult` 都满足该协议，各自的原生字段（如 `VQEResult.energy`、`QASResult.circuit`）继续保留，`value`/`parameters` 是统一读取入口。
+- `Optimizer`：经典参数优化器协议，只要求存在 `minimize(fn, init_params, *, gradient_fn=None, callback=None)` 方法；`aicir.optimizer` 的 `GD`/`Adam`/`SPSA`/`COBYLA`/`LBFGSB`/`ScipyMinimize` 均满足。
+- `HistoryRecord`：优化器逐步历史记录的数据类（`step`/`fun`/`grad_norm`/`learning_rate` + `extras` 字典存放各优化器专属字段），同时支持 `record["fun"]`/`record.get(...)` 的旧版 dict 风格访问。
+- **词汇表**：`value` 表示目标值/能量，`parameters` 表示参数，`learning_rate` 是规范名，`lr` 作为兼容别名在各 `run(...)` 入口继续可用。
+
+```python
+from aicir import Circuit, Hamiltonian, NumpyBackend, Parameter, ry
+from aicir.optimizer import GD
+from aicir.vqc import BasicVQE
+from aicir.protocols import AlgorithmResult
+
+theta = Parameter("theta")
+solver = BasicVQE(
+    Hamiltonian([("Z", 1.0)]),
+    ansatz=Circuit(ry(theta, 0), n_qubits=1),
+    backend=NumpyBackend(),
+    optimizer=GD(max_iters=40, learning_rate=0.15, gradient_method="psr"),
+)
+result = solver.run(init_params=[0.1])
+
+isinstance(result, AlgorithmResult)   # True
+result.value, result.parameters       # 与 result.energy 等价；VQEResult 原生字段照常可用
+```
+
+### 7.2 子目录说明表
+
 `aicir` 子目录中还包含更具体的说明文档：
 
 | 子目录                      | 说明文档                                                                | 内容概要                                                                                   |
 | --------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `aicir/ansatze`           | [`aicir/ansatze/README.md`](aicir/ansatze/README.md)                     | 参数化线路 ansatz 模板：`hea`/`hea_ti`/`uccsd`（吃纯数据，与 `vqc`/`chemistry` 解耦）。 |
 | `aicir/backends`         | [`aicir/backends/README.md`](aicir/backends/README.md)                 | 计算后端选择与使用：NumpyBackend / GPUBackend / NPUBackend、NPU complex64 兼容、后端绑定、严格模式、分布式与端到端示例。 |
-| `aicir/chemistry`         | [`aicir/chemistry/README.md`](aicir/chemistry/README.md)                 | 分子 qubit Hamiltonian：固定预置 + `build_molecule` 现算流水线（`chem` extra，Qiskit Nature/PySCF；JW 附带 HF/激发元数据）。 |
+| `aicir/chemistry`         | [`aicir/chemistry/README.md`](aicir/chemistry/README.md)                 | 分子 qubit Hamiltonian：固定预置（`h2`/`h2_jw`/`h2_tapered`/`lih`/`h2o` 等，`get_molecule(name).hf_occupation`/`.excitations` 免 PySCF 直接喂给 `aicir.ansatze.uccsd`）+ `build_molecule` 现算流水线（`chem` extra，Qiskit Nature/PySCF）。 |
 | `aicir/core/io`           | [`aicir/core/io/README.md`](aicir/core/io/README.md)                     | OpenQASM 导出行为、受控旋转门和多控旋转门分解规则。                                        |
 | `aicir/gates`             | [`aicir/gates/README.md`](aicir/gates/README.md)                         | GateSpec 门元信息注册表：目标比特数/参数个数/别名/QASM 名/绘图符号的单一来源。             |
 | `aicir/measure`           | [`aicir/measure/README.md`](aicir/measure/README.md)                     | 测量执行与经典控制流：轨迹路径、`ClassicalRegister`、`measure(creg=)`、`if_`/`while_`、`Result.classical_counts`。 |
 | `aicir/metrics`           | [`aicir/metrics/README.md`](aicir/metrics/README.md)                     | 任务无关的量子线路评分指标，供 QAS、VQE ansatz 筛选等架构层任务复用。                      |
 | `aicir/noise`             | [`aicir/noise/README.md`](aicir/noise/README.md)                         | 噪声通道、门后触发式 `NoiseModel`、密度矩阵噪声敏感性分析、离子阱默认噪声配置和误差预算指标。 |
-| `aicir/optimization/qubo` | [`aicir/optimization/qubo/README.md`](aicir/optimization/qubo/README.md) | QUBO 建模、Ising/Hamiltonian 转换、BasicQAOA 矩阵入口与结果解码。                          |
+| `aicir/optimization/qubo` | [`aicir/optimization/qubo/README.md`](aicir/optimization/qubo/README.md) | QUBO 建模、`Model.to_ising_export()`/`IsingModel.to_export()` 强类型 `IsingExport`（`to_ising()`/`named()` dict 形式仍可用）、`run_model_qaoa(...)`（`run_qubo_qaoa` 别名）透传完整 `BasicQAOA.run` 参数面（`optimizer=`/`shots=`/`backend=`/`method=`/`grad_method=`/`learning_rate=`）。 |
 | `aicir/optimizer`         | [`aicir/optimizer/README.md`](aicir/optimizer/README.md)                 | VQE/VQA 经典参数优化器（`Adam`/`SPSA`/`minimize` 等）；线路结构优化已迁至 `aicir.transpile`。 |
-| `aicir/primitives`        | [`aicir/primitives/README.md`](aicir/primitives/README.md)               | Sampler/Estimator primitives 统一执行入口与 `SampleResult`/`EstimateResult` 结果对象。 |
-| `aicir/qas`               | [`aicir/qas/README.md`](aicir/qas/README.md)                             | 量子架构搜索模块、统一入口、配置工厂和各 QAS 方法说明。                                    |
-| `aicir/qml`               | [`aicir/qml/README.md`](aicir/qml/README.md)                             | 量子机器学习梯度工具，包括参数移位、有限差分、伴随微分和自动微分等方法。                   |
+| `aicir/primitives`        | [`aicir/primitives/README.md`](aicir/primitives/README.md)               | Sampler/Estimator primitives 统一执行入口：`run(...) -> SampleResult`/`EstimateResult`（`.value`，`EstimateResult.energy` 别名），`estimate(...)` 为 `BasicVQE(energy_estimator=...)` 注入 shim，`estimator_for_target(target)` 按设备能力选型。 |
+| `aicir/protocols.py`      | （无独立子 README，见 §7.1）                                             | 跨算法结果/优化器协议与统一词汇表：`AlgorithmResult`（`value`/`parameters`/`history`/`metadata`）、`Optimizer`、`HistoryRecord`。 |
+| `aicir/qas`               | [`aicir/qas/README.md`](aicir/qas/README.md)                             | 量子架构搜索模块：统一入口 `run(method_or_config, problem=..., **kwargs) -> QASResult`，10 种方法（`available_qas_methods()`），`config.<method>(...)` 配置工厂。 |
+| `aicir/qml`               | [`aicir/qml/README.md`](aicir/qml/README.md)                             | 量子机器学习梯度工具（`aicir/qml/deriv/` 包，导入路径不变）：参数移位（含激发门四项移位 `psr4`）、有限差分、伴随微分、`hessian(..., method=...)`、量子自然梯度和自动微分；返回类型契约见该 README §0。 |
 | `aicir/simulator`         | [`aicir/simulator/README.md`](aicir/simulator/README.md)                 | 精确张量网络模拟：`tn_statevector`/单/部分振幅/`tn_expectation`，cotengra 路径+切片（`tn` extra），NPU 上可微；以及 bond 截断的 MPS 近似引擎 `mps_statevector`/`mps_expectation`（`Measure.run(method="mps")`、`MPSEstimator`）。 |
 | `aicir/transpile`         | [`aicir/transpile/README.md`](aicir/transpile/README.md)                 | 线路编译与优化流水线：`PassManager`、`optimize` 入口、多格式 `optimize_basic`/`optimize_circuit` 与本地化简 pass。 |
 | `aicir/visual`           | [`aicir/visual/README.md`](aicir/visual/README.md)                     | 线路图、态向量/概率分布、密度矩阵热力图，以及 QAS / metrics 结果可视化。 |
-| `aicir/vqc`               | [`aicir/vqc/README.md`](aicir/vqc/README.md)                             | VQE、QAOA、VQD、SSVQE 等基础变分算法编排（ansatz 模板已独立为 `aicir.ansatze`）。          |
+| `aicir/vqc`               | [`aicir/vqc/README.md`](aicir/vqc/README.md)                             | VQE、QAOA、VQD、SSVQE 等基础变分算法编排（ansatz 模板已独立为 `aicir.ansatze`）；`run(..., learning_rate=...)` 为规范关键字（`lr=` 兼容别名），结果对象满足 `AlgorithmResult`（`.value`/`.parameters`）；`BasicVQE` 无 torch 时也可走 numpy 路径。 |
 | `demos`                   | [`demos/`](demos/)                                                       | 演示 `aicir.visual` 模块的示例脚本，涵盖线路、态向量、密度矩阵和 QAS 结果可视化。        |
