@@ -199,7 +199,7 @@ class IonTrapNoiseConfig:
         }
 
     def summary(self) -> str:
-        resolved = self.resolved_parameters(prefer_calibration=True)
+        resolved = self.resolved_parameters()
         lines = [
             "=== Ion Trap Unified Noise Config ===",
             f"md: {self.sources.get('md')}",
@@ -211,7 +211,7 @@ class IonTrapNoiseConfig:
 
         return "\n".join(lines)
 
-    def resolved_parameters(self, prefer_calibration: bool = True) -> Dict[str, Any]:
+    def resolved_parameters(self) -> Dict[str, Any]:
         """Return a flattened parameter dictionary ready for runtime use."""
         resolved = deepcopy(self.parameters)
         for key in list(resolved):
@@ -232,7 +232,6 @@ class IonTrapNoiseConfig:
         self,
         qubits: Optional[Sequence[int]] = None,
         *,
-        prefer_calibration: bool = True,
         include_readout: Optional[bool] = None,
         include_idle: Optional[bool] = None,
     ) -> NoiseModel:
@@ -243,7 +242,7 @@ class IonTrapNoiseConfig:
         compatibility. They only activate when the circuit contains gate types
         named `measure`, `reset`, or `idle`.
         """
-        resolved = self.resolved_parameters(prefer_calibration=prefer_calibration)
+        resolved = self.resolved_parameters()
         noise_model = NoiseModel()
 
         if qubits is not None:
@@ -312,14 +311,8 @@ class IonTrapNoiseConfig:
                     )
 
         if enable_idle:
-            idle_oneq_p = self.idle_dephasing_probability(
-                prefer_calibration=prefer_calibration,
-                gate_family="oneq",
-            )
-            idle_twoq_p = self.idle_dephasing_probability(
-                prefer_calibration=prefer_calibration,
-                gate_family="twoq",
-            )
+            idle_oneq_p = self.idle_dephasing_probability(gate_family="oneq")
+            idle_twoq_p = self.idle_dephasing_probability(gate_family="twoq")
             if idle_oneq_p > 0:
                 for qubit in all_qubits:
                     noise_model.add_channel(
@@ -337,12 +330,7 @@ class IonTrapNoiseConfig:
 
         return noise_model
 
-    def idle_dephasing_probability(
-        self,
-        *,
-        prefer_calibration: bool = True,
-        gate_family: str = "twoq",
-    ) -> float:
+    def idle_dephasing_probability(self, *, gate_family: str = "twoq") -> float:
         """Derive idle dephasing probability using the 2025 document formula.
 
         Document formula:
@@ -352,7 +340,7 @@ class IonTrapNoiseConfig:
         - oneq: t = oneq_gate_time
         - twoq: t = twoq_gate_time
         """
-        resolved = self.resolved_parameters(prefer_calibration=prefer_calibration)
+        resolved = self.resolved_parameters()
         t2 = float(resolved.get("T2", 0.0) or 0.0)
         if t2 <= 0:
             return 0.0

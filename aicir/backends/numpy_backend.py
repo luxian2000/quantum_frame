@@ -85,10 +85,16 @@ class NumpyBackend(Backend):
 
     def matmul(self, a, b):
         # Promote to complex128 during multiplication to reduce backend/BLAS
-        # overflow/invalid warnings on some platforms, then cast back.
+        # overflow/invalid warnings on some platforms, then cast back. Some
+        # BLAS builds (e.g. Apple Accelerate) still raise spurious divide/
+        # overflow/invalid RuntimeWarnings from transient values inside their
+        # complex matmul kernel even at complex128 and even though the actual
+        # output is finite and correct; errstate suppresses just those flags
+        # for this call without touching global numpy error state.
         a128 = np.asarray(a, dtype=np.complex128)
         b128 = np.asarray(b, dtype=np.complex128)
-        out = a128 @ b128
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            out = a128 @ b128
         return out.astype(self._dtype)
 
     def kron(self, a, b):
@@ -227,10 +233,14 @@ class NumpyBackend(Backend):
         return np.bincount(indices, minlength=len(probs_real))
 
     def expectation_sv(self, state, operator):
+        # 见 matmul() 注释：部分 BLAS 构建在此类复数矩阵乘法上会给出无害的
+        # divide/overflow/invalid RuntimeWarning，errstate 仅抑制这几类标志。
         s = np.asarray(state).reshape(-1, 1)
-        val = (np.conj(s).T @ np.asarray(operator) @ s)[0, 0]
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            val = (np.conj(s).T @ np.asarray(operator) @ s)[0, 0]
         return float(np.real(val))
 
     def expectation_dm(self, rho, operator):
-        val = np.trace(np.asarray(rho) @ np.asarray(operator))
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            val = np.trace(np.asarray(rho) @ np.asarray(operator))
         return float(np.real(val))

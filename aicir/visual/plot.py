@@ -56,7 +56,6 @@ def _controlled_targets(gate) -> list[int]:
 _PALETTE: dict[str, tuple[str, str]] = {
     "hadamard": ("#CBDDF0", "#3B6FB5"),
     "clifford": ("#B8DEB2", "#3F8B3D"),
-    "t_gate": ("#F6C2BE", "#D9534F"),
     "measure": ("#F3C6DC", "#C2549B"),
     "default": ("#E2E2E2", "#888888"),
 }
@@ -504,8 +503,12 @@ def _draw_connector(ax, x, q_lo, q_hi, n_qubits, color):
             linewidth=1.8, zorder=2)
 
 
-def _draw_reset_link(ax, x_start, x_end, y, color):
-    ax.plot([x_start, x_end], [y, y], color=color, linewidth=1.4, zorder=1)
+def _draw_reset_link(ax, x_start, x_end, y):
+    # 与 measure 同色的虚线，dash 间距比 matplotlib 默认更大，以便和普通实线量子
+    # 线明显区分。
+    _, edgecolor = _style_for("measure")
+    ax.plot([x_start, x_end], [y, y], color=edgecolor, linewidth=1.4,
+            linestyle=(0, (4, 3)), zorder=1)
 
 
 # --- Per-gate dispatch ----------------------------------------------------
@@ -681,7 +684,7 @@ def _render_figure(
 
     for targets in reset_links.values():
         for target, (x_start, x_end) in targets.items():
-            _draw_reset_link(ax, x_start, x_end, _yy(target, n_qubits), wire_color)
+            _draw_reset_link(ax, x_start, x_end, _yy(target, n_qubits))
 
     for index, (gate, col) in enumerate(zip(gates, columns)):
         _render_gate(

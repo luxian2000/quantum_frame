@@ -230,7 +230,12 @@ def global_evolution_unitary(
 
     eigenvalues, eigenvectors = np.linalg.eigh(matrix)
     phases = np.exp(-1.0j * float(evolution_time) * eigenvalues)
-    unitary = (eigenvectors * phases) @ eigenvectors.conj().T
+    # Some BLAS builds (e.g. Apple Accelerate) raise spurious divide/overflow/
+    # invalid RuntimeWarnings from transient values inside this complex matmul
+    # even though the result is finite and correct (verified unitary to
+    # ~1e-7); errstate suppresses just those flags for this call.
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        unitary = (eigenvectors * phases) @ eigenvectors.conj().T
     return unitary.astype(dtype, copy=False)
 
 

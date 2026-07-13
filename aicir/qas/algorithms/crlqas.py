@@ -525,7 +525,14 @@ def _resolve_crlqas_backend(device: Optional[str]) -> NumpyBackend:
 def train_crlqas(
     hamiltonian: np.ndarray | Hamiltonian,
     config: Optional[CRLQASConfig] = None,
+    *,
+    estimator: Any = None,
 ) -> CRLQASResult:
+    """``estimator``（``aicir.primitives`` 的 ``BaseEstimator`` 契约）为可选注入点，
+    见 :func:`_energy_of_gates`。Adam-SPSA 热循环按设计始终走
+    ``estimator=None`` 的直接态向量路径（性能考虑，不受此参数影响）；仅训练
+    结束后回退兜底（``best_gates`` 为空）的最终能量求值会消费该参数。
+    """
     cfg = CRLQASConfig() if config is None else config
 
     if cfg.max_episodes <= 0:
@@ -699,7 +706,10 @@ def train_crlqas(
 
     if not best_gates:
         best_gates = []
-        best_energy = _energy_of_gates(best_gates, hamiltonian_matrix=h_matrix, n_qubits=n_qubits, backend=backend)
+        best_energy = _energy_of_gates(
+            best_gates, hamiltonian_matrix=h_matrix, n_qubits=n_qubits, backend=backend,
+            estimator=estimator,
+        )
 
     result_circuit = Circuit(*best_gates, n_qubits=n_qubits, backend=backend)
     return CRLQASResult(
@@ -715,8 +725,10 @@ def train_crlqas(
 def crlqas(
     hamiltonian: np.ndarray | Hamiltonian,
     config: Optional[CRLQASConfig] = None,
+    *,
+    estimator: Any = None,
 ) -> Tuple[Circuit, float]:
-    result = train_crlqas(hamiltonian=hamiltonian, config=config)
+    result = train_crlqas(hamiltonian=hamiltonian, config=config, estimator=estimator)
     return result.circuit, result.minimum_energy
 
 

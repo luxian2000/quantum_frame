@@ -96,10 +96,13 @@ def noise_sensitivity(
     circuit: Circuit,
     backend: Optional[Backend] = None,
     noise_model: Optional[NoiseModel] = None,
-    n_samples: int = 200,
     initial_state: Optional[State] = None,
 ) -> NoiseSensitivityResult:
-    """Compare ideal and noisy execution and summarize gate-type sensitivity."""
+    """Compare ideal and noisy execution and summarize gate-type sensitivity.
+
+    Fidelity is computed exactly from ideal vs. noisy density matrices, so
+    this routine has no stochastic component and takes no sample-count knob.
+    """
     if backend is None:
         from ..backends.numpy_backend import NumpyBackend
 

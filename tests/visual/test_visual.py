@@ -589,7 +589,10 @@ def test_plot_handles_reset_marker(plt):
     assert box_patches[-1].get_edgecolor() == pytest.approx(to_rgba(measure_edge))
     for arc in reset_arcs:
         assert arc.get_edgecolor() == pytest.approx(to_rgba(measure_edge))
-    assert dashed == []
+    assert len(dashed) == 1
+    assert dashed[0].get_color() == measure_edge
+    xdata = dashed[0].get_xdata()
+    assert min(xdata) == pytest.approx(0.0)
 
 
 def test_plot_reset_arcs_are_split_before_arrowheads(plt):
@@ -654,7 +657,7 @@ def test_plot_reset_arrowheads_are_slightly_larger(plt):
     assert min(lengths) > box * 0.075
 
 
-def test_plot_draws_reset_link_as_plain_solid_wire_before_next_gate(plt):
+def test_plot_draws_reset_link_as_dashed_measure_colored_wire_before_next_gate(plt):
     circuit = Circuit(measure(0), reset(0), rz(0.2, 0), n_qubits=1)
 
     fig, ax = plot(circuit, layered=False, save=False)
@@ -681,7 +684,12 @@ def test_plot_draws_reset_link_as_plain_solid_wire_before_next_gate(plt):
     assert box_patches[1].get_edgecolor() == pytest.approx(to_rgba(measure_edge))
     for arc in reset_arcs:
         assert arc.get_edgecolor() == pytest.approx(to_rgba(measure_edge))
-    assert dashed == []
+
+    assert len(dashed) == 1
+    assert dashed[0].get_color() == measure_edge
+    xdata = dashed[0].get_xdata()
+    assert min(xdata) == pytest.approx(0.0)
+    assert max(xdata) == pytest.approx(2.0)
 
     solid_wire_spans = []
     for line in ax.lines:
@@ -694,7 +702,9 @@ def test_plot_draws_reset_link_as_plain_solid_wire_before_next_gate(plt):
         if not np.allclose(ydata, [0.0, 0.0], atol=1e-6):
             continue
         solid_wire_spans.append((min(xdata), max(xdata)))
-    assert any(np.isclose(start, 0.0) and np.isclose(end, 2.0) for start, end in solid_wire_spans)
+    # 虚线接管了 measure→reset→下一门 之间这段，普通实线不应叠加在同一区间。
+    assert not any(np.isclose(start, 0.0) and np.isclose(end, 2.0) for start, end in solid_wire_spans)
+    assert any(np.isclose(start, 2.0) for start, end in solid_wire_spans)
 
 
 @pytest.mark.parametrize("next_gate", [cnot(1, [0]), swap(0, 1)])
@@ -704,18 +714,21 @@ def test_plot_reset_dash_stops_at_virtual_box_for_boxless_next_gate(plt, next_ga
     fig, ax = plot(circuit, layered=False, save=False)
 
     box = sys.modules["aicir.visual.plot"]._BOX
+    measure_edge = sys.modules["aicir.visual.plot"]._style_for("measure")[1]
+    dashed_segments = []
     solid_segments = []
     for line in ax.lines:
-        if line.get_linestyle() not in {"-", "solid"}:
-            continue
         xdata = np.asarray(line.get_xdata(), dtype=float)
         ydata = np.asarray(line.get_ydata(), dtype=float)
-        if xdata.shape != (2,) or ydata.shape != (2,):
+        if xdata.shape != (2,) or ydata.shape != (2,) or not np.allclose(ydata, [1.0, 1.0], atol=1e-6):
             continue
-        if np.allclose(ydata, [1.0, 1.0], atol=1e-6):
+        if line.get_linestyle() == "--" and line.get_color() == measure_edge:
+            dashed_segments.append((min(xdata), max(xdata)))
+        elif line.get_linestyle() in {"-", "solid"}:
             solid_segments.append((min(xdata), max(xdata)))
 
     expected_stop = 2.0 - box / 2
     assert fig is ax.figure
-    assert any(np.isclose(start, 0.0) and np.isclose(end, expected_stop) for start, end in solid_segments)
+    # measure->reset 的虚线接管到虚拟方框边界为止，之后交回普通实线。
+    assert any(np.isclose(start, 0.0) and np.isclose(end, expected_stop) for start, end in dashed_segments)
     assert any(np.isclose(start, expected_stop) and end > 2.0 for start, end in solid_segments)

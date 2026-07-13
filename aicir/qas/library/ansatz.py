@@ -572,7 +572,7 @@ def architecture_from_supernet_gene(
             if gate_type == "i":
                 continue
             if gate_type == "h":
-                gates.append({"type": "h", "target_qubit": qubit})
+                gates.append({"type": "hadamard", "target_qubit": qubit})
                 continue
             cursor[0] += 1
             gates.append({"type": gate_type, "target_qubit": qubit, "parameter": 0.071 * cursor[0]})

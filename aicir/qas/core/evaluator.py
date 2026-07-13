@@ -177,7 +177,7 @@ class ArchitectureEvaluator:
         if metric_name == "noise_sensitivity":
             if self.noise_model is None:
                 raise ValueError("noise_sensitivity requires ArchitectureEvaluator(noise_model=...).")
-            result = noise_sensitivity(circuit, backend=backend, noise_model=self.noise_model, n_samples=self.n_samples)
+            result = noise_sensitivity(circuit, backend=backend, noise_model=self.noise_model)
             score = 1.0 - result.avg_fidelity_loss
             return self._group_score(
                 "noise_robustness",
