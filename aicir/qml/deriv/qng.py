@@ -103,6 +103,22 @@ def _validate_qfim_diag(qfim_diag: Any, parameter_count: int) -> np.ndarray:
     return diag
 
 
+_UNSUPPORTED_QNG_GRADIENT_METHOD = {
+    "spsr": (
+        "gradient_method='spsr' 不受 QNG 族（qng/bdqng/kqng/dqng）支持：spsr "
+        "的随机方向估计（每次只采样部分参数坐标）与 QNG 的度规预条件组合尚未"
+        "验证/不支持，二者叠加可能得到有偏或不稳定的自然梯度方向。请改用 "
+        "'psr'、'fd'、'spsa'（整体随机但仍覆盖全部坐标）或 'auto'。"
+    ),
+}
+
+
+def _reject_unsupported_qng_gradient_method(method_norm: str) -> None:
+    message = _UNSUPPORTED_QNG_GRADIENT_METHOD.get(method_norm)
+    if message is not None:
+        raise ValueError(message)
+
+
 def _ordinary_gradient_for_qng(
     fn: Callable[[Any], Any] | None,
     theta: np.ndarray,
@@ -113,10 +129,17 @@ def _ordinary_gradient_for_qng(
     backend: Any,
     gradient_kwargs: dict[str, Any],
 ) -> np.ndarray:
+    """按 ``method`` 分发普通梯度（QNG 系列的预条件对象）。
+
+    支持 ``"psr"``（默认）、``"fd"``、``"spsa"``、``"auto"``。``"spsr"``
+    显式拒绝——见 :data:`_UNSUPPORTED_QNG_GRADIENT_METHOD`：spsr 只采样部分
+    参数坐标，与 QNG 的整体度规预条件组合未经验证。
+    """
     if fn is None:
         raise ValueError("fn is required when grad is not provided")
 
     method_norm = str(method).strip().lower()
+    _reject_unsupported_qng_gradient_method(method_norm)
     kwargs = dict(gradient_kwargs)
     if method_norm == "psr":
         kwargs.setdefault("shift", shift)
@@ -142,10 +165,12 @@ def _ordinary_gradient_for_dqng_torch(
     backend: Any,
     gradient_kwargs: dict[str, Any],
 ):
+    """``_ordinary_gradient_for_qng`` 的 torch/NPU 设备驻留变体（同样拒绝 spsr）。"""
     if fn is None:
         raise ValueError("fn is required when grad is not provided")
 
     method_norm = str(method).strip().lower()
+    _reject_unsupported_qng_gradient_method(method_norm)
     kwargs = dict(gradient_kwargs)
     if method_norm == "psr":
         return _psr_torch(
@@ -496,7 +521,9 @@ def qng(
         grad: Optional precomputed ordinary gradient.
         qfim: Optional precomputed QFIM.
         gradient_method: Ordinary-gradient method when ``grad`` is omitted:
-            ``"psr"`` (default), ``"fd"``, ``"spsa"``, or ``"auto"``.
+            ``"psr"`` (default), ``"fd"``, ``"spsa"``, or ``"auto"``. ``"spsr"``
+            is rejected with ``ValueError``: its per-call random coordinate
+            sampling is not validated against QNG's metric preconditioning.
         gradient_kwargs: Extra keyword arguments forwarded to the selected
             ordinary-gradient method.
         shift: Parameter-shift amount used by ``gradient_method="psr"``.
@@ -604,7 +631,9 @@ def bdqng(
         grad: Optional precomputed ordinary gradient.
         qfim_blocks: Optional precomputed QFIM block matrices, one per block.
         gradient_method: Ordinary-gradient method when ``grad`` is omitted:
-            ``"psr"`` (default), ``"fd"``, ``"spsa"``, or ``"auto"``.
+            ``"psr"`` (default), ``"fd"``, ``"spsa"``, or ``"auto"``. ``"spsr"``
+            is rejected with ``ValueError``: its per-call random coordinate
+            sampling is not validated against QNG's metric preconditioning.
         gradient_kwargs: Extra keyword arguments forwarded to the selected
             ordinary-gradient method.
         shift: Parameter-shift amount used by ``gradient_method="psr"``.

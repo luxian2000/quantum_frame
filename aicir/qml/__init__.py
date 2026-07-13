@@ -3,6 +3,7 @@
 from .deriv import (
     auto,
     psr,
+    psr4,
     spsr,
     spsa,
     mpsr,
@@ -39,6 +40,7 @@ except ImportError:  # pragma: no cover - 取决于运行环境是否装 torch
 __all__ = [
     "auto",
     "psr",
+    "psr4",
     "spsr",
     "spsa",
     "mpsr",

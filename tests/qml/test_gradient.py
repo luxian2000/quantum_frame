@@ -210,14 +210,59 @@ def test_hessian_fd_matches_single_rotation_expectation():
 
 
 def test_hessian_psr_falls_back_for_non_pauli_frequency():
+    """method='auto'（默认）：psr/fd 对角元不一致时降级为 fd，并发出 RuntimeWarning。"""
     value = np.array([0.37])
 
     def objective(theta):
         return np.cos(2.0 * theta[0])
 
-    matrix = hessian(objective, value)
+    with pytest.warns(RuntimeWarning, match="降级为 fd"):
+        matrix = hessian(objective, value)
 
     assert np.allclose(matrix, [[-4.0 * np.cos(2.0 * value[0])]], atol=1e-3)
+
+
+def test_hessian_auto_matches_fd_result_after_fallback():
+    """method='auto' 数值行为与拆包前默认行为一致：仅多了一条 warning。"""
+    value = np.array([0.37])
+
+    def objective(theta):
+        return np.cos(2.0 * theta[0])
+
+    with pytest.warns(RuntimeWarning):
+        auto_matrix = hessian(objective, value, method="auto")
+    fd_matrix = hessian(objective, value, method="fd", eps=1e-3)
+
+    assert np.allclose(auto_matrix, fd_matrix)
+
+
+def test_hessian_psr_raises_on_non_pauli_frequency():
+    """method='psr'（显式严格模式）：对角元与 fd 不一致时直接报错，不静默降级。"""
+    value = np.array([0.37])
+
+    def objective(theta):
+        return np.cos(2.0 * theta[0])
+
+    with pytest.raises(ValueError, match="psr"):
+        hessian(objective, value, method="psr")
+
+
+def test_hessian_psr_explicit_matches_default_on_pauli_frequency():
+    """method='psr' 在标准 Pauli 频率下与 method='auto' 数值一致（无降级/报错）。"""
+    params = np.array([0.4, -0.2])
+
+    def objective(theta):
+        return np.cos(theta[0]) * np.sin(theta[1])
+
+    explicit = hessian(objective, params, method="psr")
+    default = hessian(objective, params)
+
+    assert np.allclose(explicit, default)
+
+
+def test_hessian_rejects_invalid_method():
+    with pytest.raises(ValueError, match="method"):
+        hessian(lambda theta: np.sum(theta), np.array([0.1]), method="nope")
 
 
 def test_fd_matches_analytic_gradient_for_vector_params():
@@ -602,6 +647,45 @@ def test_qng_accepts_spsa_gradient_method():
 
     assert np.allclose(grad, [-np.sin(theta[0])], atol=1e-4)
     assert np.allclose(natural_grad, grad, atol=1e-4)
+
+
+def test_qng_rejects_spsr_gradient_method():
+    """gradient_method='spsr' 显式报错（未验证的随机坐标采样 + QNG 度规预条件组合）。"""
+    backend = NumpyBackend()
+    z = np.diag([1.0, -1.0]).astype(np.complex64)
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), n_qubits=1)
+        return State.zero_state(1, backend).evolve(circuit.unitary(backend=backend))
+
+    def objective(theta):
+        state = state_fn(theta)
+        return backend.expectation_sv(state.data, backend.cast(z))
+
+    theta = np.array([0.5])
+    with pytest.raises(ValueError, match="spsr"):
+        qng(objective, state_fn, theta, gradient_method="spsr")
+
+
+def test_dqng_rejects_spsr_gradient_method_on_torch_path():
+    """dqng 的 NPU/torch 分支（_ordinary_gradient_for_dqng_torch）同样拒绝 spsr。"""
+    torch = pytest.importorskip("torch")
+    from aicir.backends.npu_backend import NPUBackend
+
+    backend = NPUBackend(device="cpu")
+    z = backend.cast(np.diag([1.0, -1.0]).astype(np.complex64))
+
+    def state_fn(theta):
+        circuit = Circuit(ry(theta[0], 0), n_qubits=1)
+        return State.zero_state(1, backend).evolve(circuit.unitary(backend=backend))
+
+    def objective(theta):
+        state = state_fn(theta)
+        return backend.expectation_sv(state.data, z)
+
+    theta = np.array([0.5])
+    with pytest.raises(ValueError, match="spsr"):
+        dqng(objective, state_fn, theta, gradient_method="spsr", backend=backend)
 
 
 def test_qng_accepts_npu_backend_state_tensor():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from typing import Any
 
@@ -69,19 +70,31 @@ def hessian(
     fn: Callable[[np.ndarray], float],
     params: Any,
     *,
-    method: str = "psr",
+    method: str = "auto",
     shift: float = np.pi / 2.0,
     coefficient: float = 0.5,
     eps: float = 1e-3,
 ) -> np.ndarray:
-    """计算标量目标函数的完整 Hessian 矩阵。"""
+    """计算标量目标函数的完整 Hessian 矩阵。
+
+    ``method``：
+
+    - ``"auto"``（默认）：先用 psr 二阶公式估计每个参数的对角元，并与 fd 对照；
+      若某个对角元不一致（生成元谱不是标准 Pauli 旋转的 {-1,0,1}），整体降级为
+      fd 并通过 ``warnings.warn(..., RuntimeWarning)`` 提示——这是拆包前的默认
+      行为（当时唯一可选项就是这套逻辑，只是没有名字也不报警），拆包只补上了
+      警告，数值结果不变。
+    - ``"psr"``：纯 psr 二阶公式，不做 fd 对照/降级；若检测到对角元与 fd 不一致
+      （生成元谱非 {-1,0,1}），直接抛 ``ValueError`` 而不是静默换算法。
+    - ``"fd"``：纯有限差分，不做 psr 计算。
+    """
     theta = np.asarray(params, dtype=float)
     if theta.size == 0:
         raise ValueError("params must contain at least one parameter")
 
     method_norm = str(method).strip().lower()
-    if method_norm not in {"psr", "fd"}:
-        raise ValueError("method must be 'psr' or 'fd'")
+    if method_norm not in {"auto", "psr", "fd"}:
+        raise ValueError("method must be 'auto', 'psr', or 'fd'")
     eps_value = float(eps)
     if not eps_value > 0.0:
         raise ValueError("eps must be a positive number")
@@ -89,21 +102,44 @@ def hessian(
     indices = list(np.ndindex(theta.shape))
     psr_diag_cache: dict[tuple[int, ...], float] = {}
     fd_diag_cache: dict[tuple[int, ...], float] = {}
-    if method_norm == "psr":
+
+    active_method = method_norm
+    if method_norm == "auto":
+        active_method = "psr"
         for index in indices:
             shifted_value = _psr_second_at_index(fn, theta, index, float(shift), float(coefficient))
             fd_value = _fd_second_at_indices(fn, theta, index, index, eps_value)
             psr_diag_cache[index] = shifted_value
             fd_diag_cache[index] = fd_value
             if not np.isclose(shifted_value, fd_value, rtol=1e-3, atol=1e-5):
-                method_norm = "fd"
+                warnings.warn(
+                    "hessian(method='auto') 检测到 psr 二阶对角元与 fd 不一致"
+                    f"（index={index}），生成元谱可能不是标准 Pauli 旋转的 "
+                    "{-1,0,1}；已自动降级为 fd。如需固定算法，请显式传入 "
+                    "method='psr'（不一致时报错）或 method='fd'。",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                active_method = "fd"
                 break
+    elif method_norm == "psr":
+        for index in indices:
+            shifted_value = _psr_second_at_index(fn, theta, index, float(shift), float(coefficient))
+            fd_value = _fd_second_at_indices(fn, theta, index, index, eps_value)
+            psr_diag_cache[index] = shifted_value
+            if not np.isclose(shifted_value, fd_value, rtol=1e-3, atol=1e-5):
+                raise ValueError(
+                    "hessian(method='psr') 检测到 psr 二阶对角元与 fd 不一致"
+                    f"（index={index}）；生成元谱可能不是标准 Pauli 旋转的 "
+                    "{-1,0,1}，psr 二阶公式不适用。请改用 method='fd' 或 "
+                    "method='auto'（自动降级并给出 RuntimeWarning）。"
+                )
 
     matrix = np.zeros((theta.size, theta.size), dtype=float)
     for row, left in enumerate(indices):
         for col in range(row, theta.size):
             right = indices[col]
-            if method_norm == "psr":
+            if active_method == "psr":
                 if left == right:
                     value = psr_diag_cache.get(left)
                     if value is None:

@@ -2,20 +2,23 @@
 
 NEXT.md §6。内置方法在导入时注册一次，按 ``category`` 分三类：
 
-- ``fn_gradient``：``psr``/``fd``/``auto``/``spsa``/``spsr``；
+- ``fn_gradient``：``psr``/``psr4``/``fd``/``auto``/``spsa``/``spsr``；
 - ``circuit_gradient``：``ad``（伴随微分）；
 - ``preconditioner``：``qng``/``bdqng``/``kqng``/``dqng``。
 
 ``mpsr`` 因返回标量混合偏导、不满足任何统一契约，刻意排除（仍可用 ``qml.mpsr``）。
 ``resolve_diff``/``select_diff`` 只对 ``fn_gradient`` 生效，保证经典优化器分发安全；
 ``ad``/``qng`` 族仅供 ``get_diff``/``registered_diffs(category=...)`` 检索发现。
+``psr4``（激发门四项移位规则）已注册、可通过 ``get_diff``/``resolve_diff`` 发现
+与解析，但刻意不加入 ``select_diff`` 的自动优选偏好（仍是两项 ``psr`` 优先，
+``psr4`` 需要调用方按线路生成元谱显式选择）。
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
-from ..deriv import ad, auto, bdqng, dqng, fd, kqng, psr, qng, spsa, spsr
+from ..deriv import ad, auto, bdqng, dqng, fd, kqng, psr, psr4, qng, spsa, spsr
 from .spec import DiffMethod
 
 _REGISTRY: dict[str, DiffMethod] = {}
@@ -142,6 +145,7 @@ def select_diff(*, backend: Any = None, shots: Any = None, noisy: bool = False) 
 _STANDARD_METHODS = (
     # fn_gradient: (fn, params) -> 梯度向量
     DiffMethod("psr", psr, exact=True),
+    DiffMethod("psr4", psr4, exact=True),
     DiffMethod("fd", fd),
     DiffMethod(
         "auto", auto, exact=True, requires_torch=True,

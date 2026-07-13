@@ -39,7 +39,7 @@ from aicir.qml.diff import (
 
 
 def test_builtin_fn_gradients_registered():
-    assert set(registered_diffs(category="fn_gradient")) == {"psr", "fd", "auto", "spsa", "spsr"}
+    assert set(registered_diffs(category="fn_gradient")) == {"psr", "psr4", "fd", "auto", "spsa", "spsr"}
 
 
 def test_builtin_circuit_gradient_and_preconditioners_registered():
@@ -49,7 +49,7 @@ def test_builtin_circuit_gradient_and_preconditioners_registered():
 
 def test_registered_diffs_no_filter_is_all_categories():
     assert set(registered_diffs()) == {
-        "psr", "fd", "auto", "spsa", "spsr",
+        "psr", "psr4", "fd", "auto", "spsa", "spsr",
         "ad", "qng", "bdqng", "kqng", "dqng",
     }
 
@@ -57,6 +57,21 @@ def test_registered_diffs_no_filter_is_all_categories():
 def test_resolve_returns_bound_function():
     assert resolve_diff("psr") is deriv.psr
     assert resolve_diff("auto") is deriv.auto
+
+
+def test_psr4_registered_and_discoverable():
+    """psr4（四项移位规则）已注册为 fn_gradient，可被 get_diff/resolve_diff 发现。"""
+    spec = get_diff("psr4")
+    assert spec is not None
+    assert spec.category == "fn_gradient"
+    assert spec.fn is deriv.psr4
+    assert resolve_diff("psr4") is deriv.psr4
+
+
+def test_psr4_not_in_select_diff_auto_preference():
+    """psr4 刻意不参与 select_diff 自动优选（需按线路生成元谱显式选择）。"""
+    for kwargs in ({}, {"shots": 1000}, {"noisy": True}):
+        assert select_diff(**kwargs) != "psr4"
 
 
 def test_resolve_rejects_non_fn_gradient():
