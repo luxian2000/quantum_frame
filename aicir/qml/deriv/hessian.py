@@ -66,6 +66,34 @@ def _fd_second_at_indices(
     ) / (4.0 * eps ** 2))
 
 
+def _fd_second_with_uncertainty(
+    fn: Callable[[np.ndarray], float],
+    theta: np.ndarray,
+    index: tuple[int, ...],
+    eps: float,
+) -> tuple[float, float]:
+    """返回 fd 二阶对角元及其**自身**的误差估计。
+
+    二阶中心差分的舍入误差约为 ``δf / eps**2``：目标函数只要走 complex64 态矢量
+    （δf≈1e-7），默认 ``eps=1e-3`` 就能放大出 0.1 量级的误差——此时 fd 自己都不准，
+    不能拿它去判定精确的 psr 是否"不一致"。这里用 ``eps`` 与 ``2*eps`` 两个步长的
+    差值作为 fd 的不确定度，供调用方判断 fd 是否有资格做裁判。
+    """
+    fine = _fd_second_at_indices(fn, theta, index, index, eps)
+    coarse = _fd_second_at_indices(fn, theta, index, index, 2.0 * eps)
+    return fine, abs(fine - coarse)
+
+
+def _psr_agrees_with_fd(psr_value: float, fd_value: float, fd_uncertainty: float) -> bool:
+    """psr 与 fd 是否一致——容差取 fd 自身不确定度与固定容差中的较大者。
+
+    只有当 fd 足够可信（不确定度小）且仍与 psr 显著不符时，才认定生成元谱不是标准
+    Pauli 旋转的 {-1,0,1}。
+    """
+    tolerance = max(1e-3 * abs(psr_value), 1e-5, 4.0 * fd_uncertainty)
+    return abs(psr_value - fd_value) <= tolerance
+
+
 def hessian(
     fn: Callable[[np.ndarray], float],
     params: Any,
@@ -108,10 +136,10 @@ def hessian(
         active_method = "psr"
         for index in indices:
             shifted_value = _psr_second_at_index(fn, theta, index, float(shift), float(coefficient))
-            fd_value = _fd_second_at_indices(fn, theta, index, index, eps_value)
+            fd_value, fd_uncertainty = _fd_second_with_uncertainty(fn, theta, index, eps_value)
             psr_diag_cache[index] = shifted_value
             fd_diag_cache[index] = fd_value
-            if not np.isclose(shifted_value, fd_value, rtol=1e-3, atol=1e-5):
+            if not _psr_agrees_with_fd(shifted_value, fd_value, fd_uncertainty):
                 warnings.warn(
                     "hessian(method='auto') 检测到 psr 二阶对角元与 fd 不一致"
                     f"（index={index}），生成元谱可能不是标准 Pauli 旋转的 "
@@ -125,9 +153,9 @@ def hessian(
     elif method_norm == "psr":
         for index in indices:
             shifted_value = _psr_second_at_index(fn, theta, index, float(shift), float(coefficient))
-            fd_value = _fd_second_at_indices(fn, theta, index, index, eps_value)
+            fd_value, fd_uncertainty = _fd_second_with_uncertainty(fn, theta, index, eps_value)
             psr_diag_cache[index] = shifted_value
-            if not np.isclose(shifted_value, fd_value, rtol=1e-3, atol=1e-5):
+            if not _psr_agrees_with_fd(shifted_value, fd_value, fd_uncertainty):
                 raise ValueError(
                     "hessian(method='psr') 检测到 psr 二阶对角元与 fd 不一致"
                     f"（index={index}）；生成元谱可能不是标准 Pauli 旋转的 "

@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 
@@ -258,6 +260,38 @@ def test_hessian_psr_explicit_matches_default_on_pauli_frequency():
     default = hessian(objective, params)
 
     assert np.allclose(explicit, default)
+
+
+def test_hessian_does_not_falsely_fall_back_on_complex64_circuit():
+    """真实线路（complex64 态矢量）下的标准旋转门不得被误判为非 Pauli 生成元。
+
+    complex64 的目标函数精度约 1e-7，默认 eps=1e-3 的二阶差分舍入误差可达 0.1 量级；
+    若拿这样的 fd 去裁判 psr，最简单的 ry 线路都会被误判降级，返回不准的 fd 值。
+    """
+    from aicir import Circuit, Hamiltonian, ry
+    from aicir.primitives import StatevectorEstimator
+
+    hamiltonian = Hamiltonian(n_qubits=1, terms=[("Z", 1.0)])
+    estimator = StatevectorEstimator()
+
+    def objective(theta):
+        circuit = Circuit(ry(float(theta[0]), 0), n_qubits=1)
+        return float(estimator.run(circuit, hamiltonian).value)
+
+    angle = 0.7
+    params = np.array([angle])
+    expected = -np.cos(angle)  # d²/dθ² ⟨Z⟩ = -cos θ
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)  # 任何降级警告都视为失败
+        auto = np.asarray(hessian(objective, params))
+
+    assert auto.shape == (1, 1)
+    assert np.isclose(float(auto.ravel()[0]), expected, atol=1e-4)
+
+    # 严格模式同样不得报错，并给出同一解析值。
+    strict = np.asarray(hessian(objective, params, method="psr"))
+    assert np.isclose(float(strict.ravel()[0]), expected, atol=1e-4)
 
 
 def test_hessian_rejects_invalid_method():
