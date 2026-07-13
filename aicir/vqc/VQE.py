@@ -532,7 +532,21 @@ class BasicVQE:
         init_params: np.ndarray | None = None,
         optimizer: Any = None,
         callback: Callable[[int, float, np.ndarray], None] | None = None,
+        *,
+        learning_rate: float | None = None,
     ) -> VQEResult:
+        """运行梯度下降（或注入的 ``optimizer``）优化 VQE 参数。
+
+        ``lr`` 为兼容别名，规范名为 ``learning_rate``（词汇表见 ``aicir/protocols.py``）。
+        两者同时传入且取值不同（``learning_rate`` 与非默认 ``lr`` 冲突）时抛
+        ``ValueError``；只传 ``learning_rate`` 时以其为准。
+        """
+        if learning_rate is not None:
+            if lr != 0.1 and lr != learning_rate:
+                raise ValueError(
+                    "Pass either 'learning_rate' or 'lr', not conflicting values for both."
+                )
+            lr = learning_rate
         selected_optimizer = optimizer if optimizer is not None else self.optimizer
         if selected_optimizer is not None:
             return self._run_with_optimizer(selected_optimizer, init_params=init_params, callback=callback)

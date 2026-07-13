@@ -165,3 +165,25 @@ def test_basic_qaoa_run_accepts_black_box_optimizer():
     assert result.optimizer_result is not None
     assert result.parameters.shape == (2,)
     assert len(result.energy_history) >= 1
+
+
+def test_basic_qaoa_run_learning_rate_alias_matches_lr():
+    hamiltonian = Hamiltonian(n_qubits=1, terms=[("Z", [0], 1.0)])
+    init_params = np.array([0.1, 0.1])
+
+    via_lr = BasicQAOA(problem_hamiltonian=hamiltonian, p=1).run(
+        max_iters=3, lr=0.2, init_params=init_params
+    )
+    via_learning_rate = BasicQAOA(problem_hamiltonian=hamiltonian, p=1).run(
+        max_iters=3, learning_rate=0.2, init_params=init_params
+    )
+
+    assert via_learning_rate.energy_history == via_lr.energy_history
+    np.testing.assert_array_equal(via_learning_rate.parameters, via_lr.parameters)
+
+
+def test_basic_qaoa_run_conflicting_lr_and_learning_rate_raises():
+    qaoa = BasicQAOA(problem_hamiltonian=Hamiltonian(n_qubits=1, terms=[("Z", [0], 1.0)]), p=1)
+
+    with pytest.raises(ValueError, match="learning_rate"):
+        qaoa.run(max_iters=1, lr=0.3, learning_rate=0.2, init_params=np.array([0.1, 0.1]))

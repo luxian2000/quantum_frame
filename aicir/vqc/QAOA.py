@@ -705,7 +705,20 @@ class BasicQAOA:
         seed: int | None = None,
         method: str = "statevector",
         grad_method: str = "fd",
+        learning_rate: float | None = None,
     ) -> QAOAResult:
+        """运行梯度下降（或注入的 ``optimizer``）优化 QAOA 参数。
+
+        ``lr`` 为兼容别名，规范名为 ``learning_rate``（词汇表见 ``aicir/protocols.py``）。
+        两者同时传入且取值不同（``learning_rate`` 与非默认 ``lr`` 冲突）时抛
+        ``ValueError``；只传 ``learning_rate`` 时以其为准。
+        """
+        if learning_rate is not None:
+            if lr != 0.05 and lr != learning_rate:
+                raise ValueError(
+                    "Pass either 'learning_rate' or 'lr', not conflicting values for both."
+                )
+            lr = learning_rate
         if max_iters <= 0:
             raise ValueError("max_iters must be a positive integer")
         if optimizer is None and lr <= 0:

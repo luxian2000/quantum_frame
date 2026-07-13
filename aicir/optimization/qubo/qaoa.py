@@ -150,12 +150,14 @@ def run_model_qaoa(
     backend: Any = None,
     method: str = "statevector",
     grad_method: str = "fd",
+    learning_rate: float | None = None,
 ) -> QAOAResult:
     """Run ``BasicQAOA`` on a QUBO ``Model``.
 
     ``seed`` 同时用于构造 ``BasicQAOA``（初始参数采样）和转发给
     ``BasicQAOA.run``（shots 采样等运行期随机性），与 ``BasicQAOA.run`` 的
-    其余可选关键字参数一起原样转发。
+    其余可选关键字参数一起原样转发。``lr``/``learning_rate`` 语义与
+    ``BasicQAOA.run`` 完全一致（``lr`` 为兼容别名），原样转发由其做冲突校验。
     """
 
     solver = model_to_basic_qaoa(
@@ -177,6 +179,7 @@ def run_model_qaoa(
         seed=seed,
         method=method,
         grad_method=grad_method,
+        learning_rate=learning_rate,
     )
 
 
