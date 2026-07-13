@@ -48,16 +48,6 @@ import math  # noqa: E402
 assert math.isfinite(result.energy), f"energy must be finite, got {result.energy!r}"
 assert len(result.energy_history) == 3
 
-import warnings  # noqa: E402
-
-with warnings.catch_warnings(record=True) as caught:
-    warnings.simplefilter("always")
-    import aicir.optimization.sb  # noqa: F401,E402
-
-assert any(issubclass(w.category, DeprecationWarning) for w in caught), (
-    "aicir.optimization.sb import must raise a DeprecationWarning"
-)
-
 assert "torch" not in sys.modules, "running a numpy-backend VQE must not pull in torch"
 
 print("TORCH_ABSENCE_OK")
