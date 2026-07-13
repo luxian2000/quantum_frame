@@ -97,6 +97,8 @@ optimized = pm.run(circuit)   # 返回变换后的 Circuit 副本
 
 `run` 接收 `Circuit` 对象（或任何兼容 `CircuitIR` 接口的对象），返回一个新的 `Circuit`，原始线路不被修改。
 
+`run_with_result(circuit)` 运行同一条流水线，但返回 `TranspileResult`（`circuit`/`layout`/`passes`/`depth_before`/`depth_after`/`metadata`）：`depth_before`/`depth_after` 是编译前后的线路深度（ASAP 层数），`layout` 取自流水线中携带 `last_layout` 的 pass（如 `LayoutPass`/`RoutingPass`，链式组合；无布局 pass 时为 `None`），`passes` 是实际运行的 pass 名序列。
+
 ---
 
 ## 3  optimize — 默认优化入口
@@ -377,5 +379,6 @@ optimized = pm.run(circuit)
 | `DecomposePass` | Pass | 高级门分解到目标门集 |
 | `LayoutPass` | Pass | logical→physical 比特重标号 |
 | `RoutingPass` | Pass | 沿耦合图插入 SWAP 满足拓扑 |
+| `TranspileResult` | 数据类 | `circuit`/`layout`/`passes`/`depth_before`/`depth_after`/`metadata`；由 `PassManager.run_with_result(circuit)` 返回 |
 
 > `Target`（硬件目标描述）从 `aicir.devices` 导入，是 `DecomposePass`/`LayoutPass`/`RoutingPass` 的共同输入。

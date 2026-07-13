@@ -118,20 +118,17 @@ fig, ax = cir.plot("figures/bell")
 
 | 门类别 | 填充色 | 说明 |
 | --- | --- | --- |
-| Hadamard | 淡蓝 | 非 Clifford 基色 |
-| Clifford 门（X, Y, Z, S, CX, CY, CZ, SWAP） | 淡绿 | |
-| 参数化 Clifford 门 | 浅绿 | 减淡 30% |
-| T 门 | 淡红 | |
-| 参数化非 Clifford 门（Rx, Ry, Rz, CRx, …, U2, U3） | 浅蓝 | 减淡 20% |
+| Clifford 门（H, X, Y, Z, S, CX, CY, CZ, SWAP） | 淡绿 | |
+| 非参数化非 Clifford 门（T 门、Toffoli） | 淡蓝 | |
+| 参数化非 Clifford 门（Rx, Ry, Rz, CRx, …, U2, U3, unitary, single/double_excitation） | 浅蓝 | 减淡 20% |
 | 测量 / Reset | 粉红 | |
-| 其它 | 灰色 | |
+| 其它（未归类门名） | 灰色 | |
 
 #### Reset 渲染细节
 
-- Reset 以与 Measure 同色、标注旋转箭头的虚线显示
-- 虚线从 `measure(q)` 连接到后续同一比特的量子门
-- 若无后续量子门则延伸到线路末端
-- 虚线区间内不叠加普通实线
+- Reset 门框与 Measure 同色，标注旋转箭头图案
+- 紧跟在同一比特 `measure(q)` 之后的 reset 会把该测量到后续量子门之间的这段量子线渲染为一条连续实线（颜色、线宽与普通量子线相同），避免与被跳过的普通实线重叠
+- 若无后续量子门则该连接线延伸到线路末端
 
 ---
 
