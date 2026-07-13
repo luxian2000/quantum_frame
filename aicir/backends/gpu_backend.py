@@ -129,7 +129,18 @@ class GPUBackend(Backend):
     def inner_product(self, bra, ket):
         b = bra.reshape(-1)
         k = ket.reshape(-1)
-        return torch.dot(torch.conj(b), k)
+        if torch.is_complex(b) or torch.is_complex(k):
+            # 实虚部分解为 4 个实数 dot：⟨b|k⟩ = Σ conj(b)·k。
+            # 规避 torch.dot 在部分构建（实测 torch 2.4 / aarch64 CPU）上对
+            # torch.conj 惰性共轭视图返回全零的内核缺陷；.real/.imag 为可微视图，
+            # autograd 语义与原实现一致。
+            dtype = torch.promote_types(b.dtype, k.dtype)
+            b = b.to(dtype)
+            k = k.to(dtype)
+            real = torch.dot(b.real, k.real) + torch.dot(b.imag, k.imag)
+            imag = torch.dot(b.real, k.imag) - torch.dot(b.imag, k.real)
+            return torch.complex(real, imag)
+        return torch.dot(b, k)
 
     def measure_probs(self, state):
         probs = (torch.abs(state.reshape(-1)) ** 2).real
