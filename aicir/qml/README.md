@@ -1,6 +1,15 @@
 # aicir.qml — 量子机器学习梯度与梯度无关优化工具包
 
-本模块 (`aicir/qml/deriv.py`) 实现了量子电路参数梯度、高阶导数、QFIM 几何预条件和显式 gradient-free 坐标精确最小化方法。所有方法均与 `NumpyBackend`、`GPUBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。
+本模块（`aicir/qml/deriv/` 包，内部按功能拆成 `fn_gradient`/`hessian`/`adjoint`/`qfim`/`qng`/`rotosolve` 等子模块）实现了量子电路参数梯度、高阶导数、QFIM 几何预条件和显式 gradient-free 坐标精确最小化方法。所有方法均与 `NumpyBackend`、`GPUBackend`、`NPUBackend` 兼容，后端返回的张量（包括自动微分追踪张量、复数标量、加速器设备张量）均可直接作为目标函数返回值，无需手动调用 `float()` 或 `to_numpy()`。子模块拆分不影响导入路径：`from aicir.qml import psr` 与 `from aicir.qml.deriv import psr` 都继续可用。
+
+---
+
+## 0. 返回类型契约
+
+- **一律返回 NumPy 数组**：`auto`、`psr`、`psr4`、`spsr`、`spsa`、`mpsr`、`fd`、`ad`、`hessian`、`qfim`/`metric_tensor`、`qfim_diag`、`qfim_blocks`、`qng`、`bdqng`。即便内部为保持设备驻留而用 torch 张量计算（如 `auto`、`qfim` 系在 torch 态输入下），最终都会转换为主机端 NumPy 数组再返回；`qng`/`bdqng` 即便 `state_fn` 返回 torch/NPU 张量，或预先算好的 `grad`/`qfim`/`qfim_blocks` 本身是 torch 张量，也统一转换回 NumPy。
+- **入参决定出参设备**：只有 `kqng`、`dqng`、`rotosolve` 三个例外——当传入 `NPUBackend`（或 NPU-family backend），或预先算好的 `grad`/`qfim_diag`/`kfac_factors`（`rotosolve` 则是 `params`）本身是 torch 张量时，它们返回**同设备的 torch 张量**；否则同样返回 NumPy 数组。
+
+调用方若把 `qng`/`bdqng` 的返回值和 `kqng`/`dqng`/`rotosolve` 的返回值混用（例如同一优化循环里既用 `qng` 又用 `dqng`），需要注意前者恒定是 NumPy，后者可能是 torch 张量，不能假设两者返回类型一致。
 
 ---
 
@@ -62,6 +71,7 @@
 |               |                                                    |                                             |                                               |
 | `auto`      | Automatic Differentiation                          | 1 次反向传播                                | Torch/NPU 后端，自动微分图                    |
 | `psr`       | Parameter-Shift Rule                               | $2P$                                      | 通用旋转门，无噪声或含噪声均可                |
+| `psr4`      | Four-Term PSR                                      | $4P$                                      | 生成元谱为 $\{-1,0,1\}$ 的门（如激发门），标准两项 `psr` 不适用 |
 | `spsr`      | Stochastic PSR                                     | $2K$（$K \leq P$ 次采样）               | 大参数量随机坐标梯度                          |
 | `spsa`      | Simultaneous Perturbation Stochastic Approximation | $2K$（$K$ 个扰动方向）                  | 极大参数量/硬件噪声下的随机全方向梯度         |
 | `mpsr`      | Multi-parameter PSR                                | $2^M$（$M$ 个坐标的混合偏导数）         | 高阶混合偏导                                  |
@@ -97,6 +107,15 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | `shift`       | 正负移位量（默认 π/2，对应 Pauli 旋转门标准频谱） |
 | `coefficient` | 差分系数（默认 0.5）                               |
 
+#### `psr4(fn, params, *, shifts=(π/2, 3π/2), coefficients=None)`
+
+| 参数            | 说明                                                                 |
+| --------------- | -------------------------------------------------------------------- |
+| `fn`          | 接受完整参数数组、返回标量的目标函数                                 |
+| `params`      | 当前参数值，支持标量和任意形状数组                                   |
+| `shifts`      | 两个正移位量 `(s1, s2)`，默认 `(π/2, 3π/2)`                         |
+| `coefficients` | 可选系数对 `(c1, c2)`；`None` 时使用激发门默认值 `((√2+1)/4√2, (√2−1)/4√2)` |
+
 #### `spsr(fn, params, *, n_samples, rng, replace, shift, coefficient, unbiased)`
 
 | 参数          | 说明                                               |
@@ -121,13 +140,18 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | --------------------- | ------------------------------------------------------------------- |
 | `parameter_indices` | 指定混合偏导的坐标：整数、元组索引或其列表；`None` 表示对所有参数 |
 
-#### `hessian(fn, params, *, method="psr", shift=π/2, coefficient=0.5, eps=1e-3)`
+#### `hessian(fn, params, *, method="auto", shift=π/2, coefficient=0.5, eps=1e-3)`
 
 | 参数 | 说明 |
 | --- | --- |
-| `method` | `"psr"` 使用二阶参数移位和 `mpsr` 混合偏导；`"fd"` 使用中心有限差分 |
-| `shift` / `coefficient` | `method="psr"` 时的参数移位配置 |
-| `eps` | `method="fd"` 时的二阶差分步长 |
+| `method` | `"auto"`（默认）：先用 psr 二阶公式估计每个对角元并与 fd 对照，若某个对角元不一致（生成元谱不是标准 Pauli 旋转的 $\{-1,0,1\}$）整体降级为 fd，并发出 `RuntimeWarning`；`"psr"`：纯二阶参数移位公式 + `mpsr` 混合偏导，检测到对角元与 fd 不一致时直接抛 `ValueError`（不静默换算法）；`"fd"`：纯中心有限差分，不做 psr 对照 |
+| `shift` / `coefficient` | `method="auto"`/`"psr"` 时的参数移位配置 |
+| `eps` | 二阶差分步长；`method="fd"` 时用于全部差分，`method="auto"`/`"psr"` 时用于内部一致性对照 |
+
+二阶有限差分需要除以 $\varepsilon^2$，比一阶 `fd`（除以 $\varepsilon$）对浮点消去误差敏感得多：`hessian` 的 `eps` 默认值 `1e-3` 沿用 §8 一阶 `fd` 的推荐值，但在 aicir 默认的 `complex64` 单精度模拟下，二阶差分用该默认值往往有明显误差（对简单单参数 `ry` 线路，`method="fd"` 默认 `eps` 算出的对角元与解析值可相差几个百分点）。因此：
+
+- `method="fd"` 建议显式传入更大的 `eps`（如 `1e-2`）以获得准确结果，而不是依赖默认值
+- `method="auto"`/`"psr"` 内部用同样的二阶中心差分做一致性对照，默认 `eps` 也可能把本应通过的对角元误判为“生成元谱不是标准 Pauli 旋转”（尤其是最简单的单参数旋转门电路）而多余地降级/报错——遇到此类误报，同样应显式调大 `eps`（如 `1e-2`）后重试，而不是默认信任警告代表生成元谱真的有问题
 
 #### `fd(fn, params, *, eps=1e-3, mode="central")`
 
@@ -163,7 +187,7 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | `state_fn`                | 接受完整参数数组、返回纯态 ansatz 终态；当`qfim` 已提供时可为 `None`           |
 | `grad`                    | 可选的普通梯度；提供后跳过`fn` 的梯度计算                                        |
 | `qfim`                    | 可选的 QFIM；提供后跳过`state_fn` 的 QFIM 估计                                   |
-| `gradient_method`         | 未提供`grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"` |
+| `gradient_method`         | 未提供`grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"`；传入 `"spsr"` 会抛 `ValueError`（见下） |
 | `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                       |
 | `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                         |
 | `metric_eps`              | 用于 QFIM 态导数中心差分的步长                                                     |
@@ -182,7 +206,7 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | `block_size`              | 未提供`blocks` 时按 flat 参数顺序连续分块的大小，默认 `1`                      |
 | `grad`                    | 可选的普通梯度；提供后跳过`fn` 的梯度计算                                        |
 | `qfim_blocks`             | 可选的 block QFIM 列表；提供后跳过`state_fn` 的 block QFIM 估计                  |
-| `gradient_method`         | 未提供`grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"` |
+| `gradient_method`         | 未提供`grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"`；传入 `"spsr"` 会抛 `ValueError`（见下） |
 | `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                       |
 | `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                         |
 | `metric_eps`              | 用于 block QFIM 态导数中心差分的步长                                               |
@@ -202,7 +226,7 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | `block_size`              | 未提供`blocks` / `factor_shapes` 时按 flat 参数顺序连续分块的大小              |
 | `grad`                    | 可选的普通梯度；提供后跳过`fn` 的梯度计算                                        |
 | `kfac_factors`            | 可选的 Kronecker 因子列表`[(A, B), ...]`；提供后跳过 `state_fn` 的因子估计     |
-| `gradient_method`         | 未提供`grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"` |
+| `gradient_method`         | 未提供`grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"`；传入 `"spsr"` 会抛 `ValueError`（见下） |
 | `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                       |
 | `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                         |
 | `metric_eps`              | 用于 QFIM block 态导数中心差分的步长                                               |
@@ -219,7 +243,7 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | `state_fn`                | 接受完整参数数组、返回纯态 ansatz 终态；当`qfim_diag` 已提供时可为 `None`      |
 | `grad`                    | 可选的普通梯度；提供后跳过`fn` 的梯度计算                                        |
 | `qfim_diag`               | 可选的 QFIM 对角线；提供后跳过`state_fn` 的 QFIM 对角估计                        |
-| `gradient_method`         | 未提供`grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"` |
+| `gradient_method`         | 未提供`grad` 时使用的普通梯度方法：`"psr"`、`"fd"`、`"spsa"` 或 `"auto"`；传入 `"spsr"` 会抛 `ValueError`（见下） |
 | `gradient_kwargs`         | 透传给普通梯度方法的额外参数                                                       |
 | `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                         |
 | `metric_eps`              | 用于 QFIM 对角态导数中心差分的步长                                                 |
@@ -411,6 +435,45 @@ grad = spsa(objective, theta, eps=1e-3, n_samples=8, rng=123)
 
 ---
 
+## 6.5 四项参数移位规则 `psr4`
+
+```python
+from aicir.qml import psr4
+grad = psr4(fn, params, *, shifts=(π/2, 3π/2), coefficients=None)
+```
+
+### 原理
+
+标准 `psr` 的两项公式只对生成元谱为 $\{-\frac{1}{2},\frac{1}{2}\}$ 的门（Pauli 旋转门）精确。对于生成元谱为 $\{-1,0,1\}$ 的门（如量子化学激发门 SingleExcitation/DoubleExcitation），梯度需要四个采样点：
+
+$$
+\frac{\partial \langle O \rangle}{\partial \theta_k} = c_1\left[\langle O \rangle(\theta_k+s_1) - \langle O \rangle(\theta_k-s_1)\right] - c_2\left[\langle O \rangle(\theta_k+s_2) - \langle O \rangle(\theta_k-s_2)\right]
+$$
+
+默认 $(s_1,s_2)=(\pi/2, 3\pi/2)$，$(c_1,c_2)=\left(\frac{\sqrt2+1}{4\sqrt2}, \frac{\sqrt2-1}{4\sqrt2}\right)$，与 PennyLane 的 SingleExcitation/DoubleExcitation 参数移位配方一致。
+
+### 特点
+
+- 每个参数需要 **4 次** 函数调用，总共 $4P$
+- `psr4` 已注册进 §15 的 DiffMethod 注册表（`category="fn_gradient"`），可经 `get_diff("psr4")`/`resolve_diff("psr4")` 发现和调用
+- `psr4` **不**参与 `select_diff` 的自动优选：调用方需要知道线路门的生成元谱是 $\{-1,0,1\}$ 才应显式选用 `psr4`，`select_diff` 无法从上下文推断门类型
+- 若门生成元谱既不是标准 Pauli 旋转的 $\{-\frac{1}{2},\frac{1}{2}\}$，也不是 $\{-1,0,1\}$，应改用 `fd` 或 `auto`
+
+### 示例
+
+```python
+import numpy as np
+from aicir.qml import psr4
+
+# 生成元谱 {-1,0,1} 的合成目标（模拟激发门期望值随角度变化的三频结构）
+def objective(theta):
+    return 0.5 * np.cos(theta[0])
+
+grad = psr4(objective, np.array([0.3]))
+```
+
+---
+
 ## 7. 多参数混合偏导 `mpsr`
 
 ```python
@@ -512,8 +575,7 @@ $$
 
 ```python
 from aicir.qml import ad
-from aicir import Circuit, NumpyBackend, ry, cx
-from aicir.operators import Hamiltonian
+from aicir import Circuit, NumpyBackend, Hamiltonian, ry, cx
 import numpy as np
 
 bk = NumpyBackend()
@@ -550,6 +612,8 @@ $$
 - 解 `(F + damping * I) @ natural_grad = grad`
 
 也可通过 `gradient_method="spsa"` 使用 SPSA 作为普通梯度来源，适合只想用少量目标函数调用估计 QNG 预条件前梯度的场景。
+
+`gradient_method="spsr"` 会被 `qng`/`bdqng`/`kqng`/`dqng` 统一拒绝，抛出 `ValueError`：`spsr` 每次只随机采样部分参数坐标估计梯度，这种局部采样与 QNG 族的整体度规预条件组合尚未验证，叠加后可能得到有偏或不稳定的自然梯度方向。需要随机化梯度时请改用覆盖全部坐标的 `"spsa"`。
 
 QFIM 的纯态公式为：
 
@@ -951,7 +1015,7 @@ select_diff(backend=gpu_backend, shots=1024)  # 'psr'（auto 不支持 shots）
 
 ### 示例：经优化器按名调用
 
-`aicir.optimizer.params` 的优化器（`GD`/`Adam`/`ScipyMinimize`）通过注册表分发，因此 `gradient_method` 可用任意已注册方法名（此前仅支持 `psr`/`fd`/`spsa`）：
+`aicir.optimizer.params` 的优化器（`GD`/`Adam`/`ScipyMinimize`）通过注册表分发，因此 `gradient_method` 可用任意已注册方法名：
 
 ```python
 from aicir.optimizer.params import Adam

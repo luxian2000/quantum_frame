@@ -29,7 +29,7 @@ from aicir.optimization.qubo import model_to_hamiltonian
 hamiltonian = model_to_hamiltonian(model)
 ```
 
-该适配器将一、二比特的 Z 项转换为 `aicir.operators.Hamiltonian`。默认会将
+该适配器将一、二比特的 Z 项转换为 `aicir.Hamiltonian`（即 `aicir.core.operators.Hamiltonian`）。默认会将
 Ising 全局偏置量保留为单位算符项，以保持能量精确一致；若只需要 QAOA 相位算符
 （可差一个全局相位），可传入 `include_offset=False` 省略偏置量。
 
@@ -105,7 +105,7 @@ cores = split_cores(model.polynomial())
 
 ## 覆盖范围
 
-本次首批集成已包含：
+本包提供：
 
 - 二值变量与稀疏多项式表达式
 - 通过 `ModelContext` 实现的模型级变量注册表
@@ -114,16 +114,15 @@ cores = split_cores(model.polynomial())
 - 底层 `QuboBuilder`
 - TSP、图着色、背包问题的构造器
 - QUBO、Ising、稀疏矩阵、QAOA 项的导出
-- 转换为 `aicir.operators.Hamiltonian`
+- 转换为 `aicir.core.operators.Hamiltonian`
 - `aicir.vqc.BasicQAOA` 的稠密矩阵辅助函数
 - 解的解码与小规模模型的暴力枚举分析
 - 按连通分量拆分（`split_polynomial`）与 Billionnet–Jaumard 二次核心分解
   （`split_cores`）
 
-本次未包含：
+本包不提供：
 
 - PyQUBO / Fixstars Amplify 基准测试脚本
 - 独立打包构建文件
-- 面向大规模 QUBO 的可扩展稀疏或电路级 QAOA 执行
-
-下一步集成应为更大规模 QUBO 实例添加可扩展的稀疏或电路级 QAOA 路径。
+- 面向大规模 QUBO 的可扩展稀疏或电路级 QAOA 执行（大规模 QUBO 实例应避免稠密的
+  `2^n x 2^n` 矩阵，改用电路级或稀疏 QAOA 实现）

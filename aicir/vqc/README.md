@@ -13,6 +13,8 @@
 | `BasicVQD` / `run_vqd`     | `VQD.py`   | `VQDResult`   | VQD 编排：带 deflation penalty 的激发态近似                                          |
 | `BasicSSVQE` / `run_ssvqe` | `SSVQE.py` | `SSVQEResult` | SSVQE 编排：多参考态加权目标的低能谱近似                                             |
 
+`BasicVQE`/`BasicVQD`/`BasicSSVQE` 在 `NumpyBackend` 上的编排与优化路径本身不需要 `torch`；`from aicir.vqc import BasicVQE, BasicVQD, BasicSSVQE` 与 `from aicir.core import Circuit, Parameter, ry` 这类直接子模块导入在未安装 torch 的环境下即可正常使用。
+
 ---
 
 ## 2. VQE 编排
@@ -26,7 +28,7 @@
 
 | 参数                                           | 说明                                                                                                                                                                                                 |
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hamiltonian`                                | dense_matrix 或`aicir.operators.Hamiltonian`                                                                                                                                                       |
+| `hamiltonian`                                | dense_matrix 或`aicir.Hamiltonian`（即`aicir.core.operators.Hamiltonian`）                                                                                                                        |
 | `ansatz`                                     | 可选`Circuit` 模板或 callable builder                                                                                                                                                              |
 | `backend`                                    | `NumpyBackend` / `GPUBackend` / `NPUBackend` 等                                                                                                                                                |
 | `optimizer`                                  | 可选`GD`、`Adam`、`SPSA`、`COBYLA`、`LBFGSB`、`ScipyMinimize` 等                                                                                                                         |
@@ -57,6 +59,20 @@ solver = BasicVQE(
 )
 result = solver.run(init_params=np.array([0.1]))
 print(result.energy, result.parameters)
+print(result.value, result.energy)   # .value 与 .energy 等价（AlgorithmResult 协议别名）
+```
+
+未注入 `optimizer` 时，`BasicVQE.run(...)` 走内置梯度下降，规范学习率 kwarg 是 `learning_rate=`；旧名 `lr=` 仍被接受，两者同时传入且取值冲突会抛 `ValueError`：
+
+```python
+solver_gd = BasicVQE(hamiltonian, ansatz=ansatz, backend=NumpyBackend())
+result_gd = solver_gd.run(max_iters=80, learning_rate=0.15, init_params=np.array([0.1]))
+
+# 等价旧写法
+result_gd = solver_gd.run(max_iters=80, lr=0.15, init_params=np.array([0.1]))
+
+# 同时传入且取值不一致（lr 为非默认值 0.2，与 learning_rate=0.15 冲突）-> ValueError
+# solver_gd.run(max_iters=80, lr=0.2, learning_rate=0.15, init_params=np.array([0.1]))
 ```
 
 ### 示例：callable ansatz
@@ -253,6 +269,7 @@ result = qaoa.run(
 
 print(result.energy)
 print(result.parameters)
+print(result.value)   # .value 是 .energy 的别名（AlgorithmResult 协议，与 VQEResult 一致）
 ```
 
 QAOA 的常见优化器是无梯度黑盒优化器，例如 `NelderMead`、`COBYLA`、`SPSA`。`run()` 默认提供 finite-difference gradient descent；实际任务通常建议显式传入 optimizer。

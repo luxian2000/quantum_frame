@@ -65,6 +65,20 @@ hamiltonian = mol.to_hamiltonian()
 
 `build_molecule` 内部用 `PySCFDriver` 算分子积分，再用 Qiskit Nature 的 mapper（`jordan_wigner`/`parity`/`bravyi_kitaev`）把费米子哈密顿量映到 qubit 空间，返回一个与预置同构的 `MoleculeHamiltonian`。可选 `active_electrons`/`active_orbitals` 做 active-space 裁剪，`charge`/`spin` 指定电荷与自旋多重度，`two_qubit_reduction` 仅对 `parity` 映射生效。
 
+### 比特序
+
+第 2 节的固定预置与本节的 `build_molecule` 现算流水线共用同一套 canonical 比特序：Qiskit `SparsePauliOp.to_list()` 返回的 label 原样字符串，不做任何翻转（即 `QUBIT_ORDER = "qiskit_label"`）。两条路径生成的 `terms`、`hf_occupation`、`excitations` 均按这套比特序对齐，可以直接混用、比对或互相替换而不必担心比特序不一致。
+
+若某个调用方确实需要旧版本中出现过的镜像比特序（label 逐字符反转），可显式调用 `reverse_pauli_labels`；默认生成路径（预置与 `build_molecule`）都不会调用它：
+
+```python
+from aicir.chemistry import build_molecule
+from aicir.chemistry._qiskit_bridge import reverse_pauli_labels
+
+mol = build_molecule("H 0 0 0; H 0 0 0.735", basis="sto-3g", mapping="jordan_wigner")
+mirrored_terms = reverse_pauli_labels(mol.terms)   # 逐项 label[::-1]，canonical 比特序不受影响
+```
+
 ### 分子元数据
 
 `mapping="jordan_wigner"`（默认）、`"parity"` 和 `"bravyi_kitaev"` 均会填充以下三个字段。JW 下 `hf_occupation` 的 1-bit 数等于电子数，`excitations` 是直接的费米子激发 qubit 索引；Parity/BK 下 `hf_occupation` 是 mapper 变换后的计算基 bitstring，1-bit 数不等于电子数，`excitations` 是经过目标 qubit 数过滤的结构索引，保证 `uccsd(...)` 输入校验与小线路构造可运行，但不宣称对应 mapper 的物理 UCCSD 激发算符。

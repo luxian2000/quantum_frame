@@ -33,6 +33,7 @@ Primitives 遵循以下入参归一化约定：
 3. **可观测量广播 (Estimator)**：
    - 单个 `observable` 自动广播配对到所有 `circuits`。
    - 若两者皆为序列，必须等长，并按位置一对一配对计算。
+4. **消费入口**：`run(...) -> EstimateResult`（`.value`，另有 `.energy` 别名）是所有 Estimator 的规范消费入口，新代码应直接消费它。`estimate(circuit, hamiltonian)` 仍保留在每个 Estimator 上，是内部委托 `run()` 再打包成仅暴露 `.energy` 的轻量结果对象的直通/注入 shim，主要面向 `BasicVQE(energy_estimator=...)` 这类历史依赖注入点；`BasicVQE(energy_estimator=...)` 同时接受两种形态——只要对象暴露 `run(...)` 或 `estimate(...)` 之一即可注入，内部优先经 `run()` 消费 `EstimateResult`。
 
 ---
 
