@@ -121,7 +121,7 @@ demos/run_p1_round_demo.py
 
 ## Module Responsibilities
 
-- `p0_bootstrap_fair.py`: P0 bootstrap queue writer plus fair-label one-call API.
+- `p0_bootstrap_fair.py`: P0 bootstrap queue writer plus fair-label one-call API. Also owns `resolve_closed_loop_defaults()` (fills in `rounds`/`initial_labels`/batch sizing when left as `"auto"`), `default_initial_labels_for_qubits()`, `default_max_rounds_for_qubits()`, and `stamp_literal_hamiltonian_terms()` (writes the resolved Pauli-term list onto queue rows before fair labeling).
 - `__main__.py`: package command-line entry for `python -m aicir.qas.vqe_loop`.
 - `p0_chemistry_excitation.py`: chemistry excitation candidate rows and mutation-space metadata.
 - `p0_supernet_native.py`: generic supernet-native bootstrap rows.
@@ -130,10 +130,16 @@ demos/run_p1_round_demo.py
 - `demos/run_p1_round_demo.py`: current P1 entry point for mutation/oracle/fallback planning, optional fair labeling, and multi-round label feedback.
 - `p1_round.py`: plans one P1 queue plus equal-budget baselines from labeled parents, mutation children, oracle predictions, and fallback E2/E5 scoring.
 - `p1_evolution.py`: P1 parent selection, supernet/chemistry/operator-sequence mutation, optional operator growth, layer crossover, and mutation result rows.
+- `p1_selection.py`: fallback ranking, baseline selector queues, and P1 queue-row selection helpers, including `decide_next_round_quotas()`'s row-level policy inputs.
 - `oracle.py`: local/trusted oracle prediction and abstention helpers.
-- `benchmark_table.py`: benchmark-table schema, CSV IO, row-object parsing, built-in fair-label protocol defaults, and row-level P1 policies.
-- `fair_vqe.py`: evaluates and optimizes one architecture on one VQE problem using the frozen fair-label policy.
-- `sharding.py`: splits a fair-label queue into independent shards for multi-NPU or multi-process runs.
+- `task_proxy.py`: VQE-specific task-aware cheap proxy evaluators used as P1 selectors; never replaces fair COBYLA labels.
+- `graph_predictor.py`: dependency-light fair-energy predictor for P1 (fixed graph/structure features plus ridge regression), same fit/predict shape as a future GNN-based predictor.
+- `ansatz_family.py`: per-ansatz-family capability declarations used by P0/P1 planning.
+- `growth_routes.py`: executable defaults for the two supported P1 growth routes (`line_a_operator_sequence`, `line_b_chemistry_excitation`).
+- `cheap_eval_experiment.py`: row schema, manifest, and injectable runner scaffold for E1-E5 cheap-evaluation diagnostic experiments; does not itself run VQE or supernet training.
+- `benchmark_table.py`: benchmark-table schema, CSV IO, row-object parsing, built-in fair-label protocol defaults, and row-level P1 policies, including `decide_next_round_quotas()`.
+- `fair_vqe.py`: evaluates and optimizes one architecture on one VQE problem using the frozen fair-label policy. `evaluate_vqe_energy()`/`optimize_vqe_energy()` run on the exact statevector Pauli-term path (`vqe_engine="statevector_pauli_terms"` in `optimize_vqe_energy()`'s result metadata), not `BasicVQE`. `evaluate_vqe_energy(..., estimator=...)` accepts an `aicir.primitives` `BaseEstimator`-compatible object as an optional injection point; `optimize_vqe_energy()`'s COBYLA loop does not take `estimator=` and always uses the built-in Pauli-term evaluation.
+- `shard_scheduler.py`: splits a fair-label queue into independent shards for multi-NPU or multi-process runs.
 - `p0_problem_aware.py`: optional P0 diagnostic problem-aware supernet sampler; not part of the core P0/P1/fair path.
 
 ## Protocol Boundaries
@@ -171,7 +177,7 @@ python -m aicir.qas.vqe_loop.fair_labeling \
 Run fair labels as independent shards:
 
 ```bash
-python -m aicir.qas.vqe_loop.sharding \
+python -m aicir.qas.vqe_loop.shard_scheduler \
   --queue outputs/qas_stage2/round1/round1_queue.csv \
   --output outputs/qas_stage2/round1/round1_labels.csv \
   --work-dir outputs/qas_stage2/round1/label_shards \
@@ -183,7 +189,7 @@ python -m aicir.qas.vqe_loop.sharding \
 
 ## Notes
 
-- `sharding.py` is a task-parallel queue runner; it does not change the fair-label protocol.
+- `shard_scheduler.py` is a task-parallel queue runner; it does not change the fair-label protocol.
 - `fair_vqe.py` is not a general VQE frontend; it is the fair-label execution layer used by VQE-QAS.
 - The old preparation/next-batch/trust-region chain has been removed from this package path.
 

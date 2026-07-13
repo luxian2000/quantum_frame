@@ -149,7 +149,8 @@ cfg = config.vqe_loop(
     active_electrons=2,
     active_spatial_orbitals=2,
     chemistry_excitation_count=8,
-    initial_labels=4,
+    initial_labels=0,
+    rounds=0,
     max_evals=20,
 )
 
@@ -322,8 +323,8 @@ cfg = config.supernet(
 )
 
 result = run("supernet_classification", config=cfg)
-print(result.best_score)
-print(result.best_circuit.show())
+print(result.value)
+print(result.circuit.show())
 ```
 
 内置分类任务按补充材料构造 300 个 3 维样本，并划分为 100 个训练样本、100 个验证样本和 100 个测试样本。输入编码为 `RY(x1) ⊗ RY(x2) ⊗ RY(x3)`；默认标签由一个固定随机 `U*(theta*)` 量子核生成，测量量为最后一个量子比特处于 `|0>` 的概率：概率大于等于 `0.75` 标为 `1`，小于等于 `0.25` 标为 `0`，中间样本丢弃并重采样。训练 loss 使用 MSE，预测阈值为 `0.5`。代码默认单量子比特门池为 `(i, h, rx, ry, rz)`，并在 `(0, 1)`、`(0, 2)`、`(1, 2)` 上搜索是否添加 CNOT；若固定单量子比特门为 `RY`（`single_qubit_gates=("ry",)`，论文设置），则 `layers=3` 时逻辑搜索空间大小为 `8^3`。
@@ -346,8 +347,8 @@ cfg = config.supernet_h2(
 )
 
 result = run("supernet_h2", config=cfg)
-print(result.final_metrics)
-print(result.best_circuit.show())
+print(result.metadata["final_metrics"])
+print(result.circuit.show())
 ```
 
 内置 H2 任务使用补充材料 Eq. (19) 的 4 量子比特 Pauli 哈密顿量：
@@ -427,13 +428,15 @@ result = supernet_qas(ham, layers=6, supernet_num=5,
 
 ### 3.6 VQE-QAS 一键闭环入口
 
-VQE-QAS 的闭环代码放在 `aicir.qas.vqe_loop`，和 `algorithms/` 下的 MoG-VQE、PPO-RB 等算法实现并列但隔离。常规使用优先调用包级入口：
+VQE-QAS 的闭环代码放在 `aicir.qas.vqe_loop`，和 `algorithms/` 下的 MoG-VQE、PPO-RB 等算法实现并列但隔离。常规使用优先调用包级入口。这一入口只负责 P0 bootstrap + fair label（`rounds` 必须为 `0`，且必须显式配置一个 P0 bootstrap family——`supernet_native_count` 或 `use_chemistry_excitation_pool`/`chemistry_excitation_count`，`initial_labels` 必须为 `0`）；P1 变异/oracle/fallback 多轮搜索走独立入口 `aicir.qas.demos.run_p1_round_demo`（见 `aicir/qas/vqe_loop/README.md`）：
 
 ```bash
 python -m aicir.qas.vqe_loop \
   --hamiltonian h2_terms.json \
   --output-dir outputs/qas_h2_loop \
-  --rounds 2 \
+  --initial-labels 0 \
+  --rounds 0 \
+  --supernet-native-count 1 \
   --backend numpy \
   --dtype complex128
 ```
@@ -456,7 +459,9 @@ result = run_vqe_qas_closed_loop(
         n_qubits=4,
         hamiltonian_terms=h2_terms,
         hamiltonian_id="h2_sto3g_jw_0735",
-        rounds=2,
+        rounds=0,
+        initial_labels=0,
+        supernet_native_count=1,
         backend="numpy",
         dtype="complex128",
     )
@@ -735,7 +740,8 @@ cfg = config.pporb(
     seed=42,
 )
 
-theta, circuit = run("pporb", target_density_matrix=rho_target, epsilon=0.95, config=cfg)
+result = run("pporb", target_density_matrix=rho_target, epsilon=0.95, config=cfg)
+theta, circuit = result.parameters, result.circuit
 
 print(f"参数张量数量: {len(theta)}")
 print(f"线路门数: {len(circuit.gates)}")
@@ -969,7 +975,7 @@ cfg = config.crlqas(
 )
 
 result = run("crlqas", hamiltonian=h2, config=cfg)
-print(result.minimum_energy)
+print(result.value)
 print(result.circuit.show())
 ```
 
