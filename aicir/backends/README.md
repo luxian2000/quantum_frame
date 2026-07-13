@@ -324,7 +324,7 @@ print(f"summary : {result.summary()}")
 
 #### 梯度方法：psr 现状 vs complex64-free autodiff 前景
 
-NPU 版目前默认 `--gradient psr`（参数移位）：
+排查当时 NPU 版默认 `--gradient psr`（参数移位）：
 
 - **内存**：psr 把目标当黑盒、在 `torch.no_grad()` 下求值，不建反向图，内存友好。
 - **complex64 autodiff 已死**：`--gradient ad` 在 `loss.backward()` 处报
