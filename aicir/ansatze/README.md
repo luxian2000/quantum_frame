@@ -254,7 +254,7 @@ mol = build_molecule("H 0 0 0; H 0 0 0.735", basis="sto-3g", mapping="jordan_wig
 ansatz = uccsd(mol.n_qubits, mol.hf_occupation, mol.excitations)
 ```
 
-`hf_occupation`/`excitations` 仅在 Jordan-Wigner 映射下由 `build_molecule` 填充；传 `None` 会抛 `ValueError`。
+`build_molecule` 在 `jordan_wigner`/`parity`/`bravyi_kitaev` 三种映射下都会填充 `hf_occupation`/`excitations`（`uccsd` 收到 `None` 会抛 `ValueError`），但只有 Jordan-Wigner 下的 `excitations` 是 mapper-correct 的化学 UCCSD 激发；parity/bravyi_kitaev 下 `hf_occupation` 是映射变换后的 bitstring、`excitations` 只是结构索引，不建议直接喂给 `uccsd` 构造物理正确的 ansatz。
 
 ---
 

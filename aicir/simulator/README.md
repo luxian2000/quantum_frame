@@ -34,15 +34,15 @@
 
 ## 2. 公共 API
 
-### `tn_statevector(circuit, *, backend=None) -> State`
+### `tn_statevector(circuit, *, backend=None, optimize="auto", memory_limit=None) -> State`
 
-收缩整段电路得到末态，返回 `State`（向量形态，`(2^n, 1)`）。等价于但不经过逐门 `State.evolve`，直接把电路的门张量网络一次性缩并。
+收缩整段电路得到末态，返回 `State`（向量形态，`(2^n, 1)`）。等价于但不经过逐门 `State.evolve`，直接把电路的门张量网络一次性缩并。`optimize`/`memory_limit` 控制收缩路径与切片，见第 5 节。
 
-### `single_amplitude(circuit, bitstring, *, backend=None) -> complex`
+### `single_amplitude(circuit, bitstring, *, backend=None, optimize="auto", memory_limit=None) -> complex`
 
 求单个基态振幅 `⟨bitstring|U|0...0⟩`。`bitstring` 是长度为 `n_qubits` 的 0/1 字符串（或等价序列），只做标量收缩，不构造全态矢量，适合仅需个别振幅时节省内存。
 
-### `partial_amplitude(circuit, *, open_qubits=None, bitstrings=None, backend=None)`
+### `partial_amplitude(circuit, *, open_qubits=None, bitstrings=None, backend=None, optimize="auto", memory_limit=None)`
 
 求部分振幅，二选一：
 - `open_qubits=[...]`：给定比特“开放”（保留为自由输出腿），其余比特的输出端固定在 `|0>`；返回长度 `2^len(open_qubits)` 的振幅向量，向量下标按开放比特**升序**排列、**首个开放比特对应最高位（MSB）**。
@@ -50,7 +50,7 @@
 
 两者必须且只能提供其一。
 
-### `tn_expectation(circuit, observable, *, backend=None)`
+### `tn_expectation(circuit, observable, *, backend=None, optimize="auto", memory_limit=None)`
 
 求期望值 `⟨psi|O|psi⟩`，其中 `observable` 可以是带 `to_matrix(backend)` 方法的对象（例如 `Hamiltonian`），也可以是可直接 `backend.cast` 的矩阵。内部先用张量网络收缩出末态矢量，再走 `backend.expectation_sv`。在 `GPUBackend`/`NPUBackend` 上，若电路参数是 Torch 张量（`requires_grad=True`），返回值保留计算图，可 `.backward()` 得到参数梯度——`NPUBackend` 的复数 `tensordot` 复用 autograd-safe 的 real/imag 分解 matmul 实现，因此该可微性在 NPU 上同样成立。
 
@@ -79,7 +79,7 @@
 
 **约束与限制**：
 - 仅接受 1/2 比特门；≥3 比特门需先经 `aicir.transpile.DecomposePass` 分解。
-- 非相邻双比特门自动插入 SWAP 网络，并跟踪逻辑↔物理置换（`site_permutation` 属性）。
+- 非相邻双比特门自动插入 SWAP 网络，并跟踪逻辑↔物理置换（`MPSState.logical_at`/`site_of` 属性）。
 - 仅支持纯态、无噪声、无经典控制流（`ControlFlow`）。
 - 后端支持 NumPy/GPU/NPU；NPU 支持 `mps_statevector`、`mps_expectation` 与 `MPSEstimator` 前向，梯度通过 `MPSEstimator.gradient(method="psr")` 参数移位获得。直接 autograd（`mps_expectation(...).backward()`）仅作为 CPU/GPU 能力；Ascend 缺少 complex64 梯度累加所需内核。NPU 上 `NPUBackend.svd` 走 real-embedding（Ascend 无原生 complex64 SVD），复数乘/除经 real/imag 分解，真机验收见 `demos/demo_npu_mps.py`。
 
@@ -148,4 +148,4 @@ python demos/demo_npu_tensor.py --allow-cpu-fallback   # 无 NPU 时允许回退
 ## 7. 与其他子系统的关系
 
 - `Measure`（`aicir/measure/`）：`method="tensor"` 与 `method="mps"` 复用本模块的 `tn_statevector` 与 `mps_statevector`，其余聚合/读出逻辑与 `method="statevector"` 一致。
-- `Backend`（`aicir/backends/`）：本模块只依赖 `Backend` 抽象的张量原语，不感知具体后端实现；MPS/张量网络截断近似（有损压缩）见本模块的 `mps_statevector`/`mps_expectation`（Spec 2，已落地）。
+- `Backend`（`aicir/backends/`）：本模块只依赖 `Backend` 抽象的张量原语，不感知具体后端实现；MPS/张量网络截断近似（有损压缩）见本模块的 `mps_statevector`/`mps_expectation`。
