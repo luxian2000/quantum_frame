@@ -81,11 +81,13 @@ def _float_parameter(value: Any) -> float:
 
 
 def _parameter_vector_from_circuit(circuit: Any) -> list[float]:
+    from aicir.ir import instruction_parameter
+
     vector: list[float] = []
     for gate in circuit.gates:
-        if "parameter" not in gate or gate.get("parameter") is None:
+        parameter = instruction_parameter(gate)
+        if parameter is None:
             continue
-        parameter = gate["parameter"]
         if isinstance(parameter, (list, tuple)):
             vector.extend(_float_parameter(value) for value in parameter)
         else:

@@ -15,6 +15,9 @@ LEGACY_GATE_DICT_BOUNDARIES = {
     # Legacy transpile APIs that explicitly operate on gate-dict lists.
     "aicir/transpile/passes/_local_rewrite.py",
     "aicir/transpile/rewrite.py",
+    # QAS 显式门序列基因：gates 字段是 JSON DTO（json.dumps 往返、to_jsonable 导出），
+    # 属于允许的 dict 互操作边界，而非运行时线路读取。
+    "aicir/qas/library/ansatz.py",
 }
 
 LEGACY_GATE_DICT_PREFIXES = (

@@ -50,8 +50,10 @@ class ChemistryExcitationAnsatzTests(unittest.TestCase):
         self.assertEqual(architecture.parameter_count, 2)
         self.assertEqual(architecture.two_qubit_gate_count, 2)
         self.assertEqual(architecture.metadata["family"], "chemistry_excitation")
+        from aicir.ir import instruction_name
+
         self.assertEqual(
-            [gate["type"] for gate in architecture.circuit.gates],
+            [instruction_name(gate) for gate in architecture.circuit.gates],
             ["pauli_x", "pauli_x", "single_excitation", "double_excitation"],
         )
 

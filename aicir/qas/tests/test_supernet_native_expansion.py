@@ -50,8 +50,10 @@ def test_supernet_native_gene_round_trips_to_vqe_architecture():
     assert decoded == gene
     assert architecture.n_qubits == 3
     assert architecture.metadata["ansatz_gene"]["kind"] == "supernet_native"
-    assert any(gate.get("type") == "ry" for gate in architecture.circuit.gates)
-    assert any(gate.get("type") == "rzz" for gate in architecture.circuit.gates)
+    from aicir.ir import instruction_name
+
+    assert any(instruction_name(gate) == "ry" for gate in architecture.circuit.gates)
+    assert any(instruction_name(gate) == "rzz" for gate in architecture.circuit.gates)
 
 
 def test_supernet_native_rows_use_supernet_sampled_ranked_architectures(tmp_path):

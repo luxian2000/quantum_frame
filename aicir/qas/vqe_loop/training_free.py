@@ -45,12 +45,14 @@ def _gene_from_row(row: Mapping[str, Any]) -> SupernetAnsatzGene | None:
 
 
 def _two_q_count(circuit: Any) -> int:
+    from aicir.ir import instruction_controls, instruction_name
+
     return int(
         len(
             [
                 gate
                 for gate in circuit.gates
-                if gate.get("control_qubits") or gate.get("type") in {"rxx", "rzz"}
+                if instruction_controls(gate) or instruction_name(gate) in {"rxx", "rzz"}
             ]
         )
     )
