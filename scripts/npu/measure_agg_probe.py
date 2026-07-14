@@ -112,10 +112,14 @@ def case_shared_pre_vector_state(backend: NPUBackend, n: int, shots: int) -> Non
 
 
 def case_capacity(backend: NPUBackend, n: int, shots: int) -> None:
-    # 该规模下密度路径需要 (2^n)^2 复数矩阵，不可行；lite 路径应正常完成
+    # 该规模下密度路径需要 (2^n)^2 复数矩阵，不可行；只取计数的最轻路径
+    # （return_state=False + return_probabilities=False）应正常完成
     start = time.perf_counter()
-    result = Measure(backend).run(_ghz(n, backend), shots=shots, seed=5, return_state=False)
+    result = Measure(backend).run(_ghz(n, backend), shots=shots, seed=5,
+                                  return_state=False, return_probabilities=False)
     elapsed = time.perf_counter() - start
+    if result.probabilities is not None:
+        raise AssertionError("return_probabilities=False 时 probabilities 应为 None")
     _check_ghz_counts(result.counts(-1), n, shots, label=f"capacity n={n}")
     print(f"[capacity] n={n} shots={shots} 用时 {elapsed:.2f}s")
 
