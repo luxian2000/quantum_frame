@@ -9,5 +9,6 @@ from .abstract import BaseEncoder
 from .amplitude import AmplitudeEncoder
 from .angle import AngleEncoder
 from .basis import BasisEncoder
+from .iqp import IQPEncoder
 
-__all__ = ["BaseEncoder", "AmplitudeEncoder", "AngleEncoder", "BasisEncoder"]
+__all__ = ["BaseEncoder", "AmplitudeEncoder", "AngleEncoder", "BasisEncoder", "IQPEncoder"]

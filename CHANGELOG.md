@@ -2,6 +2,12 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-14
+
+### Added
+
+- **`aicir.encoder.IQPEncoder`：IQP 特征映射编码器。** 实现 Havlicek et al.（Nature 567, 209 (2019)，arXiv:1804.11326）提出的量子增强特征空间编码 `|Phi(x)> = (U_Phi(x) H^n)^reps |0>^n`，其中 `U_Phi(x)` 为 Pauli-Z 基对角相位酉阵（`|S| <= 2`），默认系数取论文选择 `phi_i = x_i`、`phi_ij = (pi - x_i)(pi - x_j)`（可经 `data_map=` 自定义）。对角层用 `rz`/`rzz` 精确实现（`exp(i*phi*Z) == rz(-2*phi)`，无全局相位差）。构造参数：`n_qubits`（可选，数据不足补零）、`reps`（默认 2，同论文）、`entanglement`（`"full"`/`"linear"`/显式配对列表）。除 `BaseEncoder` 的 `encode()` 外另提供 `circuit(data)`（只建线路不演化）与量子核方法 `kernel(x, z)`、`kernel_matrix(xs, zs=None)`（`K = |<Phi(x)|Phi(z)>|^2`，可直接喂经典 SVM）；IQP 映射不可逆，`decode()` 抛 `NotImplementedError`。测试 `tests/circuit/test_iqp_encoder.py` 含与论文定义逐元素对照的独立 NumPy 参考实现。
+
 ## 2026-07-12
 
 ### Added
