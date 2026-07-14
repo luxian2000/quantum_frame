@@ -8,6 +8,7 @@
 
 - **`Measure.run` 新增 `return_probabilities: bool = True`：完整概率数组可选。** 传 `False` 时 `Result.probabilities` 为 `None` 且全程跳过其计算（exact/shots=1 路径不再调用 `State.probabilities`，`aggregate_avg` 新增 `include_probabilities` 参数同步跳过），供大比特下只取计数/末态的调用方省内存；`Result.most_probable()` 在概率不可用时抛 `ValueError`（附原因）。默认 `True`，既有行为与所有现有调用方（`BasicQAOA.probabilities`、`qml.qfun`、`primitives` sampler 等）完全不变。NPU 探针 capacity 档改用只取计数的最轻组合（`return_state=False` + `return_probabilities=False`）。
   - 所修缺陷：此前 `Result.probabilities` 无条件生成——每次 `run` 都物化完整 2^n float64 概率数组（`to_numpy(...).astype(np.float64)` 还需一次显式拷贝，外加后端 |amp|² 中间量），即使调用方只需要 `counts(-1)`。n=32 时仅此一项约 34 GB，与态向量本身（~34 GB complex64）相当，使峰值内存约翻倍；末端采样自 `sample_terminal_batch` 起已独立计算 Born 分布，不依赖该字段。该行为自统一测量入口引入以来一直存在。
+  - 真机验证：`scripts/npu/measure_agg.sh --n-qubits 24` 严格 NPU（npu:0）4/4 cases 通过，capacity 档（`return_state=False` + `return_probabilities=False` 只取计数）8.14s。
 
 - **`Measure.run` 无中途随机源路径的末端读出改为批量采样（同种子计数流变更）。** 无噪声且无线路内随机源的 shot 路径中，末端 Z 基读出不再逐 shot 调用 `terminal_z_measure`，改为新增的 `projector.sample_terminal_batch`：Born 分布只计算一次、一次性抽取全部 M 个读出结果（O(2^n + M)），坍缩后完整态只按不同读出结果各构造一次、且仅在下游需要聚合末态（`return_state` 或 `observables`）时才构造。分布与逐 shot 逐比特投影严格一致（先按 Born 规则采样全寄存器 index 再读子集比特，与原实现同构），但随机数消费顺序改变——**同一 seed 下的具体计数与此前版本不同**（跨版本 seed 复现不属于既有契约）。含噪声 / in-circuit measure / 控制流的逐轨迹路径不受影响。
   - 所修缺陷：此前该路径对每个 shot 各调用一次 `terminal_z_measure`，每次都重新计算完整 2^n Born 分布、做整段态向量的子集投影与归一化，总代价 O(M·n·2^n) 且逐 shot 产生一份坍缩态副本（即使 `return_state=False` 从不使用）。真机 Ascend NPU 上 n=24、shots=200 的探针 capacity 档为此耗时 633s，其中密度矩阵聚合修复后剩余耗时几乎全部来自这里；该行为自统一测量入口引入以来一直存在。
