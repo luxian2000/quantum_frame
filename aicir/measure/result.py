@@ -33,7 +33,7 @@ def _reduced_density(rho_flat: np.ndarray, n: int, keep: Sequence[int]) -> np.nd
 class Result:
     n_qubits: int
     backend_name: str
-    probabilities: np.ndarray
+    probabilities: Optional[np.ndarray]
     shots: Optional[int] = None
     measurement_specs: List[MeasureSpec] = field(default_factory=list)
     incircuit_outputs: Dict[int, object] = field(default_factory=dict)
@@ -120,6 +120,8 @@ class Result:
         return _reduced_density(arr, self.n_qubits, list(R))
 
     def most_probable(self):
+        if self.probabilities is None:
+            raise ValueError("probabilities 不可用（run 时传入了 return_probabilities=False）")
         idx = int(np.argmax(self.probabilities))
         return f"|{idx:0{self.n_qubits}b}>", float(self.probabilities[idx])
 

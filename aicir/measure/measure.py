@@ -135,8 +135,8 @@ class Measure:
     def run(self, circuit, shots=1, measure_qubits=(), snap=None,
             sm="avg", seed=None, *,
             initial_state=None, initial_density_matrix=None,
-            observables=None, return_state=True, method="statevector",
-            max_bond_dim=None, cutoff=1e-10) -> Result:
+            observables=None, return_state=True, return_probabilities=True,
+            method="statevector", max_bond_dim=None, cutoff=1e-10) -> Result:
         """统一测量入口。
 
         参数:
@@ -155,6 +155,9 @@ class Measure:
                                      与 initial_state 互斥）
             observables:             可观测量字典 {name: operator_matrix}
             return_state:            是否在结果中附带 state / final_state
+            return_probabilities:    是否在结果中附带完整 2^n 概率数组（False 时
+                                     probabilities 为 None 且跳过其计算，供大比特
+                                     只取计数/末态的调用方省内存）
             method:                  "statevector"（默认，逐门态矢量演化）、"tensor"（张量网络求末态后
                                      复用既有测量机制；仅纯态、无噪声）或 "mps"（bond 截断的矩阵乘积态
                                      演化求末态后复用既有测量机制；仅纯态、无噪声、不支持 snap/initial_state）
@@ -182,7 +185,8 @@ class Measure:
             return self.run(
                 stripped, shots=shots, measure_qubits=measure_qubits, snap=snap,
                 sm=sm, seed=seed, initial_state=psi, observables=observables,
-                return_state=return_state, method="statevector",
+                return_state=return_state, return_probabilities=return_probabilities,
+                method="statevector",
             )
 
         if method == "mps":
@@ -201,7 +205,8 @@ class Measure:
             return self.run(
                 stripped, shots=shots, measure_qubits=measure_qubits, snap=None,
                 sm=sm, seed=seed, initial_state=psi, observables=observables,
-                return_state=return_state, method="statevector",
+                return_state=return_state, return_probabilities=return_probabilities,
+                method="statevector",
             )
 
         norm_shots = self._validate_shots(shots)             # None=exact
@@ -274,13 +279,15 @@ class Measure:
 
         result = self._build_result(trajectories, n, backend, norm_shots, exact, specs,
                                      terminal_qubits, do_terminal, observables, return_state,
+                                     return_probabilities=return_probabilities,
                                      noise_model=noise_model,
                                      initial_density_matrix=initial_density_matrix)
         return result
 
     def _build_result(self, trajectories, n, backend, norm_shots, exact, specs,
                       terminal_qubits, do_terminal, observables, return_state,
-                      *, noise_model=None, initial_density_matrix=None) -> Result:
+                      *, return_probabilities=True, noise_model=None,
+                      initial_density_matrix=None) -> Result:
         classical_trajectories = [dict(getattr(tr, "classical", {}) or {}) for tr in trajectories]
         """把轨迹集合按 shots 语义折叠成 Result。"""
         if exact or norm_shots == 1:
@@ -295,8 +302,12 @@ class Measure:
                 terminal_output = (np.array(tr.terminal) if exact
                                    else np.array(tr.terminal).reshape(1, -1))
             snap_states = dict(tr.snaps)
-            probabilities = backend.to_numpy(tr.pre.probabilities()).reshape(-1).astype(np.float64) \
-                if hasattr(tr.pre, "probabilities") else np.abs(backend.to_numpy(state).reshape(-1)) ** 2
+            if not return_probabilities:
+                probabilities = None
+            elif hasattr(tr.pre, "probabilities"):
+                probabilities = backend.to_numpy(tr.pre.probabilities()).reshape(-1).astype(np.float64)
+            else:
+                probabilities = np.abs(backend.to_numpy(state).reshape(-1)) ** 2
             incircuit_counts = {}
             terminal_counts = None
             if not exact:  # shots=1 仍可统计
@@ -315,7 +326,8 @@ class Measure:
             shared_pure_pre = (not tr0.pre.is_density) and all(tr.pre is tr0.pre for tr in trajectories)
             agg = aggregate_avg(trajectories, n, specs,
                                 terminal_qubits if do_terminal else None,
-                                include_states=want_states and not shared_pure_pre)
+                                include_states=want_states and not shared_pure_pre,
+                                include_probabilities=return_probabilities)
             if not want_states:
                 state = None
                 final = None

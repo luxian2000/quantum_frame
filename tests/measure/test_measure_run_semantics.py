@@ -222,3 +222,30 @@ def test_batch_terminal_sampling_matches_born_rule(m):
     counts = result.counts(-1)
     freq0 = counts.get("0", 0) / shots
     assert abs(freq0 - np.cos(0.4) ** 2) < 0.02
+
+
+def test_return_probabilities_false_skips_probability_array(monkeypatch, m):
+    # 概率数组按需生成：return_probabilities=False 时不计算/不返回 2^n 概率数组
+    from aicir.core.state import State as _State
+    from aicir.measure import aggregate as agg_mod
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("return_probabilities=False 不应计算全谱概率数组")
+
+    # exact 模式：概率来自 State.probabilities
+    monkeypatch.setattr(_State, "probabilities", _boom)
+    r = m.run(bell_circuit(), shots=None, return_probabilities=False)
+    assert r.probabilities is None
+    np.testing.assert_allclose(r.state.array, BELL, atol=1e-6)
+    with pytest.raises(ValueError):
+        r.most_probable()
+    monkeypatch.undo()
+
+    # shots>1 轻量路径：概率来自逐轨迹 _traj_probs
+    monkeypatch.setattr(agg_mod, "_traj_probs", _boom)
+    r2 = m.run(bell_circuit(), shots=32, seed=9, return_state=False,
+               return_probabilities=False)
+    assert r2.probabilities is None
+    counts = r2.counts(-1)
+    assert set(counts) <= {"00", "11"}
+    assert sum(counts.values()) == 32

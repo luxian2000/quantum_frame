@@ -54,7 +54,8 @@ def terminal_mixture(trajectories, n_qubits: int) -> np.ndarray:
 
 def aggregate_avg(trajectories, n_qubits: int, measurement_specs,
                   terminal_qubits: Optional[List[int]],
-                  include_states: bool = True) -> Dict[str, object]:
+                  include_states: bool = True,
+                  include_probabilities: bool = True) -> Dict[str, object]:
     """将多条 TrajectoryResult 按 avg 模式聚合为 Result 字段字典。
 
     参数:
@@ -66,6 +67,8 @@ def aggregate_avg(trajectories, n_qubits: int, measurement_specs,
                            （state/final_state 为 None），probabilities 改为逐轨迹
                            概率向量的平均——与 diag(平均密度矩阵) 数学等价，
                            供 return_state=False 且无 observables 的调用方省内存
+        include_probabilities: False 时跳过 2^n 概率数组的计算（返回 None），
+                           供只取计数/末态的调用方省内存
 
     返回:
         包含聚合字段的字典，供 Measure.run 构造 Result 使用。
@@ -137,7 +140,9 @@ def aggregate_avg(trajectories, n_qubits: int, measurement_specs,
         snap_states[t] = sum((count / M) * _as_density(snap) for snap, count in groups.values())
 
     # 对角元即基态概率；无聚合态时用逐轨迹概率平均（数学上等价）
-    if include_states:
+    if not include_probabilities:
+        probabilities = None
+    elif include_states:
         probabilities = np.real(np.diag(state)).astype(np.float64)
     else:
         # 按对象身份去重：共享前态时概率向量只计算一次
