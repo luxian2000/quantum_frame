@@ -298,9 +298,14 @@ class Measure:
                     key = "".join("0" if b == 1 else "1" for b in tr.terminal)
                     terminal_counts = {key: 1}
         else:
-            agg = aggregate_avg(trajectories, n, specs, terminal_qubits if do_terminal else None)
-            state = State.from_matrix(np.asarray(agg["state"]), n)
-            final = State.from_matrix(np.asarray(agg["final_state"]), n)
+            # 仅当调用方需要聚合态（return_state 或 observables）时才做
+            # (2^n,2^n) 密度矩阵平均；否则跳过密度矩阵构造以省内存
+            want_states = bool(return_state or observables)
+            agg = aggregate_avg(trajectories, n, specs,
+                                terminal_qubits if do_terminal else None,
+                                include_states=want_states)
+            state = State.from_matrix(np.asarray(agg["state"]), n) if want_states else None
+            final = State.from_matrix(np.asarray(agg["final_state"]), n) if want_states else None
             incircuit_outputs = agg["incircuit_outputs"]; incircuit_counts = agg["incircuit_counts"]
             terminal_output = agg["terminal_output"]; terminal_counts = agg["terminal_counts"]
             snap_states = {t: State.from_matrix(np.asarray(s), n) for t, s in agg["snapshot_states"].items()}
