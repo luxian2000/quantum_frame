@@ -127,7 +127,7 @@ aicir/
   optimization/  # QUBO、Ising 映射等经典优化问题工具
   noise/         # 噪声通道、噪声模型与开放系统演化
   metrics/       # 线路表达能力、可训练性、硬件指标等
-  encoder/       # AmplitudeEncoder、AngleEncoder、BasisEncoder
+  encoder/       # AmplitudeEncoder、AngleEncoder、BasisEncoder、IQPEncoder
   devices/       # 设备/目标硬件能力描述
   universal/     # QFT 等可复用量子线路模块
   visual/        # 线路绘图与可视化
@@ -1240,6 +1240,7 @@ result.value, result.parameters       # 与 result.energy 等价；VQEResult 原
 | `aicir/backends`         | [`aicir/backends/README.md`](aicir/backends/README.md)                 | 计算后端选择与使用：NumpyBackend / GPUBackend / NPUBackend、NPU complex64 兼容、后端绑定、严格模式、分布式与端到端示例。 |
 | `aicir/chemistry`         | [`aicir/chemistry/README.md`](aicir/chemistry/README.md)                 | 分子 qubit Hamiltonian：固定预置（`h2`/`h2_jw`/`h2_tapered`/`lih`/`h2o` 等，`get_molecule(name).hf_occupation`/`.excitations` 免 PySCF 直接喂给 `aicir.ansatze.uccsd`）+ `build_molecule` 现算流水线（`chem` extra，Qiskit Nature/PySCF）。 |
 | `aicir/core/io`           | [`aicir/core/io/README.md`](aicir/core/io/README.md)                     | OpenQASM 导出行为、受控旋转门和多控旋转门分解规则。                                        |
+| `aicir/encoder`           | [`aicir/encoder/README.md`](aicir/encoder/README.md)                     | 经典数据→量子态编码器：`AmplitudeEncoder`/`AngleEncoder`/`BasisEncoder`/`IQPEncoder`（IQP 特征映射，自带 `kernel`/`kernel_matrix` 量子核，可直接喂经典 SVM），含编码器选择指南与统一 `encode(...)` 契约。 |
 | `aicir/gates`             | [`aicir/gates/README.md`](aicir/gates/README.md)                         | GateSpec 门元信息注册表：目标比特数/参数个数/别名/QASM 名/绘图符号的单一来源。             |
 | `aicir/measure`           | [`aicir/measure/README.md`](aicir/measure/README.md)                     | 测量执行与经典控制流：轨迹路径、`ClassicalRegister`、`measure(creg=)`、`if_`/`while_`、`Result.classical_counts`。 |
 | `aicir/metrics`           | [`aicir/metrics/README.md`](aicir/metrics/README.md)                     | 任务无关的量子线路评分指标，供 QAS、VQE ansatz 筛选等架构层任务复用。                      |
