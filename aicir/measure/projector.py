@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 
@@ -239,8 +239,8 @@ def reset_channel(state: State, qubits: Sequence[int]) -> State:
     return state
 
 
-def _born_sample_index(state: State, rng) -> int:
-    """按 Born 规则从计算基分布中采样一个 flat index。"""
+def _born_probs(state: State) -> np.ndarray:
+    """计算基 Born 分布（裁剪负值并归一化的 numpy float64 向量）。"""
     backend = state.backend
     n = state.n_qubits
     if state.is_density:
@@ -249,9 +249,14 @@ def _born_sample_index(state: State, rng) -> int:
     else:
         psi = backend.to_numpy(state.data).reshape(-1)
         probs = np.abs(psi) ** 2
-    probs = np.clip(probs, 0.0, None)
+    probs = np.clip(np.asarray(probs, dtype=np.float64), 0.0, None)
     total = probs.sum()
-    probs = probs / total if total > 0 else np.full_like(probs, 1.0 / probs.size)
+    return probs / total if total > 0 else np.full_like(probs, 1.0 / probs.size)
+
+
+def _born_sample_index(state: State, rng) -> int:
+    """按 Born 规则从计算基分布中采样一个 flat index。"""
+    probs = _born_probs(state)
     return int(rng.choice(probs.size, p=probs))
 
 
@@ -279,6 +284,34 @@ def _project_subset_outcome(state: State, qubits: Sequence[int], bits: Sequence[
     if norm > 0:
         psi = psi / norm
     return State(backend.cast(psi), n, backend, bit_order=state.bit_order)
+
+
+def sample_terminal_batch(state: State, measure_qubits: Sequence[int], shots: int, rng,
+                          *, collapse: bool = True) -> Tuple[List[List[int]], Dict[tuple, State]]:
+    """无中途随机源路径的末端 Z 基批量采样。
+
+    与逐 shot 调用 terminal_z_measure 同分布：按 Born 规则一次性抽取 shots 个
+    全寄存器计算基 index（分布只计算一次，O(2^n + shots)），读取各被测比特
+    0/1 值；坍缩后完整态只按不同读出结果各构造一次（collapse=False 时不构造）。
+
+    返回 (outcomes, posts)：
+        outcomes: 长度 shots 的本征值列表（每项按 measure_qubits 顺序、取值 ±1）
+        posts:    {本征值元组: 坍缩后完整态}；collapse=False 时为空字典
+    """
+    n = state.n_qubits
+    probs = _born_probs(state)
+    indices = rng.choice(probs.size, size=int(shots), p=probs)
+
+    outcomes: List[List[int]] = []
+    posts: Dict[tuple, State] = {}
+    for x in indices:
+        bits = [(int(x) >> (n - 1 - int(q))) & 1 for q in measure_qubits]
+        eig = [1 if bit == 0 else -1 for bit in bits]
+        outcomes.append(eig)
+        key = tuple(eig)
+        if collapse and key not in posts:
+            posts[key] = _project_subset_outcome(state, measure_qubits, bits)
+    return outcomes, posts
 
 
 def terminal_z_measure(state: State, measure_qubits: Sequence[int], rng) -> Tuple[State, List[int]]:

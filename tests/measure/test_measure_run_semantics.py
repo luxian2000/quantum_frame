@@ -184,3 +184,41 @@ def test_snap_records_intermediate_full_states(m):
     assert result.snap(2) is None
     # snapshot_states 中有且只有 0 和 1 两个快照
     assert set(result.snapshot_states.keys()) == {0, 1}
+
+
+def test_no_randomness_path_batch_samples_terminal(monkeypatch, m):
+    # 无噪声、无线路内随机源的 shots>1 路径：末端读出应一次性批量采样，
+    # 不再逐 shot 调用 terminal_z_measure（O(shots·n·2^n) → O(2^n + shots)）
+    from aicir.measure import projector as projector_mod
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("无中途随机源路径不应逐 shot 调用 terminal_z_measure")
+
+    monkeypatch.setattr(projector_mod, "terminal_z_measure", _boom)
+
+    result = m.run(bell_circuit(), shots=50, seed=7)
+
+    out = result.output(-1)
+    assert out.shape == (50, 2)
+    counts = result.counts(-1)
+    assert set(counts) <= {"00", "11"}
+    assert sum(counts.values()) == 50
+    # 坍缩末态仍按读出结果正确构造
+    assert result.final_state_kind == "density_matrix"
+    diag = np.real(np.diag(np.asarray(result.final_state)))
+    np.testing.assert_allclose(
+        [diag[0], diag[3]],
+        [counts.get("00", 0) / 50, counts.get("11", 0) / 50],
+        atol=1e-6,
+    )
+
+
+def test_batch_terminal_sampling_matches_born_rule(m):
+    # 批量采样与 Born 规则分布一致：ry(0.8) 后 p(|0>) = cos^2(0.4) ≈ 0.8477
+    from aicir.core.circuit import ry
+
+    shots = 4000
+    result = m.run(Circuit(ry(0.8, 0), n_qubits=1), shots=shots, seed=42, return_state=False)
+    counts = result.counts(-1)
+    freq0 = counts.get("0", 0) / shots
+    assert abs(freq0 - np.cos(0.4) ** 2) < 0.02
