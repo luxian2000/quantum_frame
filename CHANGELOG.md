@@ -10,6 +10,7 @@
   - 所修缺陷：此前 `sm="avg"` 聚合对 `shots>1` 一律做密度矩阵平均——即使无噪声、无线路内随机源、全部 M 条轨迹共享同一纯态前态（`Measure.run` 在该路径只演化一次、末端采样 M 次），仍会对同一个态向量做 M 次 `|ψ><ψ|` 外积并累加进两个 `(2^n,2^n)` complex 累加器（pre/post 各一），快照与概率聚合同样逐轨迹重复 M 次。空间 O(4^n)、时间 O(M·4^n)，n≈16–17 起即不可行（64–256 GB），而结果在数学上恒等于单个 `|ψ><ψ|`，属纯粹浪费；该行为自 `aggregate.py` 引入以来一直存在。
 
 - **`Measure.run` 多 shot 路径按需跳过密度矩阵聚合。** `shots>1` 且 `return_state=False`、未传 `observables` 时，`sm="avg"` 聚合不再构造 `(2^n, 2^n)` 的 pre/post 密度矩阵平均（此前即使调用方丢弃聚合态也会构造，无噪声纯态线路下为纯粹浪费）；`probabilities` 改为逐轨迹概率向量的平均，与 `diag(平均密度矩阵)` 数学等价，采样流（种子可复现性）不变。`return_state=True` 或传入 `observables` 时行为完全不变（聚合态仍为密度矩阵）。配套：`aggregate_avg(...)` 新增 `include_states: bool = True` 参数，`False` 时返回字典中 `state`/`final_state` 为 `None`。
+  - 所修缺陷：此前 `return_state=False` 只在装配 `Result` 时把 `state`/`final_state` 字段置 `None`，密度矩阵本身照常构造——`shots>1` 的 `sm="avg"` 聚合无条件对 M 条轨迹做 pre/post 两个 `(2^n,2^n)` complex 密度矩阵平均，再把结果丢弃。即调用方显式声明不要聚合态（如 `BasicQAOA.sample`/`probabilities` 只取计数与概率），仍要付出 O(4^n) 内存与 O(M·4^n) 计算，n≈16–17 起即不可行；该行为自 `aggregate.py` 引入以来一直存在。
 
 ### Added
 
