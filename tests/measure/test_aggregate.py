@@ -80,3 +80,59 @@ def test_multi_shot_observables_still_work_without_state(monkeypatch):
 
     assert result.state is None
     assert abs(result.expectation_values["ZZ"] - 1.0) < 1e-6
+
+
+def test_multi_shot_shared_pre_state_stays_vector(monkeypatch):
+    # fix：无噪声、无线路内随机源的 shots>1 默认路径（return_state=True）：
+    # 前态全轨迹共享纯态，avg(|ψ><ψ|)==|ψ><ψ|，聚合 state 应保持向量形态；
+    # 末端混合态按读出结果分组构造，外积次数 = 不同结果数而非 shots
+    from aicir.measure import aggregate as agg_mod
+    from aicir.core.circuit import Circuit, hadamard, cnot
+    from aicir.measure.measure import Measure
+
+    calls = {"n": 0}
+    original = agg_mod._as_density
+
+    def counting(state):
+        calls["n"] += 1
+        return original(state)
+
+    monkeypatch.setattr(agg_mod, "_as_density", counting)
+
+    bell = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
+    result = Measure(NumpyBackend()).run(bell, shots=50, seed=7)
+
+    assert not result.state.is_density
+    assert np.asarray(result.state).shape == (4,)
+    # final：有末端测量 → 各 shot 坍缩结果不同，仍为密度矩阵（真混合态）
+    assert result.final_state_kind == "density_matrix"
+    counts = result.counts(-1)
+    diag = np.real(np.diag(np.asarray(result.final_state)))
+    np.testing.assert_allclose(
+        [diag[0], diag[3]],
+        [counts.get("00", 0) / 50, counts.get("11", 0) / 50],
+        atol=1e-6,
+    )
+    assert calls["n"] <= len(counts)
+
+
+def test_multi_shot_no_terminal_final_stays_vector(monkeypatch):
+    # 无末端测量（measure_qubits=None）：post 即 pre，state/final 均为共享纯态向量，
+    # 全程不构造密度矩阵
+    from aicir.measure import aggregate as agg_mod
+    from aicir.core.circuit import Circuit, hadamard, cnot
+    from aicir.measure.measure import Measure
+
+    def _boom(_state):
+        raise AssertionError("共享纯态前态且无末端测量时不应构造密度矩阵")
+
+    monkeypatch.setattr(agg_mod, "_as_density", _boom)
+
+    bell = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
+    result = Measure(NumpyBackend()).run(bell, shots=50, seed=7, measure_qubits=None)
+
+    assert result.final_state_kind == "state_vector"
+    expected = np.zeros(4, dtype=complex)
+    expected[0] = expected[3] = 1 / np.sqrt(2)
+    np.testing.assert_allclose(np.asarray(result.state), expected, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(result.final_state), expected, atol=1e-6)

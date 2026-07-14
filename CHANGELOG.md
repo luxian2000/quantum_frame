@@ -6,6 +6,8 @@
 
 ### Changed
 
+- **`Measure.run` 多 shot 共享纯态前态：聚合 `state` 保持向量形态（契约变更）。** 无噪声且无线路内随机源（无 in-circuit measure/控制流）的 `shots>1` 路径中，全部轨迹共享同一纯态前态，`avg(|ψ><ψ|) == |ψ><ψ|`，聚合 `state` 不再折叠为 `(2^n,2^n)` 密度矩阵而是保持向量形态 `State`（`np.asarray(result.state)` 形状由 `(2^n,2^n)` 变为 `(2^n,)`）；无末端测量（`measure_qubits=None`）时 `final_state` 同为向量（`final_state_kind="state_vector"`），全程不构造密度矩阵。有末端测量时 `final_state` 仍为密度矩阵（真混合态，契约不变），但改为按读出结果分组构造（新增 `aggregate.terminal_mixture`，外积次数 = 不同读出结果数 ≤ min(M, 2^k)，而非 shots 数 M）。噪声 / `initial_density_matrix` / in-circuit measure 路径行为完全不变。另：`aggregate_avg` 的快照与轻量概率聚合按对象身份去重，共享轨迹下只计算一次。
+
 - **`Measure.run` 多 shot 路径按需跳过密度矩阵聚合。** `shots>1` 且 `return_state=False`、未传 `observables` 时，`sm="avg"` 聚合不再构造 `(2^n, 2^n)` 的 pre/post 密度矩阵平均（此前即使调用方丢弃聚合态也会构造，无噪声纯态线路下为纯粹浪费）；`probabilities` 改为逐轨迹概率向量的平均，与 `diag(平均密度矩阵)` 数学等价，采样流（种子可复现性）不变。`return_state=True` 或传入 `observables` 时行为完全不变（聚合态仍为密度矩阵）。配套：`aggregate_avg(...)` 新增 `include_states: bool = True` 参数，`False` 时返回字典中 `state`/`final_state` 为 `None`。
 
 ### Added
