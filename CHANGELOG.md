@@ -8,6 +8,7 @@
 
 - **`Measure.run` 无中途随机源路径的末端读出改为批量采样（同种子计数流变更）。** 无噪声且无线路内随机源的 shot 路径中，末端 Z 基读出不再逐 shot 调用 `terminal_z_measure`，改为新增的 `projector.sample_terminal_batch`：Born 分布只计算一次、一次性抽取全部 M 个读出结果（O(2^n + M)），坍缩后完整态只按不同读出结果各构造一次、且仅在下游需要聚合末态（`return_state` 或 `observables`）时才构造。分布与逐 shot 逐比特投影严格一致（先按 Born 规则采样全寄存器 index 再读子集比特，与原实现同构），但随机数消费顺序改变——**同一 seed 下的具体计数与此前版本不同**（跨版本 seed 复现不属于既有契约）。含噪声 / in-circuit measure / 控制流的逐轨迹路径不受影响。
   - 所修缺陷：此前该路径对每个 shot 各调用一次 `terminal_z_measure`，每次都重新计算完整 2^n Born 分布、做整段态向量的子集投影与归一化，总代价 O(M·n·2^n) 且逐 shot 产生一份坍缩态副本（即使 `return_state=False` 从不使用）。真机 Ascend NPU 上 n=24、shots=200 的探针 capacity 档为此耗时 633s，其中密度矩阵聚合修复后剩余耗时几乎全部来自这里；该行为自统一测量入口引入以来一直存在。
+  - 真机验证：`scripts/npu/measure_agg.sh --n-qubits 24` 严格 NPU（npu:0）4/4 cases 通过（含验证共享纯态向量聚合契约的 `shared_pre_vector_state`），capacity 档由修复前的 633s 降至 8.40s。
 
 - **`Measure.run` 多 shot 共享纯态前态：聚合 `state` 保持向量形态（契约变更）。** 无噪声且无线路内随机源（无 in-circuit measure/控制流）的 `shots>1` 路径中，全部轨迹共享同一纯态前态，`avg(|ψ><ψ|) == |ψ><ψ|`，聚合 `state` 不再折叠为 `(2^n,2^n)` 密度矩阵而是保持向量形态 `State`（`np.asarray(result.state)` 形状由 `(2^n,2^n)` 变为 `(2^n,)`）；无末端测量（`measure_qubits=None`）时 `final_state` 同为向量（`final_state_kind="state_vector"`），全程不构造密度矩阵。有末端测量时 `final_state` 仍为密度矩阵（真混合态，契约不变），但改为按读出结果分组构造（新增 `aggregate.terminal_mixture`，外积次数 = 不同读出结果数 ≤ min(M, 2^k)，而非 shots 数 M）。噪声 / `initial_density_matrix` / in-circuit measure 路径行为完全不变。另：`aggregate_avg` 的快照与轻量概率聚合按对象身份去重，共享轨迹下只计算一次。
 
