@@ -253,17 +253,24 @@ class Measure:
                     circuit, fresh_state(), backend, tm=do_terminal,
                     measure_qubits=terminal_qubits, snap_ops=snap_ops, rng=rng, noise_model=noise_model))
         else:
-            # 无线路中途随机源：ρ_pre 算一次，末端采样 M 次
+            # 无线路中途随机源：ρ_pre 算一次，末端读出批量采样（分布只算一次，
+            # O(2^n + M)），坍缩后完整态只按不同读出结果构造、且仅在下游需要
+            # 聚合末态（return_state / observables）时才构造
             base = run_trajectory(circuit, fresh_state(), backend, tm=False,
                                   measure_qubits=None, snap_ops=snap_ops, rng=rng, noise_model=None)
-            from .projector import terminal_z_measure
-            for _ in range(M):
-                if do_terminal:
-                    post, terminal = terminal_z_measure(base.pre, terminal_qubits, rng)
-                else:
-                    post, terminal = base.pre, None
-                trajectories.append(type(base)(pre=base.pre, post=post, incircuit={},
-                                               terminal=terminal, snaps=base.snaps))
+            if do_terminal:
+                from .projector import sample_terminal_batch
+                need_posts = bool(return_state or observables)
+                outcomes, posts = sample_terminal_batch(base.pre, terminal_qubits, M, rng,
+                                                        collapse=need_posts)
+                for eig in outcomes:
+                    post = posts[tuple(eig)] if need_posts else base.pre
+                    trajectories.append(type(base)(pre=base.pre, post=post, incircuit={},
+                                                   terminal=eig, snaps=base.snaps))
+            else:
+                for _ in range(M):
+                    trajectories.append(type(base)(pre=base.pre, post=base.pre, incircuit={},
+                                                   terminal=None, snaps=base.snaps))
 
         result = self._build_result(trajectories, n, backend, norm_shots, exact, specs,
                                      terminal_qubits, do_terminal, observables, return_state,
