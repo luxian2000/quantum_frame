@@ -148,8 +148,9 @@ def test_multi_shot_output_shape(m):
     assert set(counts.keys()) <= {"00", "11"}
     assert sum(counts.values()) == 100
 
-    # shots>1 无噪声下 state 聚合为密度矩阵
-    assert np.asarray(result.state).shape == (4, 4)
+    # shots>1 无噪声共享纯态前态：state 保持向量形态（avg(|ψ><ψ|)==|ψ><ψ|）
+    assert np.asarray(result.state).shape == (4,)
+    assert not result.state.is_density
 
 
 def test_multi_shot_subset_output_and_density(m):

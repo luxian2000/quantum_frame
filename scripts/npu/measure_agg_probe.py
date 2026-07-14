@@ -80,6 +80,37 @@ def case_seed_parity_and_contract(backend: NPUBackend, n: int, shots: int) -> No
         raise AssertionError("lite 与密度路径 probabilities 不一致")
 
 
+def case_shared_pre_vector_state(backend: NPUBackend, n: int, shots: int) -> None:
+    # 共享纯态前态（无噪声、无线路内随机源）+ return_state=True：
+    # 聚合 state 保持向量形态；无末端测量时 final 同为向量、全程不构造密度矩阵
+    original = _agg_mod._as_density
+
+    def _boom(_state):
+        raise AssertionError("共享纯态前态且无末端测量时不应构造密度矩阵")
+
+    _agg_mod._as_density = _boom
+    try:
+        result = Measure(backend).run(_ghz(n, backend), shots=shots, seed=17,
+                                      measure_qubits=None, return_state=True)
+    finally:
+        _agg_mod._as_density = original
+    if result.state.is_density or result.final_state_kind != "state_vector":
+        raise AssertionError("无末端测量的共享纯态路径应返回向量形态聚合态")
+
+    # 有末端测量：state 仍为向量；final 为按读出结果分组的真混合态，对角线与计数一致
+    result = Measure(backend).run(_ghz(n, backend), shots=shots, seed=17, return_state=True)
+    if result.state.is_density:
+        raise AssertionError("共享纯态前态的聚合 state 应保持向量形态")
+    if result.final_state_kind != "density_matrix":
+        raise AssertionError("末端测量后的 final_state 应为密度矩阵（真混合态）")
+    counts = result.counts(-1)
+    diag = np.real(np.diag(np.asarray(result.final_state)))
+    zero_w = counts.get("0" * n, 0) / shots
+    one_w = counts.get("1" * n, 0) / shots
+    if not (np.isclose(diag[0], zero_w, atol=1e-5) and np.isclose(diag[-1], one_w, atol=1e-5)):
+        raise AssertionError(f"final 混合态对角线 {diag[0]}/{diag[-1]} 与计数权重 {zero_w}/{one_w} 不符")
+
+
 def case_capacity(backend: NPUBackend, n: int, shots: int) -> None:
     # 该规模下密度路径需要 (2^n)^2 复数矩阵，不可行；lite 路径应正常完成
     start = time.perf_counter()
@@ -102,6 +133,7 @@ def main() -> None:
     cases = [
         ("lite_skips_density", lambda: case_lite_skips_density(backend, 6, args.shots)),
         ("seed_parity_and_contract", lambda: case_seed_parity_and_contract(backend, 6, args.shots)),
+        ("shared_pre_vector_state", lambda: case_shared_pre_vector_state(backend, 6, args.shots)),
         ("capacity", lambda: case_capacity(backend, args.n_qubits, args.shots)),
     ]
     for name, fn in cases:

@@ -29,6 +29,29 @@ def _bitstr(bits: Sequence[int]) -> str:
     return "".join("0" if b == 1 else "1" for b in bits)
 
 
+def terminal_mixture(trajectories, n_qubits: int) -> np.ndarray:
+    """按末端读出结果分组构造混合态 ρ = Σ_b (count_b/M) |ψ_b><ψ_b|。
+
+    共享前态（无噪声、无线路内随机源）的多 shot 路径专用：末端坍缩后的
+    post 态只随读出结果不同，逐结果各构造一次外积即可，外积次数为不同
+    读出结果数（≤ min(M, 2^k)）而非 shots 数 M。
+    """
+    M = len(trajectories)
+    groups: Dict[tuple, list] = {}
+    for tr in trajectories:
+        key = tuple(int(b) for b in tr.terminal)
+        entry = groups.get(key)
+        if entry is None:
+            groups[key] = [tr.post, 1]
+        else:
+            entry[1] += 1
+    dim = 1 << n_qubits
+    rho = np.zeros((dim, dim), dtype=complex)
+    for post, count in groups.values():
+        rho += (count / M) * _as_density(post)
+    return rho
+
+
 def aggregate_avg(trajectories, n_qubits: int, measurement_specs,
                   terminal_qubits: Optional[List[int]],
                   include_states: bool = True) -> Dict[str, object]:
@@ -101,15 +124,33 @@ def aggregate_avg(trajectories, n_qubits: int, measurement_specs,
         if trajectories else set()
     )
     for t in snap_keys:
-        snap_states[t] = sum(_as_density(tr.snaps[t]) for tr in trajectories) / M
+        # 按对象身份去重：共享轨迹（无中途随机源）下全轨迹快照为同一对象，
+        # 密度矩阵只构造一次
+        groups: Dict[int, list] = {}
+        for tr in trajectories:
+            snap = tr.snaps[t]
+            entry = groups.get(id(snap))
+            if entry is None:
+                groups[id(snap)] = [snap, 1]
+            else:
+                entry[1] += 1
+        snap_states[t] = sum((count / M) * _as_density(snap) for snap, count in groups.values())
 
     # 对角元即基态概率；无聚合态时用逐轨迹概率平均（数学上等价）
     if include_states:
         probabilities = np.real(np.diag(state)).astype(np.float64)
     else:
-        prob_sum = np.zeros(dim, dtype=np.float64)
+        # 按对象身份去重：共享前态时概率向量只计算一次
+        groups: Dict[int, list] = {}
         for tr in trajectories:
-            prob_sum += _traj_probs(tr.pre)
+            entry = groups.get(id(tr.pre))
+            if entry is None:
+                groups[id(tr.pre)] = [tr.pre, 1]
+            else:
+                entry[1] += 1
+        prob_sum = np.zeros(dim, dtype=np.float64)
+        for pre, count in groups.values():
+            prob_sum += count * _traj_probs(pre)
         probabilities = prob_sum / M
 
     return {

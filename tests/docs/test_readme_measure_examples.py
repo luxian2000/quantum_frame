@@ -74,7 +74,8 @@ def test_shots_none_counts_raises():
 
 def test_shots_m_terminal_output_shape_and_state_is_dm():
     """shots=16，Bell 态全比特末端测量：output(-1) 形状 (16,2)，
-    counts(-1) ⊆ {"00","11"}，state 为 (4,4) 密度矩阵。"""
+    counts(-1) ⊆ {"00","11"}；无噪声共享纯态前态下 state 保持向量形态，
+    末端测量后的 final_state 为 (4,4) 密度矩阵（真混合态）。"""
     cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
     r = run(cir, shots=16)
 
@@ -85,7 +86,8 @@ def test_shots_m_terminal_output_shape_and_state_is_dm():
     assert set(cts.keys()) <= {"00", "11"}
     assert sum(cts.values()) == 16
 
-    assert np.asarray(r.state).shape == (4, 4)
+    assert np.asarray(r.state).shape == (4,)
+    assert np.asarray(r.final_state).shape == (4, 4)
 
 
 # ---------- §4.5 末端输出顺序：保留 measure_qubits 输入顺序 ----------

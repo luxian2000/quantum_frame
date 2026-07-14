@@ -25,7 +25,9 @@ def test_shots_m_terminal_shapes_and_density_state():
     cir = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2)
     r = run(cir, shots=64)
     assert r.output(-1).shape == (64, 2)
-    assert np.asarray(r.state).shape == (4, 4)
+    # 无噪声共享纯态前态：聚合 state 保持向量形态；末端测量后的 final 为真混合态
+    assert np.asarray(r.state).shape == (4,)
+    assert r.final_state_kind == "density_matrix"
     counts = r.counts(-1)
     assert set(counts) <= {"00", "11"}
 

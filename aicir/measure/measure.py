@@ -25,7 +25,7 @@ from ..ir import (
     instruction_name,
     instruction_qubits,
 )
-from .aggregate import aggregate_avg
+from .aggregate import aggregate_avg, terminal_mixture
 from .result import MeasureSpec, Result
 from .trajectory import run_trajectory
 
@@ -299,13 +299,26 @@ class Measure:
                     terminal_counts = {key: 1}
         else:
             # 仅当调用方需要聚合态（return_state 或 observables）时才做
-            # (2^n,2^n) 密度矩阵平均；否则跳过密度矩阵构造以省内存
+            # (2^n,2^n) 密度矩阵平均；否则跳过密度矩阵构造以省内存。
+            # 共享纯态前态（无噪声、无线路内随机源：全轨迹 pre 为同一对象）时
+            # avg(|ψ><ψ|) == |ψ><ψ|，聚合 state 直接保持向量形态；final 仅在
+            # 有末端测量时才是真混合态（按读出结果分组构造，见 terminal_mixture）
+            tr0 = trajectories[0]
             want_states = bool(return_state or observables)
+            shared_pure_pre = (not tr0.pre.is_density) and all(tr.pre is tr0.pre for tr in trajectories)
             agg = aggregate_avg(trajectories, n, specs,
                                 terminal_qubits if do_terminal else None,
-                                include_states=want_states)
-            state = State.from_matrix(np.asarray(agg["state"]), n) if want_states else None
-            final = State.from_matrix(np.asarray(agg["final_state"]), n) if want_states else None
+                                include_states=want_states and not shared_pure_pre)
+            if not want_states:
+                state = None
+                final = None
+            elif shared_pure_pre:
+                state = tr0.pre
+                final = (State.from_matrix(terminal_mixture(trajectories, n), n)
+                         if do_terminal else tr0.pre)
+            else:
+                state = State.from_matrix(np.asarray(agg["state"]), n)
+                final = State.from_matrix(np.asarray(agg["final_state"]), n)
             incircuit_outputs = agg["incircuit_outputs"]; incircuit_counts = agg["incircuit_counts"]
             terminal_output = agg["terminal_output"]; terminal_counts = agg["terminal_counts"]
             snap_states = {t: State.from_matrix(np.asarray(s), n) for t, s in agg["snapshot_states"].items()}
