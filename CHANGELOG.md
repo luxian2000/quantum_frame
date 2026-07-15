@@ -11,17 +11,32 @@
 1. **（未修，结构性）`aicir/measure/projector.py` 全模块主机计算**：每个 in-circuit measure / reset / creg 测量都是整态 D2H→numpy→H2D，每操作、每轨迹、每 shot 一次往返。设备原生化需按 CLAUDE.md complex64 约束逐算子给出 real/imag 安全形式 + 真机回归，暂缓。
 2. （已修）`measure_joint_pauli` 重复基变换。
 3. （已修）MPS shape/长度读取 `to_numpy` 整个张量。
-4. **（未修）`State.reorder_endianness`**（`aicir/core/state.py`）：D2H → **2^n 次 Python 循环**逐振幅置换 → H2D；`msb()`/`lsb()` 超过 ~20 比特不可用，可向量化为位反转索引 gather。
+4. （已修，见下方 2026-07-15 第二批 Fixed）`State.reorder_endianness`（`aicir/core/state.py`）：D2H → **2^n 次 Python 循环**逐振幅置换 → H2D；`msb()`/`lsb()` 超过 ~20 比特不可用，可向量化为位反转索引 gather。
 5. （已修）`Measure.run` 每 shot 重复上传初始态。
 6. （已修）`NoiseModel` Kraus 算符每门每轨迹重建（含 `_embed_operator` 的 2^n 次 Python 循环——缓存后只跑一次，循环本身未重写）。
 7. （已修）`_born_probs`/`joint_parity_probs` 密度分支为取对角线下传整个 ρ。
 8. （已修）密度投影 `np.outer(keep, keep)` 物化 4^n 布尔掩码。
-9. **（未修）`projector._reset_dm`**：O(4^n) 嵌套 Python 双循环，密度矩阵 reset 超过 ~10 比特不可用；可向量化为子块相加。
-10. **（未修）密度/噪声路径全尺寸门矩阵每轨迹重建**（`trajectory._apply_unitary` → `gate_to_matrix(cir_qubits=n)`）：门在 M 条轨迹间完全相同但无跨轨迹缓存，M 次 4^n 分配/构建；且密度路径完全不走局部门快路径。
-11. **（未修）`Measure._build_result` observables 在 CPU 计算**：state（2^n 或 4^n）+ 每个算符 D2H 后稠密 numpy matmul；`backend.expectation_sv/expectation_dm` 已有 NPU 安全设备实现可用，可降为标量传输。
-12. **（未修，低优先）**`State.norm()` 下传整个 2^n 概率向量只为求和（可设备侧 sum）；`State.matrix`/`array` 缓存常驻 4^n/2^n host 副本、从不逐出（by design，须知）。
+9. （已修，见下方 2026-07-15 第二批 Fixed）`projector._reset_dm`：O(4^n) 嵌套 Python 双循环，密度矩阵 reset 超过 ~10 比特不可用；可向量化为子块相加。
+10. （已修，见下方 2026-07-15 第二批 Fixed）密度/噪声路径全尺寸门矩阵每轨迹重建（`trajectory._apply_unitary` → `gate_to_matrix(cir_qubits=n)`）：门在 M 条轨迹间完全相同但无跨轨迹缓存，M 次 4^n 分配/构建；且密度路径完全不走局部门快路径。
+11. （已修，见下方 2026-07-15 第二批 Fixed）`Measure._build_result` observables 在 CPU 计算：state（2^n 或 4^n）+ 每个算符 D2H 后稠密 numpy matmul；`backend.expectation_sv/expectation_dm` 已有 NPU 安全设备实现可用，可降为标量传输。
+12. （norm 已修，见下方 2026-07-15 第二批 Fixed；缓存部分 by design 不改）`State.norm()` 下传整个 2^n 概率向量只为求和（可设备侧 sum）；`State.matrix`/`array` 缓存常驻 4^n/2^n host 副本、从不逐出（by design，须知）。
 
-### Fixed
+### Fixed（第二批：审计 #4、#9、#10、#11、#12-norm）
+
+全部行为保持（数值、契约、同种子随机流不变）。真机基线待硬件回归后补记。
+
+- **密度/噪声路径全尺寸门矩阵跨轨迹缓存（审计 #10）。** `Measure.run` 为每次运行建一个按 `id(gate)` 键控的矩阵缓存，经 `run_trajectory`/`_exec_ops` 传入 `_apply_unitary`；torch 参数带 `requires_grad` 时绕过缓存（不改变 autograd 图形状，NPU fan-out 梯度累加不可用）。
+  - 所修缺陷：门对象与矩阵在 M 条轨迹间完全相同，但此前每条轨迹对每个门重跑 `gate_to_matrix(cir_qubits=n)` 的 kron 链——M×G 次 4^n 构建/分配，是 Kraus 缓存落地后噪声路径的剩余主项。
+- **observables 期望值设备侧计算（审计 #11）。** `_build_result` 改走 `State.expectation` → `backend.expectation_sv/expectation_dm`（NPU 安全实现已存在），每个 observable 只传一个标量。
+  - 所修缺陷：此前把整个态（2^n 向量或 4^n 密度矩阵）`to_numpy` 下传后在 CPU 做稠密 matmul。
+- **`projector._reset_dm` 向量化（审计 #9）。** 整形为 (L,2,R,L,2,R) 秩-6 张量后对目标比特 0/0、1/1 对角子块求和；顺带删除孤立的 `_replace_bit`。新增与 Kraus 信道定义 K0ρK0†+K1ρK1† 的逐元素等价测试与 n=13 性能哨兵。
+  - 所修缺陷：O(4^n) 嵌套 Python 双循环，n=13 本机约 3s，密度矩阵 reset 超过 ~13 比特不可用。
+- **`State.reorder_endianness` 向量化（审计 #4）。** n 次移位构造位反转索引后一次 gather；顺带删除孤立的 `_reverse_bits`。新增 n=22 性能哨兵与小 n 位反转定义对照测试。
+  - 所修缺陷：对 2^n 个振幅逐个 Python 循环（n=22 本机约 1.3s），`msb()`/`lsb()` 大 n 不可用。
+- **`State.norm()` 设备侧求和（审计 #12 的 norm 部分）。** 张量上 `.sum()` 后只传标量。
+  - 所修缺陷：此前 `to_numpy` 整个 2^n 概率向量只为求和。`State.matrix`/`array` 的常驻 host 缓存为 by design，不改。
+
+### Fixed（第一批）
 
 本日六项为上述审计的 high-value 修复（对应审计 #2、#3、#5、#6、#7、#8），全部行为保持（不改变分布、契约或同种子随机数消费顺序）。真机基线待硬件回归后补记（`scripts/npu/hotpath.sh`）。
 
