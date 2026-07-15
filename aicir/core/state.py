@@ -30,11 +30,6 @@ def _normalize_bit_order(bit_order: Optional[str], default: str = "msb") -> str:
     return order
 
 
-def _reverse_bits(index: int, n_qubits: int) -> int:
-    bits = f"{index:0{n_qubits}b}"
-    return int(bits[::-1], 2)
-
-
 def _basis_label(index: int, n_qubits: int, bit_order: str) -> str:
     bits = f"{index:0{n_qubits}b}"
     return bits[::-1] if bit_order == "lsb" else bits
@@ -390,10 +385,14 @@ class State:
         if target_order == self._bit_order or self._n_qubits <= 1:
             return State(self._data, self._n_qubits, self._backend, bit_order=target_order)
 
+        # 向量化位反转索引 gather（n 次移位），替代 2^n 次 Python 循环
         amplitudes = self.to_numpy()
-        reordered = np.zeros_like(amplitudes)
-        for idx, amplitude in enumerate(amplitudes):
-            reordered[_reverse_bits(idx, self._n_qubits)] = amplitude
+        idx = np.arange(1 << self._n_qubits, dtype=np.int64)
+        rev = np.zeros_like(idx)
+        for b in range(self._n_qubits):
+            rev |= ((idx >> b) & 1) << (self._n_qubits - 1 - b)
+        reordered = np.empty_like(amplitudes)
+        reordered[rev] = amplitudes
 
         return State.from_array(
             reordered,
