@@ -245,3 +245,31 @@ def test_initial_density_matrix_cast_once_across_shots(monkeypatch):
                                   return_state=False)
     assert sum(result.incircuit_counts[1].values()) == 8
     assert len(casts) <= 1  # 初始 dm 只 cast 一次
+
+
+def test_observables_computed_via_backend_expectation(monkeypatch):
+    # observables 应走 backend.expectation_sv/dm（设备侧，标量传输），
+    # 不应把 2^n 态整体 to_numpy 后在 CPU 上做稠密 matmul
+    import numpy as np
+    from aicir.backends.numpy_backend import NumpyBackend
+    from aicir.core.circuit import Circuit, hadamard, cnot
+    from aicir.measure.measure import Measure
+
+    backend = NumpyBackend()
+    sizes = []
+    original = backend.to_numpy
+
+    def spying(tensor):
+        arr = original(tensor)
+        sizes.append(arr.size)
+        return arr
+
+    monkeypatch.setattr(backend, "to_numpy", spying)
+
+    zz = np.diag([1.0, -1.0, -1.0, 1.0]).astype(complex)
+    bell = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2, backend=backend)
+    result = Measure(backend).run(bell, shots=None, return_state=False,
+                                  return_probabilities=False, observables={"ZZ": zz})
+
+    assert abs(result.expectation_values["ZZ"] - 1.0) < 1e-6
+    assert max(sizes, default=0) <= 1  # 只允许标量传输
