@@ -8,7 +8,8 @@
 
 NPU 内存浪费 / 设备往返审计：12 项发现与修复
 
-本日审计发现 12 项（`NPUBackend` 本身干净——设备驻留概率/采样、real/imag 分解、局部矩阵缓存——问题全部在其上层）。除 #1 外全部已修；修复均行为保持（数值、契约、同种子随机数消费顺序不变）。真机基线待硬件回归后补记（`scripts/npu/hotpath.sh`）。
+本日审计发现 12 项（`NPUBackend` 本身干净——设备驻留概率/采样、real/imag 分解、局部矩阵缓存——问题全部在其上层）。除 #1 外全部已修；修复均行为保持（数值、契约、同种子随机数消费顺序不变）。
+真机验证：`scripts/npu/hotpath.sh` 严格 NPU（npu:0）3/3 cases 通过——`incircuit_joint_pauli` n=10 shots=16 1.13s；`noisy_kraus_cache` n=8 shots=16 2.99s（噪声路径首次真机验证）；`mps_shape_reads` n=20 shots=16 1.31s（含 SWAP 网络触发的 flat 位置换 gather 路径；修复前 n>8 直接报 aclnnComplex 8 维上限错误）。
 
 1. **`aicir/measure/projector.py` 全模块主机计算（未修，结构性）。**
    - 缺陷：每个 in-circuit measure / reset / creg 测量都是整态 D2H→numpy→H2D，每操作、每轨迹、每 shot 一次往返。
