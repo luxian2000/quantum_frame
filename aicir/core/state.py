@@ -414,8 +414,9 @@ class State:
         计算态向量的范数（归一化时应约等于 1.0）。
         矩阵形态下返回对角线归一化结果（恒约为 1.0）。
         """
-        probs_np = self._backend.to_numpy(self.probabilities()).real
-        return float(probs_np.sum()) ** 0.5
+        # 设备侧求和后只传标量（probabilities() 向量态返回后端张量）
+        total = self._backend.to_numpy(self.probabilities().sum())
+        return float(np.asarray(total).real) ** 0.5
 
     def partial_trace(self, keep) -> "State":
         """对子系统求偏迹，返回 matrix 形态 State（形状 2^k×2^k，k=len(keep)）。"""

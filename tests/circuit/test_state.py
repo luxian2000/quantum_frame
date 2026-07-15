@@ -90,3 +90,24 @@ def test_reorder_endianness_matches_bit_reversal():
         rev = int(f"{i:0{n}b}"[::-1], 2)
         expected[rev] = vec[i]
     np.testing.assert_allclose(out, expected, atol=1e-6)
+
+
+def test_norm_transfers_scalar_only(monkeypatch):
+    # norm() 应设备侧求和后只传标量，不下传整个 2^n 概率向量
+    import numpy as np
+    from aicir.backends.numpy_backend import NumpyBackend
+    from aicir.core.state import State
+
+    b = NumpyBackend()
+    state = State.zero_state(4, b)
+    sizes = []
+    original = b.to_numpy
+
+    def spying(tensor):
+        arr = original(tensor)
+        sizes.append(np.asarray(arr).size)
+        return arr
+
+    monkeypatch.setattr(b, "to_numpy", spying)
+    assert abs(state.norm() - 1.0) < 1e-6
+    assert max(sizes, default=0) <= 1
