@@ -66,7 +66,10 @@ def case_noisy_kraus_cache(backend: NPUBackend, n: int, shots: int) -> None:
 
 
 def case_mps_shape_reads(backend: NPUBackend, n: int, shots: int) -> None:
-    gates = [hadamard(0)] + [cx(q, [q - 1]) for q in range(1, n)]
+    # 末尾两次非相邻 cx(n-1, [0])（自逆，净效果恒等）触发 SWAP 网络 →
+    # site_of 非恒等，覆盖 to_statevector 的 flat 位置换 gather 路径
+    gates = ([hadamard(0)] + [cx(q, [q - 1]) for q in range(1, n)]
+             + [cx(n - 1, [0]), cx(n - 1, [0])])
     circ = Circuit(*gates, n_qubits=n, backend=backend)
     start = time.perf_counter()
     result = Measure(backend).run(circ, shots=shots, seed=5, method="mps",
