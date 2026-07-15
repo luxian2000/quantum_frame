@@ -6,9 +6,9 @@
 
 ### Fixed
 
-NPU 内存浪费 / 设备往返审计：12 项发现与修复
+NPU 内存浪费 / 设备往返审计：多项发现与修复
 
-本日审计发现 12 项（`NPUBackend` 本身干净——设备驻留概率/采样、real/imag 分解、局部矩阵缓存——问题全部在其上层）。除 #1 外全部已修；修复均行为保持（数值、契约、同种子随机数消费顺序不变）。
+本日审计发现 15 项（`NPUBackend` 本身干净——设备驻留概率/采样、real/imag 分解、局部矩阵缓存——问题全部在其上层）。除 #1 外全部已修；修复均行为保持（数值、契约、同种子随机数消费顺序不变）。
 真机验证：`scripts/npu/hotpath.sh` 严格 NPU（npu:0）3/3 cases 通过——`incircuit_joint_pauli` n=10 shots=16 1.13s；`noisy_kraus_cache` n=8 shots=16 2.99s（噪声路径首次真机验证）；`mps_shape_reads` n=20 shots=16 1.31s（含 SWAP 网络触发的 flat 位置换 gather 路径；修复前 n>8 直接报 aclnnComplex 8 维上限错误）。
 
 1. **`aicir/measure/projector.py` 全模块主机计算（已修：测量路径设备原生化）。**
@@ -51,10 +51,10 @@ NPU 内存浪费 / 设备往返审计：12 项发现与修复
 13. **`NoiseModel.apply` Kraus 累加用裸 `+`（真机新暴露，已修）。**
     - 缺陷：complex64 NPU 无 aclnnAdd，`acc = acc + ...` 在真机报 `RuntimeError: call aclnnAdd failed ... DT_COMPLEX64`；#6/#10 落地后 `hotpath.sh` 首次把噪声路径跑上真机才暴露（此前噪声路径从未做过 NPU 硬件验证）。
     - 修复：累加改走 `backend.add`（NPUBackend 已有 `_NpuAddFn` real/imag 安全实现）。
-15. **多 shot 噪声 observables 算符按 run 后端 cast，与聚合态设备错配（真机新暴露，已修）。**
+14. **多 shot 噪声 observables 算符按 run 后端 cast，与聚合态设备错配（真机新暴露，已修）。**
     - 缺陷：`shots>1` 噪声路径的聚合密度态经 `State.from_matrix` 默认 `NumpyBackend`（host），但 `_build_result`（审计 #11 的设备侧 observables）按 **run 的后端** cast 算符——run 在 NPU 时算符落到 `npu:0`，而 `NumpyBackend.expectation_dm` 对其 `np.asarray(operator)` 报 `can't convert npu:0 device type tensor to numpy`。CPU 后端下 torch-cpu 张量可隐式转 numpy，故仅真机暴露；`noise_probe.py` 的 `density_observables` case 首次跑上真机即命中。
     - 修复：算符改按 **state 自身后端** cast（`state.backend.cast(op)`），算符与聚合态恒同设备。
-14. **MPS `to_statevector` 秩-n 整形/转置超 NPU 8 维上限（真机新暴露，已修）。**
+15. **MPS `to_statevector` 秩-n 整形/转置超 NPU 8 维上限（真机新暴露，已修）。**
     - 缺陷：`(2,)*n` 整形 + 轴置换在 NPU 上经 `_NpuReshapeFn`/`_NpuTransposeFn` 以 `torch.complex` 重组，`aclnnComplex` 限 8 维——n>8 时真机报 `RuntimeError: call aclnnComplex failed ... cannot be larger than 8 dimensions`；`hotpath.sh` 首次把 MPS 路径跑上真机才暴露。
     - 修复：物理序→逻辑序改为 flat 位置换 gather（新增 `_permute_basis`：torch 走 real/imag 分离 `index_select`，numpy 花式索引）；无 SWAP（`site_of` 恒等）时直接跳过。全程 reshape 秩 ≤2。
 
