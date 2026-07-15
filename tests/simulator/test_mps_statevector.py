@@ -75,3 +75,30 @@ def test_shape_reads_do_not_transfer_tensors(monkeypatch):
     monkeypatch.undo()
     # 数值由既有 parity 测试钉住，此处只做归一化 sanity
     assert np.isclose(np.linalg.norm(psi.to_numpy()), 1.0, atol=1e-6)
+
+
+def test_to_statevector_avoids_rank_n_reshape(monkeypatch):
+    # NPU aclnnComplex 限 8 维：to_statevector 不得做 (2,)*n 秩-n 整形/转置，
+    # 逻辑序还原须走 flat 位置换 gather
+    from aicir.backends.numpy_backend import NumpyBackend
+    from aicir.core.circuit import Circuit, cnot, hadamard, ry
+    from aicir.simulator import mps_statevector
+    from aicir.core.state import State
+
+    backend = NumpyBackend()
+    n = 9
+    # 非相邻 cx 触发 SWAP 网络 → site_of 非恒等，覆盖置换路径
+    circ = Circuit(hadamard(0), ry(0.4, 4), cnot(8, [0]), n_qubits=n, backend=backend)
+
+    original = backend.reshape
+
+    def guarded(a, shape):
+        assert len(tuple(shape)) <= 2, f"rank-{len(tuple(shape))} reshape 超出 NPU 8 维限制路径"
+        return original(a, shape)
+
+    mps = mps_statevector(circ, backend=backend)
+    monkeypatch.setattr(backend, "reshape", guarded)
+    psi = mps.to_statevector()
+
+    ref = State.zero_state(n, backend).evolve(circ.unitary(backend=backend))
+    np.testing.assert_allclose(psi.to_numpy(), ref.to_numpy(), atol=1e-5)

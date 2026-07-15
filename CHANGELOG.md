@@ -49,6 +49,9 @@ NPU 内存浪费 / 设备往返审计：12 项发现与修复
 13. **`NoiseModel.apply` Kraus 累加用裸 `+`（真机新暴露，已修）。**
     - 缺陷：complex64 NPU 无 aclnnAdd，`acc = acc + ...` 在真机报 `RuntimeError: call aclnnAdd failed ... DT_COMPLEX64`；#6/#10 落地后 `hotpath.sh` 首次把噪声路径跑上真机才暴露（此前噪声路径从未做过 NPU 硬件验证）。
     - 修复：累加改走 `backend.add`（NPUBackend 已有 `_NpuAddFn` real/imag 安全实现）。
+14. **MPS `to_statevector` 秩-n 整形/转置超 NPU 8 维上限（真机新暴露，已修）。**
+    - 缺陷：`(2,)*n` 整形 + 轴置换在 NPU 上经 `_NpuReshapeFn`/`_NpuTransposeFn` 以 `torch.complex` 重组，`aclnnComplex` 限 8 维——n>8 时真机报 `RuntimeError: call aclnnComplex failed ... cannot be larger than 8 dimensions`；`hotpath.sh` 首次把 MPS 路径跑上真机才暴露。
+    - 修复：物理序→逻辑序改为 flat 位置换 gather（新增 `_permute_basis`：torch 走 real/imag 分离 `index_select`，numpy 花式索引）；无 SWAP（`site_of` 恒等）时直接跳过。全程 reshape 秩 ≤2。
 
 ## 2026-07-14
 
