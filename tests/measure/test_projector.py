@@ -212,3 +212,39 @@ def test_density_projection_avoids_outer_mask(monkeypatch):
     proj = projector._project_parity_rotated(rotated, [0, 1], 1)
     back = projector.pauli_basis_change(proj, [0, 1], "X", inverse=True)
     np.testing.assert_allclose(back.to_numpy(), rho, atol=1e-6)
+
+
+def test_reset_dm_matches_kraus_definition():
+    # _reset_dm 与信道定义 K0 ρ K0† + K1 ρ K1† 逐元素一致（随机密度矩阵）
+    rng = np.random.default_rng(3)
+    n, q = 3, 1
+    dim = 1 << n
+    m = rng.normal(size=(dim, dim)) + 1j * rng.normal(size=(dim, dim))
+    rho = m @ m.conj().T
+    rho = rho / np.trace(rho)
+
+    k0_1q = np.array([[1, 0], [0, 0]], dtype=complex)
+    k1_1q = np.array([[0, 1], [0, 0]], dtype=complex)
+
+    def embed(op1q):
+        full = np.array([[1.0]], dtype=complex)
+        for qi in range(n):
+            full = np.kron(full, op1q if qi == q else np.eye(2, dtype=complex))
+        return full
+
+    k0, k1 = embed(k0_1q), embed(k1_1q)
+    expected = k0 @ rho @ k0.conj().T + k1 @ rho @ k1.conj().T
+    np.testing.assert_allclose(projector._reset_dm(rho, n, q), expected, atol=1e-12)
+
+
+def test_reset_dm_vectorized_scales():
+    # 向量化后 n=11（dim=2048）应远快于旧 O(4^n) Python 双循环（旧实现数秒）
+    import time
+    n = 13
+    dim = 1 << n
+    rho = np.eye(dim, dtype=complex) / dim
+    t0 = time.perf_counter()
+    out = projector._reset_dm(rho, n, 5)
+    elapsed = time.perf_counter() - t0
+    assert np.isclose(np.trace(out).real, 1.0, atol=1e-9)
+    assert elapsed < 1.0  # 旧 O(4^n) Python 双循环在本机约 3s

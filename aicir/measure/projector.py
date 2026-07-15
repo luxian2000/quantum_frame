@@ -160,28 +160,21 @@ def measure_joint_pauli(state: State, qubits: Sequence[int], basis: str, rng) ->
     return restored, lam
 
 
-def _replace_bit(index: int, n: int, q: int, bit: int) -> int:
-    """将 flat index 在第 q 个量子比特（msb 约定）上的比特置为 bit，返回新 index。"""
-    mask = 1 << (n - 1 - q)
-    return (index | mask) if bit else (index & ~mask)
-
-
 def _reset_dm(rho: np.ndarray, n: int, q: int) -> np.ndarray:
     """对密度矩阵施加重置信道 R_q(ρ)=K0 ρ K0† + K1 ρ K1†（K0=|0><0|, K1=|0><1|）。
 
     结果中目标比特恒处 |0>：仅在目标比特行/列均为 0 的子块上累加
     out[r,c] = rho[r,c] + rho[r1,c1]（r1/c1 为把 r/c 的目标比特置 1 后的 index）。
+    向量化实现：整形为 (L,2,R, L,2,R) 秩-6 张量后对目标比特 0/0 与 1/1
+    两个对角子块求和，无逐元素 Python 循环。
     """
     dim = 1 << n
-    out = np.zeros_like(rho)
-    mask = 1 << (n - 1 - q)
-    rows = [r for r in range(dim) if not (r & mask)]
-    for r in rows:
-        r1 = _replace_bit(r, n, q, 1)
-        for c in rows:
-            c1 = _replace_bit(c, n, q, 1)
-            out[r, c] = rho[r, c] + rho[r1, c1]
-    return out
+    left = 1 << q
+    right = 1 << (n - 1 - q)
+    t = rho.reshape(left, 2, right, left, 2, right)
+    out = np.zeros_like(t)
+    out[:, 0, :, :, 0, :] = t[:, 0, :, :, 0, :] + t[:, 1, :, :, 1, :]
+    return out.reshape(dim, dim)
 
 
 def _reset_one(state: State, q: int) -> State:
