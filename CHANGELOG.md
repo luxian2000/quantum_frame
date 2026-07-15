@@ -4,7 +4,9 @@
 
 ## 2026-07-15
 
-### NPU 内存浪费 / 设备往返审计：12 项发现与修复
+### Fixed
+
+NPU 内存浪费 / 设备往返审计：12 项发现与修复
 
 本日审计发现 12 项（`NPUBackend` 本身干净——设备驻留概率/采样、real/imag 分解、局部矩阵缓存——问题全部在其上层）。除 #1 外全部已修；修复均行为保持（数值、契约、同种子随机数消费顺序不变）。真机基线待硬件回归后补记（`scripts/npu/hotpath.sh`）。
 
@@ -44,19 +46,22 @@
 12. **`State.norm()` 整向量下传只为求和（norm 已修；缓存部分 by design 不改）。**
     - 缺陷：`to_numpy` 整个 2^n 概率向量只为 `.sum()`。另：`State.matrix`/`array` 缓存常驻 4^n/2^n host 副本、从不逐出——by design，须知，不改。
     - 修复：张量上 `.sum()` 后只传标量。
+13. **`NoiseModel.apply` Kraus 累加用裸 `+`（真机新暴露，已修）。**
+    - 缺陷：complex64 NPU 无 aclnnAdd，`acc = acc + ...` 在真机报 `RuntimeError: call aclnnAdd failed ... DT_COMPLEX64`；#6/#10 落地后 `hotpath.sh` 首次把噪声路径跑上真机才暴露（此前噪声路径从未做过 NPU 硬件验证）。
+    - 修复：累加改走 `backend.add`（NPUBackend 已有 `_NpuAddFn` real/imag 安全实现）。
 
 ## 2026-07-14
 
 ### Changed
 
 - **`Measure.run` 新增 `return_probabilities: bool = True`：完整概率数组可选。** 传 `False` 时 `Result.probabilities` 为 `None` 且全程跳过其计算（exact/shots=1 路径不再调用 `State.probabilities`，`aggregate_avg` 新增 `include_probabilities` 参数同步跳过），供大比特下只取计数/末态的调用方省内存；`Result.most_probable()` 在概率不可用时抛 `ValueError`（附原因）。默认 `True`，既有行为与所有现有调用方（`BasicQAOA.probabilities`、`qml.qfun`、`primitives` sampler 等）完全不变。NPU 探针 capacity 档改用只取计数的最轻组合（`return_state=False` + `return_probabilities=False`）。
+
   - 所修缺陷：此前 `Result.probabilities` 无条件生成——每次 `run` 都物化完整 2^n float64 概率数组（`to_numpy(...).astype(np.float64)` 还需一次显式拷贝，外加后端 |amp|² 中间量），即使调用方只需要 `counts(-1)`。n=32 时仅此一项约 34 GB，与态向量本身（~34 GB complex64）相当，使峰值内存约翻倍；末端采样自 `sample_terminal_batch` 起已独立计算 Born 分布，不依赖该字段。该行为自统一测量入口引入以来一直存在。
   - 真机验证：`scripts/npu/measure_agg.sh --n-qubits 24` 严格 NPU（npu:0）4/4 cases 通过，capacity 档（`return_state=False` + `return_probabilities=False` 只取计数）8.14s。
-
 - **`Measure.run` 无中途随机源路径的末端读出改为批量采样（同种子计数流变更）。** 无噪声且无线路内随机源的 shot 路径中，末端 Z 基读出不再逐 shot 调用 `terminal_z_measure`，改为新增的 `projector.sample_terminal_batch`：Born 分布只计算一次、一次性抽取全部 M 个读出结果（O(2^n + M)），坍缩后完整态只按不同读出结果各构造一次、且仅在下游需要聚合末态（`return_state` 或 `observables`）时才构造。分布与逐 shot 逐比特投影严格一致（先按 Born 规则采样全寄存器 index 再读子集比特，与原实现同构），但随机数消费顺序改变——**同一 seed 下的具体计数与此前版本不同**（跨版本 seed 复现不属于既有契约）。含噪声 / in-circuit measure / 控制流的逐轨迹路径不受影响。
+
   - 所修缺陷：此前该路径对每个 shot 各调用一次 `terminal_z_measure`，每次都重新计算完整 2^n Born 分布、做整段态向量的子集投影与归一化，总代价 O(M·n·2^n) 且逐 shot 产生一份坍缩态副本（即使 `return_state=False` 从不使用）。真机 Ascend NPU 上 n=24、shots=200 的探针 capacity 档为此耗时 633s，其中密度矩阵聚合修复后剩余耗时几乎全部来自这里；该行为自统一测量入口引入以来一直存在。
   - 真机验证：`scripts/npu/measure_agg.sh --n-qubits 24` 严格 NPU（npu:0）4/4 cases 通过（含验证共享纯态向量聚合契约的 `shared_pre_vector_state`），capacity 档由修复前的 633s 降至 8.40s。
-
 - **`Measure.run` 多 shot 共享纯态前态：聚合 `state` 保持向量形态（契约变更）。** 无噪声且无线路内随机源（无 in-circuit measure/控制流）的 `shots>1` 路径中，全部轨迹共享同一纯态前态，`avg(|ψ><ψ|) == |ψ><ψ|`，聚合 `state` 不再折叠为 `(2^n,2^n)` 密度矩阵而是保持向量形态 `State`（`np.asarray(result.state)` 形状由 `(2^n,2^n)` 变为 `(2^n,)`）；无末端测量（`measure_qubits=None`）时 `final_state` 同为向量（`final_state_kind="state_vector"`），全程不构造密度矩阵。有末端测量时 `final_state` 仍为密度矩阵（真混合态，契约不变），但改为按读出结果分组构造（新增 `aggregate.terminal_mixture`，外积次数 = 不同读出结果数 ≤ min(M, 2^k)，而非 shots 数 M）。噪声 / `initial_density_matrix` / in-circuit measure 路径行为完全不变。另：`aggregate_avg` 的快照与轻量概率聚合按对象身份去重，共享轨迹下只计算一次。
 
   - 修复Bug：此前 `sm="avg"` 聚合对 `shots>1` 一律做密度矩阵平均——即使无噪声、无线路内随机源、全部 M 条轨迹共享同一纯态前态（`Measure.run` 在该路径只演化一次、末端采样 M 次），仍会对同一个态向量做 M 次 `|ψ><ψ|` 外积并累加进两个 `(2^n,2^n)` complex 累加器（pre/post 各一），快照与概率聚合同样逐轨迹重复 M 次。空间 O(4^n)、时间 O(M·4^n)，n≈16–17 起即不可行（64–256 GB），而结果在数学上恒等于单个 `|ψ><ψ|`，属纯粹浪费；该行为自 `aggregate.py` 引入以来一直存在。
@@ -105,8 +110,7 @@
 
 - **`aicir.qas`：Phase 3b——QAS 调度迁移到 Phase 3a 基础设施，`run()` 统一返回 `QASResult`。** 承接上一节 Phase 3a（新增基础设施但不改行为）；本次是接线：
   - **`SearchStrategy` 注册表收官。** `core/config._FACTORIES` 的全部 10 个方法（`supernet`/`supernet_classification`/`supernet_h2`/`pporb`/`pprdql`/`crlqas`/`qdrats`/`dqas`/`vqe_loop`/新增的 `mogvqe`）现在都在 `core/strategies.py` 注册为 `SearchStrategy`（实现拆到新增的 `core/adapters.py`，`strategies.py` 只保留注册）。`runner.py` 的旧 `_Spec`/`_TABLE`/`_load` 分发表已删除；`run()` 只查策略注册表。`available_qas_methods()` 现在派生自注册表（`registered_strategies()`，字典序），不再是 `_FACTORIES` 的插入序。
-  - **`run()` 对全部方法统一返回 `QASResult`。** 之前 `pporb` 返回裸 `(theta, circuit)` 元组、`supernet`/`dqas`/`qdrats`/`crlqas`/`pprdql`/`vqe_loop` 各自返回方法专属结果对象（`SupernetResult`/`DQASResult`/`QDRATSResult`/`CRLQASResult`/`PPRDQLResult`/`ClosedLoopResult`）；现在全部统一包装为 `QASResult`（`method`/`value`/`circuit`/`parameters`/`history`/`metadata`/`raw`），原始对象保留在 `raw` 不丢信息。迁移表：
-    | 方法                                                     | 旧用法                                                                   | 新用法                                                                                                                                                                                |
+  - **`run()` 对全部方法统一返回 `QASResult`。** 之前 `pporb` 返回裸 `(theta, circuit)` 元组、`supernet`/`dqas`/`qdrats`/`crlqas`/`pprdql`/`vqe_loop` 各自返回方法专属结果对象（`SupernetResult`/`DQASResult`/`QDRATSResult`/`CRLQASResult`/`PPRDQLResult`/`ClosedLoopResult`）；现在全部统一包装为 `QASResult`（`method`/`value`/`circuit`/`parameters`/`history`/`metadata`/`raw`），原始对象保留在 `raw` 不丢信息。迁移表：| 方法                                                     | 旧用法                                                                   | 新用法                                                                                                                                                                                |
     | -------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
     | `pporb`                                                | `theta, circ = run("pporb", ...)`                                      | `r = run("pporb", ...)`；`r.parameters`（旧 `theta`）、`r.circuit`；`r.value` 恒为 `None`（`ppo_rb_qas` 本就不返回保真度，重算需重跑环境仿真，3b 不做）                 |
     | `supernet`/`supernet_classification`/`supernet_h2` | `result.best_circuit`/`result.best_score`/`result.ranking_records` | `r.circuit`（= 旧 `best_circuit`）、`r.value`（= 旧 `best_score`）；`ranking_records`/`best_architecture`/`final_metrics` 移到 `r.metadata`，或整份旧对象走 `r.raw` |

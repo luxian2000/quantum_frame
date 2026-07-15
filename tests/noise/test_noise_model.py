@@ -103,3 +103,30 @@ def test_kraus_operators_cached_across_gates_and_shots(monkeypatch):
     result = Measure(backend).run(circ, shots=8, seed=1, return_state=False)
     assert np.isclose(float(np.sum(result.probabilities)), 1.0, atol=1e-6)
     assert len(calls) == 1  # 8 shots × 3 门，嵌入只构建一次
+
+
+def test_noise_apply_routes_add_through_backend(monkeypatch):
+    # NPU complex64 无 aclnnAdd：Kraus 累加须走 backend.add（NPU 有 real/imag
+    # 安全实现），不得用裸 `+`（真机 hotpath 探针曾以 RuntimeError 暴露）
+    import numpy as np
+    from aicir.backends.numpy_backend import NumpyBackend
+    from aicir.core.circuit import Circuit, hadamard
+    from aicir.measure.measure import Measure
+    from aicir.noise import BitFlipChannel, NoiseModel
+
+    backend = NumpyBackend()
+    calls = []
+    original = backend.add
+
+    def spying(a, b):
+        calls.append(True)
+        return original(a, b)
+
+    monkeypatch.setattr(backend, "add", spying)
+
+    circ = Circuit(hadamard(0), n_qubits=1, backend=backend)
+    circ.noise_model = NoiseModel().add_channel(BitFlipChannel(target_qubit=0, p=0.3))
+    result = Measure(backend).run(circ, shots=4, seed=1, return_state=False)
+
+    assert len(calls) >= 2  # 每个 Kraus 项一次累加
+    assert np.isclose(float(np.sum(result.probabilities)), 1.0, atol=1e-6)

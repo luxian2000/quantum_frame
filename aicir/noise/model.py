@@ -80,9 +80,10 @@ class NoiseModel:
                 kraus = rule.channel.kraus_operators(n_qubits, backend)
                 pairs = [(k, backend.dagger(k)) for k in kraus]
                 self._kraus_cache[cache_key] = pairs
+            # 累加走 backend.add：NPU complex64 无 aclnnAdd，裸 `+` 真机报错
             acc = backend.zeros(out.shape)
             for k, k_dag in pairs:
-                acc = acc + backend.matmul(backend.matmul(k, out), k_dag)
+                acc = backend.add(acc, backend.matmul(backend.matmul(k, out), k_dag))
             out = acc
         return out
 
