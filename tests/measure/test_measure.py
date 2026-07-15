@@ -273,3 +273,35 @@ def test_observables_computed_via_backend_expectation(monkeypatch):
 
     assert abs(result.expectation_values["ZZ"] - 1.0) < 1e-6
     assert max(sizes, default=0) <= 1  # 只允许标量传输
+
+
+
+def test_density_observables_operator_matches_state_backend(monkeypatch):
+    # 多 shot 噪声聚合态经 State.from_matrix 默认 NumpyBackend，observable
+    # 算符必须按 state 的后端 cast（而非 run 的后端）。run 在 NPU/GPU 时若按
+    # run 后端 cast，算符落到别的设备，NumpyBackend.expectation_dm 的
+    # np.asarray(operator) 无法转换（真机 npu:0 报错）。用 torch GPUBackend
+    # 作 run 后端在 CPU 上复现类型错配：聚合态数据为 numpy，算符须同为 numpy。
+    from aicir.backends.gpu_backend import GPUBackend
+    from aicir.noise import BitFlipChannel, NoiseModel
+
+    backend = GPUBackend()
+    captured = {}
+    original = State.expectation
+
+    def spy(self, operator):
+        captured["op_type"] = type(operator)
+        captured["state_data_type"] = type(self.data)
+        return original(self, operator)
+
+    monkeypatch.setattr(State, "expectation", spy)
+
+    circ = Circuit(hadamard(0), cnot(1, [0]), n_qubits=2, backend=backend)
+    circ.noise_model = NoiseModel().add_channel(BitFlipChannel(target_qubit=0, p=0.1))
+    zz = np.diag([1.0, -1.0, -1.0, 1.0]).astype(complex)
+    result = Measure(backend).run(circ, shots=4, seed=1, return_state=True,
+                                  observables={"ZZ": zz})
+
+    # 算符类型须与聚合态数据类型一致（同后端），否则跨设备 expectation 崩溃
+    assert captured["op_type"] == captured["state_data_type"]
+    assert -1.0 - 1e-5 <= result.expectation_values["ZZ"] <= 1.0 + 1e-5
