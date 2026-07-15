@@ -248,3 +248,51 @@ def test_reset_dm_vectorized_scales():
     elapsed = time.perf_counter() - t0
     assert np.isclose(np.trace(out).real, 1.0, atol=1e-9)
     assert elapsed < 1.0  # 旧 O(4^n) Python 双循环在本机约 3s
+
+
+def test_measure_joint_pauli_device_resident(monkeypatch):
+    # 审计 #1：joint-Pauli 测量路径应设备驻留——除标量（p_plus/norm）外
+    # 不得把整态 to_numpy 下传（此前旋转/投影全程 D2H→numpy→H2D）
+    b = NumpyBackend()
+    psi = State(b.cast(np.full((8, 1), 1 / np.sqrt(8), dtype=complex)), 3, b)
+
+    sizes = []
+    original = b.to_numpy
+
+    def spying(tensor):
+        arr = original(tensor)
+        sizes.append(np.asarray(arr).size)
+        return arr
+
+    monkeypatch.setattr(b, "to_numpy", spying)
+    rng = np.random.default_rng(0)
+    out, lam = projector.measure_joint_pauli(psi, [0, 2], "X", rng)
+
+    assert lam in (1, -1)
+    assert max(sizes, default=0) <= 1  # 只允许标量下传
+    monkeypatch.undo()
+    assert np.isclose(np.linalg.norm(out.to_numpy()), 1.0, atol=1e-6)
+
+
+def test_project_subset_outcome_no_host_roundtrip(monkeypatch):
+    # 子集投影（末端坍缩/creg 测量共用）应设备侧完成，无整态 to_numpy
+    b = NumpyBackend()
+    bell = np.zeros((4, 1), dtype=complex)
+    bell[0, 0] = bell[3, 0] = 1 / np.sqrt(2)
+    state = State(b.cast(bell), 2, b)
+
+    sizes = []
+    original = b.to_numpy
+
+    def spying(tensor):
+        arr = original(tensor)
+        sizes.append(np.asarray(arr).size)
+        return arr
+
+    monkeypatch.setattr(b, "to_numpy", spying)
+    out = projector._project_subset_outcome(state, [0], [1])
+    assert max(sizes, default=0) <= 1
+    monkeypatch.undo()
+    expected = np.zeros(4, dtype=complex)
+    expected[3] = 1.0
+    np.testing.assert_allclose(out.to_numpy().reshape(-1), expected, atol=1e-6)
