@@ -71,10 +71,11 @@ class MPSState:
         for s in range(1, self.n_qubits):
             t = self.tensors[s]
             cur = bk.tensordot(cur, t, ([cur.ndim - 1], [0]))  # (..., 2, Dr)
+            # shape 在张量对象上直接可读（numpy/torch 同），不做 D2H 传输
+            shape = tuple(int(d) for d in cur.shape)
             new_rows = 1
-            shape = np.asarray(bk.to_numpy(cur)).shape
             for d in shape[:-1]:
-                new_rows *= int(d)
+                new_rows *= d
             cur = bk.reshape(cur, (new_rows, shape[-1]))
         phys = bk.reshape(cur, (2,) * self.n_qubits)  # 物理 site 序
         perm = [self.site_of[q] for q in range(self.n_qubits)]  # 逻辑序
@@ -97,7 +98,7 @@ class MPSState:
         dl, dr = t.shape[0], t.shape[2]
         mat = bk.reshape(t, (dl * 2, dr))
         u, s, vh = bk.svd(mat)  # u:(dl*2,K) s:(K,) vh:(K,dr)
-        k = int(np.asarray(bk.to_numpy(s)).shape[0])
+        k = int(s.shape[0])  # 长度直接读张量 shape，不做 D2H 传输
         self.tensors[i] = bk.reshape(u, (dl, 2, k))
         s_c = bk.cast(s)
         carry = bk.mul(vh, bk.reshape(s_c, (k, 1)))  # (K, dr)
@@ -112,7 +113,7 @@ class MPSState:
         dl, dr = t.shape[0], t.shape[2]
         mat = bk.reshape(t, (dl, 2 * dr))
         u, s, vh = bk.svd(mat)  # u:(dl,K) s:(K,) vh:(K,2*dr)
-        k = int(np.asarray(bk.to_numpy(s)).shape[0])
+        k = int(s.shape[0])  # 长度直接读张量 shape，不做 D2H 传输
         self.tensors[i] = bk.reshape(vh, (k, 2, dr))
         s_c = bk.cast(s)
         carry = bk.mul(u, bk.reshape(s_c, (1, k)))  # (dl, K)

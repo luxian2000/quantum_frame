@@ -48,3 +48,30 @@ def test_control_flow_rejected():
     c.append(if_(reg[0] == 1, body_circuit))
     with pytest.raises(ValueError):
         mps_statevector(c, backend=bk)
+
+
+def test_shape_reads_do_not_transfer_tensors(monkeypatch):
+    # shape/长度读取不应 to_numpy 整个张量：to_statevector 与单比特门
+    # 引发的中心移动全程 0 次 to_numpy（NPU 下每次都是强制 D2H + 同步）
+    from aicir.backends.numpy_backend import NumpyBackend
+    from aicir.core.circuit import Circuit, hadamard, ry
+    from aicir.simulator import mps_statevector
+
+    backend = NumpyBackend()
+    circuit = Circuit(hadamard(0), ry(0.3, 2), hadamard(1), n_qubits=3, backend=backend)
+
+    calls = []
+    original = backend.to_numpy
+
+    def spying(tensor):
+        calls.append(True)
+        return original(tensor)
+
+    monkeypatch.setattr(backend, "to_numpy", spying)
+    state = mps_statevector(circuit, backend=backend)
+    psi = state.to_statevector()
+    assert calls == []  # 单比特门 + to_statevector：无任何 to_numpy
+
+    monkeypatch.undo()
+    # 数值由既有 parity 测试钉住，此处只做归一化 sanity
+    assert np.isclose(np.linalg.norm(psi.to_numpy()), 1.0, atol=1e-6)
