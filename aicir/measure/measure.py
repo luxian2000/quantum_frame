@@ -356,9 +356,12 @@ class Measure:
         exp_vars: Dict[str, float] = {}
         if observables:
             # 设备侧期望值（State.expectation → backend.expectation_sv/dm），
-            # 只传标量；此前把整个态 to_numpy 后在 CPU 稠密 matmul
+            # 只传标量；此前把整个态 to_numpy 后在 CPU 稠密 matmul。
+            # 算符按 state 自身后端 cast：多 shot 聚合态经 State.from_matrix
+            # 默认 NumpyBackend，与 run 后端（可能是 NPU）不同设备——按 run
+            # 后端 cast 会使算符落到别的设备，expectation 跨设备崩溃。
             for name, op in observables.items():
-                exp_vals[name] = float(state.expectation(backend.cast(op)))
+                exp_vals[name] = float(state.expectation(state.backend.cast(op)))
 
         # 判断末态是否为密度矩阵（噪声路径 / 初始密度矩阵输入）
         is_dm = bool(return_state and final.is_density) if return_state else False
