@@ -25,6 +25,21 @@ _SWAP4 = np.array(
 ).reshape(2, 2, 2, 2)
 
 
+def _permute_basis(flat, src, bk):
+    """按 flat 基态索引置换重排 (2^n,) 张量：out[i] = flat[src[i]]。
+
+    torch 张量走 real/imag 分离 index_select（NPU 无复数 gather，且
+    aclnnComplex 限 8 维，不能走 (2,)*n 秩-n 整形/转置）；numpy 直接花式索引。
+    """
+    if hasattr(flat, "index_select"):
+        import torch
+        idx = torch.as_tensor(src, dtype=torch.long, device=flat.device)
+        real = torch.real(flat).index_select(0, idx)
+        imag = torch.imag(flat).index_select(0, idx)
+        return torch.complex(real, imag)
+    return np.asarray(flat)[src]
+
+
 def _keep_count(s_np, max_bond_dim, cutoff):
     """按 cutoff（相对最大奇异值）+ max_bond_dim 决定保留的奇异值个数（≥1）。"""
     if s_np.size == 0:
@@ -77,10 +92,17 @@ class MPSState:
             for d in shape[:-1]:
                 new_rows *= d
             cur = bk.reshape(cur, (new_rows, shape[-1]))
-        phys = bk.reshape(cur, (2,) * self.n_qubits)  # 物理 site 序
-        perm = [self.site_of[q] for q in range(self.n_qubits)]  # 逻辑序
-        logical = bk.transpose(phys, perm)
-        data = bk.reshape(logical, (1 << self.n_qubits, 1))
+        # 物理 site 序 → 逻辑序：flat 位置换 gather（不做 (2,)*n 秩-n 整形/
+        # 转置——NPU aclnnComplex 限 8 维）；无 SWAP 时 site_of 恒等，直接跳过
+        n = self.n_qubits
+        flat = bk.reshape(cur, (1 << n,))
+        if self.site_of != list(range(n)):
+            idx = np.arange(1 << n, dtype=np.int64)
+            src = np.zeros_like(idx)
+            for q in range(n):
+                src |= ((idx >> (n - 1 - q)) & 1) << (n - 1 - self.site_of[q])
+            flat = _permute_basis(flat, src, bk)
+        data = bk.reshape(flat, (1 << n, 1))
         return State(data, self.n_qubits, bk)
 
     def _apply_one_site(self, m2, site):
