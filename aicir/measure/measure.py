@@ -259,10 +259,13 @@ class Measure:
         rng = np.random.default_rng(seed_seq)
         trajectories = []
         if has_incircuit or noise_model is not None:
+            # 全尺寸门矩阵跨轨迹共享缓存（门对象与矩阵在 M 条轨迹间不变）
+            gate_matrix_cache: dict = {}
             for _ in range(M):
                 trajectories.append(run_trajectory(
                     circuit, fresh_state(), backend, tm=do_terminal,
-                    measure_qubits=terminal_qubits, snap_ops=snap_ops, rng=rng, noise_model=noise_model))
+                    measure_qubits=terminal_qubits, snap_ops=snap_ops, rng=rng,
+                    noise_model=noise_model, matrix_cache=gate_matrix_cache))
         else:
             # 无线路中途随机源：ρ_pre 算一次，末端读出批量采样（分布只算一次，
             # O(2^n + M)），坍缩后完整态只按不同读出结果构造、且仅在下游需要
@@ -352,15 +355,10 @@ class Measure:
         exp_vals: Dict[str, float] = {}
         exp_vars: Dict[str, float] = {}
         if observables:
-            state_arr = backend.to_numpy(state)
-            rho = state_arr if (state_arr.ndim == 2 and state_arr.shape[0] == state_arr.shape[1]) else None
-            vec = None if rho is not None else state_arr.reshape(-1, 1)
+            # 设备侧期望值（State.expectation → backend.expectation_sv/dm），
+            # 只传标量；此前把整个态 to_numpy 后在 CPU 稠密 matmul
             for name, op in observables.items():
-                op = backend.to_numpy(op)
-                if rho is not None:
-                    exp_vals[name] = float(np.real(np.trace(rho @ op)))
-                else:
-                    exp_vals[name] = float(np.real((vec.conj().T @ op @ vec)[0, 0]))
+                exp_vals[name] = float(state.expectation(backend.cast(op)))
 
         # 判断末态是否为密度矩阵（噪声路径 / 初始密度矩阵输入）
         is_dm = bool(return_state and final.is_density) if return_state else False

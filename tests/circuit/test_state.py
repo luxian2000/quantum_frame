@@ -57,3 +57,57 @@ class TestState(unittest.TestCase):
             state = State.zero_state(2, backend)
 
         self.assertEqual(tuple(state.data.shape), (4, 1))
+
+
+def test_reorder_endianness_vectorized_scales():
+    # 向量化后 n=20 端序重排应亚秒完成（旧实现 2^n 次 Python 循环，数秒）
+    import time
+    import numpy as np
+    from aicir.core.state import State
+
+    n = 22
+    rng = np.random.default_rng(1)
+    vec = rng.normal(size=1 << n) + 1j * rng.normal(size=1 << n)
+    state = State.from_array(vec, n_qubits=n)
+    t0 = time.perf_counter()
+    out = state.lsb()
+    elapsed = time.perf_counter() - t0
+    assert out.bit_order == "lsb"
+    assert elapsed < 0.5  # 旧 2^n Python 循环在本机约 1.3s
+
+
+def test_reorder_endianness_matches_bit_reversal():
+    # 与逐 index 位反转定义一致（小 n 手写对照）
+    import numpy as np
+    from aicir.core.state import State
+
+    n = 3
+    vec = np.arange(1, (1 << n) + 1, dtype=complex)
+    vec = vec / np.linalg.norm(vec)
+    out = State.from_array(vec, n_qubits=n).lsb().to_numpy()
+    expected = np.empty_like(vec)
+    for i in range(1 << n):
+        rev = int(f"{i:0{n}b}"[::-1], 2)
+        expected[rev] = vec[i]
+    np.testing.assert_allclose(out, expected, atol=1e-6)
+
+
+def test_norm_transfers_scalar_only(monkeypatch):
+    # norm() 应设备侧求和后只传标量，不下传整个 2^n 概率向量
+    import numpy as np
+    from aicir.backends.numpy_backend import NumpyBackend
+    from aicir.core.state import State
+
+    b = NumpyBackend()
+    state = State.zero_state(4, b)
+    sizes = []
+    original = b.to_numpy
+
+    def spying(tensor):
+        arr = original(tensor)
+        sizes.append(np.asarray(arr).size)
+        return arr
+
+    monkeypatch.setattr(b, "to_numpy", spying)
+    assert abs(state.norm() - 1.0) < 1e-6
+    assert max(sizes, default=0) <= 1
