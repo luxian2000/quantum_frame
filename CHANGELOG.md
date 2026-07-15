@@ -4,9 +4,26 @@
 
 ## 2026-07-15
 
+### Audit（NPU 内存浪费 / 设备往返，全部 12 项）
+
+本日审计发现 12 项（`NPUBackend` 本身干净——设备驻留概率/采样、real/imag 分解、局部矩阵缓存——问题全部在其上层）。**#2、#3、#5、#6、#7、#8 六项已修**（见下方 Fixed），其余为已知未修问题：
+
+1. **（未修，结构性）`aicir/measure/projector.py` 全模块主机计算**：每个 in-circuit measure / reset / creg 测量都是整态 D2H→numpy→H2D，每操作、每轨迹、每 shot 一次往返。设备原生化需按 CLAUDE.md complex64 约束逐算子给出 real/imag 安全形式 + 真机回归，暂缓。
+2. （已修）`measure_joint_pauli` 重复基变换。
+3. （已修）MPS shape/长度读取 `to_numpy` 整个张量。
+4. **（未修）`State.reorder_endianness`**（`aicir/core/state.py`）：D2H → **2^n 次 Python 循环**逐振幅置换 → H2D；`msb()`/`lsb()` 超过 ~20 比特不可用，可向量化为位反转索引 gather。
+5. （已修）`Measure.run` 每 shot 重复上传初始态。
+6. （已修）`NoiseModel` Kraus 算符每门每轨迹重建（含 `_embed_operator` 的 2^n 次 Python 循环——缓存后只跑一次，循环本身未重写）。
+7. （已修）`_born_probs`/`joint_parity_probs` 密度分支为取对角线下传整个 ρ。
+8. （已修）密度投影 `np.outer(keep, keep)` 物化 4^n 布尔掩码。
+9. **（未修）`projector._reset_dm`**：O(4^n) 嵌套 Python 双循环，密度矩阵 reset 超过 ~10 比特不可用；可向量化为子块相加。
+10. **（未修）密度/噪声路径全尺寸门矩阵每轨迹重建**（`trajectory._apply_unitary` → `gate_to_matrix(cir_qubits=n)`）：门在 M 条轨迹间完全相同但无跨轨迹缓存，M 次 4^n 分配/构建；且密度路径完全不走局部门快路径。
+11. **（未修）`Measure._build_result` observables 在 CPU 计算**：state（2^n 或 4^n）+ 每个算符 D2H 后稠密 numpy matmul；`backend.expectation_sv/expectation_dm` 已有 NPU 安全设备实现可用，可降为标量传输。
+12. **（未修，低优先）**`State.norm()` 下传整个 2^n 概率向量只为求和（可设备侧 sum）；`State.matrix`/`array` 缓存常驻 4^n/2^n host 副本、从不逐出（by design，须知）。
+
 ### Fixed
 
-本日六项为 NPU 内存浪费 / 设备往返审计的 high-value 修复，全部行为保持（不改变分布、契约或同种子随机数消费顺序）。真机基线待硬件回归后补记（`scripts/npu/hotpath.sh`）。
+本日六项为上述审计的 high-value 修复（对应审计 #2、#3、#5、#6、#7、#8），全部行为保持（不改变分布、契约或同种子随机数消费顺序）。真机基线待硬件回归后补记（`scripts/npu/hotpath.sh`）。
 
 - **`measure_joint_pauli` 去除重复基变换。** `joint_parity_probs` 主体抽为 `_parity_probs_rotated`（已旋转态上按宇称分桶）；`measure_joint_pauli` 复用自身已算好的 `rotated`。
   - 所修缺陷：此前 `measure_joint_pauli` 先做一次正向旋转，随后调用的 `joint_parity_probs` 内部对同一态**再做一次同样的旋转**——每个非 Z 基 in-circuit 测量 3 次旋转（应为正向+逆向 2 次），每次旋转在 NPU 上都是整态 D2H→numpy→H2D 往返。
