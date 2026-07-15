@@ -142,3 +142,24 @@ def test_terminal_order_preserved():
     rng = np.random.default_rng(5)
     _, eig = projector.terminal_z_measure(psi, [1, 0], rng)
     assert eig == [-1, 1]
+
+
+def test_measure_joint_pauli_rotates_once_each_way(monkeypatch):
+    # 修复重复基变换：measure_joint_pauli 只应做一次正向 + 一次逆向旋转
+    # （此前 joint_parity_probs 内部对同一态重复做正向旋转，共 3 次）
+    calls = []
+    original = projector.pauli_basis_change
+
+    def counting(state, qubits, basis, inverse):
+        calls.append(bool(inverse))
+        return original(state, qubits, basis, inverse)
+
+    monkeypatch.setattr(projector, "pauli_basis_change", counting)
+
+    plus = _sv([1 / np.sqrt(2), 1 / np.sqrt(2)])
+    rng = np.random.default_rng(0)
+    out, lam = projector.measure_joint_pauli(plus, [0], "X", rng)
+
+    assert calls == [False, True]  # 一次正向、一次逆向
+    assert lam == 1  # |+> 的 X 测量恒为 +1
+    assert np.allclose(out.to_numpy().reshape(-1), plus.to_numpy().reshape(-1), atol=1e-6)

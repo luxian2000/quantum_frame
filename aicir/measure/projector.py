@@ -101,6 +101,17 @@ def _parities(dim: int, mask: int) -> np.ndarray:
     return (p & 1).astype(np.int64)
 
 
+def _parity_probs_rotated(rotated: State, qubits: Sequence[int]) -> Tuple[float, float]:
+    """在已旋到 Z 基的态上按选中比特宇称分桶概率，返回 (p_plus, p_minus)。"""
+    n = rotated.n_qubits
+    backend = rotated.backend
+    par = _parities(1 << n, _parity_mask(n, qubits))
+    probs = np.asarray(backend.to_numpy(rotated.probabilities()), dtype=np.float64).reshape(-1)
+    p_plus = float(probs[par == 0].sum())
+    p_plus = min(max(p_plus, 0.0), 1.0)
+    return p_plus, 1.0 - p_plus
+
+
 def joint_parity_probs(state: State, qubits: Sequence[int], basis: str) -> Tuple[float, float]:
     """计算联合 Pauli 串 P 取本征值 +1 / -1 的概率（Born 规则）。
 
@@ -108,20 +119,8 @@ def joint_parity_probs(state: State, qubits: Sequence[int], basis: str) -> Tuple
     偶宇称对应 P=+1，奇宇称对应 P=-1。
     返回 (p_plus, p_minus)。
     """
-    n = state.n_qubits
     rotated = pauli_basis_change(state, qubits, basis, inverse=False)
-    backend = state.backend
-    par = _parities(1 << n, _parity_mask(n, qubits))
-    if rotated.is_density:
-        rho = backend.to_numpy(rotated.data).reshape(1 << n, 1 << n)
-        diag = np.real(np.diag(rho))
-        p_plus = float(diag[par == 0].sum())
-    else:
-        psi = backend.to_numpy(rotated.data).reshape(-1)
-        probs = np.abs(psi) ** 2
-        p_plus = float(probs[par == 0].sum())
-    p_plus = min(max(p_plus, 0.0), 1.0)
-    return p_plus, 1.0 - p_plus
+    return _parity_probs_rotated(rotated, qubits)
 
 
 def _project_parity_rotated(rotated: State, qubits: Sequence[int], lam: int) -> State:
@@ -153,7 +152,7 @@ def measure_joint_pauli(state: State, qubits: Sequence[int], basis: str, rng) ->
     单次两结果投影只坍缩 ±1 宇称子空间，保持子空间内部相干。
     """
     rotated = pauli_basis_change(state, qubits, basis, inverse=False)
-    p_plus, _ = joint_parity_probs(state, qubits, basis)
+    p_plus, _ = _parity_probs_rotated(rotated, qubits)
     lam = 1 if rng.random() < p_plus else -1
     projected = _project_parity_rotated(rotated, qubits, lam)
     restored = pauli_basis_change(projected, qubits, basis, inverse=True)
