@@ -142,3 +142,73 @@ def test_terminal_order_preserved():
     rng = np.random.default_rng(5)
     _, eig = projector.terminal_z_measure(psi, [1, 0], rng)
     assert eig == [-1, 1]
+
+
+def test_measure_joint_pauli_rotates_once_each_way(monkeypatch):
+    # 修复重复基变换：measure_joint_pauli 只应做一次正向 + 一次逆向旋转
+    # （此前 joint_parity_probs 内部对同一态重复做正向旋转，共 3 次）
+    calls = []
+    original = projector.pauli_basis_change
+
+    def counting(state, qubits, basis, inverse):
+        calls.append(bool(inverse))
+        return original(state, qubits, basis, inverse)
+
+    monkeypatch.setattr(projector, "pauli_basis_change", counting)
+
+    plus = _sv([1 / np.sqrt(2), 1 / np.sqrt(2)])
+    rng = np.random.default_rng(0)
+    out, lam = projector.measure_joint_pauli(plus, [0], "X", rng)
+
+    assert calls == [False, True]  # 一次正向、一次逆向
+    assert lam == 1  # |+> 的 X 测量恒为 +1
+    assert np.allclose(out.to_numpy().reshape(-1), plus.to_numpy().reshape(-1), atol=1e-6)
+
+
+def test_born_probs_density_no_full_rho_transfer(monkeypatch):
+    # 密度态 _born_probs 只应经 State.probabilities 下传 2^n 对角线，
+    # 不应 to_numpy 整个 (2^n,2^n) 密度矩阵
+    b = NumpyBackend()
+    rho = np.diag([0.25, 0.25, 0.25, 0.25]).astype(complex)
+    state = State(b.cast(rho), 2, b)
+
+    sizes = []
+    original = b.to_numpy
+
+    def spying(tensor):
+        arr = original(tensor)
+        sizes.append(arr.size)
+        return arr
+
+    monkeypatch.setattr(b, "to_numpy", spying)
+
+    probs = projector._born_probs(state)
+    np.testing.assert_allclose(probs, [0.25] * 4, atol=1e-6)
+    assert max(sizes) <= 4  # 只传 2^n 向量，未传 4^n 矩阵
+
+
+def test_density_projection_avoids_outer_mask(monkeypatch):
+    # 密度分支投影不应物化 (2^n,2^n) 布尔掩码（np.outer），改行列置零；
+    # 数值与手写期望一致
+    def _boom(*_a, **_k):
+        raise AssertionError("密度投影不应构造 outer 布尔掩码")
+
+    monkeypatch.setattr(projector.np, "outer", _boom)
+
+    # Bell 密度矩阵投影 q0=0 → |00><00|
+    bell = np.zeros((4, 1), dtype=complex)
+    bell[0, 0] = bell[3, 0] = 1 / np.sqrt(2)
+    rho = bell @ bell.conj().T
+    b = NumpyBackend()
+    state = State(b.cast(rho), 2, b)
+
+    out = projector._project_subset_outcome(state, [0], [0])
+    expected = np.zeros((4, 4), dtype=complex)
+    expected[0, 0] = 1.0
+    np.testing.assert_allclose(out.to_numpy(), expected, atol=1e-6)
+
+    # 宇称投影同样不应用 outer：|Φ+> 密度上投影 X⊗X=+1 保持原态
+    rotated = projector.pauli_basis_change(state, [0, 1], "X", inverse=False)
+    proj = projector._project_parity_rotated(rotated, [0, 1], 1)
+    back = projector.pauli_basis_change(proj, [0, 1], "X", inverse=True)
+    np.testing.assert_allclose(back.to_numpy(), rho, atol=1e-6)

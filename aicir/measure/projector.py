@@ -101,6 +101,17 @@ def _parities(dim: int, mask: int) -> np.ndarray:
     return (p & 1).astype(np.int64)
 
 
+def _parity_probs_rotated(rotated: State, qubits: Sequence[int]) -> Tuple[float, float]:
+    """在已旋到 Z 基的态上按选中比特宇称分桶概率，返回 (p_plus, p_minus)。"""
+    n = rotated.n_qubits
+    backend = rotated.backend
+    par = _parities(1 << n, _parity_mask(n, qubits))
+    probs = np.asarray(backend.to_numpy(rotated.probabilities()), dtype=np.float64).reshape(-1)
+    p_plus = float(probs[par == 0].sum())
+    p_plus = min(max(p_plus, 0.0), 1.0)
+    return p_plus, 1.0 - p_plus
+
+
 def joint_parity_probs(state: State, qubits: Sequence[int], basis: str) -> Tuple[float, float]:
     """计算联合 Pauli 串 P 取本征值 +1 / -1 的概率（Born 规则）。
 
@@ -108,20 +119,8 @@ def joint_parity_probs(state: State, qubits: Sequence[int], basis: str) -> Tuple
     偶宇称对应 P=+1，奇宇称对应 P=-1。
     返回 (p_plus, p_minus)。
     """
-    n = state.n_qubits
     rotated = pauli_basis_change(state, qubits, basis, inverse=False)
-    backend = state.backend
-    par = _parities(1 << n, _parity_mask(n, qubits))
-    if rotated.is_density:
-        rho = backend.to_numpy(rotated.data).reshape(1 << n, 1 << n)
-        diag = np.real(np.diag(rho))
-        p_plus = float(diag[par == 0].sum())
-    else:
-        psi = backend.to_numpy(rotated.data).reshape(-1)
-        probs = np.abs(psi) ** 2
-        p_plus = float(probs[par == 0].sum())
-    p_plus = min(max(p_plus, 0.0), 1.0)
-    return p_plus, 1.0 - p_plus
+    return _parity_probs_rotated(rotated, qubits)
 
 
 def _project_parity_rotated(rotated: State, qubits: Sequence[int], lam: int) -> State:
@@ -132,8 +131,9 @@ def _project_parity_rotated(rotated: State, qubits: Sequence[int], lam: int) -> 
     keep = (par == (0 if lam == 1 else 1))
     if rotated.is_density:
         rho = backend.to_numpy(rotated.data).reshape(1 << n, 1 << n).copy()
-        mask2d = np.outer(keep, keep)
-        rho = np.where(mask2d, rho, 0.0)
+        # 行列置零代替 outer 布尔掩码，避免额外 (2^n,2^n) 分配
+        rho[~keep, :] = 0.0
+        rho[:, ~keep] = 0.0
         tr = np.real(np.trace(rho))
         if tr > 0:
             rho = rho / tr
@@ -153,7 +153,7 @@ def measure_joint_pauli(state: State, qubits: Sequence[int], basis: str, rng) ->
     单次两结果投影只坍缩 ±1 宇称子空间，保持子空间内部相干。
     """
     rotated = pauli_basis_change(state, qubits, basis, inverse=False)
-    p_plus, _ = joint_parity_probs(state, qubits, basis)
+    p_plus, _ = _parity_probs_rotated(rotated, qubits)
     lam = 1 if rng.random() < p_plus else -1
     projected = _project_parity_rotated(rotated, qubits, lam)
     restored = pauli_basis_change(projected, qubits, basis, inverse=True)
@@ -240,16 +240,14 @@ def reset_channel(state: State, qubits: Sequence[int]) -> State:
 
 
 def _born_probs(state: State) -> np.ndarray:
-    """计算基 Born 分布（裁剪负值并归一化的 numpy float64 向量）。"""
+    """计算基 Born 分布（裁剪负值并归一化的 numpy float64 向量）。
+
+    经 State.probabilities 取概率：密度态在设备侧取对角线后只下传 2^n
+    向量，避免为取对角线传输整个 (2^n,2^n) 密度矩阵。
+    """
     backend = state.backend
-    n = state.n_qubits
-    if state.is_density:
-        rho = backend.to_numpy(state.data).reshape(1 << n, 1 << n)
-        probs = np.real(np.diag(rho))
-    else:
-        psi = backend.to_numpy(state.data).reshape(-1)
-        probs = np.abs(psi) ** 2
-    probs = np.clip(np.asarray(probs, dtype=np.float64), 0.0, None)
+    probs = np.asarray(backend.to_numpy(state.probabilities()), dtype=np.float64).reshape(-1)
+    probs = np.clip(probs, 0.0, None)
     total = probs.sum()
     return probs / total if total > 0 else np.full_like(probs, 1.0 / probs.size)
 
@@ -272,8 +270,9 @@ def _project_subset_outcome(state: State, qubits: Sequence[int], bits: Sequence[
         keep &= (bitvals == int(bit))
     if state.is_density:
         rho = backend.to_numpy(state.data).reshape(1 << n, 1 << n).copy()
-        mask2d = np.outer(keep, keep)
-        rho = np.where(mask2d, rho, 0.0)
+        # 行列置零代替 outer 布尔掩码，避免额外 (2^n,2^n) 分配
+        rho[~keep, :] = 0.0
+        rho[:, ~keep] = 0.0
         tr = np.real(np.trace(rho))
         if tr > 0:
             rho = rho / tr

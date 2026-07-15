@@ -75,3 +75,31 @@ class TestNoiseModel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_kraus_operators_cached_across_gates_and_shots(monkeypatch):
+    # Kraus 全系统嵌入只应按 (规则, n, backend) 构建一次，
+    # 不随每门每轨迹重建（M×G 次 4^n 稠密构建 + H2D）
+    import numpy as np
+    from aicir.backends.numpy_backend import NumpyBackend
+    from aicir.core.circuit import Circuit, hadamard, pauli_x
+    from aicir.measure.measure import Measure
+    from aicir.noise import BitFlipChannel, NoiseModel
+
+    channel = BitFlipChannel(target_qubit=0, p=0.3)
+    calls = []
+    original = channel.kraus_operators
+
+    def spying(n_qubits, backend):
+        calls.append(True)
+        return original(n_qubits, backend)
+
+    monkeypatch.setattr(channel, "kraus_operators", spying)
+
+    backend = NumpyBackend()
+    circ = Circuit(hadamard(0), pauli_x(0), hadamard(0), n_qubits=1, backend=backend)
+    circ.noise_model = NoiseModel().add_channel(channel)
+
+    result = Measure(backend).run(circ, shots=8, seed=1, return_state=False)
+    assert np.isclose(float(np.sum(result.probabilities)), 1.0, atol=1e-6)
+    assert len(calls) == 1  # 8 shots × 3 门，嵌入只构建一次

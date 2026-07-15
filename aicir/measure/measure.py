@@ -237,15 +237,21 @@ class Measure:
         noise_model = getattr(circuit, "noise_model", None)
         seed_seq = np.random.SeedSequence(seed) if seed is not None else np.random.SeedSequence()
 
+        # 初始态只归一化/cast 一次：轨迹执行不就地修改输入张量，可安全共享，
+        # 避免噪声/in-circuit 分支每 shot 重复上传初始态（NPU 下 M 次 H2D）
+        if initial_density_matrix is not None:
+            shared_init = State(backend.cast(np.asarray(initial_density_matrix)), n, backend)
+        elif initial_state is None:
+            shared_init = None
+        elif isinstance(initial_state, State):
+            shared_init = initial_state
+        else:
+            shared_init = State(initial_state, n, backend)
+
         def fresh_state() -> State:
-            if initial_density_matrix is not None:
-                dm = np.asarray(initial_density_matrix)
-                return State(backend.cast(dm), n, backend)
-            if initial_state is None:
-                return State.zero_state(n, backend)
-            if isinstance(initial_state, State):
-                return initial_state
-            return State(initial_state, n, backend)
+            if shared_init is not None:
+                return shared_init
+            return State.zero_state(n, backend)
 
         has_incircuit = _needs_trajectory(circuit) if n_ops else False
         M = 1 if exact else norm_shots

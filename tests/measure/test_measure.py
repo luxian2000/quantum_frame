@@ -217,3 +217,31 @@ class TestMeasure(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_initial_density_matrix_cast_once_across_shots(monkeypatch):
+    # 初始密度矩阵只应 cast/上传一次，不随 shots 每轨迹重复（NPU 下 M 次 4^n H2D）
+    import numpy as np
+    from aicir.backends.numpy_backend import NumpyBackend
+    from aicir.core.circuit import Circuit, hadamard, measure
+    from aicir.measure.measure import Measure
+
+    backend = NumpyBackend()
+    rho0 = np.diag([1.0, 0.0]).astype(complex)
+
+    casts = []
+    original = backend.cast
+
+    def spying(value, *a, **k):
+        if value is rho0:  # np.asarray(rho0) 同 dtype 返回原对象
+            casts.append(True)
+        return original(value, *a, **k)
+
+    monkeypatch.setattr(backend, "cast", spying)
+
+    # in-circuit measure 强制走每轨迹 fresh_state 分支
+    circ = Circuit(hadamard(0), measure(0), n_qubits=1, backend=backend)
+    result = Measure(backend).run(circ, shots=8, seed=3, initial_density_matrix=rho0,
+                                  return_state=False)
+    assert sum(result.incircuit_counts[1].values()) == 8
+    assert len(casts) <= 1  # 初始 dm 只 cast 一次

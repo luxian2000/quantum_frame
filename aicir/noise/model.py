@@ -17,9 +17,15 @@ class NoiseRule:
 
 @dataclass
 class NoiseModel:
-    """Noise model composed of gate-triggered channel rules."""
+    """Noise model composed of gate-triggered channel rules.
+
+    全系统嵌入的 Kraus 算符按 (规则下标, n_qubits, backend) 缓存——
+    多 shot / 多门重复 apply 时只构建一次。信道对象加入规则后
+    不应再就地修改参数（否则缓存不失效）。
+    """
 
     rules: List[NoiseRule] = field(default_factory=list)
+    _kraus_cache: dict = field(default_factory=dict, repr=False, compare=False)
 
     def add_channel(
         self,
@@ -63,15 +69,20 @@ class NoiseModel:
         if gate_type is None and gate is not None:
             gate_type = instruction_name(gate)
         out = rho
-        for rule in self.rules:
+        for rule_idx, rule in enumerate(self.rules):
             if not self._match_rule(rule, gate_type):
                 continue
             if not self._should_apply_to_gate(rule, gate):
                 continue
-            kraus = rule.channel.kraus_operators(n_qubits, backend)
+            cache_key = (rule_idx, int(n_qubits), id(backend))
+            pairs = self._kraus_cache.get(cache_key)
+            if pairs is None:
+                kraus = rule.channel.kraus_operators(n_qubits, backend)
+                pairs = [(k, backend.dagger(k)) for k in kraus]
+                self._kraus_cache[cache_key] = pairs
             acc = backend.zeros(out.shape)
-            for k in kraus:
-                acc = acc + backend.matmul(backend.matmul(k, out), backend.dagger(k))
+            for k, k_dag in pairs:
+                acc = acc + backend.matmul(backend.matmul(k, out), k_dag)
             out = acc
         return out
 
