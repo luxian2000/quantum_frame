@@ -131,8 +131,9 @@ def _project_parity_rotated(rotated: State, qubits: Sequence[int], lam: int) -> 
     keep = (par == (0 if lam == 1 else 1))
     if rotated.is_density:
         rho = backend.to_numpy(rotated.data).reshape(1 << n, 1 << n).copy()
-        mask2d = np.outer(keep, keep)
-        rho = np.where(mask2d, rho, 0.0)
+        # 行列置零代替 outer 布尔掩码，避免额外 (2^n,2^n) 分配
+        rho[~keep, :] = 0.0
+        rho[:, ~keep] = 0.0
         tr = np.real(np.trace(rho))
         if tr > 0:
             rho = rho / tr
@@ -269,8 +270,9 @@ def _project_subset_outcome(state: State, qubits: Sequence[int], bits: Sequence[
         keep &= (bitvals == int(bit))
     if state.is_density:
         rho = backend.to_numpy(state.data).reshape(1 << n, 1 << n).copy()
-        mask2d = np.outer(keep, keep)
-        rho = np.where(mask2d, rho, 0.0)
+        # 行列置零代替 outer 布尔掩码，避免额外 (2^n,2^n) 分配
+        rho[~keep, :] = 0.0
+        rho[:, ~keep] = 0.0
         tr = np.real(np.trace(rho))
         if tr > 0:
             rho = rho / tr

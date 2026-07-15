@@ -185,3 +185,30 @@ def test_born_probs_density_no_full_rho_transfer(monkeypatch):
     probs = projector._born_probs(state)
     np.testing.assert_allclose(probs, [0.25] * 4, atol=1e-6)
     assert max(sizes) <= 4  # 只传 2^n 向量，未传 4^n 矩阵
+
+
+def test_density_projection_avoids_outer_mask(monkeypatch):
+    # 密度分支投影不应物化 (2^n,2^n) 布尔掩码（np.outer），改行列置零；
+    # 数值与手写期望一致
+    def _boom(*_a, **_k):
+        raise AssertionError("密度投影不应构造 outer 布尔掩码")
+
+    monkeypatch.setattr(projector.np, "outer", _boom)
+
+    # Bell 密度矩阵投影 q0=0 → |00><00|
+    bell = np.zeros((4, 1), dtype=complex)
+    bell[0, 0] = bell[3, 0] = 1 / np.sqrt(2)
+    rho = bell @ bell.conj().T
+    b = NumpyBackend()
+    state = State(b.cast(rho), 2, b)
+
+    out = projector._project_subset_outcome(state, [0], [0])
+    expected = np.zeros((4, 4), dtype=complex)
+    expected[0, 0] = 1.0
+    np.testing.assert_allclose(out.to_numpy(), expected, atol=1e-6)
+
+    # 宇称投影同样不应用 outer：|Φ+> 密度上投影 X⊗X=+1 保持原态
+    rotated = projector.pauli_basis_change(state, [0, 1], "X", inverse=False)
+    proj = projector._project_parity_rotated(rotated, [0, 1], 1)
+    back = projector.pauli_basis_change(proj, [0, 1], "X", inverse=True)
+    np.testing.assert_allclose(back.to_numpy(), rho, atol=1e-6)
