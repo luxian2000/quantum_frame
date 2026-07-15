@@ -15,24 +15,74 @@ _H = (1.0 / np.sqrt(2.0)) * np.array([[1, 1], [1, -1]], dtype=np.complex128)
 _S = np.array([[1, 0], [0, 1j]], dtype=np.complex128)
 _SDG = np.array([[1, 0], [0, -1j]], dtype=np.complex128)
 
-
-def _apply_1q_sv(psi_col: np.ndarray, n: int, q: int, U: np.ndarray) -> np.ndarray:
-    """对纯态向量施加单比特门 U，作用在第 q 个量子比特上。"""
-    t = psi_col.reshape([2] * n)
-    t = np.tensordot(U, t, axes=([1], [q]))
-    t = np.moveaxis(t, 0, q)
-    return t.reshape(-1, 1)
+# 设备常量缓存：{(id(backend), tag): 后端张量}。基变换 2x2 门与宇称掩码
+# 按后端各 cast 一次（跨 shot 复用），避免每次操作重复 H2D 上传。
+_DEVICE_CACHE: Dict[tuple, object] = {}
 
 
-def _apply_1q_dm(rho: np.ndarray, n: int, q: int, U: np.ndarray) -> np.ndarray:
-    """对密度矩阵施加单比特门 U，作用在第 q 个量子比特上：U ρ U†。"""
-    dim = 1 << n
-    t = rho.reshape([2] * (2 * n))
-    t = np.tensordot(U, t, axes=([1], [q]))
-    t = np.moveaxis(t, 0, q)
-    t = np.tensordot(U.conj(), t, axes=([1], [n + q]))
-    t = np.moveaxis(t, 0, n + q)
-    return t.reshape(dim, dim)
+def _dev_const(backend, tag, build):
+    """按 (backend, tag) 缓存 backend.cast(build()) 的设备常量。"""
+    key = (id(backend), tag)
+    value = _DEVICE_CACHE.get(key)
+    if value is None:
+        value = backend.cast(build())
+        _DEVICE_CACHE[key] = value
+    return value
+
+
+def _dev_host(tag, build):
+    """缓存主机侧 numpy float32 常量（密度路径 probabilities 为 numpy）。"""
+    key = ("host", tag)
+    value = _DEVICE_CACHE.get(key)
+    if value is None:
+        value = np.asarray(build(), dtype=np.float32)
+        _DEVICE_CACHE[key] = value
+    return value
+
+
+def _dev_real(backend, tag, build):
+    """按 (backend, tag) 缓存**实数**设备常量（torch 后端保持实 dtype）。
+
+    与实数概率张量做逐元素乘/求和时须避免复数化——NPU 复数 reduce/加法
+    kernel 缺失（aclnnAdd/DT_COMPLEX64），实数路径则完全受支持。
+    """
+    key = (id(backend), "real", tag)
+    value = _DEVICE_CACHE.get(key)
+    if value is None:
+        arr = np.asarray(build(), dtype=np.float32)
+        device = getattr(backend, "_device", None)
+        if device is not None:
+            import torch
+            value = torch.as_tensor(arr, dtype=torch.float32, device=device)
+        else:
+            value = arr
+        _DEVICE_CACHE[key] = value
+    return value
+
+
+def _apply_1q_sv(psi, n: int, q: int, u_dev, bk):
+    """对纯态向量（后端张量, (2^n,1)）施加单比特门，设备侧完成。"""
+    left = 1 << q
+    right = 1 << (n - 1 - q)
+    t = bk.reshape(psi, (left, 2, right))
+    t = bk.tensordot(u_dev, t, ([1], [1]))      # (2, L, R)
+    t = bk.transpose(t, [1, 0, 2])
+    return bk.reshape(t, (1 << n, 1))
+
+
+def _apply_1q_dm(rho, n: int, q: int, u_dev, u_conj_dev, bk):
+    """对密度矩阵（后端张量, (2^n,2^n)）施加单比特门 U ρ U†，设备侧完成。
+
+    工作张量秩恒为 6（NPU aclnnComplex 限 8 维，不可用 [2]*2n 整形）。
+    """
+    left = 1 << q
+    right = 1 << (n - 1 - q)
+    t = bk.reshape(rho, (left, 2, right, left, 2, right))
+    t = bk.tensordot(u_dev, t, ([1], [1]))       # (2, L,R,L,2,R)
+    t = bk.transpose(t, [1, 0, 2, 3, 4, 5])      # (L,2,R,L,2,R)
+    t = bk.tensordot(u_conj_dev, t, ([1], [4]))  # (2, L,2,R,L,R)
+    t = bk.transpose(t, [1, 2, 3, 4, 0, 5])      # (L,2,R,L,2,R)
+    return bk.reshape(t, (1 << n, 1 << n))
 
 
 def _basis_change_seq(basis: str, inverse: bool) -> List[np.ndarray]:
@@ -69,17 +119,21 @@ def pauli_basis_change(state: State, qubits: Sequence[int], basis: str, inverse:
     seq = _basis_change_seq(basis, inverse)
     if not seq:
         return state
+    # 设备侧逐比特施加 2x2 门；门常量按 (backend, 矩阵) 各 cast 一次
     if state.is_density:
-        rho = backend.to_numpy(state.data).reshape(1 << n, 1 << n).astype(np.complex128)
+        rho = state.data
         for q in qubits:
             for U in seq:
-                rho = _apply_1q_dm(rho, n, int(q), U)
-        return State(backend.cast(rho), n, backend)
-    psi = backend.to_numpy(state.data).reshape(-1, 1).astype(np.complex128)
+                u = _dev_const(backend, ("u", id(U)), lambda U=U: U)
+                uc = _dev_const(backend, ("uc", id(U)), lambda U=U: U.conj())
+                rho = _apply_1q_dm(rho, n, int(q), u, uc, backend)
+        return State(rho, n, backend)
+    psi = state.data
     for q in qubits:
         for U in seq:
-            psi = _apply_1q_sv(psi, n, int(q), U)
-    return State(backend.cast(psi), n, backend, bit_order=state.bit_order)
+            u = _dev_const(backend, ("u", id(U)), lambda U=U: U)
+            psi = _apply_1q_sv(psi, n, int(q), u, backend)
+    return State(psi, n, backend, bit_order=state.bit_order)
 
 
 def _parity_mask(n: int, qubits: Sequence[int]) -> int:
@@ -102,12 +156,25 @@ def _parities(dim: int, mask: int) -> np.ndarray:
 
 
 def _parity_probs_rotated(rotated: State, qubits: Sequence[int]) -> Tuple[float, float]:
-    """在已旋到 Z 基的态上按选中比特宇称分桶概率，返回 (p_plus, p_minus)。"""
+    """在已旋到 Z 基的态上按选中比特宇称分桶概率，返回 (p_plus, p_minus)。
+
+    设备侧掩码点积求 p_plus，只下传一个标量；偶宇称指示掩码按
+    (backend, n, 掩码位) 各 cast 一次（跨 shot 复用）。
+    """
     n = rotated.n_qubits
     backend = rotated.backend
-    par = _parities(1 << n, _parity_mask(n, qubits))
-    probs = np.asarray(backend.to_numpy(rotated.probabilities()), dtype=np.float64).reshape(-1)
-    p_plus = float(probs[par == 0].sum())
+    mask_int = _parity_mask(n, qubits)
+    # 实数掩码 × 实数概率：全程实 dtype（NPU 无复数 reduce/加法 kernel）。
+    # probs 向量态为后端张量、密度态为 numpy——掩码按同侧缓存，避免跨设备混用
+    probs = rotated.probabilities()
+    if isinstance(probs, np.ndarray):
+        even = _dev_host(("even", n, mask_int),
+                         lambda: (_parities(1 << n, mask_int) == 0))
+    else:
+        even = _dev_real(backend, ("even", n, mask_int),
+                         lambda: (_parities(1 << n, mask_int) == 0))
+    weighted = probs.reshape(-1) * even
+    p_plus = float(np.real(np.asarray(backend.to_numpy(weighted.sum()))))
     p_plus = min(max(p_plus, 0.0), 1.0)
     return p_plus, 1.0 - p_plus
 
@@ -124,26 +191,18 @@ def joint_parity_probs(state: State, qubits: Sequence[int], basis: str) -> Tuple
 
 
 def _project_parity_rotated(rotated: State, qubits: Sequence[int], lam: int) -> State:
-    """在已旋到 Z 的态上，投影到联合宇称 lam(±1) 子空间并归一化（保持子空间内相干）。"""
+    """在已旋到 Z 的态上，投影到联合宇称 lam(±1) 子空间并归一化（保持子空间内相干）。
+
+    设备侧掩码乘法 + 归一化；宇称保留掩码按 (backend, n, 掩码位, lam)
+    各 cast 一次（跨 shot 复用）。
+    """
     backend = rotated.backend
     n = rotated.n_qubits
-    par = _parities(1 << n, _parity_mask(n, qubits))
-    keep = (par == (0 if lam == 1 else 1))
-    if rotated.is_density:
-        rho = backend.to_numpy(rotated.data).reshape(1 << n, 1 << n).copy()
-        # 行列置零代替 outer 布尔掩码，避免额外 (2^n,2^n) 分配
-        rho[~keep, :] = 0.0
-        rho[:, ~keep] = 0.0
-        tr = np.real(np.trace(rho))
-        if tr > 0:
-            rho = rho / tr
-        return State(backend.cast(rho), n, backend)
-    psi = backend.to_numpy(rotated.data).reshape(-1, 1).copy()
-    psi[~keep, 0] = 0.0
-    norm = np.linalg.norm(psi)
-    if norm > 0:
-        psi = psi / norm
-    return State(backend.cast(psi), n, backend, bit_order=rotated.bit_order)
+    mask_int = _parity_mask(n, qubits)
+    target = 0 if lam == 1 else 1
+    keep = _dev_const(backend, ("pkeep", n, mask_int, target),
+                      lambda: (_parities(1 << n, mask_int) == target).astype(np.float64))
+    return _masked_normalize(rotated, keep, backend)
 
 
 def measure_joint_pauli(state: State, qubits: Sequence[int], basis: str, rng) -> Tuple[State, int]:
@@ -251,31 +310,43 @@ def _born_sample_index(state: State, rng) -> int:
     return int(rng.choice(probs.size, p=probs))
 
 
+def _masked_normalize(state: State, keep_dev, backend) -> State:
+    """设备侧掩码投影 + 归一化。keep_dev 为 (2^n,) 0/1 指示（后端张量）。
+
+    向量态：psi ⊙ keep 后除以范数；密度态：行/列各乘一次掩码后按迹归一。
+    归一化因子经标量下传后按复数常量乘回，全程不下传整态。
+    """
+    n = state.n_qubits
+    dim = 1 << n
+    if state.is_density:
+        rho = backend.mul(state.data, backend.reshape(keep_dev, (dim, 1)))
+        rho = backend.mul(rho, backend.reshape(keep_dev, (1, dim)))
+        tr = float(np.real(np.asarray(backend.to_numpy(backend.trace(rho)))))
+        if tr > 0:
+            rho = backend.mul(rho, backend.cast(np.complex128(1.0 / tr)))
+        return State(rho, n, backend)
+    psi = backend.mul(state.data, backend.reshape(keep_dev, (dim, 1)))
+    norm2 = float(np.real(np.asarray(backend.to_numpy(backend.abs_sq(psi).sum()))))
+    if norm2 > 0:
+        psi = backend.mul(psi, backend.cast(np.complex128(1.0 / np.sqrt(norm2))))
+    return State(psi, n, backend, bit_order=state.bit_order)
+
+
 def _project_subset_outcome(state: State, qubits: Sequence[int], bits: Sequence[int]) -> State:
-    """把指定比特投影到给定 0/1 取值（其余比特保留），归一化。"""
+    """把指定比特投影到给定 0/1 取值（其余比特保留），归一化（设备侧）。"""
     backend = state.backend
     n = state.n_qubits
-    keep = np.ones(1 << n, dtype=bool)
-    idx = np.arange(1 << n, dtype=np.int64)
-    for q, bit in zip(qubits, bits):
-        qmask = 1 << (n - 1 - int(q))
-        bitvals = (idx & qmask) >> (n - 1 - int(q))
-        keep &= (bitvals == int(bit))
-    if state.is_density:
-        rho = backend.to_numpy(state.data).reshape(1 << n, 1 << n).copy()
-        # 行列置零代替 outer 布尔掩码，避免额外 (2^n,2^n) 分配
-        rho[~keep, :] = 0.0
-        rho[:, ~keep] = 0.0
-        tr = np.real(np.trace(rho))
-        if tr > 0:
-            rho = rho / tr
-        return State(backend.cast(rho), n, backend)
-    psi = backend.to_numpy(state.data).reshape(-1, 1).copy()
-    psi[~keep, 0] = 0.0
-    norm = np.linalg.norm(psi)
-    if norm > 0:
-        psi = psi / norm
-    return State(backend.cast(psi), n, backend, bit_order=state.bit_order)
+    key = ("skeep", n, tuple(int(q) for q in qubits), tuple(int(b) for b in bits))
+
+    def build():
+        keep = np.ones(1 << n, dtype=bool)
+        idx = np.arange(1 << n, dtype=np.int64)
+        for q, bit in zip(qubits, bits):
+            shift = n - 1 - int(q)
+            keep &= (((idx >> shift) & 1) == int(bit))
+        return keep.astype(np.float64)
+
+    return _masked_normalize(state, _dev_const(backend, key, build), backend)
 
 
 def sample_terminal_batch(state: State, measure_qubits: Sequence[int], shots: int, rng,
