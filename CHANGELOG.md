@@ -2,6 +2,25 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-15
+
+### Fixed
+
+本日六项为 NPU 内存浪费 / 设备往返审计的 high-value 修复，全部行为保持（不改变分布、契约或同种子随机数消费顺序）。真机基线待硬件回归后补记（`scripts/npu/hotpath.sh`）。
+
+- **`measure_joint_pauli` 去除重复基变换。** `joint_parity_probs` 主体抽为 `_parity_probs_rotated`（已旋转态上按宇称分桶）；`measure_joint_pauli` 复用自身已算好的 `rotated`。
+  - 所修缺陷：此前 `measure_joint_pauli` 先做一次正向旋转，随后调用的 `joint_parity_probs` 内部对同一态**再做一次同样的旋转**——每个非 Z 基 in-circuit 测量 3 次旋转（应为正向+逆向 2 次），每次旋转在 NPU 上都是整态 D2H→numpy→H2D 往返。
+- **`_born_probs` / `joint_parity_probs` 密度分支经 `State.probabilities` 取对角线。**
+  - 所修缺陷：此前 `to_numpy` 整个 `(2^n,2^n)` 密度矩阵只为取 `np.diag`；`State.probabilities` 的设备侧 `.diagonal()` 路径只需下传 2^n 向量，传输量 4^n→2^n。
+- **密度投影行列置零代替 outer 布尔掩码。** `_project_subset_outcome` / `_project_parity_rotated` 密度分支改为 `rho[~keep,:]=0; rho[:,~keep]=0`。
+  - 所修缺陷：此前构造 `np.outer(keep, keep)` 全尺寸 `(2^n,2^n)` bool 掩码 + `np.where` 整拷贝——n=16 时约 4 GB 掩码，纯多余分配。
+- **MPS shape/长度读取不再 `to_numpy` 整个张量。** `to_statevector` 逐 site 与 `_move_center_right/left` 每次 SVD 改为直接读张量 `.shape`（numpy/torch 通用）。
+  - 所修缺陷：此前把整个收缩中间张量（趋近 2^n）/奇异值向量下传 CPU 只为读维度——NPU 下每次都是强制同步 + 零信息增益的 D2H，逐 site / 逐 SVD 发生。
+- **`Measure.run` 初始态 cast 提升到 shot 循环外。** `fresh_state` 的 `initial_state`/`initial_density_matrix` 归一化一次后全轨迹共享（轨迹执行不就地修改输入张量，局部门写入 `empty_like` 新缓冲；`State` 输入分支此前已是共享先例）。
+  - 所修缺陷：噪声/in-circuit 分支每条轨迹重跑 `np.asarray` + `backend.cast`——`initial_density_matrix` 为 M 次相同 4^n H2D 上传（数组 `initial_state` 同理 2^n×M）。
+- **`NoiseModel` 缓存全系统嵌入的 Kraus 算符。** 按 `(规则下标, n_qubits, id(backend))` 缓存 `(K, K†)` 对；信道加入规则后不应再就地修改参数（docstring 注明）。
+  - 所修缺陷：`apply` 每个匹配门、每条轨迹都重跑 `kraus_operators`——嵌入函数用 2^n 次 Python 循环构建稠密 `(2^n,2^n)` numpy 再 `backend.cast`（每次全新 H2D），M shots × G 门 × k Kraus 地重复构建从不变化的算符，是噪声路径的主要浪费。
+
 ## 2026-07-14
 
 ### Changed
