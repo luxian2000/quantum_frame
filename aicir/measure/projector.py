@@ -239,16 +239,14 @@ def reset_channel(state: State, qubits: Sequence[int]) -> State:
 
 
 def _born_probs(state: State) -> np.ndarray:
-    """计算基 Born 分布（裁剪负值并归一化的 numpy float64 向量）。"""
+    """计算基 Born 分布（裁剪负值并归一化的 numpy float64 向量）。
+
+    经 State.probabilities 取概率：密度态在设备侧取对角线后只下传 2^n
+    向量，避免为取对角线传输整个 (2^n,2^n) 密度矩阵。
+    """
     backend = state.backend
-    n = state.n_qubits
-    if state.is_density:
-        rho = backend.to_numpy(state.data).reshape(1 << n, 1 << n)
-        probs = np.real(np.diag(rho))
-    else:
-        psi = backend.to_numpy(state.data).reshape(-1)
-        probs = np.abs(psi) ** 2
-    probs = np.clip(np.asarray(probs, dtype=np.float64), 0.0, None)
+    probs = np.asarray(backend.to_numpy(state.probabilities()), dtype=np.float64).reshape(-1)
+    probs = np.clip(probs, 0.0, None)
     total = probs.sum()
     return probs / total if total > 0 else np.full_like(probs, 1.0 / probs.size)
 

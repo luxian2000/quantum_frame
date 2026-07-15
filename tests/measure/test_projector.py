@@ -163,3 +163,25 @@ def test_measure_joint_pauli_rotates_once_each_way(monkeypatch):
     assert calls == [False, True]  # 一次正向、一次逆向
     assert lam == 1  # |+> 的 X 测量恒为 +1
     assert np.allclose(out.to_numpy().reshape(-1), plus.to_numpy().reshape(-1), atol=1e-6)
+
+
+def test_born_probs_density_no_full_rho_transfer(monkeypatch):
+    # 密度态 _born_probs 只应经 State.probabilities 下传 2^n 对角线，
+    # 不应 to_numpy 整个 (2^n,2^n) 密度矩阵
+    b = NumpyBackend()
+    rho = np.diag([0.25, 0.25, 0.25, 0.25]).astype(complex)
+    state = State(b.cast(rho), 2, b)
+
+    sizes = []
+    original = b.to_numpy
+
+    def spying(tensor):
+        arr = original(tensor)
+        sizes.append(arr.size)
+        return arr
+
+    monkeypatch.setattr(b, "to_numpy", spying)
+
+    probs = projector._born_probs(state)
+    np.testing.assert_allclose(probs, [0.25] * 4, atol=1e-6)
+    assert max(sizes) <= 4  # 只传 2^n 向量，未传 4^n 矩阵
