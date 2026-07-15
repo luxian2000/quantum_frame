@@ -11,9 +11,10 @@ NPU 内存浪费 / 设备往返审计：12 项发现与修复
 本日审计发现 12 项（`NPUBackend` 本身干净——设备驻留概率/采样、real/imag 分解、局部矩阵缓存——问题全部在其上层）。除 #1 外全部已修；修复均行为保持（数值、契约、同种子随机数消费顺序不变）。
 真机验证：`scripts/npu/hotpath.sh` 严格 NPU（npu:0）3/3 cases 通过——`incircuit_joint_pauli` n=10 shots=16 1.13s；`noisy_kraus_cache` n=8 shots=16 2.99s（噪声路径首次真机验证）；`mps_shape_reads` n=20 shots=16 1.31s（含 SWAP 网络触发的 flat 位置换 gather 路径；修复前 n>8 直接报 aclnnComplex 8 维上限错误）。
 
-1. **`aicir/measure/projector.py` 全模块主机计算（未修，结构性）。**
+1. **`aicir/measure/projector.py` 全模块主机计算（已修：测量路径设备原生化）。**
    - 缺陷：每个 in-circuit measure / reset / creg 测量都是整态 D2H→numpy→H2D，每操作、每轨迹、每 shot 一次往返。
-   - 处置：暂缓。设备原生化需按 CLAUDE.md complex64 约束逐算子给出 real/imag 安全形式 + 真机回归；#2/#7/#8/#10/#11 落地后它是仅剩的往返源，是否值得重写以 `hotpath.sh` 的 `incircuit_joint_pauli` 真机计时为准。
+   - 修复：`pauli_basis_change` / 宇称概率 / 宇称投影 / 子集投影改用后端原语（tensordot/transpose/reshape/mul/trace/abs_sq）设备侧完成，仅 p_plus/norm/trace 标量下传；2x2 门与宇称/保留掩码按 (backend, tag) 各 cast 一次跨 shot 复用。密度工作张量秩恒 6（NPU aclnnComplex 限 8 维）；概率加权全程实 dtype（NPU 无复数 reduce）。**明示保留主机计算**：reset 信道（含分离性判定，罕用）与 `_born_probs` 的 2^n 概率下传（numpy rng 采样契约）。
+   - 真机验证：`hotpath.sh --incircuit-qubits 24 --shots 8` 严格 NPU（npu:0）110.73s→83.39s（-25%，剩余耗时为两路径共有的逐 shot 全态演化）；小 n（n=10）1.13s→1.30s——kernel 启动开销 ≈ 传输节省，设备原生化收益只在大 n 出现。3/3 cases 通过。
 2. **`measure_joint_pauli` 重复基变换（已修）。**
    - 缺陷：先做一次正向旋转，随后调用的 `joint_parity_probs` 内部对同一态再做一次同样的旋转——每个非 Z 基 in-circuit 测量 3 次旋转（应为正向+逆向 2 次），每次旋转在 NPU 上都是整态 D2H→numpy→H2D 往返。
    - 修复：`joint_parity_probs` 主体抽为 `_parity_probs_rotated`（已旋转态上按宇称分桶）；`measure_joint_pauli` 复用自身已算好的 `rotated`。
