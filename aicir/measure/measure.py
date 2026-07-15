@@ -259,10 +259,13 @@ class Measure:
         rng = np.random.default_rng(seed_seq)
         trajectories = []
         if has_incircuit or noise_model is not None:
+            # 全尺寸门矩阵跨轨迹共享缓存（门对象与矩阵在 M 条轨迹间不变）
+            gate_matrix_cache: dict = {}
             for _ in range(M):
                 trajectories.append(run_trajectory(
                     circuit, fresh_state(), backend, tm=do_terminal,
-                    measure_qubits=terminal_qubits, snap_ops=snap_ops, rng=rng, noise_model=noise_model))
+                    measure_qubits=terminal_qubits, snap_ops=snap_ops, rng=rng,
+                    noise_model=noise_model, matrix_cache=gate_matrix_cache))
         else:
             # 无线路中途随机源：ρ_pre 算一次，末端读出批量采样（分布只算一次，
             # O(2^n + M)），坍缩后完整态只按不同读出结果构造、且仅在下游需要

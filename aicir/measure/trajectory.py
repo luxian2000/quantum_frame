@@ -25,6 +25,7 @@ from ..ir import (
     circuit_instructions,
     instruction_metadata,
     instruction_name,
+    instruction_parameter,
     instruction_qubits,
 )
 from . import projector
@@ -51,10 +52,23 @@ def _gate_basis(gate) -> str:
     return str(getattr(gate, "basis", "Z"))
 
 
-def _apply_unitary(gate, state: State, backend, n: int, noise_model) -> State:
-    """施加一个酉门（可选噪声）。原 run_trajectory 中的酉门演化逻辑原样抽出。"""
+def _apply_unitary(gate, state: State, backend, n: int, noise_model,
+                   matrix_cache: Optional[dict] = None) -> State:
+    """施加一个酉门（可选噪声）。原 run_trajectory 中的酉门演化逻辑原样抽出。
+
+    matrix_cache：按 id(gate) 缓存全尺寸门矩阵（同一 Circuit 的门对象在
+    多条轨迹间复用，矩阵不变）。torch 张量参数带 requires_grad 时绕过缓存，
+    避免改变 autograd 图形状（NPU 上 fan-out 梯度累加不可用）。
+    """
     if state.is_density or noise_model is not None:
-        gm = gate_to_matrix(gate, cir_qubits=n, backend=backend)
+        param = instruction_parameter(gate)
+        cacheable = (matrix_cache is not None
+                     and not bool(getattr(param, "requires_grad", False)))
+        gm = matrix_cache.get(id(gate)) if cacheable else None
+        if gm is None:
+            gm = gate_to_matrix(gate, cir_qubits=n, backend=backend)
+            if cacheable:
+                matrix_cache[id(gate)] = gm
         state = state.evolve(gm)
     else:
         new_data = apply_gate_to_state(gate, state.data, n, backend)
@@ -96,7 +110,7 @@ def _measure_into_creg(state, qubits, reg_name, clbits, classical, rng):
 
 
 def _exec_ops(ops, state, classical, backend, n, *, rng, noise_model,
-              snap_ops, incircuit, snaps, top_level):
+              snap_ops, incircuit, snaps, top_level, matrix_cache=None):
     """递归执行一段操作序列，处理控制流 / measure→creg / 酉门 / reset。
 
     op_index 只在 top_level=True 时才有意义：它是顶层 circuit_instructions
@@ -116,11 +130,13 @@ def _exec_ops(ops, state, classical, backend, n, *, rng, noise_model,
                 if cond.evaluate(classical):
                     state = _exec_ops(gate.body, state, classical, backend, n,
                                       rng=rng, noise_model=noise_model, snap_ops=snap_ops,
-                                      incircuit=incircuit, snaps=snaps, top_level=False)
+                                      incircuit=incircuit, snaps=snaps, top_level=False,
+                                      matrix_cache=matrix_cache)
                 elif gate.else_gates is not None:
                     state = _exec_ops(gate.else_body, state, classical, backend, n,
                                       rng=rng, noise_model=noise_model, snap_ops=snap_ops,
-                                      incircuit=incircuit, snaps=snaps, top_level=False)
+                                      incircuit=incircuit, snaps=snaps, top_level=False,
+                                      matrix_cache=matrix_cache)
             else:  # while
                 iters = 0
                 while cond.evaluate(classical):
@@ -130,7 +146,8 @@ def _exec_ops(ops, state, classical, backend, n, *, rng, noise_model,
                             f"while 超过 max_iterations={gate.max_iterations} 仍满足条件")
                     state = _exec_ops(gate.body, state, classical, backend, n,
                                       rng=rng, noise_model=noise_model, snap_ops=snap_ops,
-                                      incircuit=incircuit, snaps=snaps, top_level=False)
+                                      incircuit=incircuit, snaps=snaps, top_level=False,
+                                      matrix_cache=matrix_cache)
             if top_level and op_index in snap_ops:
                 snaps[op_index] = state
             continue
@@ -150,7 +167,7 @@ def _exec_ops(ops, state, classical, backend, n, *, rng, noise_model,
         elif _is_reset(gate):
             state = projector.reset_channel(state, _marker_qubits(gate, n))
         else:
-            state = _apply_unitary(gate, state, backend, n, noise_model)
+            state = _apply_unitary(gate, state, backend, n, noise_model, matrix_cache)
 
         if top_level and op_index in snap_ops:
             snaps[op_index] = state
@@ -187,6 +204,7 @@ def run_trajectory(
     snap_ops: Set[int],
     rng,
     noise_model=None,
+    matrix_cache: Optional[dict] = None,
 ) -> TrajectoryResult:
     """执行单条量子测量轨迹。
 
@@ -211,7 +229,7 @@ def run_trajectory(
 
     state = _exec_ops(circuit, init_state, classical, backend, n, rng=rng,
                       noise_model=noise_model, snap_ops=snap_ops, incircuit=incircuit,
-                      snaps=snaps, top_level=True)
+                      snaps=snaps, top_level=True, matrix_cache=matrix_cache)
 
     # 末端测量
     pre = state

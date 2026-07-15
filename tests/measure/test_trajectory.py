@@ -40,3 +40,30 @@ def test_trajectory_snap_after_op_index():
                         snap_ops={0}, rng=rng, noise_model=None)
     v = tr.snaps[0].to_numpy().reshape(-1)
     assert np.allclose(np.abs(v), [1/np.sqrt(2), 0, 1/np.sqrt(2), 0], atol=1e-6)
+
+
+def test_density_path_gate_matrices_built_once_across_shots(monkeypatch):
+    # 密度/噪声路径全尺寸门矩阵只应按门构建一次，不随每条轨迹重建
+    import numpy as np
+    from aicir.backends.numpy_backend import NumpyBackend
+    from aicir.core.circuit import Circuit, cnot, hadamard
+    from aicir.measure import trajectory as traj_mod
+    from aicir.measure.measure import Measure
+    from aicir.noise import BitFlipChannel, NoiseModel
+
+    calls = []
+    original = traj_mod.gate_to_matrix
+
+    def spying(gate, *a, **k):
+        calls.append(True)
+        return original(gate, *a, **k)
+
+    monkeypatch.setattr(traj_mod, "gate_to_matrix", spying)
+
+    backend = NumpyBackend()
+    circ = Circuit(hadamard(0), cnot(1, [0]), hadamard(1), n_qubits=2, backend=backend)
+    circ.noise_model = NoiseModel().add_channel(BitFlipChannel(target_qubit=0, p=0.2))
+
+    result = Measure(backend).run(circ, shots=8, seed=2, return_state=False)
+    assert np.isclose(float(np.sum(result.probabilities)), 1.0, atol=1e-6)
+    assert len(calls) == 3  # 3 个门各一次，而非 8 shots × 3
