@@ -208,12 +208,43 @@ class QFun:
             name = select_diff(backend=self._backend, shots=self.shots, noisy=noisy)
         return resolve_diff(name)
 
+    def _probs_jacobian(self, x: np.ndarray, scalar: bool) -> np.ndarray:
+        """probs 返回的参数移位 Jacobian。
+
+        每个基态概率 p_i = <ψ|i><i|ψ> 是投影算符期望，故对整条概率向量施同一
+        参数移位规则即得 (D, P) Jacobian（标量参为 (D,)）。逐输出分量复用注册表
+        梯度方法（``self.differential``，单一事实来源），并用按参数元组缓存的
+        ``_probs`` 使 D 个分量共享同一批底层线路求值（psr 下共 2P 次）。
+        """
+        grad_fn = self._gradient_fn()
+        cache: dict[tuple, np.ndarray] = {}
+
+        def probs_at(p: np.ndarray) -> np.ndarray:
+            arg = float(p) if np.ndim(p) == 0 else np.asarray(p, dtype=float)
+            key = tuple(np.round(np.atleast_1d(np.asarray(arg, dtype=float)).reshape(-1), 12))
+            cached = cache.get(key)
+            if cached is None:
+                _, circuit, _, wires, _ = self._resolve(arg)
+                cached = self._probs(circuit, wires)
+                cache[key] = cached
+            return cached
+
+        dim = int(probs_at(x).shape[0])
+        rows = [
+            np.asarray(grad_fn(lambda p, i=i: float(probs_at(p)[i]), x), dtype=float)
+            for i in range(dim)
+        ]
+        # 标量参：每行为标量 → (D,)；向量参：每行 (P,) → (D, P)。
+        return np.stack(rows, axis=0)
+
     def grad(self, param: Any) -> Any:
         x = np.asarray(param, dtype=float)
         scalar = x.ndim == 0
         kind, _, observables, _, multi = self._resolve(float(x) if scalar else x)
-        if kind != "expval":
-            raise ValueError(".grad 仅支持 expval 返回（probs/sample 无梯度）")
+        if kind == "sample":
+            raise ValueError(".grad 不支持 sample 返回（离散采样无梯度）")
+        if kind == "probs":
+            return self._probs_jacobian(x, scalar)
         n_obs = len(observables)
         grad_fn = self._gradient_fn()
 

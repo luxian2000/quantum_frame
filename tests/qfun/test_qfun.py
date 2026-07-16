@@ -246,7 +246,11 @@ def test_sample_requires_shots():
         circ(0.0)
 
 
-def test_grad_rejects_probs():
+def test_grad_probs_returns_jacobian():
+    # probs 梯度现已支持（qml 成熟化第 2 项）：单 ry(θ) 的 probs Jacobian
+    # = [-½sinθ, ½sinθ]（标量参 → 形状 (D,)）
+    import numpy as np
+
     from aicir.qml import probs
 
     @qfun()
@@ -255,5 +259,5 @@ def test_grad_rejects_probs():
         c.append(ry(theta, 0))
         return probs(c)
 
-    with pytest.raises(ValueError):
-        circ.grad(0.3)
+    jac = np.asarray(circ.grad(0.3), dtype=float)
+    np.testing.assert_allclose(jac, [-0.5 * np.sin(0.3), 0.5 * np.sin(0.3)], atol=1e-6)
