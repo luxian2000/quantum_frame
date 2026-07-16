@@ -1237,3 +1237,43 @@ y = model(torch.randn(8, 4))         # 批量前向 → (8,)
 ```
 
 ---
+
+## 18. 批量量子层 `BatchLayer`（`aicir.qml.qlayer`）
+
+`BatchLayer` 是 `QLayer` 的批量姊妹：要求**固定模板线路**（参数门限单参数的
+`rx/ry/rz/crx/cry/crz/rzz/rxx`），换来整批一次演化与端到端 torch autograd——
+底层走 `aicir.core.batch.BatchSV`（实部/虚部实张量、逐样本门角度、NPU 安全，
+无复数内核），不做逐参数 PSR 循环，反向由 torch 原生求导完成。
+
+```python
+BatchLayer(circuit, n_inputs, *, backend, init=None, dtype=torch.float32)
+```
+
+- 参数约定与 `QLayer` 的 `cat([inputs, weights])` 同序：模板 `circuit.parameters`
+  首用序的前 `n_inputs` 个为数据编码参数（逐样本取 `inputs` 对应列），其余为
+  本层可训练权重（`torch.nn.Parameter`）。
+- 读出为逐比特 `<Z_q>`：`forward(inputs (batch, n_inputs))` 返回
+  `(batch, n_qubits)`；一维输入返回 `(n_qubits,)`。梯度同时回流到权重与
+  前置经典层输入。
+- `backend` 须为 torch 系（`GPUBackend`/`NPUBackend`），决定 device 与 dtype。
+
+```python
+import torch
+from aicir import Circuit, Parameter, cx, rx, ry, rzz
+from aicir.backends.gpu_backend import GPUBackend
+from aicir.qml import BatchLayer
+
+x0, x1 = Parameter("x0"), Parameter("x1")
+w0, w1, w2 = (Parameter(f"w{i}") for i in range(3))
+template = Circuit(rx(x0, 0), rx(x1, 1),          # 数据编码（逐样本）
+                   ry(w0, 0), ry(w1, 1),          # 可训练权重
+                   rzz(w2, 0, 1), cx(1, [0]), n_qubits=2)
+
+layer = BatchLayer(template, n_inputs=2, backend=GPUBackend())
+model = torch.nn.Sequential(torch.nn.Linear(8, 2), layer)  # 混合网络
+out = model(torch.randn(32, 8))                            # (32, 2) 的 <Z_q>
+out.sum().backward()                                        # 原生 autograd
+```
+
+选型：任意 Python 构线路 / 任意观测量 / 需要 PSR 语义 → `QLayer`；
+固定模板 + 大 batch 训练（尤其 NPU）→ `BatchLayer`。
