@@ -32,10 +32,11 @@ from .diff import (
 )
 from .qfun import QFun, Expval, Probs, Sample, expval, probs, qfun, sample
 
-try:  # torch 可选：无 torch 时不暴露 QLayer
-    from .qlayer import QLayer
+try:  # torch 可选：无 torch 时不暴露 QLayer/BatchLayer
+    from .qlayer import BatchLayer, QLayer
 except ImportError:  # pragma: no cover - 取决于运行环境是否装 torch
     QLayer = None
+    BatchLayer = None
 
 __all__ = [
     "auto",
@@ -73,4 +74,5 @@ __all__ = [
     "probs",
     "sample",
     "QLayer",
+    "BatchLayer",
 ]
