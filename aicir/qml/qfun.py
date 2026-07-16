@@ -85,6 +85,9 @@ _Measurement = (Expval, Probs, Sample)
 
 
 def _make_backend(device: Any):
+    # 已是后端实例（有 to_numpy）：直接透传，便于注入指定设备（如 from_distributed_env）。
+    if not isinstance(device, str) and hasattr(device, "to_numpy"):
+        return device
     dev = str(device).lower()
     if dev in {"numpy", "cpu"}:
         from ..backends.numpy_backend import NumpyBackend
@@ -208,6 +211,10 @@ class QFun:
             # 传入线路使 auto 生成元感知：激发门谱 {-1,0,1} 升级 psr→psr4。
             name = select_diff(backend=self._backend, shots=self.shots, noisy=noisy,
                                circuit=circuit)
+            if name == "auto":
+                # torch-AD 需可微张量目标，但 QFun.grad 为 float 接口（逐点重跑线路），
+                # 无法驱动 AD；退回按非 torch 语义选参数移位家族（psr / 激发线路 psr4）。
+                name = select_diff(backend=None, shots=self.shots, noisy=noisy, circuit=circuit)
         return resolve_diff(name)
 
     def _probs_jacobian(self, x: np.ndarray, scalar: bool) -> np.ndarray:
