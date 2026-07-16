@@ -1,3 +1,4 @@
+import contextlib
 import unittest
 from unittest import mock
 
@@ -7,6 +8,24 @@ from torch.utils._python_dispatch import TorchDispatchMode
 
 from aicir import NPUBackend, State, npu_runtime_context_from_env
 from aicir.backends.npu_backend import is_npu_available
+
+
+def _neutralize_npu_set_device():
+    """Neutralize ``torch.npu.set_device`` so distributed-env unit tests stay
+    hermetic across 0/1/N-card boxes.
+
+    These tests hardcode ``LOCAL_RANK`` (e.g. 2) to exercise env parsing and the
+    process-group path; they assert nothing about the physical device. On a real
+    multi-card launch the card exists, but on a single-card box ``set_device``
+    would open a card outside ``[0, device_count)`` and raise. Resolving the
+    device is card-count-independent (no allocation), so only ``set_device`` must
+    be no-op'd; the resolved device (npu vs cpu) — and thus the hccl/gloo branch
+    — is preserved. On CPU-only boxes ``torch.npu`` is absent and the branch is
+    never reached, so no patch is needed.
+    """
+    if hasattr(torch, "npu") and hasattr(torch.npu, "set_device"):
+        return mock.patch("torch.npu.set_device")
+    return contextlib.nullcontext()
 
 
 class _BanComplexAddMul(TorchDispatchMode):
@@ -99,7 +118,8 @@ class TestNPUBackend(unittest.TestCase):
             },
             clear=False,
         ):
-            backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
+            with _neutralize_npu_set_device():
+                backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 
         self.assertIsNotNone(backend.runtime_context)
         self.assertEqual(backend.runtime_context.world_size, 8)
@@ -144,7 +164,8 @@ class TestNPUBackend(unittest.TestCase):
             with mock.patch("torch.distributed.is_available", return_value=True):
                 with mock.patch("torch.distributed.is_initialized", side_effect=[False, True]):
                     with mock.patch("torch.distributed.init_process_group") as init_pg:
-                        backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
+                        with _neutralize_npu_set_device():
+                            backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 
         expected_backend = "hccl" if getattr(backend._device, "type", None) == "npu" else "gloo"
         init_pg.assert_called_once_with(backend=expected_backend, rank=1, world_size=2)
