@@ -122,6 +122,7 @@ SUITES: dict[str, Suite] = {
             "tests/optimizer/test_params.py",
             "tests/optimizer/test_params_diff_registry.py",
         ),
+        scripts=(("scripts/npu/qml_layers_probe.py",),),
     ),
     "qaoa": Suite(
         name="qaoa",

@@ -109,12 +109,47 @@ def _is_torch_family_backend(backend: Any) -> bool:
 _SELECT_PREFERENCE = ("auto", "psr", "fd")
 
 
-def select_diff(*, backend: Any = None, shots: Any = None, noisy: bool = False) -> str:
+def circuit_shift_rule(circuit: Any) -> str | None:
+    """按线路参数门的 GateSpec ``shift_rule`` 归类参数移位规则。
+
+    返回 ``"two_term"``（全为两项旋转门，用 psr）、``"four_term"``（全为激发门
+    等 {-1,0,1} 谱，用 psr4）、``"mixed"``（两者并存，无统一解析规则）或
+    ``None``（无解析参数门）。只统计已注册且带 generator 或 shift_rule 的参数门；
+    其余（如 u3/自定义 unitary）不影响 psr↔psr4 判定，跳过。
+    """
+    from ...gates import canonical_gate_name, gate_generator, gate_shift_rule
+    from ...ir import circuit_instructions, instruction_name, instruction_parameter
+
+    rules: set[str] = set()
+    for gate in circuit_instructions(circuit):
+        if instruction_parameter(gate) is None:
+            continue
+        name = canonical_gate_name(instruction_name(gate))
+        rule = gate_shift_rule(name)
+        if rule is not None:
+            rules.add(rule)
+        elif gate_generator(name) is not None:
+            rules.add("two_term")  # 单生成元旋转门默认两项规则
+    if not rules:
+        return None
+    if rules == {"two_term"}:
+        return "two_term"
+    if rules == {"four_term"}:
+        return "four_term"
+    return "mixed"
+
+
+def select_diff(*, backend: Any = None, shots: Any = None, noisy: bool = False,
+                circuit: Any = None) -> str:
     """按 NEXT.md §6 策略选择梯度方法名（纯函数）。
 
     过滤：``requires_torch`` 仅在 Torch 系后端保留；有 shots 丢弃
     ``supports_shots=False``；``noisy`` 丢弃 ``supports_noise=False``。
     偏好顺序：``auto -> psr -> fd``（``spsa``/``spsr`` 不参与自动优选）。
+
+    生成元感知（传 ``circuit`` 时）：仅当优选落到两项规则 ``psr`` 时按线路门谱
+    校正——全激发门 → 升级 ``psr4``（若兼容），两/四项混合 → 降到 ``fd``（psr/psr4
+    均非逐参数正确）。``auto``（伴随 AD，对任意门精确）/``fd`` 不受影响。
     """
 
     has_shots = shots is not None and int(shots) > 0
@@ -129,11 +164,22 @@ def select_diff(*, backend: Any = None, shots: Any = None, noisy: bool = False) 
             return False
         return True
 
+    chosen = "fd"
     for name in _SELECT_PREFERENCE:
         spec = _REGISTRY.get(name)
         if spec is not None and compatible(spec):
-            return name
-    return "fd"
+            chosen = name
+            break
+
+    if circuit is not None and chosen == "psr":
+        rule = circuit_shift_rule(circuit)
+        if rule == "four_term":
+            psr4_spec = _REGISTRY.get("psr4")
+            if psr4_spec is not None and compatible(psr4_spec):
+                return "psr4"
+        elif rule == "mixed":
+            return "fd"
+    return chosen
 
 
 # ---------------------------------------------------------------------------

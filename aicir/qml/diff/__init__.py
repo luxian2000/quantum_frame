@@ -2,6 +2,7 @@
 
 from .registry import (
     canonical_diff,
+    circuit_shift_rule,
     get_diff,
     register_diff,
     registered_diffs,
@@ -14,6 +15,7 @@ from .spec import DiffMethod
 __all__ = [
     "DiffMethod",
     "canonical_diff",
+    "circuit_shift_rule",
     "get_diff",
     "register_diff",
     "registered_diffs",
