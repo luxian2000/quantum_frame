@@ -1277,3 +1277,38 @@ out.sum().backward()                                        # 原生 autograd
 
 选型：任意 Python 构线路 / 任意观测量 / 需要 PSR 语义 → `QLayer`；
 固定模板 + 大 batch 训练（尤其 NPU）→ `BatchLayer`。
+
+## 19. 端到端量子分类器 `build_classifier`（`aicir.qml.classifier`）
+
+`build_classifier` 把「角度编码 → 硬件高效纠缠层 → 逐比特 `<Z_q>` 读出 →
+线性头」组合成一个标准 `torch.nn.Module`，直接用 torch 优化器/损失训练。量子
+部分走 `BatchLayer`（整批一次演化、实/虚分离、NPU 安全、原生 autograd），
+故大 batch 训练在 NPU/GPU 上高效。
+
+```python
+build_classifier(*, n_features, n_classes, backend, n_qubits=None, layers=2, seed=None)
+```
+
+- 返回 `nn.Module`：`forward(x (batch, n_features)) -> logits (batch, n_classes)`。
+- `n_qubits` 缺省 = `n_features`；模板前 `n_features` 个参数为逐样本数据编码，
+  其余为 `layers` 层 `ry` + `rzz`/`cx` 环形纠缠的权重（符合 `BatchLayer` 门集）。
+- `backend` 须为 torch 系（`GPUBackend`/`NPUBackend`）。
+
+```python
+import torch
+from aicir.backends.gpu_backend import GPUBackend
+from aicir.qml import build_classifier
+
+model = build_classifier(n_features=2, n_classes=2, backend=GPUBackend(),
+                         n_qubits=2, layers=2, seed=0)
+opt = torch.optim.Adam(model.parameters(), lr=0.1)
+lossfn = torch.nn.CrossEntropyLoss()
+for _ in range(100):
+    opt.zero_grad()
+    lossfn(model(X), y).backward()   # X:(N,2) float, y:(N,) long
+    opt.step()
+```
+
+可运行示例（XOR 四象限 / sklearn moons，含 `--device npu`）：
+`python -m demos.QNN.qnn_classifier_demo`。准确率由 `tests/qml/test_classifier.py`
+钉住（XOR 训练/测试 >0.85/>0.80）。
