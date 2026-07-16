@@ -21,7 +21,8 @@ import numpy as np
 from aicir import Circuit, Hamiltonian, NPUBackend, PauliString, cx, hadamard, rx, ry, rzz
 from aicir.backends.npu_backend import is_npu_available
 from aicir.core.circuit import Parameter
-from aicir.qml import qfun, expval, probs, BatchLayer, build_classifier, QuantumKernel, angle_feature_map
+from aicir.qml import (qfun, expval, probs, BatchLayer, build_classifier, QuantumKernel,
+                       angle_feature_map, gradient_variance)
 
 
 def _backend(allow_cpu_fallback: bool) -> NPUBackend:
@@ -113,6 +114,21 @@ def case_quantum_kernel(backend):
         raise AssertionError("核矩阵应对称")
 
 
+def case_gradient_variance(backend):
+    # 贫瘠高原诊断：真实目标梯度方差（走设备侧期望 + PSR）
+    from aicir import Hamiltonian, PauliString, ry, cx
+
+    obs = Hamiltonian([PauliString("Z", n_qubits=3, qubits=[0])])
+
+    @qfun(device=backend, differential="psr", observable=obs)
+    def f(t):
+        return Circuit(ry(t[0], 0), cx(1, [0]), ry(t[1], 1), cx(2, [1]), ry(t[2], 2), n_qubits=3)
+
+    rep = gradient_variance(f, 3, n_samples=6, seed=0)
+    if not (rep["gradient_variance"] >= 0.0 and np.isfinite(rep["mean_gradient_norm"])):
+        raise AssertionError(f"梯度方差诊断异常: {rep}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--allow-cpu-fallback", action="store_true")
@@ -125,6 +141,7 @@ def main():
         ("batchlayer_forward_backward", lambda: case_batchlayer_forward_backward(backend)),
         ("classifier_train_step", lambda: case_classifier_train_step(backend)),
         ("quantum_kernel", lambda: case_quantum_kernel(backend)),
+        ("gradient_variance", lambda: case_gradient_variance(backend)),
     ]
     passed, failures = 0, []
     for name, fn in cases:

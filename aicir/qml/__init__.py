@@ -31,6 +31,7 @@ from .diff import (
     unregister_diff,
 )
 from .qfun import QFun, Expval, Probs, Sample, expval, probs, qfun, sample
+from .diagnostics import barren_plateau_scan, gradient_variance, qfim_spectrum
 
 try:  # torch 可选：无 torch 时不暴露 QLayer/BatchLayer/classifier
     from .qlayer import BatchLayer, QLayer
@@ -85,4 +86,7 @@ __all__ = [
     "classifier_template",
     "QuantumKernel",
     "angle_feature_map",
+    "gradient_variance",
+    "barren_plateau_scan",
+    "qfim_spectrum",
 ]
