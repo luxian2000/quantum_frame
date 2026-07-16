@@ -168,6 +168,17 @@ class BatchSV:
         if gate_type == "identity":
             return self
 
+        if gate_type in ("rzz", "rxx"):
+            qs = [int(q) for q in instruction_qubits(gate)]
+            if len(qs) != 2 or qs[0] == qs[1]:
+                raise ValueError(f"{gate_type} 需要两个不同的量子比特, 得到 {qs}")
+            theta = self._angle_tensor(instruction_parameter(gate))
+            if gate_type == "rzz":
+                self._apply_rzz(qs[0], qs[1], theta)
+            else:
+                self._apply_rxx(qs[0], qs[1], theta)
+            return self
+
         target = int(instruction_qubits(gate)[0])
         controls = [int(c) for c in instruction_controls(gate)]
         control_states = [int(s) for s in instruction_control_states(gate)]
@@ -217,6 +228,42 @@ class BatchSV:
         new_imag = torch.stack([out0i, out1i], dim=2).reshape(B, self.dim)
         self.real = new_real
         self.imag = new_imag
+
+    # ──────────────────────────── 双比特门 ────────────────────────────
+
+    def _angle_tensor(self, parameter) -> torch.Tensor:
+        """把门角度归一为 (k,) 实张量, k=1(广播) 或 batch(逐样本)。"""
+        if _is_tensor(parameter):
+            t = parameter.to(device=self.device, dtype=self.real_dtype).reshape(-1)
+        else:
+            t = torch.tensor([float(parameter)], dtype=self.real_dtype, device=self.device)
+        if t.numel() not in (1, self.batch_size):
+            raise ValueError(f"角度长度 {t.numel()} 须为 1 或 batch={self.batch_size}")
+        return t
+
+    def _apply_rzz(self, q1: int, q2: int, theta: torch.Tensor) -> None:
+        """rzz(θ) = diag(e^{∓iθ/2})：对每个基态施相位 -θ/2·zz, 全程实张量。"""
+        _, zsign = _bit_tensors(self.n_qubits, self.device, self.real_dtype)
+        zz = zsign[q1] * zsign[q2]                    # (D,), ±1
+        phi = (-0.5 * theta).reshape(-1, 1) * zz      # (k, D) 广播
+        c, s = torch.cos(phi), torch.sin(phi)
+        new_real = self.real * c - self.imag * s
+        new_imag = self.real * s + self.imag * c
+        self.real, self.imag = new_real, new_imag
+
+    def _apply_rxx(self, q1: int, q2: int, theta: torch.Tensor) -> None:
+        """rxx(θ) = cos(θ/2)·I - i·sin(θ/2)·X⊗X：X⊗X 即双比特同时翻转（索引异或）。"""
+        idx, _ = _bit_tensors(self.n_qubits, self.device, self.real_dtype)
+        mask = (1 << (self.n_qubits - 1 - q1)) | (1 << (self.n_qubits - 1 - q2))
+        perm = idx ^ mask                             # (D,)
+        re_f = self.real.index_select(1, perm)
+        im_f = self.imag.index_select(1, perm)
+        half = (0.5 * theta).reshape(-1, 1)
+        c, s = torch.cos(half), torch.sin(half)
+        # -i·sin·(a+bi) = sin·b - i·sin·a
+        new_real = c * self.real + s * im_f
+        new_imag = c * self.imag - s * re_f
+        self.real, self.imag = new_real, new_imag
 
     # ──────────────────────────── 读出 ────────────────────────────────
 

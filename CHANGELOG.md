@@ -2,6 +2,13 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-16
+
+### Added
+
+- **`aicir.core.BatchSV` 支持 `rzz`/`rxx` 双比特门。** rzz 为逐基态对角相位（-θ/2·zz），rxx 为 cos(θ/2)·I - i·sin(θ/2)·X⊗X（双比特同时翻转 = 索引异或 gather）；与既有 1 比特路径一致：全程实部/虚部实张量、支持逐样本张量角度与 autograd、NPU 安全（测试含 `_BanComplexAddMul` 复数内核禁用守卫）。补齐 HEA `rzz`/`rxx` 纠缠层与 IQP 编码在批量路径上的门集缺口。
+- **`aicir.qml.BatchLayer`：固定模板线路的批量量子层（qml 成熟化路线第 1 项）。** `BatchSV` 此前零消费方、`QLayer` 批量前向为逐行 Python 循环（每样本一次全态演化）；`BatchLayer` 要求固定模板（参数门限单参数的 `rx/ry/rz/crx/cry/crz/rzz/rxx`），换来整批一次演化 + 端到端 torch 原生 autograd（实/虚分离、NPU 安全、无逐参数 PSR 循环）。参数约定与 `QLayer` 的 `cat([inputs, weights])` 同序（模板 `parameters` 首用序前 `n_inputs` 个为逐样本数据编码，其余为可训练权重），读出逐比特 `<Z_q>`，梯度同时回流到权重与前置经典层。torch 可选依赖守卫与 `QLayer` 一致（无 torch 时 `aicir.qml.BatchLayer is None`）。选型见 `aicir/qml/README.md` §18。真机 NPU 回归：`scripts/npu/qml.sh --strict-npu --pytest-arg -q`（新测试已随 `tests/qml` 纳入该 suite）。
+
 ## 2026-07-15
 
 ### Fixed

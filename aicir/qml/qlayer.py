@@ -25,12 +25,21 @@ model = torch.nn.Sequential(torch.nn.Linear(4, 1), QLayer(cost, n_weights=0))
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 import numpy as np
 import torch
 
+from ..core.batch import BatchSV
+from ..core.circuit import Parameter
+from ..gates import canonical_gate_name
+from ..ir import instruction_name
 from .qfun import QFun
+
+# BatchSV 支持张量角度的参数门（rx/ry/rz 及受控形式来自 _base_2x2 张量分支，
+# rzz/rxx 来自双比特实张量路径）
+_BATCH_PARAM_GATES = {"rx", "ry", "rz", "crx", "cry", "crz", "rzz", "rxx"}
 
 
 class _QFunApply(torch.autograd.Function):
@@ -121,3 +130,95 @@ class QLayer(torch.nn.Module):
             return self._run(torch.cat([x.reshape(-1), w]))
         rows = [self._run(torch.cat([row.reshape(-1), w])) for row in x]
         return torch.stack(rows, dim=0)
+
+
+class BatchLayer(torch.nn.Module):
+    """固定模板线路的批量量子层：BatchSV 整批前向 + 原生 autograd 反向。
+
+    与 :class:`QLayer` 的分工：QLayer 包任意 ``QFun``、逐行求值、参数移位反向，
+    通用但每样本一次演化；BatchLayer 要求**固定模板线路**（参数门限
+    ``rx/ry/rz/crx/cry/crz/rzz/rxx``），换来整批一次演化与端到端 torch
+    autograd —— 全程实部/虚部实张量，NPU 安全（无复数内核）。
+
+    参数约定（与 QLayer 的 ``cat([inputs, weights])`` 同序）：模板
+    ``circuit.parameters()`` 首用序的前 ``n_inputs`` 个为数据编码参数
+    （逐样本取 ``inputs`` 对应列），其余为本层可训练权重。
+
+    读出为逐比特 ``<Z_q>``：``forward(inputs (batch, n_inputs))`` 返回
+    ``(batch, n_qubits)``；一维输入返回 ``(n_qubits,)``。
+
+    Args:
+        circuit: 含符号 :class:`~aicir.core.circuit.Parameter` 的模板线路。
+        n_inputs: 数据编码参数个数（模板参数首用序的前缀）。
+        backend: torch 系后端（``GPUBackend``/``NPUBackend``），决定 device/dtype。
+        init: 权重初值（长度 = 模板参数数 - n_inputs）；缺省 ``[0, 2π)`` 均匀采样。
+        dtype: 权重 dtype，默认 ``torch.float32``。
+    """
+
+    def __init__(
+        self,
+        circuit,
+        n_inputs: int,
+        *,
+        backend,
+        init: Any = None,
+        dtype: torch.dtype = torch.float32,
+    ) -> None:
+        super().__init__()
+        params = list(circuit.parameters)
+        n_inputs = int(n_inputs)
+        if not 0 <= n_inputs <= len(params):
+            raise ValueError(f"n_inputs={n_inputs} 越界（模板共 {len(params)} 个参数）")
+        index_of = {id(p): i for i, p in enumerate(params)}
+
+        specs = []  # (gate, param_index or None)
+        for gate in circuit.gates:
+            raw = tuple(getattr(gate, "params", ()) or ())
+            symbolic = [v for v in raw if isinstance(v, Parameter)]
+            if symbolic:
+                name = canonical_gate_name(instruction_name(gate))
+                if name not in _BATCH_PARAM_GATES or len(raw) != 1:
+                    raise ValueError(
+                        f"BatchLayer 参数门仅支持单参数的 {sorted(_BATCH_PARAM_GATES)}，得到 {name}")
+                specs.append((gate, index_of[id(symbolic[0])]))
+            else:
+                specs.append((gate, None))
+
+        self.n_qubits = int(circuit.n_qubits)
+        self.n_inputs = n_inputs
+        self.n_weights = len(params) - n_inputs
+        self._specs = specs
+        self._backend = backend
+        if init is None:
+            data = torch.empty(self.n_weights, dtype=dtype).uniform_(0.0, 2.0 * np.pi)
+        else:
+            data = torch.as_tensor(np.asarray(init, dtype=float), dtype=dtype).reshape(-1)
+            if data.numel() != self.n_weights:
+                raise ValueError(f"init 长度 {data.numel()} 与权重数 {self.n_weights} 不符")
+        self.weights = torch.nn.Parameter(data)
+
+    def forward(self, inputs: Any = None) -> torch.Tensor:
+        if inputs is None:
+            if self.n_inputs != 0:
+                raise ValueError(f"模板含 {self.n_inputs} 个数据编码参数，需提供 inputs")
+            x = None
+            batch = 1
+            single = True
+        else:
+            x = inputs if torch.is_tensor(inputs) else torch.as_tensor(inputs)
+            single = x.dim() <= 1
+            x = x.reshape(1, -1) if single else x
+            if x.shape[1] != self.n_inputs:
+                raise ValueError(f"inputs 特征数 {x.shape[1]} 与 n_inputs={self.n_inputs} 不符")
+            batch = x.shape[0]
+
+        sv = BatchSV(self.n_qubits, batch, self._backend)
+        x = None if x is None else x.to(dtype=sv.real_dtype)
+        for gate, idx in self._specs:
+            if idx is None:
+                sv.apply_gate(gate)
+            else:
+                angle = x[:, idx] if idx < self.n_inputs else self.weights[idx - self.n_inputs]
+                sv.apply_gate(dataclasses.replace(gate, params=(angle,)))
+        out = sv.z_expectations()  # (batch, n_qubits)
+        return out.reshape(-1) if single else out

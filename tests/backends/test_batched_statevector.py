@@ -158,3 +158,56 @@ class TestBatchSV(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBatchSVTwoQubit(unittest.TestCase):
+    """rzz/rxx 批量路径：以单态路径逐样本为基准，且禁复数加/乘（NPU 安全）。"""
+
+    def setUp(self):
+        torch.manual_seed(1)
+        np.random.seed(1)
+        self.backend = NPUBackend(fallback_to_cpu=True)
+
+    def _compare(self, gate_factory, name):
+        from aicir import rzz, rxx  # noqa: F401  (按 name 取工厂)
+        n, batch = 3, 4
+        thetas = np.random.uniform(-np.pi, np.pi, size=batch)
+
+        # 参考：逐样本单态路径
+        per_sample = [
+            [hadamard(0), hadamard(1), hadamard(2), gate_factory(float(t), 0, 2), ry(0.3, 1)]
+            for t in thetas
+        ]
+        ref = _z_expectations_reference(self.backend, n, per_sample)
+
+        # 批量：逐样本张量角度 + 禁复数加/乘
+        sv = BatchSV(n, batch, self.backend)
+        with _BanComplexAddMul():
+            for q in range(n):
+                sv.apply_gate(hadamard(q))
+            sv.apply_gate(gate_factory(torch.as_tensor(thetas, dtype=sv.real_dtype), 0, 2))
+            sv.apply_gate(ry(0.3, 1))
+            got = sv.z_expectations().cpu().numpy()
+        np.testing.assert_allclose(got, ref, atol=1e-5, err_msg=name)
+
+    def test_rzz_per_sample_matches_reference(self):
+        from aicir import rzz
+        self._compare(rzz, "rzz")
+
+    def test_rxx_per_sample_matches_reference(self):
+        from aicir import rxx
+        self._compare(rxx, "rxx")
+
+    def test_rzz_autograd_flows(self):
+        from aicir import rzz
+        n, batch = 2, 3
+        theta = torch.zeros(batch, requires_grad=True)
+        sv = BatchSV(n, batch, self.backend)
+        sv.apply_gate(hadamard(0))
+        sv.apply_gate(rzz(theta, 0, 1))
+        sv.apply_gate(hadamard(0))
+        loss = sv.z_expectations().sum()
+        loss.backward()
+        # d<Z0>/dθ|θ=0 = -sin(θ) = 0 附近有限且非 None
+        assert theta.grad is not None
+        assert torch.all(torch.isfinite(theta.grad))
