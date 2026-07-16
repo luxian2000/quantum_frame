@@ -1312,3 +1312,29 @@ for _ in range(100):
 可运行示例（XOR 四象限 / sklearn moons，含 `--device npu`）：
 `python -m demos.QNN.qnn_classifier_demo`。准确率由 `tests/qml/test_classifier.py`
 钉住（XOR 训练/测试 >0.85/>0.80）。
+
+## 20. 量子核 `QuantumKernel`（`aicir.qml.kernel`）
+
+量子核 `K(x, z) = |<Φ(x)|Φ(z)>|²`。`QuantumKernel` 用 `BatchSV` **一次**批量演化
+全部 N 个特征态（O(N) 次演化），再以实/虚分离矩阵乘算 gram（全实数 matmul，NPU
+安全），替代逐对重演化的 O(N²) 路径。核矩阵可直接喂 sklearn 预计算核 SVM。
+
+```python
+from aicir.backends.gpu_backend import GPUBackend
+from aicir.qml import QuantumKernel, angle_feature_map
+
+kernel = QuantumKernel(angle_feature_map(n_qubits=3), backend=GPUBackend())
+K = kernel.matrix(X)            # (N, N) numpy，X:(N, 3)
+Kxz = kernel.matrix(X, Z)       # (N, M) 交叉核
+k = kernel(x, z)                # 单对
+
+# 喂经典 SVM（预计算核）
+from sklearn.svm import SVC
+SVC(kernel="precomputed").fit(K, y)
+```
+
+- `feature_map` 为含符号 `Parameter` 的模板，**全部**参数数据驱动（首用序对应输入
+  列），参数门限 `rx/ry/rz/crx/cry/crz/rzz/rxx`。
+- 非线性特征映射（如 IQP 的 `(π-xᵢ)(π-xⱼ)`）由调用方预先算入输入角度矩阵。
+- 对比 `aicir.encoder.IQPEncoder.kernel_matrix`（逐对 O(N²) 演化）：`QuantumKernel`
+  O(N) 演化，大 N 与 NPU 上优势显著。

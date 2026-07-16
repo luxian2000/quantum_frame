@@ -21,7 +21,7 @@ import numpy as np
 from aicir import Circuit, Hamiltonian, NPUBackend, PauliString, cx, hadamard, rx, ry, rzz
 from aicir.backends.npu_backend import is_npu_available
 from aicir.core.circuit import Parameter
-from aicir.qml import qfun, expval, probs, BatchLayer, build_classifier
+from aicir.qml import qfun, expval, probs, BatchLayer, build_classifier, QuantumKernel, angle_feature_map
 
 
 def _backend(allow_cpu_fallback: bool) -> NPUBackend:
@@ -99,6 +99,20 @@ def case_classifier_train_step(backend):
         raise AssertionError("classifier 训练损失非有限")
 
 
+def case_quantum_kernel(backend):
+    # 量子核：批量演化 + 实/虚 gram（全实数 matmul，NPU 安全）
+    fmap = angle_feature_map(n_qubits=3)
+    kernel = QuantumKernel(fmap, backend=backend)
+    X = np.random.default_rng(2).uniform(-1, 1, size=(6, 3))
+    K = np.asarray(kernel.matrix(X))
+    if K.shape != (6, 6):
+        raise AssertionError(f"核矩阵形状 {K.shape} != (6,6)")
+    if not np.allclose(np.diag(K), 1.0, atol=1e-4):
+        raise AssertionError("核矩阵对角应为 1（归一态自内积）")
+    if not np.allclose(K, K.T, atol=1e-4):
+        raise AssertionError("核矩阵应对称")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--allow-cpu-fallback", action="store_true")
@@ -110,6 +124,7 @@ def main():
         ("qfun_probs_grad", lambda: case_qfun_probs_grad(backend)),
         ("batchlayer_forward_backward", lambda: case_batchlayer_forward_backward(backend)),
         ("classifier_train_step", lambda: case_classifier_train_step(backend)),
+        ("quantum_kernel", lambda: case_quantum_kernel(backend)),
     ]
     passed, failures = 0, []
     for name, fn in cases:
