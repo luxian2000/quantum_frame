@@ -125,3 +125,21 @@ def test_rejects_unsupported_parametrized_gate():
     circ = Circuit(u3(theta, 0.1, 0.2, 0), n_qubits=1)
     with pytest.raises(ValueError):
         BatchLayer(circ, 0, backend=GPUBackend())
+
+
+def test_output_on_weights_device_for_classical_composition():
+    # 读出须与模块参数同设备，下游经典 nn.Module 才能无缝拼接（NPU 上尤其关键：
+    # 演化在设备、读出移回参数设备）。CPU 上钉住 device 一致性契约。
+    from aicir import Circuit, Parameter, cx, rx, ry
+    n, n_inputs, n_weights = 2, 2, 3
+    xs = [Parameter(f"x{i}") for i in range(n_inputs)]
+    ws = [Parameter(f"w{i}") for i in range(n_weights)]
+    template = Circuit(rx(xs[0], 0), rx(xs[1], 1), ry(ws[0], 0), ry(ws[1], 1),
+                       ry(ws[2], 0), cx(1, [0]), n_qubits=n)
+    layer = BatchLayer(template, n_inputs=n_inputs, backend=GPUBackend())
+    out = layer(torch.randn(4, n_inputs))
+    assert out.device == layer.weights.device
+    # 拼一个同设备的经典头，前向不报设备错
+    head = torch.nn.Linear(n, 2).to(layer.weights.device)
+    logits = head(out)
+    assert logits.shape == (4, 2)

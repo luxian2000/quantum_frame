@@ -220,5 +220,8 @@ class BatchLayer(torch.nn.Module):
             else:
                 angle = x[:, idx] if idx < self.n_inputs else self.weights[idx - self.n_inputs]
                 sv.apply_gate(dataclasses.replace(gate, params=(angle,)))
-        out = sv.z_expectations()  # (batch, n_qubits)
+        out = sv.z_expectations()  # (batch, n_qubits)，位于后端设备
+        # 读出移回模块参数所在设备（默认 CPU），使下游经典 nn.Module 无需设备对齐；
+        # 演化仍在后端设备（NPU/GPU），仅 (batch, n_qubits) 小实张量跨设备（autograd 安全）。
+        out = out.to(self.weights.device)
         return out.reshape(-1) if single else out

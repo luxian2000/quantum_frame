@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- **`BatchLayer` 读出移回模块参数设备，修 `build_classifier` 真机 NPU 设备错配（真机暴露）。** `BatchLayer.forward` 此前返回后端设备（npu:0）上的读出张量，而下游 `torch.nn.Linear` 头默认在 CPU，`build_classifier` 在 NPU 上 `model(x)` 报 `Expected all tensors to be on the same device`（`qml_layers_probe` 的 `classifier_train_step` case 首次跑上真机才暴露；CPU 后端两者同为 cpu 故掩盖）。现读出经 `.to(self.weights.device)` 移回模块参数设备（默认 CPU）——演化仍在后端设备（NPU/GPU），仅 `(batch, n_qubits)` 小实张量跨设备（autograd 安全），使量子层与任意经典 `nn.Module` 无缝拼接。
 - **NPU `from_distributed_env` 单元测试对物理卡数保持无关（真机单卡暴露）。** `tests/backends/test_npu_backend.py` 的 `test_from_distributed_env` 与 `..._initializes_process_group_when_rendezvous_env_exists` 硬编码 `LOCAL_RANK=2`/`1` 只为测 env 解析与 process-group 路径、不断言物理设备；`_resolve_device("npu:2")` 与卡数无关（无分配），但 `__init__` 随后调用真实 `torch.npu.set_device(npu:2)`，单卡机上超出 `[0,1)` 报 `Invalid device ID`（多卡机则正常，故先前 4 卡验证通过、单卡 strict 才暴露）。新增 `_neutralize_npu_set_device`：`torch.npu` 存在时 no-op `set_device`（设备解析与 hccl/gloo 分支保持不变），CPU-only 机 `torch.npu` 缺席则不 patch。与既已无关化的 `test_from_distributed_env_uses_local_rank_device`（mock `_resolve_device`）同法。**非产品 bug**：真机多卡启动若 `LOCAL_RANK` 越界应当报错（静默回退单卡到 CPU 会造成跨设备混合运行）。已在真机单卡 NPU 复跑 `scripts/npu/backend.sh --strict-npu` 通过。
 
 ## 2026-07-15
