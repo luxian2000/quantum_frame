@@ -6,8 +6,13 @@
 
 ### Added
 
+- **`aicir.qml.QFun.grad` 支持 `probs` 返回的 Jacobian（qml 成熟化路线第 2 项）。** 此前 `.grad` 对 `probs`/`sample` 一律拒绝；现 `probs` 返回参数移位 Jacobian（形状 `(D, P)`，标量参为 `(D,)`，`D=2^len(wires)`、`P` 为参数数）。每个基态概率 `p_i=<ψ|i><i|ψ>` 是投影算符期望，故对整条概率向量施同一参数移位规则即得，逐输出分量复用注册表梯度方法（`self.differential`，单一事实来源），并用按参数元组缓存的 `_probs` 使 `D` 个分量共享同一批底层线路求值（psr 下共 `2P` 次）。因 Jacobian 形状与多观测量约定一致，`QLayer`/`BatchLayer` 反向无需改动即可对 `probs` 层回流（分类损失就此可用）。`sample` 仍无梯度（离散采样），报错信息更明确。
 - **`aicir.core.BatchSV` 支持 `rzz`/`rxx` 双比特门。** rzz 为逐基态对角相位（-θ/2·zz），rxx 为 cos(θ/2)·I - i·sin(θ/2)·X⊗X（双比特同时翻转 = 索引异或 gather）；与既有 1 比特路径一致：全程实部/虚部实张量、支持逐样本张量角度与 autograd、NPU 安全（测试含 `_BanComplexAddMul` 复数内核禁用守卫）。补齐 HEA `rzz`/`rxx` 纠缠层与 IQP 编码在批量路径上的门集缺口。
 - **`aicir.qml.BatchLayer`：固定模板线路的批量量子层（qml 成熟化路线第 1 项）。** `BatchSV` 此前零消费方、`QLayer` 批量前向为逐行 Python 循环（每样本一次全态演化）；`BatchLayer` 要求固定模板（参数门限单参数的 `rx/ry/rz/crx/cry/crz/rzz/rxx`），换来整批一次演化 + 端到端 torch 原生 autograd（实/虚分离、NPU 安全、无逐参数 PSR 循环）。参数约定与 `QLayer` 的 `cat([inputs, weights])` 同序（模板 `parameters` 首用序前 `n_inputs` 个为逐样本数据编码，其余为可训练权重），读出逐比特 `<Z_q>`，梯度同时回流到权重与前置经典层。torch 可选依赖守卫与 `QLayer` 一致（无 torch 时 `aicir.qml.BatchLayer is None`）。选型见 `aicir/qml/README.md` §18。真机 NPU 回归：`scripts/npu/qml.sh --strict-npu --pytest-arg -q`（新测试已随 `tests/qml` 纳入该 suite）。
+
+### Fixed
+
+- **NPU `from_distributed_env` 单元测试对物理卡数保持无关（真机单卡暴露）。** `tests/backends/test_npu_backend.py` 的 `test_from_distributed_env` 与 `..._initializes_process_group_when_rendezvous_env_exists` 硬编码 `LOCAL_RANK=2`/`1` 只为测 env 解析与 process-group 路径、不断言物理设备；`_resolve_device("npu:2")` 与卡数无关（无分配），但 `__init__` 随后调用真实 `torch.npu.set_device(npu:2)`，单卡机上超出 `[0,1)` 报 `Invalid device ID`（多卡机则正常，故先前 4 卡验证通过、单卡 strict 才暴露）。新增 `_neutralize_npu_set_device`：`torch.npu` 存在时 no-op `set_device`（设备解析与 hccl/gloo 分支保持不变），CPU-only 机 `torch.npu` 缺席则不 patch。与既已无关化的 `test_from_distributed_env_uses_local_rank_device`（mock `_resolve_device`）同法。**非产品 bug**：真机多卡启动若 `LOCAL_RANK` 越界应当报错（静默回退单卡到 CPU 会造成跨设备混合运行）。已在真机单卡 NPU 复跑 `scripts/npu/backend.sh --strict-npu` 通过。
 
 ## 2026-07-15
 
