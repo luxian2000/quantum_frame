@@ -4,6 +4,8 @@
 
 ## 2026-07-16
 
+> **真机 NPU 验证（qml 成熟化 #1–#7 收官）**：`scripts/npu/qml_layers.sh` 严格 NPU（npu:0）6/6 cases 通过（qfun expval/probs 梯度、BatchLayer 前反向、build_classifier 训练、QuantumKernel、gradient_variance）；`scripts/npu/qml.sh --strict-npu` 探针 + 完整 pytest 套件（`tests/qml` + qfun/vqc/primitives/optimizer）全绿。过程中真机探针捕获并修复 4 个仅在硬件暴露的缺陷：噪声 aclnnAdd、MPS aclnnComplex 8 维上限、classifier 设备错配、qfun auto-on-torch 崩溃。
+
 ### Added
 
 - **`aicir.qml.build_classifier`：端到端量子分类器（qml 成熟化路线第 6 项，合 1+2+6 为「可用 QML」里程碑）。** 把「角度编码 → HEA 纠缠层 → 逐比特 `<Z_q>` → 线性头」组合成标准 `torch.nn.Module`（`forward(x (N, n_features)) -> logits (N, n_classes)`），量子部分走 `BatchLayer`（整批一次演化、实/虚分离、NPU 安全、原生 autograd），可直接用 torch 优化器/损失训练、可嵌入经典网络。同附工厂 `classifier_template`（构造符合 `BatchLayer` 门集的模板）。可运行 demo `demos/QNN/qnn_classifier_demo.py`（XOR 四象限默认，`--dataset moons` 用 sklearn，`--device npu` 真机）；准确率由 `tests/qml/test_classifier.py` 钉住（XOR 训练/测试 >0.85/>0.80，本机实测 0.958/0.950）。torch 可选守卫一致（无 torch 时 `build_classifier is None`）。
