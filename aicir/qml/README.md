@@ -1338,3 +1338,28 @@ SVC(kernel="precomputed").fit(K, y)
 - 非线性特征映射（如 IQP 的 `(π-xᵢ)(π-xⱼ)`）由调用方预先算入输入角度矩阵。
 - 对比 `aicir.encoder.IQPEncoder.kernel_matrix`（逐对 O(N²) 演化）：`QuantumKernel`
   O(N) 演化，大 N 与 NPU 上优势显著。
+
+## 21. 贫瘠高原诊断（`aicir.qml.diagnostics`）
+
+把梯度方差信号 + QFIM 谱接到真实训练目标（`QFun`），诊断贫瘠高原（barren
+plateau）与平坦方向：
+
+```python
+from aicir.qml import gradient_variance, barren_plateau_scan, qfim_spectrum
+
+# 单点梯度方差（贫瘠高原信号：方差随比特数指数衰减）
+rep = gradient_variance(qfun, n_parameters, n_samples=30, seed=0)
+# → {gradient_variance, mean_gradient_norm, vanishing, ...}
+
+# 跨比特数扫描 + 衰减率判定
+scan = barren_plateau_scan(lambda n: make_qfun(n), [2, 4, 6, 8])
+# → {variances, decay_rate, is_barren}   # log2(方差) 斜率 < -0.5 判 barren
+
+# QFIM 谱（近零特征值 = 平坦方向/过参数化）
+spec = qfim_spectrum(qfun, params)
+# → {eigenvalues(降序), effective_rank, max/min_eigenvalue}
+```
+
+- 梯度经 `QFun.grad`（走 `aicir.qml.deriv` 单一事实来源），QFIM 经 `qml.qfim`；
+  区别于 `metrics.trainability` 的固定 local-probe——这里是**真实训练目标**的信号。
+- `QFun.statevector(params)` 返回测量前末态振幅，供 QFIM 等以线路态为对象。

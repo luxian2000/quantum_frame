@@ -195,6 +195,18 @@ class QFun:
         )
         return result.counts(-1)
 
+    def statevector(self, param: Any) -> np.ndarray:
+        """返回给定参数下测量前的末态振幅（numpy ``(2^n,)``）。
+
+        供诊断（如 QFIM 谱）以线路态为对象；噪声路径不支持（密度矩阵）。
+        """
+        if self.noise_model is not None:
+            raise ValueError("statevector 不支持噪声路径（末态为密度矩阵）")
+        _, circuit, _, _, _ = self._resolve(param)
+        result = Measure(circuit.backend).run(circuit, shots=None, return_state=True,
+                                              return_probabilities=False)
+        return np.asarray(result.final_state.to_numpy()).reshape(-1)
+
     def __call__(self, param: Any) -> Any:
         kind, circuit, observables, wires, multi = self._resolve(param)
         if kind == "probs":
