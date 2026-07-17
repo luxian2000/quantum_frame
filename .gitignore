@@ -18,3 +18,6 @@ dist/
 node_modules/
 demos/BeH2/output.txt
 compare.md
+CLAUDE.md
+CONTENTS.md
+NEXT.md
