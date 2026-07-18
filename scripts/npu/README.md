@@ -178,9 +178,9 @@ device. Use `--allow-cpu-fallback` only for local development.
 
 Generic full-matrix complex autograd in `tests/gates/test_matrix_autograd.py`
 is still run for the CPU/fallback backend contract. On a real Ascend NPU that
-test intentionally excludes the `NPUBackend` parametrization because torch_npu
-cannot backward through arbitrary complex fan-out graphs (`aclnnInplaceAdd` does
-not support `DT_COMPLEX64`). Real-NPU deriv coverage is provided by the probe
+test intentionally excludes the `NPUBackend` parametrization because generic
+full-matrix complex fan-out autograd is a CPU/fallback-only contract on Ascend.
+Real-NPU deriv coverage is provided by the probe
 above plus the NPUBackend custom-autograd tests selected by `scripts/npu/deriv.sh`.
 
 Without `--strict-npu`, the suites still run in environments where current tests

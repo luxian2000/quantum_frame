@@ -52,7 +52,7 @@
 
 ### `tn_expectation(circuit, observable, *, backend=None, optimize="auto", memory_limit=None)`
 
-求期望值 `⟨psi|O|psi⟩`，其中 `observable` 可以是带 `to_matrix(backend)` 方法的对象（例如 `Hamiltonian`），也可以是可直接 `backend.cast` 的矩阵。内部先用张量网络收缩出末态矢量，再走 `backend.expectation_sv`。在 `GPUBackend`/`NPUBackend` 上，若电路参数是 Torch 张量（`requires_grad=True`），返回值保留计算图，可 `.backward()` 得到参数梯度——`NPUBackend` 的复数 `tensordot` 复用 autograd-safe 的 real/imag 分解 matmul 实现，因此该可微性在 NPU 上同样成立。
+求期望值 `⟨psi|O|psi⟩`，其中 `observable` 可以是带 `to_matrix(backend)` 方法的对象（例如 `Hamiltonian`），也可以是可直接 `backend.cast` 的矩阵。内部先用张量网络收缩出末态矢量，再走 `backend.expectation_sv`。在 `GPUBackend`/`NPUBackend` 上，若电路参数是 Torch 张量（`requires_grad=True`），返回值保留计算图，可 `.backward()` 得到参数梯度，该可微性在 NPU 上同样成立。
 
 ### `Measure.run(circuit, method="tensor", ...)`
 
@@ -81,7 +81,7 @@
 - 仅接受 1/2 比特门；≥3 比特门需先经 `aicir.transpile.DecomposePass` 分解。
 - 非相邻双比特门自动插入 SWAP 网络，并跟踪逻辑↔物理置换（`MPSState.logical_at`/`site_of` 属性）。
 - 仅支持纯态、无噪声、无经典控制流（`ControlFlow`）。
-- 后端支持 NumPy/GPU/NPU；NPU 支持 `mps_statevector`、`mps_expectation` 与 `MPSEstimator` 前向，梯度通过 `MPSEstimator.gradient(method="psr")` 参数移位获得。直接 autograd（`mps_expectation(...).backward()`）仅作为 CPU/GPU 能力；Ascend 缺少 complex64 梯度累加所需内核。NPU 上 `NPUBackend.svd` 走 real-embedding（Ascend 无原生 complex64 SVD），复数乘/除经 real/imag 分解，真机验收见 `demos/demo_npu_mps.py`。
+- 后端支持 NumPy/GPU/NPU；NPU 支持 `mps_statevector`、`mps_expectation` 与 `MPSEstimator` 前向，梯度通过 `MPSEstimator.gradient(method="psr")` 参数移位获得（直接 autograd `mps_expectation(...).backward()` 仅 CPU/GPU 可用）。真机验收见 `demos/demo_npu_mps.py`。
 
 ### `mps_expectation(circuit, observable, *, max_bond_dim=None, cutoff=1e-10, backend=None)`
 
@@ -127,7 +127,7 @@
 - 设定后，`optimize="cotengra"` 或 `optimize="auto"`（满足条件使用 cotengra）会触发 cotengra 的切片规划，返回形如 `(contraction_path, slices_dict)` 的结果。
 - **执行侧**：对每个切片按 `slices_dict` 逐一固定开放指标（通过后端原语 `backend.take`），再经标准的成对 `tensordot` 收缩完成该切片，最后用 `backend.add` 累加所有切片结果。
 - **开放指标也可被切片**：当输出张量（或中间张量）超过内存预算时，output indices 也会被纳入切片维度；执行仍走后端原语，通过一次性的 one-hot 置位与累加完整重建（`一次性 one-hot 放置累加`），与处理通常切片指标相同。
-- **可微性保留**：执行侧采用 `backend.tensordot`、`backend.take`、`backend.add` 这些后端抽象原语，因此 Torch autograd 与 NPU 上可微性（包括复数分解）完全保留，求和操作保持梯度。
+- **可微性保留**：执行侧采用 `backend.tensordot`、`backend.take`、`backend.add` 这些后端抽象原语，因此 Torch autograd 与 NPU 上可微性完全保留，求和操作保持梯度。
 - **限制**：`memory_limit` 与 `optimize="opt_einsum"` 或 `"greedy"` 组合抛 `ValueError`（这两个路径不支持切片规划）。需 `pip install -e ".[tn]"`。
 
 ---

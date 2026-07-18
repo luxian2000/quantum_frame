@@ -518,21 +518,12 @@ AND torch.distributed.get_world_size() > 1
 
 所有 rank 须使用**相同的** `seed`，以保证初始权重和排名阶段的候选架构集合在各 rank 上完全一致，分片机制才能产生等价（`safe`）或有意义的数据并行（`aggressive`）结果。
 
-#### 三个阶段的分片方式
+#### safe vs aggressive 如何选
 
-##### ranking 阶段
+ranking、training、finetune 三个阶段都会按 rank 并行。两种 training 模式的取舍：
 
-`rank_architectures` 按等距切分把 `ranking_num` 个候选架构分配到各 rank：rank `r` 负责索引 `r, r+world_size, r+2*world_size, ...` 的候选架构，评估完成后经 `all_gather` 合并并统一排序。结果与单卡数值完全一致（每个候选架构只被评估一次，不重复计算）。
-
-##### training 阶段（`mode` 控制）
-
-- **`safe` 模式**：每步对采样的一个架构，将 `W=supernet_num` 次 select 评估（即 `_sharded_select`）按等距切分到各 rank，各 rank 只评估自己拥有的 supernet，`all_gather` 后取全局 argmin 选出最优 supernet；梯度步仅由 rank 0 执行（`loss.backward()` + `optimizer.step()`），其余 rank 跳过更新，步后由 `broadcast_parameters` 把权重广播到所有 rank。数值上与单卡完全等价，加速上限约为 `W`。
-
-- **`aggressive` 模式**：每步各 rank 从本步预先采样的 `world_size` 个架构中取 `arch[rank]`，分别独立做 select → forward → backward，对所有共享参数的梯度执行 `all_reduce_mean` 求平均；随后通过 `all_gather` 取得被任一 rank 选中的 supernet id 并集，**所有 rank 一致地步进这同一组优化器**（梯度已同步、优化器状态一致，因此各 rank 权重保持同步，无需广播）。约等效于 `world_size` 倍吞吐，但各 rank 动态更新不同、训练轨迹与单卡不同；可相应调小 `supernet_steps`（如缩短为原来的 `1/world_size`）。
-
-##### finetune 阶段
-
-`train` 对排名前 `world_size` 的候选架构做并行微调：`is_sharded` 时 rank `r` 微调 `ranking_records[r]`，`all_gather` 后取全局 `score` 最小的 payload 作为最优结果。单卡路径等价于仅微调 top-1。
+- **`safe`**：数值上与单卡**完全等价**，加速上限约为 `W = supernet_num`。要可复现、要与单卡结果一致时选它。
+- **`aggressive`**：约 `world_size` 倍吞吐，但各 rank 训练轨迹与单卡不同（数据并行近似）；选它时可相应调小 `supernet_steps`（如缩短为原来的 `1/world_size`）。
 
 #### 入口
 

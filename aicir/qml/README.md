@@ -231,7 +231,7 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                         |
 | `metric_eps`              | 用于 QFIM block 态导数中心差分的步长                                               |
 | `damping`                 | Kronecker 因子阻尼；实现中使用`sqrt(damping)` 加到两个因子对角线上               |
-| `backend`                 | Torch/NPU 后端；传入`NPUBackend` 时启用不搬回 CPU 的设备端路径                   |
+| `backend`                 | Torch/NPU 后端                   |
 | `return_gradient`         | 若为`True`，额外返回普通梯度                                                     |
 | `return_kfac_factors`     | 若为`True`，额外返回 Kronecker 因子列表                                          |
 
@@ -248,7 +248,7 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | `shift` / `coefficient` | `gradient_method="psr"` 时的参数移位配置                                         |
 | `metric_eps`              | 用于 QFIM 对角态导数中心差分的步长                                                 |
 | `damping`                 | 加到每个 QFIM 对角项上的非负阻尼项                                                 |
-| `backend`                 | Torch/NPU 后端；传入`NPUBackend` 时启用不搬回 CPU 的设备端路径                   |
+| `backend`                 | Torch/NPU 后端                   |
 | `return_gradient`         | 若为`True`，额外返回普通梯度                                                     |
 | `return_qfim_diag`        | 若为`True`，额外返回 QFIM 对角线                                                 |
 
@@ -262,7 +262,7 @@ $P$：可微参数数量。$K$：随机采样坐标数或扰动方向数。
 | `parameter_indices` | 可选更新坐标，支持 flat 整数索引、多维 tuple 索引或列表      |
 | `shift`             | 两点偏移量，默认`π/2`，对应频率为 1 的标准 ROTOSOLVE 公式 |
 | `atol`              | 拟合正弦振幅低于该阈值时认为该坐标平坦，不更新               |
-| `backend`           | Torch/NPU 后端；传入后目标值、三角函数和坐标更新保持在设备端 |
+| `backend`           | Torch/NPU 后端 |
 | `return_value`      | 若为`True`，同时返回最终目标函数值                         |
 
 ## 3. 自动微分 `auto`
@@ -283,18 +283,6 @@ grad = auto(fn, params, *, backend=None)
 $$
 \frac{\partial \langle O \rangle}{\partial \boldsymbol{\theta}} = \text{torch.autograd.grad}(\langle O \rangle(\boldsymbol{\theta}),\ \boldsymbol{\theta})
 $$
-
-### NPU 兼容设计
-
-参数张量的 `dtype` 和 `device` 均从 `backend` 中读取（`backend._dtype` → 对应实数类型，`backend._device` → NPU/CUDA 设备），确保：
-
-- 对于 `NPUBackend`，参数从创建起就驻留在 NPU 上，梯度在设备端累积，最后才将 `.grad` 一次性移至主机
-- 不会在梯度计算中触发额外的设备↔主机往返
-
-| 精度后端              | 参数`dtype`     |
-| --------------------- | ----------------- |
-| `complex64`（默认） | `torch.float32` |
-| `complex128`        | `torch.float64` |
 
 ### 与其他方法的对比
 
@@ -568,7 +556,6 @@ $$
 - **空间复杂度**：仅需 $O(1)$ 额外状态存储（$|\lambda\rangle$ 与 $|\phi\rangle$ 各一份），远优于有限差分的 $O(P)$ 额外电路
 - 与 `psr` 相比：相同精度，但减少 $\sim P$ 倍的模拟开销
 - **结构感知**：直接作用于 `Circuit` 对象，可微门为 `rx/ry/rz/crx/cry/crz/rzz/rxx`；其他门（`H`、`cx`、`u3`、任意幺正门）正常传播但不被微分
-- **NPU 兼容**：梯度读取 $\operatorname{Im}\langle\lambda|G|\phi\rangle$ 全程在设备端完成，不触发设备→主机拷贝
 - `observable` 可为矩阵（numpy/后端张量）或 `Hamiltonian` 对象
 
 ### 示例
@@ -620,16 +607,6 @@ QFIM 的纯态公式为：
 $$
 F_{ij}=4\operatorname{Re}\left[\langle\partial_i\psi|\partial_j\psi\rangle-\langle\partial_i\psi|\psi\rangle\langle\psi|\partial_j\psi\rangle\right]
 $$
-
-### NPU 兼容设计
-
-`state_fn` 可以返回：
-
-- numpy 态向量
-- Torch/NPU 后端张量（如 `state.data`）
-- aicir `State` 对象
-
-设备张量会在 QFIM 求解前 detach 并移动到主机，用 NumPy 完成小规模线性求解，避免依赖 NPU 的复杂矩阵求逆支持；目标函数返回的 NPU/Torch 标量仍可被 `psr` / `fd` / `spsa` / `auto` 路径正常处理。
 
 ### 示例
 
@@ -768,15 +745,6 @@ $$
 - 若 `params` 是二维数组且未显式指定 block，默认把整个参数矩阵作为一个 KFAC block
 - 若参数是一维数组且未显式指定形状，默认退化为 `(P, 1)` 的单列 Kronecker 因子
 
-### NPU 兼容设计
-
-当传入 `NPUBackend`，或 `grad` / `kfac_factors` 是 Torch/NPU 张量时，`kqng` 会走设备端路径：
-
-- 普通梯度保持为 Torch/NPU tensor
-- `state_fn` 返回的态向量保持为 Torch/NPU tensor
-- QFIM block、Kronecker 因子和 `torch.linalg.solve` 均在设备端完成
-- 不调用 `.cpu()`、`to_numpy()` 或 NumPy 线性代数
-
 ### 示例
 
 ```python
@@ -835,17 +803,6 @@ $$
 $$
 
 它比 `qng` 和 `bdqng` 更便宜，不需要矩阵求逆或分块线性求解；代价是完全忽略参数间耦合，因此近似更粗。
-
-### NPU 兼容设计
-
-当传入 `NPUBackend`，或 `grad` / `qfim_diag` 是 Torch/NPU 张量时，`dqng` 会走设备端路径：
-
-- `fn` 返回的标量保持为 Torch/NPU tensor
-- `state_fn` 返回的态向量保持为 Torch/NPU tensor
-- QFIM 对角线、阻尼项和最终除法均在设备端完成
-- 不调用 `.cpu()`、`to_numpy()` 或 NumPy 线性代数
-
-因此 NPU ansatz 的梯度预条件不会把中间数据搬回 CPU。若用户的 `fn` 或 `state_fn` 自己调用了 `.cpu()` / `to_numpy()`，则会由用户函数自身造成主机搬移，`dqng` 不会额外执行该操作。
 
 ### 示例
 
@@ -922,16 +879,6 @@ B=\frac{L_+ - L_-}{2\sin s}
 $$
 
 因此它执行的是逐坐标精确最小化，而不是沿梯度方向下降。
-
-### NPU 兼容设计
-
-当传入 `backend=NPUBackend`，或 `params` 本身是 Torch/NPU tensor 时，`rotosolve` 会走设备端路径：
-
-- 参数张量、目标函数标量、`atan2` 和坐标更新均保持为 Torch/NPU tensor
-- 不调用 `.cpu()`、`.numpy()`、`to_numpy()` 或 NumPy 三角函数处理设备标量
-- 返回值也是设备端 tensor；`return_value=True` 时最终 loss 同样保持在设备端
-
-因此 NPU ansatz 的 ROTOSOLVE 优化过程中不会由 `rotosolve` 把中间数据搬回 CPU。若用户的 `fn` 自己调用 `.cpu()` / `to_numpy()`，则主机搬移来自用户函数本身。
 
 ### 示例
 
@@ -1242,8 +1189,8 @@ y = model(torch.randn(8, 4))         # 批量前向 → (8,)
 
 `BatchLayer` 是 `QLayer` 的批量姊妹：要求**固定模板线路**（参数门限单参数的
 `rx/ry/rz/crx/cry/crz/rzz/rxx`），换来整批一次演化与端到端 torch autograd——
-底层走 `aicir.core.batch.BatchSV`（实部/虚部实张量、逐样本门角度、NPU 安全，
-无复数内核），不做逐参数 PSR 循环，反向由 torch 原生求导完成。
+底层走 `aicir.core.batch.BatchSV`（整批一次演化、逐样本门角度），不做逐参数
+PSR 循环，反向由 torch 原生求导完成。
 
 ```python
 BatchLayer(circuit, n_inputs, *, backend, init=None, dtype=torch.float32)
@@ -1282,8 +1229,8 @@ out.sum().backward()                                        # 原生 autograd
 
 `build_classifier` 把「角度编码 → 硬件高效纠缠层 → 逐比特 `<Z_q>` 读出 →
 线性头」组合成一个标准 `torch.nn.Module`，直接用 torch 优化器/损失训练。量子
-部分走 `BatchLayer`（整批一次演化、实/虚分离、NPU 安全、原生 autograd），
-故大 batch 训练在 NPU/GPU 上高效。
+部分走 `BatchLayer`（整批一次演化、原生 autograd），故大 batch 训练在
+NPU/GPU 上高效。
 
 ```python
 build_classifier(*, n_features, n_classes, backend, n_qubits=None, layers=2, seed=None)
@@ -1316,8 +1263,8 @@ for _ in range(100):
 ## 20. 量子核 `QuantumKernel`（`aicir.qml.kernel`）
 
 量子核 `K(x, z) = |<Φ(x)|Φ(z)>|²`。`QuantumKernel` 用 `BatchSV` **一次**批量演化
-全部 N 个特征态（O(N) 次演化），再以实/虚分离矩阵乘算 gram（全实数 matmul，NPU
-安全），替代逐对重演化的 O(N²) 路径。核矩阵可直接喂 sklearn 预计算核 SVM。
+全部 N 个特征态（O(N) 次演化）再算 gram 矩阵，替代逐对重演化的 O(N²) 路径。核矩阵
+可直接喂 sklearn 预计算核 SVM。
 
 ```python
 from aicir.backends.gpu_backend import GPUBackend
