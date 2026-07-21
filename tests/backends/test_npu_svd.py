@@ -56,6 +56,20 @@ def test_real_embedding_svd_degenerate_cpu():
     assert torch.allclose(u.conj().T @ u, torch.eye(4, dtype=u.dtype), atol=1e-3)
 
 
+def test_real_embedding_svd_rank_deficient_64_by_64():
+    """QRC reduced density matrices are 64x64 and commonly rank deficient."""
+    torch.manual_seed(9)
+    factors = torch.randn(64, 8, dtype=torch.complex64)
+    matrix = factors @ factors.conj().T
+
+    u, s, vh = _real_embedding_svd(matrix)
+
+    assert u.shape == (64, 64)
+    assert s.shape == (64,)
+    assert vh.shape == (64, 64)
+    assert torch.allclose(_recon(u, s, vh), matrix, atol=2e-3, rtol=2e-4)
+
+
 @pytest.mark.skipif(not is_npu_available(), reason="需要真实 NPU")
 def test_npu_svd_on_device():
     from aicir.backends.npu_backend import NPUBackend

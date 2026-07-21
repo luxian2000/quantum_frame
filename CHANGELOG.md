@@ -2,6 +2,12 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-21
+
+### Fixed
+
+- **NPU real-embedding 复数 SVD 支持大型秩亏矩阵。** 复数 modified Gram-Schmidt 此前使用固定 `0.5` 接受阈值；对 QRC 帧间重置产生的秩亏 `64x64` 约化密度矩阵，实 SVD 的简并零空间可能只保留 62/63 个复数右奇异向量，随后固定访问第 64 列触发 `IndexError`。现改用小容差、二次正交化和完整基检查，并新增随机秩 8 的 `64x64` 复数半正定矩阵重建回归测试。
+
 ## 2026-07-16
 
 > **真机 NPU 验证（qml 成熟化 #1–#7 收官）**：`scripts/npu/qml_layers.sh` 严格 NPU（npu:0）6/6 cases 通过（qfun expval/probs 梯度、BatchLayer 前反向、build_classifier 训练、QuantumKernel、gradient_variance）；`scripts/npu/qml.sh --strict-npu` 探针 + 完整 pytest 套件（`tests/qml` + qfun/vqc/primitives/optimizer）全绿。过程中真机探针捕获并修复 4 个仅在硬件暴露的缺陷：噪声 aclnnAdd、MPS aclnnComplex 8 维上限、classifier 设备错配、qfun auto-on-torch 崩溃。

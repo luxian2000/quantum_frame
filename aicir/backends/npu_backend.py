@@ -515,22 +515,34 @@ def _real_embedding_svd(matrix):
     big = torch.cat([torch.cat([ar, -ai], dim=1), torch.cat([ai, ar], dim=1)], dim=0)
     _ur, sr, vhr = torch.linalg.svd(big, full_matrices=False)  # sr 降序，长 2p
     kvr, kvi, ks = [], [], []  # 保留右向量的 real/imag 对与对应奇异值
+    # A fixed 0.5 cutoff rejects valid directions in a large degenerate/null
+    # subspace. This occurs for QRC's rank-deficient 64x64 reduced density
+    # matrices. Exact duplicate partners leave only roundoff-size residuals;
+    # independent complex directions remain safely above this tolerance.
+    selection_tolerance = 1.0e-4
     for j in range(int(sr.shape[0])):
         wr, wi = vhr[j, :n], vhr[j, n:]  # 候选右向量的实/虚部（实数对）
-        for kr, ki in zip(kvr, kvi):
-            dr = (kr * wr + ki * wi).sum()  # <k,w> = conj(k)·w 的实/虚部
-            di = (kr * wi - ki * wr).sum()
-            pr = dr * kr - di * ki  # proj = <k,w>·k
-            pi = dr * ki + di * kr
-            wr = wr - pr  # 实数减法（NPU 安全）
-            wi = wi - pi
+        # Reorthogonalize once to keep float32 MGS stable for p=64.
+        for _ in range(2):
+            for kr, ki in zip(kvr, kvi):
+                dr = (kr * wr + ki * wi).sum()  # <k,w> = conj(k)·w 的实/虚部
+                di = (kr * wi - ki * wr).sum()
+                pr = dr * kr - di * ki  # proj = <k,w>·k
+                pi = dr * ki + di * kr
+                wr = wr - pr  # 实数减法（NPU 安全）
+                wi = wi - pi
         nrm = torch.sqrt((wr * wr + wi * wi).sum())
-        if float(nrm.detach()) > 0.5:  # 分支为控制流，保留张量仍带梯度
+        if float(nrm.detach()) > selection_tolerance:  # 数据相关控制流
             kvr.append(wr / nrm)
             kvi.append(wi / nrm)
             ks.append(sr[j])
         if len(kvr) == p:
             break
+    if len(kvr) != p:
+        raise RuntimeError(
+            "Real-embedding SVD could not extract a complete complex right-singular "
+            f"basis: expected {p} vectors, received {len(kvr)}."
+        )
     vr, vi = torch.stack(kvr, dim=1), torch.stack(kvi, dim=1)  # (n, p) 实/虚
     S = torch.stack(ks)  # (p,) 实数降序
     ur_cols, ui_cols = [], []
