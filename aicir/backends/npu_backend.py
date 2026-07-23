@@ -514,37 +514,63 @@ def _real_embedding_svd(matrix):
     ar, ai = _SplitComplex.apply(matrix)  # 单入边拆分，反传安全
     big = torch.cat([torch.cat([ar, -ai], dim=1), torch.cat([ai, ar], dim=1)], dim=0)
     _ur, sr, vhr = torch.linalg.svd(big, full_matrices=False)  # sr 降序，长 2p
-    kvr, kvi, ks = [], [], []  # 保留右向量的 real/imag 对与对应奇异值
-    # A fixed 0.5 cutoff rejects valid directions in a large degenerate/null
-    # subspace. This occurs for QRC's rank-deficient 64x64 reduced density
-    # matrices. Exact duplicate partners leave only roundoff-size residuals;
-    # independent complex directions remain safely above this tolerance.
-    selection_tolerance = 1.0e-4
-    for j in range(int(sr.shape[0])):
-        wr, wi = vhr[j, :n], vhr[j, n:]  # 候选右向量的实/虚部（实数对）
-        # Reorthogonalize once to keep float32 MGS stable for p=64.
-        for _ in range(2):
-            for kr, ki in zip(kvr, kvi):
-                dr = (kr * wr + ki * wi).sum()  # <k,w> = conj(k)·w 的实/虚部
-                di = (kr * wi - ki * wr).sum()
-                pr = dr * kr - di * ki  # proj = <k,w>·k
-                pi = dr * ki + di * kr
-                wr = wr - pr  # 实数减法（NPU 安全）
-                wi = wi - pi
-        nrm = torch.sqrt((wr * wr + wi * wi).sum())
-        if float(nrm.detach()) > selection_tolerance:  # 数据相关控制流
-            kvr.append(wr / nrm)
-            kvi.append(wi / nrm)
-            ks.append(sr[j])
-        if len(kvr) == p:
-            break
-    if len(kvr) != p:
-        raise RuntimeError(
-            "Real-embedding SVD could not extract a complete complex right-singular "
-            f"basis: expected {p} vectors, received {len(kvr)}."
+    # Select p complex-independent directions with fixed-count, device-side
+    # pivoted MGS. The previous data-dependent ``float(nrm.detach())`` branch
+    # synchronized every candidate with the host. Residual norms and pivot
+    # indices now remain accelerator tensors. Projection against the selected
+    # basis is matrix-vectorized to avoid one kernel sequence per basis vector.
+    candidate_real = vhr[:, :n]
+    candidate_imag = vhr[:, n:]
+    candidate_count = int(candidate_real.shape[0])
+    available = torch.ones(
+        candidate_count,
+        dtype=torch.bool,
+        device=candidate_real.device,
+    )
+    candidate_indices = torch.arange(
+        candidate_count,
+        dtype=torch.long,
+        device=candidate_real.device,
+    )
+    kvr, kvi, ks = [], [], []
+    eps = torch.finfo(candidate_real.dtype).eps
+    for _ in range(p):
+        wr, wi = candidate_real, candidate_imag
+        if kvr:
+            basis_real = torch.stack(kvr, dim=0)
+            basis_imag = torch.stack(kvi, dim=0)
+            # Reorthogonalize once to keep float32 MGS stable for p=64.
+            for _ in range(2):
+                dr = wr @ basis_real.transpose(0, 1) + wi @ basis_imag.transpose(0, 1)
+                di = wi @ basis_real.transpose(0, 1) - wr @ basis_imag.transpose(0, 1)
+                wr = wr - dr @ basis_real + di @ basis_imag
+                wi = wi - dr @ basis_imag - di @ basis_real
+
+        norm_sq = (wr * wr + wi * wi).sum(dim=1)
+        scores = torch.where(
+            available,
+            norm_sq,
+            torch.full_like(norm_sq, -1.0),
         )
-    vr, vi = torch.stack(kvr, dim=1), torch.stack(kvi, dim=1)  # (n, p) 实/虚
-    S = torch.stack(ks)  # (p,) 实数降序
+        pivot = torch.argmax(scores).reshape(1)
+        chosen_real = wr.index_select(0, pivot).reshape(-1)
+        chosen_imag = wi.index_select(0, pivot).reshape(-1)
+        norm = torch.sqrt(
+            torch.clamp(
+                (chosen_real * chosen_real + chosen_imag * chosen_imag).sum(),
+                min=eps,
+            )
+        )
+        kvr.append(chosen_real / norm)
+        kvi.append(chosen_imag / norm)
+        ks.append(sr.index_select(0, pivot).reshape(()))
+        available = available & (candidate_indices != pivot)
+
+    vr = torch.stack(kvr, dim=1)
+    vi = torch.stack(kvi, dim=1)
+    S, order = torch.sort(torch.stack(ks), descending=True)
+    vr = vr.index_select(1, order)
+    vi = vi.index_select(1, order)
     ur_cols, ui_cols = [], []
     for i in range(p):
         avr = ar @ vr[:, i] - ai @ vi[:, i]  # A v_i 的实/虚部

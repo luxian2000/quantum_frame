@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from unittest import mock
 
 torch = pytest.importorskip("torch")
 
@@ -68,6 +69,22 @@ def test_real_embedding_svd_rank_deficient_64_by_64():
     assert s.shape == (64,)
     assert vh.shape == (64, 64)
     assert torch.allclose(_recon(u, s, vh), matrix, atol=2e-3, rtol=2e-4)
+
+
+def test_real_embedding_svd_does_not_convert_device_scalars_to_python():
+    torch.manual_seed(17)
+    matrix = torch.randn(8, 8, dtype=torch.complex64)
+
+    with mock.patch.object(
+        torch.Tensor,
+        "__float__",
+        side_effect=AssertionError("SVD must not synchronize a tensor through float()."),
+    ):
+        u, s, vh = _real_embedding_svd(matrix)
+
+    assert u.shape == (8, 8)
+    assert s.shape == (8,)
+    assert vh.shape == (8, 8)
 
 
 @pytest.mark.skipif(not is_npu_available(), reason="需要真实 NPU")
