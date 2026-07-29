@@ -72,8 +72,17 @@ def test_full_api_probe_has_sectioned_strict_contract():
     assert "failed_invariants" in source
     assert "EXPECTED_SECTIONS" in source
     for token in (
+        "AmplitudeDampingChannel",
+        "BitFlipChannel",
+        "DepolarizingChannel",
+        "Hamiltonian",
+        "Observable.matrix",
+        "PhaseFlipChannel",
         "initial_density_matrix",
+        "hamiltonian_error",
+        "local_dense_error",
         "logical_to_storage",
+        "noise_density_error",
         "continuation_vector_error",
         "continuation_density_error",
         "local_tensor_sizes",

@@ -38,7 +38,13 @@ def _section_worker(rank, world_size, port, output_dir):
         )
         sections = {
             name: probe.SECTION_RUNNERS[name](simulator)
-            for name in ("state", "layout", "continuation")
+            for name in (
+                "state",
+                "layout",
+                "continuation",
+                "noise",
+                "observable",
+            )
         }
         payload = {
             "evaluation_failure": evaluation_failure,
@@ -117,3 +123,14 @@ def test_two_rank_api_probe_sections_are_collective_safe(tmp_path):
         "logical_to_storage",
         "local_tensor_sizes",
     }
+
+    noise_metrics = root["sections"]["noise"]["metrics"]
+    assert noise_metrics["noise_density_error"] <= probe.STATE_ATOL
+    assert noise_metrics["noise_trace_error"] <= probe.REDUCTION_ATOL
+    assert noise_metrics["noise_probability_error"] <= probe.REDUCTION_ATOL
+    assert noise_metrics["channel_count"] == 4
+
+    observable_metrics = root["sections"]["observable"]["metrics"]
+    assert observable_metrics["pauli_error"] <= probe.REDUCTION_ATOL
+    assert observable_metrics["hamiltonian_error"] <= probe.REDUCTION_ATOL
+    assert observable_metrics["local_dense_error"] <= probe.REDUCTION_ATOL

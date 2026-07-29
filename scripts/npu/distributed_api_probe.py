@@ -18,12 +18,21 @@ import numpy as np
 import torch
 
 from aicir import (
+    AmplitudeDampingChannel,
+    BitFlipChannel,
     Circuit,
+    DepolarizingChannel,
+    Hamiltonian,
+    NoiseModel,
+    NumpyBackend,
+    Observable,
     PauliString,
+    PhaseFlipChannel,
     cx,
     hadamard,
     pauli_x,
     pauli_z,
+    rz,
 )
 from aicir.distributed import DistSimulator
 
@@ -67,6 +76,19 @@ def _max_error(actual, expected):
             )
         )
     )
+
+
+def _apply_kraus_reference(rho, channel, n):
+    backend = NumpyBackend()
+    reference = np.asarray(rho, dtype=np.complex64)
+    accumulated = np.zeros_like(reference, dtype=np.complex64)
+    for operator in channel.kraus_operators(n, backend):
+        kraus = np.asarray(operator, dtype=np.complex64)
+        accumulated = (
+            accumulated
+            + kraus @ reference @ np.conjugate(kraus.T)
+        ).astype(np.complex64)
+    return accumulated
 
 
 def _gather_long_evidence(backend, values):
@@ -628,6 +650,201 @@ def _run_continuation_section(simulator):
     return _evaluate_root_section(backend, evaluate)
 
 
+def _coherent_density_matrix(n_qubits):
+    vector = np.zeros(1 << n_qubits, dtype=np.complex64)
+    vector[0] = np.float32(1.0 / np.sqrt(2.0))
+    vector[1 << (n_qubits - 1)] = np.float32(1.0 / np.sqrt(2.0))
+    return np.outer(vector, np.conjugate(vector)).astype(np.complex64)
+
+
+def _run_noise_section(simulator):
+    backend = simulator.backend
+    distributed_axes = int(math.log2(backend.world_size))
+    n_qubits = distributed_axes + 1
+    channels = (
+        AmplitudeDampingChannel(target_qubit=0, gamma=0.1),
+        BitFlipChannel(target_qubit=0, p=0.2),
+        PhaseFlipChannel(target_qubit=0, p=0.3),
+        DepolarizingChannel(target_qubit=0, p=0.15),
+    )
+    noise_model = NoiseModel()
+    for channel in channels:
+        noise_model.add_channel(
+            channel,
+            after_gates=("pauli_x",),
+        )
+    circuit = Circuit(pauli_x(0), n_qubits=n_qubits)
+    circuit.noise_model = noise_model
+    initial_density_matrix = _root_only(
+        backend,
+        lambda: _coherent_density_matrix(n_qubits),
+    )
+
+    result = simulator.run(
+        circuit,
+        initial_density_matrix=initial_density_matrix,
+    )
+    density = _gather_state_array(result.state)
+    probabilities = result.gather_probabilities(root=0)
+
+    def evaluate():
+        reference_backend = NumpyBackend()
+        unitary = np.asarray(
+            circuit.unitary(backend=reference_backend),
+            dtype=np.complex64,
+        )
+        expected = (
+            unitary
+            @ initial_density_matrix
+            @ np.conjugate(unitary.T)
+        ).astype(np.complex64)
+        for channel in channels:
+            expected = _apply_kraus_reference(
+                expected,
+                channel,
+                n_qubits,
+            )
+        expected_probabilities = np.real(np.diag(expected))
+        noise_density_error = _max_error(density, expected)
+        noise_trace_error = float(abs(np.trace(density) - 1.0))
+        noise_probability_error = _max_error(
+            probabilities,
+            expected_probabilities,
+        )
+        metrics = {
+            "noise_density_error": noise_density_error,
+            "noise_trace_error": noise_trace_error,
+            "noise_probability_error": noise_probability_error,
+            "channel_count": len(channels),
+            "matched_gate_name": "pauli_x",
+        }
+        passed = (
+            noise_density_error <= STATE_ATOL
+            and noise_trace_error <= REDUCTION_ATOL
+            and noise_probability_error <= REDUCTION_ATOL
+            and len(channels) == 4
+        )
+        return passed, metrics
+
+    return _evaluate_root_section(backend, evaluate)
+
+
+def _observable_probe_circuit(n_qubits):
+    last = n_qubits - 1
+    return Circuit(
+        hadamard(0),
+        rz(0.37, target_qubit=0),
+        hadamard(last),
+        cx(target_qubit=last, control_qubits=(0,)),
+        rz(-0.23, target_qubit=last),
+        n_qubits=n_qubits,
+    )
+
+
+def _run_observable_section(simulator):
+    backend = simulator.backend
+    distributed_axes = int(math.log2(backend.world_size))
+    n_qubits = distributed_axes + 1
+    last = n_qubits - 1
+    circuit = _observable_probe_circuit(n_qubits)
+    pauli = PauliString(
+        "XZ",
+        n_qubits=n_qubits,
+        qubits=(0, last),
+    )
+    hamiltonian = Hamiltonian(
+        n_qubits=n_qubits,
+        terms=(
+            ("Z", 0.45, (0,)),
+            ("XX", -0.3, (0, last)),
+            ("Z", 0.2, (last,)),
+        ),
+    )
+    local_dense_matrix = np.array(
+        [
+            [0.2, 0.7 - 0.1j],
+            [0.7 + 0.1j, -0.3],
+        ],
+        dtype=np.complex64,
+    )
+    local_dense = Observable.matrix(
+        local_dense_matrix,
+        metadata={"qubits": [last]},
+    )
+    result = simulator.run(
+        circuit,
+        observables={
+            "pauli": pauli,
+            "hamiltonian": hamiltonian,
+            "local_dense": local_dense,
+        },
+    )
+
+    def evaluate():
+        reference_backend = NumpyBackend()
+        unitary = np.asarray(
+            circuit.unitary(backend=reference_backend),
+            dtype=np.complex64,
+        )
+        initial = np.zeros(1 << n_qubits, dtype=np.complex64)
+        initial[0] = 1.0
+        state = unitary @ initial
+        matrices = {
+            "pauli": np.asarray(
+                pauli.to_matrix(reference_backend),
+                dtype=np.complex64,
+            ),
+            "hamiltonian": np.asarray(
+                hamiltonian.to_matrix(reference_backend),
+                dtype=np.complex64,
+            ),
+        }
+        local_dense_full = np.eye(1, dtype=np.complex64)
+        for qubit in range(n_qubits):
+            factor = (
+                local_dense_matrix
+                if qubit == last
+                else np.eye(2, dtype=np.complex64)
+            )
+            local_dense_full = np.kron(
+                local_dense_full,
+                factor,
+            ).astype(np.complex64)
+        matrices["local_dense"] = local_dense_full
+        expected = {
+            name: np.vdot(state, matrix @ state)
+            for name, matrix in matrices.items()
+        }
+        pauli_error = float(
+            abs(result.expectations["pauli"] - expected["pauli"])
+        )
+        hamiltonian_error = float(
+            abs(
+                result.expectations["hamiltonian"]
+                - expected["hamiltonian"]
+            )
+        )
+        local_dense_error = float(
+            abs(
+                result.expectations["local_dense"]
+                - expected["local_dense"]
+            )
+        )
+        metrics = {
+            "pauli_error": pauli_error,
+            "hamiltonian_error": hamiltonian_error,
+            "local_dense_error": local_dense_error,
+        }
+        passed = (
+            pauli_error <= REDUCTION_ATOL
+            and hamiltonian_error <= REDUCTION_ATOL
+            and local_dense_error <= REDUCTION_ATOL
+        )
+        return passed, metrics
+
+    return _evaluate_root_section(backend, evaluate)
+
+
 def _validate_runtime(backend):
     device = backend._device
     if backend.world_size not in {2, 4}:
@@ -646,8 +863,8 @@ SECTION_RUNNERS = {
     "state": _run_state_section,
     "layout": _run_layout_section,
     "continuation": _run_continuation_section,
-    "noise": _pending_section,
-    "observable": _pending_section,
+    "noise": _run_noise_section,
+    "observable": _run_observable_section,
     "measure": _pending_section,
     "result": _pending_section,
     "communication": _pending_section,
