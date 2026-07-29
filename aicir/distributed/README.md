@@ -1,4 +1,4 @@
-# 分布式 NPU 状态模拟
+# `aicir.distributed` 使用指南
 
 `aicir.distributed` 提供一套独立、显式的 API，把同一个量子态分片到
 多个 Ascend NPU。它不会改变 `State`、`Measure`、`NPUBackend` 等现有
