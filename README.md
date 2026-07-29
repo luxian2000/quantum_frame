@@ -33,6 +33,7 @@
 - **噪声模拟**：通过密度矩阵演化支持退相干、比特/相位翻转、振幅阻尼和离子阱噪声。
 - **OpenQASM 输入输出**：支持 OpenQASM 2.0/3.0 导入导出，并提供 Qiskit、PennyLane、WuYue 互操作。
 - **可插拔后端**：`NumpyBackend`（CPU）、`GPUBackend`（PyTorch/CUDA）、`NPUBackend`（Ascend），只需替换一行即可切换。
+- **显式分布式 NPU 状态分片**：`aicir.distributed` 可把同一个状态向量或密度矩阵行分片到 `2^p` 个 NPU；现有单机 API 保持不变，使用边界与 `torchrun` 示例见 [`aicir.distributed` 使用指南](aicir/distributed/README.md)。
 
 ### 1.2 安装
 
@@ -104,6 +105,18 @@ backend = GPUBackend(device="cuda:0")
 backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 ```
 
+同一个量子态跨多张 NPU 的场景使用独立 API，不会由
+`NPUBackend` 自动启用：
+
+```python
+from aicir.distributed import DistSimulator
+
+simulator = DistSimulator.from_env(fallback_to_cpu=False)
+result = simulator.run(circuit, shots=1024)
+```
+
+启动与内存模型详见 [`aicir/distributed/README.md`](aicir/distributed/README.md)。
+
 ### 1.5 项目结构
 
 
@@ -113,6 +126,7 @@ aicir/
   ir/            # Operation、Measurement、ControlFlow、CircuitIR 等线路表示
   gates/         # GateSpec 注册表、门矩阵与门元信息
   backends/      # NumpyBackend、GPUBackend、NPUBackend、NPU 能力探测
+  distributed/   # 显式多 NPU 状态/密度矩阵分片、通信、规约和采样
   measure/       # Measure、Result、PauliEstimator、测量轨迹与统计结果
   primitives/    # Sampler / Estimator primitives
   qml/           # 参数移位、有限差分、autograd、QNG 等梯度工具
@@ -1240,6 +1254,7 @@ result.value, result.parameters       # 与 result.energy 等价；VQEResult 原
 | `aicir/backends`         | [`aicir/backends/README.md`](aicir/backends/README.md)                 | 计算后端选择与使用：NumpyBackend / GPUBackend / NPUBackend、NPU complex64 兼容、后端绑定、严格模式、分布式与端到端示例。 |
 | `aicir/chemistry`         | [`aicir/chemistry/README.md`](aicir/chemistry/README.md)                 | 分子 qubit Hamiltonian：固定预置（`h2`/`h2_jw`/`h2_tapered`/`lih`/`h2o` 等，`get_molecule(name).hf_occupation`/`.excitations` 免 PySCF 直接喂给 `aicir.ansatze.uccsd`）+ `build_molecule` 现算流水线（`chem` extra，Qiskit Nature/PySCF）。 |
 | `aicir/core/io`           | [`aicir/core/io/README.md`](aicir/core/io/README.md)                     | OpenQASM 导出行为、受控旋转门和多控旋转门分解规则。                                        |
+| `aicir/distributed`       | [`aicir/distributed/README.md`](aicir/distributed/README.md)             | 显式多 NPU 单状态分片：`DistNPUBackend` / `DistState` / `DistSimulator` / `DistResult`、`torchrun` 启动、初态与结果语义、布局、内存模型、支持边界和严格真机探针。 |
 | `aicir/encoder`           | [`aicir/encoder/README.md`](aicir/encoder/README.md)                     | 经典数据→量子态编码器：`AmplitudeEncoder`/`AngleEncoder`/`BasisEncoder`/`IQPEncoder`（IQP 特征映射，自带 `kernel`/`kernel_matrix` 量子核，可直接喂经典 SVM），含编码器选择指南与统一 `encode(...)` 契约。 |
 | `aicir/gates`             | [`aicir/gates/README.md`](aicir/gates/README.md)                         | GateSpec 门元信息注册表：目标比特数/参数个数/别名/QASM 名/绘图符号的单一来源。             |
 | `aicir/measure`           | [`aicir/measure/README.md`](aicir/measure/README.md)                     | 测量执行与经典控制流：轨迹路径、`ClassicalRegister`、`measure(creg=)`、`if_`/`while_`、`Result.classical_counts`。 |
