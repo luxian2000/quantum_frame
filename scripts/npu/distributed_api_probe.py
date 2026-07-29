@@ -97,6 +97,24 @@ def _sync_section(backend, root_passed, metrics):
     )
 
 
+def _evaluate_root_section(backend, evaluator):
+    root_passed = False
+    root_metrics = {}
+    if backend.rank == 0:
+        try:
+            root_passed, root_metrics = evaluator()
+            root_passed = bool(root_passed)
+            root_metrics = dict(root_metrics)
+        except Exception as error:  # noqa: BLE001
+            root_metrics = {
+                "root_evaluation_error": {
+                    "type": type(error).__name__,
+                    "message": str(error),
+                }
+            }
+    return _sync_section(backend, root_passed, root_metrics)
+
+
 def _normalized_probe_vector(dimension):
     vector = np.zeros(int(dimension), dtype=np.complex64)
     vector[0] = 1.0 + 0.5j
@@ -112,6 +130,10 @@ def _run_state_section(simulator):
     n_qubits = distributed_axes + 1
     dimension = 1 << n_qubits
     empty = Circuit(n_qubits=n_qubits)
+
+    zero_result = simulator.run(empty)
+    zero_state = _gather_state_array(zero_result.state)
+    zero_probabilities = zero_result.gather_probabilities(root=0)
 
     initial_vector = _root_only(
         backend,
@@ -142,16 +164,37 @@ def _run_state_section(simulator):
         backend,
         (
             backend.rank,
+            zero_result.state.local_data.numel(),
             vector_result.state.local_data.numel(),
             density_result.state.local_data.numel(),
+            zero_result.state.kind == "vector",
             vector_result.state.kind == "vector",
             density_result.state.kind == "matrix",
         ),
     )
 
-    metrics = {}
-    root_passed = None
-    if backend.rank == 0:
+    def evaluate():
+        expected_zero_state = np.zeros(dimension, dtype=np.complex64)
+        expected_zero_state[0] = 1.0
+        expected_zero_probabilities = np.zeros(
+            dimension,
+            dtype=np.float64,
+        )
+        expected_zero_probabilities[0] = 1.0
+        zero_state_max_error = _max_error(
+            zero_state,
+            expected_zero_state,
+        )
+        zero_state_norm_error = float(
+            abs(np.vdot(zero_state, zero_state).real - 1.0)
+        )
+        zero_probability_max_error = _max_error(
+            zero_probabilities,
+            expected_zero_probabilities,
+        )
+        zero_probability_sum_error = float(
+            abs(np.sum(zero_probabilities) - 1.0)
+        )
         statevector_max_error = _max_error(vector, initial_vector)
         density_max_error = _max_error(
             density,
@@ -172,21 +215,29 @@ def _run_state_section(simulator):
         local_sizes_ok = all(
             (
                 rank == index
+                and zero_size == expected_vector_size
                 and vector_size == expected_vector_size
                 and density_size == expected_density_size
+                and zero_kind == 1
                 and vector_kind == 1
                 and density_kind == 1
             )
             for index, (
                 rank,
+                zero_size,
                 vector_size,
                 density_size,
+                zero_kind,
                 vector_kind,
                 density_kind,
             ) in enumerate(evidence)
         )
-        root_passed = (
-            statevector_max_error <= STATE_ATOL
+        passed = (
+            zero_state_max_error <= STATE_ATOL
+            and zero_state_norm_error <= REDUCTION_ATOL
+            and zero_probability_max_error <= STATE_ATOL
+            and zero_probability_sum_error <= REDUCTION_ATOL
+            and statevector_max_error <= STATE_ATOL
             and density_max_error <= STATE_ATOL
             and statevector_norm_error <= REDUCTION_ATOL
             and density_trace_error <= REDUCTION_ATOL
@@ -195,6 +246,10 @@ def _run_state_section(simulator):
             and local_sizes_ok
         )
         metrics = {
+            "zero_state_max_error": zero_state_max_error,
+            "zero_state_norm_error": zero_state_norm_error,
+            "zero_probability_max_error": zero_probability_max_error,
+            "zero_probability_sum_error": zero_probability_sum_error,
             "statevector_max_error": statevector_max_error,
             "density_max_error": density_max_error,
             "statevector_norm_error": statevector_norm_error,
@@ -204,19 +259,24 @@ def _run_state_section(simulator):
             "local_tensor_sizes": [
                 {
                     "rank": rank,
+                    "zero_vector": zero_size,
                     "vector": vector_size,
                     "density": density_size,
                 }
                 for (
                     rank,
+                    zero_size,
                     vector_size,
                     density_size,
+                    _zero_kind,
                     _vector_kind,
                     _density_kind,
                 ) in evidence
             ],
         }
-    return _sync_section(backend, root_passed, metrics)
+        return passed, metrics
+
+    return _evaluate_root_section(backend, evaluate)
 
 
 def _layout_probe_circuit(n_qubits):
@@ -228,6 +288,62 @@ def _layout_probe_circuit(n_qubits):
         cx(target_qubit=0, control_qubits=(last,)),
         n_qubits=n_qubits,
     )
+
+
+def _numpy_apply_single_qubit(state, matrix, target, n_qubits):
+    tensor = np.asarray(state).reshape((2,) * n_qubits)
+    moved = np.moveaxis(tensor, target, 0)
+    transformed = np.tensordot(matrix, moved, axes=(1, 0))
+    return np.moveaxis(transformed, 0, target).reshape(-1)
+
+
+def _numpy_apply_cx(state, control, target, n_qubits):
+    transformed = np.zeros_like(state)
+    control_mask = 1 << (n_qubits - 1 - control)
+    target_mask = 1 << (n_qubits - 1 - target)
+    for index, amplitude in enumerate(state):
+        destination = (
+            index ^ target_mask
+            if index & control_mask
+            else index
+        )
+        transformed[destination] = amplitude
+    return transformed
+
+
+def _numpy_layout_reference(n_qubits):
+    dimension = 1 << n_qubits
+    state = np.zeros(dimension, dtype=np.complex64)
+    state[0] = 1.0
+    hadamard_matrix = np.array(
+        [[1.0, 1.0], [1.0, -1.0]],
+        dtype=np.complex64,
+    ) / np.sqrt(np.float32(2.0))
+    last = n_qubits - 1
+    state = _numpy_apply_single_qubit(
+        state,
+        hadamard_matrix,
+        0,
+        n_qubits,
+    )
+    state = _numpy_apply_cx(state, 0, 1, n_qubits)
+    state = _numpy_apply_single_qubit(
+        state,
+        hadamard_matrix,
+        last,
+        n_qubits,
+    )
+    state = _numpy_apply_cx(state, last, 0, n_qubits)
+    probabilities = np.abs(state) ** 2
+    z_signs = np.array(
+        [
+            -1.0 if index.bit_count() % 2 else 1.0
+            for index in range(dimension)
+        ],
+        dtype=np.float64,
+    )
+    expectation = float(np.sum(probabilities * z_signs))
+    return state, probabilities, expectation
 
 
 def _run_layout_section(simulator):
@@ -262,9 +378,11 @@ def _run_layout_section(simulator):
         ),
     )
 
-    metrics = {}
-    root_passed = None
-    if backend.rank == 0:
+    def evaluate():
+        expected_state, expected_probabilities, expected_expectation = (
+            _numpy_layout_reference(n_qubits)
+        )
+        auto_layout = auto_result.state.layout.logical_to_storage
         statevector_error = _max_error(auto_state, explicit_state)
         probability_error = _max_error(
             auto_probabilities,
@@ -274,6 +392,34 @@ def _run_layout_section(simulator):
             abs(
                 auto_result.expectations["pauli"]
                 - explicit_result.expectations["pauli"]
+            )
+        )
+        auto_reference_statevector_error = _max_error(
+            auto_state,
+            expected_state,
+        )
+        explicit_reference_statevector_error = _max_error(
+            explicit_state,
+            expected_state,
+        )
+        auto_reference_probability_error = _max_error(
+            auto_probabilities,
+            expected_probabilities,
+        )
+        explicit_reference_probability_error = _max_error(
+            explicit_probabilities,
+            expected_probabilities,
+        )
+        auto_reference_expectation_error = float(
+            abs(
+                auto_result.expectations["pauli"]
+                - expected_expectation
+            )
+        )
+        explicit_reference_expectation_error = float(
+            abs(
+                explicit_result.expectations["pauli"]
+                - expected_expectation
             )
         )
         expected_local_size = dimension // backend.world_size
@@ -294,21 +440,49 @@ def _run_layout_section(simulator):
         layout_ok = (
             explicit_result.state.layout.logical_to_storage
             == logical_to_storage
+            and auto_layout != logical_to_storage
         )
-        root_passed = (
+        passed = (
             layout_ok
             and local_sizes_ok
             and statevector_error <= STATE_ATOL
             and probability_error <= STATE_ATOL
             and expectation_error <= REDUCTION_ATOL
+            and auto_reference_statevector_error <= STATE_ATOL
+            and explicit_reference_statevector_error <= STATE_ATOL
+            and auto_reference_probability_error <= STATE_ATOL
+            and explicit_reference_probability_error <= STATE_ATOL
+            and auto_reference_expectation_error <= REDUCTION_ATOL
+            and explicit_reference_expectation_error <= REDUCTION_ATOL
         )
         metrics = {
+            "auto_layout": list(auto_layout),
             "logical_to_storage": list(logical_to_storage),
             "statevector_error": statevector_error,
             "probability_error": probability_error,
             "expectation_error": expectation_error,
+            "auto_reference_statevector_error": (
+                auto_reference_statevector_error
+            ),
+            "explicit_reference_statevector_error": (
+                explicit_reference_statevector_error
+            ),
+            "auto_reference_probability_error": (
+                auto_reference_probability_error
+            ),
+            "explicit_reference_probability_error": (
+                explicit_reference_probability_error
+            ),
+            "auto_reference_expectation_error": (
+                auto_reference_expectation_error
+            ),
+            "explicit_reference_expectation_error": (
+                explicit_reference_expectation_error
+            ),
         }
-    return _sync_section(backend, root_passed, metrics)
+        return passed, metrics
+
+    return _evaluate_root_section(backend, evaluate)
 
 
 def _run_continuation_section(simulator):
@@ -390,9 +564,7 @@ def _run_continuation_section(simulator):
         ),
     )
 
-    metrics = {}
-    root_passed = None
-    if backend.rank == 0:
+    def evaluate():
         continuation_vector_error = _max_error(
             continued_vector,
             combined_vector,
@@ -428,7 +600,7 @@ def _run_continuation_section(simulator):
                 density_combined,
             )
         )
-        root_passed = (
+        passed = (
             layout_ok
             and local_sizes_ok
             and continuation_vector_error <= STATE_ATOL
@@ -451,7 +623,9 @@ def _run_continuation_section(simulator):
                 for row in evidence
             ],
         }
-    return _sync_section(backend, root_passed, metrics)
+        return passed, metrics
+
+    return _evaluate_root_section(backend, evaluate)
 
 
 def _validate_runtime(backend):
