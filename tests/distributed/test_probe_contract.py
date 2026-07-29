@@ -71,6 +71,14 @@ def test_full_api_probe_has_sectioned_strict_contract():
     assert "fallback_to_cpu=False" in source
     assert "failed_invariants" in source
     assert "EXPECTED_SECTIONS" in source
+    for token in (
+        "initial_density_matrix",
+        "logical_to_storage",
+        "continuation_vector_error",
+        "continuation_density_error",
+        "local_tensor_sizes",
+    ):
+        assert token in source
     assert '"communicating_gate": True' not in source
     for section in EXPECTED_SECTIONS:
         assert f'"{section}"' in source

@@ -17,6 +17,14 @@ import sys
 import numpy as np
 import torch
 
+from aicir import (
+    Circuit,
+    PauliString,
+    cx,
+    hadamard,
+    pauli_x,
+    pauli_z,
+)
 from aicir.distributed import DistSimulator
 
 
@@ -43,6 +51,409 @@ def _section(passed, *, metrics=None, status=None):
     }
 
 
+def _root_only(backend, factory):
+    return factory() if backend.rank == 0 else None
+
+
+def _gather_state_array(state):
+    return state.to_numpy(root=0)
+
+
+def _max_error(actual, expected):
+    return float(
+        np.max(
+            np.abs(
+                np.asarray(actual) - np.asarray(expected)
+            )
+        )
+    )
+
+
+def _gather_long_evidence(backend, values):
+    evidence = torch.tensor(
+        tuple(int(value) for value in values),
+        dtype=torch.long,
+        device=backend._device,
+    )
+    gathered = backend.communicator.gather_to_root(evidence, root=0)
+    if backend.rank != 0:
+        return None
+    return [
+        [int(value) for value in item.detach().cpu().tolist()]
+        for item in gathered
+    ]
+
+
+def _sync_section(backend, root_passed, metrics):
+    passed = torch.zeros(1, dtype=torch.long, device=backend._device)
+    if backend.rank == 0:
+        if root_passed is None:
+            raise ValueError("rank 0 必须给出 section 判定")
+        passed[0] = int(bool(root_passed))
+    passed = backend.communicator.broadcast(passed, root=0)
+    return _section(
+        bool(int(passed[0].detach().cpu())),
+        metrics=metrics if backend.rank == 0 else {},
+    )
+
+
+def _normalized_probe_vector(dimension):
+    vector = np.zeros(int(dimension), dtype=np.complex64)
+    vector[0] = 1.0 + 0.5j
+    vector[1] = -0.75 + 0.25j
+    vector[-1] = 0.5 - 1.0j
+    vector /= np.linalg.norm(vector)
+    return vector
+
+
+def _run_state_section(simulator):
+    backend = simulator.backend
+    distributed_axes = int(math.log2(backend.world_size))
+    n_qubits = distributed_axes + 1
+    dimension = 1 << n_qubits
+    empty = Circuit(n_qubits=n_qubits)
+
+    initial_vector = _root_only(
+        backend,
+        lambda: _normalized_probe_vector(dimension),
+    )
+    vector_result = simulator.run(
+        empty,
+        initial_state=initial_vector,
+    )
+    vector = _gather_state_array(vector_result.state)
+    vector_probabilities = vector_result.gather_probabilities(root=0)
+
+    initial_density_matrix = _root_only(
+        backend,
+        lambda: np.outer(
+            initial_vector,
+            np.conjugate(initial_vector),
+        ).astype(np.complex64),
+    )
+    density_result = simulator.run(
+        empty,
+        initial_density_matrix=initial_density_matrix,
+    )
+    density = _gather_state_array(density_result.state)
+    density_probabilities = density_result.gather_probabilities(root=0)
+
+    evidence = _gather_long_evidence(
+        backend,
+        (
+            backend.rank,
+            vector_result.state.local_data.numel(),
+            density_result.state.local_data.numel(),
+            vector_result.state.kind == "vector",
+            density_result.state.kind == "matrix",
+        ),
+    )
+
+    metrics = {}
+    root_passed = None
+    if backend.rank == 0:
+        statevector_max_error = _max_error(vector, initial_vector)
+        density_max_error = _max_error(
+            density,
+            initial_density_matrix,
+        )
+        statevector_norm_error = float(
+            abs(np.vdot(vector, vector).real - 1.0)
+        )
+        density_trace_error = float(abs(np.trace(density) - 1.0))
+        vector_probability_sum_error = float(
+            abs(np.sum(vector_probabilities) - 1.0)
+        )
+        density_probability_sum_error = float(
+            abs(np.sum(density_probabilities) - 1.0)
+        )
+        expected_vector_size = dimension // backend.world_size
+        expected_density_size = dimension * dimension // backend.world_size
+        local_sizes_ok = all(
+            (
+                rank == index
+                and vector_size == expected_vector_size
+                and density_size == expected_density_size
+                and vector_kind == 1
+                and density_kind == 1
+            )
+            for index, (
+                rank,
+                vector_size,
+                density_size,
+                vector_kind,
+                density_kind,
+            ) in enumerate(evidence)
+        )
+        root_passed = (
+            statevector_max_error <= STATE_ATOL
+            and density_max_error <= STATE_ATOL
+            and statevector_norm_error <= REDUCTION_ATOL
+            and density_trace_error <= REDUCTION_ATOL
+            and vector_probability_sum_error <= REDUCTION_ATOL
+            and density_probability_sum_error <= REDUCTION_ATOL
+            and local_sizes_ok
+        )
+        metrics = {
+            "statevector_max_error": statevector_max_error,
+            "density_max_error": density_max_error,
+            "statevector_norm_error": statevector_norm_error,
+            "density_trace_error": density_trace_error,
+            "vector_probability_sum_error": vector_probability_sum_error,
+            "density_probability_sum_error": density_probability_sum_error,
+            "local_tensor_sizes": [
+                {
+                    "rank": rank,
+                    "vector": vector_size,
+                    "density": density_size,
+                }
+                for (
+                    rank,
+                    vector_size,
+                    density_size,
+                    _vector_kind,
+                    _density_kind,
+                ) in evidence
+            ],
+        }
+    return _sync_section(backend, root_passed, metrics)
+
+
+def _layout_probe_circuit(n_qubits):
+    last = n_qubits - 1
+    return Circuit(
+        hadamard(0),
+        cx(target_qubit=1, control_qubits=(0,)),
+        hadamard(last),
+        cx(target_qubit=0, control_qubits=(last,)),
+        n_qubits=n_qubits,
+    )
+
+
+def _run_layout_section(simulator):
+    backend = simulator.backend
+    distributed_axes = int(math.log2(backend.world_size))
+    n_qubits = distributed_axes + 1
+    dimension = 1 << n_qubits
+    logical_to_storage = tuple(list(range(1, n_qubits)) + [0])
+    circuit = _layout_probe_circuit(n_qubits)
+    observable = PauliString("Z" * n_qubits, n_qubits=n_qubits)
+
+    auto_result = simulator.run(
+        circuit,
+        observables={"pauli": observable},
+    )
+    explicit_result = simulator.run(
+        circuit,
+        observables={"pauli": observable},
+        layout=logical_to_storage,
+    )
+    auto_state = _gather_state_array(auto_result.state)
+    explicit_state = _gather_state_array(explicit_result.state)
+    auto_probabilities = auto_result.gather_probabilities(root=0)
+    explicit_probabilities = explicit_result.gather_probabilities(root=0)
+    evidence = _gather_long_evidence(
+        backend,
+        (
+            backend.rank,
+            auto_result.state.local_data.numel(),
+            explicit_result.state.local_data.numel(),
+            explicit_result.state.kind == "vector",
+        ),
+    )
+
+    metrics = {}
+    root_passed = None
+    if backend.rank == 0:
+        statevector_error = _max_error(auto_state, explicit_state)
+        probability_error = _max_error(
+            auto_probabilities,
+            explicit_probabilities,
+        )
+        expectation_error = float(
+            abs(
+                auto_result.expectations["pauli"]
+                - explicit_result.expectations["pauli"]
+            )
+        )
+        expected_local_size = dimension // backend.world_size
+        local_sizes_ok = all(
+            (
+                rank == index
+                and auto_size == expected_local_size
+                and explicit_size == expected_local_size
+                and vector_kind == 1
+            )
+            for index, (
+                rank,
+                auto_size,
+                explicit_size,
+                vector_kind,
+            ) in enumerate(evidence)
+        )
+        layout_ok = (
+            explicit_result.state.layout.logical_to_storage
+            == logical_to_storage
+        )
+        root_passed = (
+            layout_ok
+            and local_sizes_ok
+            and statevector_error <= STATE_ATOL
+            and probability_error <= STATE_ATOL
+            and expectation_error <= REDUCTION_ATOL
+        )
+        metrics = {
+            "logical_to_storage": list(logical_to_storage),
+            "statevector_error": statevector_error,
+            "probability_error": probability_error,
+            "expectation_error": expectation_error,
+        }
+    return _sync_section(backend, root_passed, metrics)
+
+
+def _run_continuation_section(simulator):
+    backend = simulator.backend
+    distributed_axes = int(math.log2(backend.world_size))
+    n_qubits = distributed_axes + 1
+    dimension = 1 << n_qubits
+    logical_to_storage = tuple(list(range(1, n_qubits)) + [0])
+    prefix = Circuit(
+        hadamard(0),
+        cx(target_qubit=1, control_qubits=(0,)),
+        n_qubits=n_qubits,
+    )
+    suffix = Circuit(
+        pauli_z(n_qubits - 1),
+        pauli_x(0),
+        n_qubits=n_qubits,
+    )
+    combined = Circuit(
+        hadamard(0),
+        cx(target_qubit=1, control_qubits=(0,)),
+        pauli_z(n_qubits - 1),
+        pauli_x(0),
+        n_qubits=n_qubits,
+    )
+
+    vector_prefix = simulator.run(
+        prefix,
+        layout=logical_to_storage,
+    )
+    vector_continued = simulator.run(
+        suffix,
+        initial_state=vector_prefix.state,
+        layout=logical_to_storage,
+    )
+    vector_combined = simulator.run(
+        combined,
+        layout=logical_to_storage,
+    )
+    continued_vector = _gather_state_array(vector_continued.state)
+    combined_vector = _gather_state_array(vector_combined.state)
+
+    initial_density_matrix = _root_only(
+        backend,
+        lambda: np.diag(
+            np.array(
+                [1.0] + [0.0] * (dimension - 1),
+                dtype=np.complex64,
+            )
+        ),
+    )
+    density_prefix = simulator.run(
+        prefix,
+        initial_density_matrix=initial_density_matrix,
+        layout=logical_to_storage,
+    )
+    density_continued = simulator.run(
+        suffix,
+        initial_density_matrix=density_prefix.state,
+        layout=logical_to_storage,
+    )
+    density_combined = simulator.run(
+        combined,
+        initial_density_matrix=initial_density_matrix,
+        layout=logical_to_storage,
+    )
+    continued_density = _gather_state_array(density_continued.state)
+    combined_density = _gather_state_array(density_combined.state)
+    evidence = _gather_long_evidence(
+        backend,
+        (
+            backend.rank,
+            vector_prefix.state.local_data.numel(),
+            vector_continued.state.local_data.numel(),
+            vector_combined.state.local_data.numel(),
+            density_prefix.state.local_data.numel(),
+            density_continued.state.local_data.numel(),
+            density_combined.state.local_data.numel(),
+        ),
+    )
+
+    metrics = {}
+    root_passed = None
+    if backend.rank == 0:
+        continuation_vector_error = _max_error(
+            continued_vector,
+            combined_vector,
+        )
+        continuation_density_error = _max_error(
+            continued_density,
+            combined_density,
+        )
+        expected_vector_size = dimension // backend.world_size
+        expected_density_size = dimension * dimension // backend.world_size
+        local_sizes_ok = all(
+            (
+                row[0] == index
+                and all(
+                    size == expected_vector_size
+                    for size in row[1:4]
+                )
+                and all(
+                    size == expected_density_size
+                    for size in row[4:]
+                )
+            )
+            for index, row in enumerate(evidence)
+        )
+        layout_ok = all(
+            result.state.layout.logical_to_storage == logical_to_storage
+            for result in (
+                vector_prefix,
+                vector_continued,
+                vector_combined,
+                density_prefix,
+                density_continued,
+                density_combined,
+            )
+        )
+        root_passed = (
+            layout_ok
+            and local_sizes_ok
+            and continuation_vector_error <= STATE_ATOL
+            and continuation_density_error <= STATE_ATOL
+        )
+        metrics = {
+            "continuation_vector_error": continuation_vector_error,
+            "continuation_density_error": continuation_density_error,
+            "logical_to_storage": list(logical_to_storage),
+            "local_tensor_sizes": [
+                {
+                    "rank": row[0],
+                    "vector_prefix": row[1],
+                    "vector_continued": row[2],
+                    "vector_combined": row[3],
+                    "density_prefix": row[4],
+                    "density_continued": row[5],
+                    "density_combined": row[6],
+                }
+                for row in evidence
+            ],
+        }
+    return _sync_section(backend, root_passed, metrics)
+
+
 def _validate_runtime(backend):
     device = backend._device
     if backend.world_size not in {2, 4}:
@@ -58,8 +469,15 @@ def _pending_section(_simulator):
 
 
 SECTION_RUNNERS = {
-    name: _pending_section
-    for name in EXPECTED_SECTIONS
+    "state": _run_state_section,
+    "layout": _run_layout_section,
+    "continuation": _run_continuation_section,
+    "noise": _pending_section,
+    "observable": _pending_section,
+    "measure": _pending_section,
+    "result": _pending_section,
+    "communication": _pending_section,
+    "contract": _pending_section,
 }
 
 
