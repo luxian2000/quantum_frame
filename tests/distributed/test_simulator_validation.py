@@ -76,7 +76,56 @@ def test_rejects_trainable_gate_parameter(monkeypatch):
     theta = torch.tensor(0.2, requires_grad=True)
     circuit = Circuit(rx(theta, 0), n_qubits=1)
 
-    with pytest.raises(ValueError, match="requires_grad"):
+    with pytest.raises(
+        ValueError,
+        match="DistSimulator 首期仅支持前向模拟，不支持自动微分",
+    ):
+        simulator.run(circuit)
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [
+        (
+            "initial_state",
+            torch.tensor(
+                [1.0, 0.0],
+                dtype=torch.complex64,
+                requires_grad=True,
+            ),
+        ),
+        (
+            "initial_density_matrix",
+            torch.eye(2, dtype=torch.complex64, requires_grad=True),
+        ),
+    ],
+)
+def test_rejects_trainable_root_owned_initial_value(
+    monkeypatch,
+    argument,
+    value,
+):
+    simulator = _simulator(monkeypatch)
+
+    with pytest.raises(
+        ValueError,
+        match="DistSimulator 首期仅支持前向模拟，不支持自动微分",
+    ):
+        simulator.run(Circuit(n_qubits=1), **{argument: value})
+
+
+def test_rejects_trainable_custom_unitary(monkeypatch):
+    simulator = _simulator(monkeypatch)
+    matrix = torch.eye(2, dtype=torch.complex64, requires_grad=True)
+    circuit = Circuit(
+        {"type": "unitary", "parameter": matrix, "n_qubits": 1},
+        n_qubits=1,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="DistSimulator 首期仅支持前向模拟，不支持自动微分",
+    ):
         simulator.run(circuit)
 
 

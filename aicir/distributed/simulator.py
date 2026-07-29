@@ -13,8 +13,10 @@ from ..core.state import State
 from ..ir import (
     circuit_instructions,
     instruction_name,
+    instruction_params,
     instruction_to_gate_dict,
 )
+from ._contracts import AUTOGRAD_ERROR, contains_requires_grad
 from .backend import DistNPUBackend
 from .density import _MatrixKernel
 from .gates import _GatePlanner, _VectorKernel
@@ -102,6 +104,29 @@ class DistSimulator:
             for index, instruction in enumerate(instructions)
         )
         return n_qubits, instructions, plans, resolved_layout, shots
+
+    def _assert_forward_only(
+        self,
+        circuit,
+        initial_state,
+        initial_density_matrix,
+    ) -> None:
+        local_rejected = (
+            contains_requires_grad(initial_state)
+            or contains_requires_grad(initial_density_matrix)
+            or any(
+                contains_requires_grad(instruction_params(instruction))
+                for instruction in circuit_instructions(circuit)
+            )
+        )
+        flag = torch.tensor(
+            [int(local_rejected)],
+            dtype=torch.long,
+            device=self._backend._device,
+        )
+        rejected = self._backend.communicator.all_reduce_sum(flag)
+        if int(rejected.detach().cpu().item()) > 0:
+            raise ValueError(AUTOGRAD_ERROR)
 
     def _assert_process_agreement(
         self,
@@ -323,6 +348,11 @@ class DistSimulator:
     ) -> DistResult:
         """Run one circuit cooperatively on all ranks."""
 
+        self._assert_forward_only(
+            circuit,
+            initial_state,
+            initial_density_matrix,
+        )
         (
             n_qubits,
             instructions,
