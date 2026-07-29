@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import torch
+from torch.utils._python_dispatch import TorchDispatchMode
 
 from aicir import (
     Circuit,
@@ -12,6 +13,15 @@ from aicir import (
     rx,
 )
 from aicir.distributed import DistNPUBackend, DistSimulator
+
+
+class _RejectComplexIndex(TorchDispatchMode):
+    """Model Ascend's aclnnIndex dtype restriction on a CPU test run."""
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        if func is torch.ops.aten.index.Tensor and args[0].is_complex():
+            raise RuntimeError("complex indexing is not supported")
+        return func(*args, **(kwargs or {}))
 
 
 def _simulator(monkeypatch):
@@ -140,6 +150,49 @@ def test_root_owned_initial_density_matrix(monkeypatch):
 
     np.testing.assert_allclose(result.state.to_numpy(), rho, atol=1e-6)
     assert result.state.is_density
+
+
+def test_density_expectation_does_not_index_complex_tensor(monkeypatch):
+    simulator = _simulator(monkeypatch)
+    rho = torch.diag(
+        torch.tensor([0.75, 0.25], dtype=torch.complex64)
+    )
+    observable = Observable.matrix(
+        torch.diag(torch.tensor([1.0, -1.0], dtype=torch.complex64)),
+        metadata={"qubits": [0]},
+    )
+
+    with _RejectComplexIndex():
+        result = simulator.run(
+            Circuit(n_qubits=1),
+            initial_density_matrix=rho,
+            observables={"z": observable},
+        )
+
+    assert result.expectations["z"] == pytest.approx(0.5)
+
+
+def test_density_collapse_does_not_index_complex_tensor(monkeypatch):
+    simulator = _simulator(monkeypatch)
+    rho = torch.diag(
+        torch.tensor([0.75, 0.25], dtype=torch.complex64)
+    )
+
+    with _RejectComplexIndex():
+        result = simulator.run(
+            Circuit(n_qubits=1),
+            initial_density_matrix=rho,
+            shots=1,
+            collapse=True,
+            seed=7,
+        )
+
+    assert sum(result.counts.values()) == 1
+    np.testing.assert_allclose(
+        np.trace(result.state.to_numpy()),
+        1.0,
+        atol=1e-6,
+    )
 
 
 def test_state_and_probability_return_flags_are_independent(monkeypatch):
