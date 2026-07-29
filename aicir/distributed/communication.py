@@ -101,26 +101,45 @@ class _Communicator:
         )
         return result
 
+    def _gather_tensor(self, tensor, root: int):
+        gathered = (
+            [torch.empty_like(tensor) for _ in range(self.world_size)]
+            if self.rank == root
+            else None
+        )
+        self._dist.gather(
+            tensor.contiguous(),
+            gather_list=gathered,
+            dst=root,
+            group=self.group,
+        )
+        return gathered
+
     def gather_to_root(self, tensor, *, root: int = 0):
-        if not 0 <= int(root) < self.world_size:
+        root = int(root)
+        if not 0 <= root < self.world_size:
             raise ValueError(
                 f"root={root} 必须位于 [0, {self.world_size})"
             )
         if self.world_size == 1:
             return [tensor.clone()]
         self._require_process_group()
-        gathered = (
-            [torch.empty_like(tensor) for _ in range(self.world_size)]
-            if self.rank == int(root)
-            else None
-        )
-        self._dist.gather(
-            tensor.contiguous(),
-            gather_list=gathered,
-            dst=int(root),
-            group=self.group,
-        )
-        return gathered
+        if torch.is_complex(tensor):
+            real_parts = self._gather_tensor(
+                torch.real(tensor).contiguous(),
+                root,
+            )
+            imag_parts = self._gather_tensor(
+                torch.imag(tensor).contiguous(),
+                root,
+            )
+            if self.rank != root:
+                return None
+            return [
+                torch.complex(real, imag).to(dtype=tensor.dtype)
+                for real, imag in zip(real_parts, imag_parts)
+            ]
+        return self._gather_tensor(tensor, root)
 
     def scatter_from_root(self, tensors, *, root: int = 0, shape=None, dtype=None):
         if not 0 <= int(root) < self.world_size:
@@ -134,6 +153,33 @@ class _Communicator:
         self._require_process_group()
         if shape is None or dtype is None:
             raise ValueError("多 rank scatter 必须提供 shape 和 dtype")
+        if dtype in (torch.complex64, torch.complex128):
+            real_dtype = (
+                torch.float32 if dtype == torch.complex64 else torch.float64
+            )
+            real_tensors = (
+                [torch.real(tensor).contiguous() for tensor in tensors]
+                if self.rank == int(root)
+                else None
+            )
+            imag_tensors = (
+                [torch.imag(tensor).contiguous() for tensor in tensors]
+                if self.rank == int(root)
+                else None
+            )
+            real = self.scatter_from_root(
+                real_tensors,
+                root=root,
+                shape=shape,
+                dtype=real_dtype,
+            )
+            imag = self.scatter_from_root(
+                imag_tensors,
+                root=root,
+                shape=shape,
+                dtype=real_dtype,
+            )
+            return torch.complex(real, imag).to(dtype=dtype)
         receive = torch.empty(tuple(shape), dtype=dtype, device=self.device)
         self._dist.scatter(
             receive,
