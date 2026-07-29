@@ -62,9 +62,20 @@ collective。`rank` 只标识某段存储属于哪个进程，不是量子寄存
 假设程序保存为 `dist_example.py`，两张或四张 NPU 的启动方式为：
 
 ```bash
-PYTHONPATH=. torchrun --nproc-per-node=2 dist_example.py
-PYTHONPATH=. torchrun --nproc-per-node=4 dist_example.py
+source /usr/local/Ascend/cann/set_env.sh
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 dist_example.py
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 dist_example.py
 ```
+
+`set_env.sh` 的实际位置取决于 CANN 安装方式；旧版组合包常见路径为
+`/usr/local/Ascend/ascend-toolkit/set_env.sh`。必须在启动
+`torchrun` 的同一个 shell 中加载它。
+
+不要写成 `PYTHONPATH=. torchrun ...`。这种写法会覆盖
+`set_env.sh` 注入的 CANN Python 路径，可能使 `torch_npu` 在
+`set_device()` 阶段报 `ModuleNotFoundError: No module named 'tbe'`。
+`PYTHONPATH=.:${PYTHONPATH}` 才是在加入当前仓库的同时保留 TBE 等
+CANN 模块。
 
 `torchrun` 为每个进程设置：
 
@@ -826,8 +837,10 @@ HCCL 带宽、kernel 粒度和临时缓冲影响。
 从仓库根目录运行：
 
 ```bash
-PYTHONPATH=. torchrun --nproc-per-node=2 scripts/npu/distributed_state_probe.py
-PYTHONPATH=. torchrun --nproc-per-node=4 scripts/npu/distributed_state_probe.py
+source /usr/local/Ascend/cann/set_env.sh
+python -c "import tbe; print(tbe.__file__)"
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 scripts/npu/distributed_state_probe.py
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 scripts/npu/distributed_state_probe.py
 ```
 
 探针强制 `fallback_to_cpu=False`，并检查：

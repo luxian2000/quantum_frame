@@ -2,8 +2,9 @@
 
 Run from the repository root:
 
-    PYTHONPATH=. torchrun --nproc-per-node=2 scripts/npu/distributed_state_probe.py
-    PYTHONPATH=. torchrun --nproc-per-node=4 scripts/npu/distributed_state_probe.py
+    source /usr/local/Ascend/cann/set_env.sh
+    PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 scripts/npu/distributed_state_probe.py
+    PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 scripts/npu/distributed_state_probe.py
 
 The probe never permits CPU fallback. Rank 0 writes one JSON object and every
 rank exits nonzero when an invariant fails.

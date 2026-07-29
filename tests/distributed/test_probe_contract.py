@@ -7,6 +7,12 @@ PROBE = (
     / "npu"
     / "distributed_state_probe.py"
 )
+MANUAL = (
+    Path(__file__).resolve().parents[2]
+    / "aicir"
+    / "distributed"
+    / "README.md"
+)
 
 
 def test_probe_is_strict_and_covers_distributed_contract():
@@ -24,3 +30,19 @@ def test_probe_is_strict_and_covers_distributed_contract():
     assert "local_tensor_sizes" in source
     assert "if backend.rank == 0" in source
     assert "json.dumps" in source
+
+
+def test_npu_launch_instructions_preserve_cann_pythonpath():
+    for path in (PROBE, MANUAL):
+        source = path.read_text(encoding="utf-8")
+        launch_lines = [
+            line.strip()
+            for line in source.splitlines()
+            if line.strip().startswith("PYTHONPATH=")
+            and "torchrun" in line
+        ]
+        assert launch_lines
+        assert all(
+            line.startswith("PYTHONPATH=.:${PYTHONPATH} torchrun")
+            for line in launch_lines
+        )
