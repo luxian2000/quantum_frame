@@ -1,4 +1,4 @@
-# `aicir.distributed` 完整功能说明
+# `aicir.distributed` 使用手册
 
 `aicir.distributed` 用多张 Ascend NPU 协同保存和演化**同一个**量子态。
 它是一套独立的显式 API，不会改变 `State`、`Circuit`、`Measure` 或
@@ -79,12 +79,12 @@ CANN 模块。
 
 `torchrun` 为每个进程设置：
 
-| 环境变量 | 含义 |
-| --- | --- |
-| `WORLD_SIZE` | 全局进程数，也是本功能的状态分片数 |
-| `RANK` | 全局进程编号，用于通信和分片编号 |
-| `LOCAL_RANK` | 当前节点内进程编号，用于绑定 `npu:LOCAL_RANK` |
-| `MASTER_ADDR` / `MASTER_PORT` | process group rendezvous 地址 |
+| 环境变量                          | 含义                                           |
+| --------------------------------- | ---------------------------------------------- |
+| `WORLD_SIZE`                    | 全局进程数，也是本功能的状态分片数             |
+| `RANK`                          | 全局进程编号，用于通信和分片编号               |
+| `LOCAL_RANK`                    | 当前节点内进程编号，用于绑定`npu:LOCAL_RANK` |
+| `MASTER_ADDR` / `MASTER_PORT` | process group rendezvous 地址                  |
 
 单节点上 `RANK` 通常等于 `LOCAL_RANK`。多节点上两者不一定相同：
 设备绑定必须使用 `LOCAL_RANK`，全局通信必须使用 `RANK`。不要额外
@@ -130,11 +130,11 @@ simulator = DistSimulator(backend)
 
 `DistNPUBackend.from_env()` 参数：
 
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| `fallback_to_cpu` | `False` | 真机应保持 `False`；NPU 不可用时直接失败 |
-| `init_process_group` | `True` | 调用方已自行初始化 process group 时可设为 `False` |
-| `process_group_backend` | `None` | 真机自动选择 HCCL；本地多进程测试可显式传 `"gloo"` |
+| 参数                      | 默认值    | 说明                                                |
+| ------------------------- | --------- | --------------------------------------------------- |
+| `fallback_to_cpu`       | `False` | 真机应保持`False`；NPU 不可用时直接失败           |
+| `init_process_group`    | `True`  | 调用方已自行初始化 process group 时可设为`False`  |
+| `process_group_backend` | `None`  | 真机自动选择 HCCL；本地多进程测试可显式传`"gloo"` |
 
 常用只读属性：
 
@@ -312,19 +312,19 @@ def run(
 
 ### 6.2 参数说明
 
-| 参数 | 说明 |
-| --- | --- |
-| `circuit` | 每个 rank 上内容相同的现有 `Circuit` |
-| `initial_state` | rank 0 完整状态向量，或每个 rank 的匹配 vector `DistState` |
-| `initial_density_matrix` | rank 0 完整密度矩阵，或每个 rank 的匹配 matrix `DistState` |
-| `observables` | 名称到结构化 observable 的映射 |
-| `shots` | `None` 表示不采样；正整数表示末端 Z 基采样 |
-| `measure_qubits` | 空序列表示全部逻辑比特；非空序列按给定顺序读出子集 |
-| `collapse` | 仅在 `shots == 1` 时允许，返回采样后的坍缩态 |
-| `seed` | 末端采样随机种子 |
-| `layout` | `None` 自动选择；或传逻辑比特到存储轴的完整排列 |
-| `return_state` | 是否通过 `DistResult.state` 暴露最终分片态 |
-| `return_probabilities` | 是否计算并保存每个 rank 的局部概率分片 |
+| 参数                       | 说明                                                        |
+| -------------------------- | ----------------------------------------------------------- |
+| `circuit`                | 每个 rank 上内容相同的现有`Circuit`                       |
+| `initial_state`          | rank 0 完整状态向量，或每个 rank 的匹配 vector`DistState` |
+| `initial_density_matrix` | rank 0 完整密度矩阵，或每个 rank 的匹配 matrix`DistState` |
+| `observables`            | 名称到结构化 observable 的映射                              |
+| `shots`                  | `None` 表示不采样；正整数表示末端 Z 基采样                |
+| `measure_qubits`         | 空序列表示全部逻辑比特；非空序列按给定顺序读出子集          |
+| `collapse`               | 仅在`shots == 1` 时允许，返回采样后的坍缩态               |
+| `seed`                   | 末端采样随机种子                                            |
+| `layout`                 | `None` 自动选择；或传逻辑比特到存储轴的完整排列           |
+| `return_state`           | 是否通过`DistResult.state` 暴露最终分片态                 |
+| `return_probabilities`   | 是否计算并保存每个 rank 的局部概率分片                      |
 
 `initial_state` 与 `initial_density_matrix` 不能同时提供。除“rank 0
 完整初态”这种约定外，每个 rank 的线路、参数和执行顺序必须一致。
@@ -604,15 +604,15 @@ collapsed_state = collapsed.state
 
 ### 12.1 结果字段
 
-| 字段/属性 | 所有 rank 是否存在 | 说明 |
-| --- | --- | --- |
-| `state` | 是，除非 `return_state=False` | 当前 rank 的最终 `DistState` |
-| `local_probabilities` | 是，除非 `return_probabilities=False` | 当前 rank 的概率分片 |
-| `expectations` | 是 | 不可变名称到标量映射，各 rank 相同 |
-| `counts` | 仅 rank 0 | 末端采样计数；未采样时所有 rank 均为 `None` |
-| `rank` | 是 | 当前全局 rank |
-| `world_size` | 是 | 状态分片数 |
-| `is_root` | 是 | `rank == 0` 的便捷判断 |
+| 字段/属性               | 所有 rank 是否存在                     | 说明                                         |
+| ----------------------- | -------------------------------------- | -------------------------------------------- |
+| `state`               | 是，除非`return_state=False`         | 当前 rank 的最终`DistState`                |
+| `local_probabilities` | 是，除非`return_probabilities=False` | 当前 rank 的概率分片                         |
+| `expectations`        | 是                                     | 不可变名称到标量映射，各 rank 相同           |
+| `counts`              | 仅 rank 0                              | 末端采样计数；未采样时所有 rank 均为`None` |
+| `rank`                | 是                                     | 当前全局 rank                                |
+| `world_size`          | 是                                     | 状态分片数                                   |
+| `is_root`             | 是                                     | `rank == 0` 的便捷判断                     |
 
 ### 12.2 聚合完整状态
 
@@ -769,10 +769,10 @@ result = simulator.run(circuit, layout=(1, 0))
 
 ### 15.1 持久状态存储
 
-| 状态 | 全局元素数 | 每 rank 元素数 | 每 rank 持久字节数 |
-| --- | ---: | ---: | ---: |
-| 状态向量 | `2^n` | `2^n / W` | `8 * 2^n / W` |
-| 密度矩阵 | `4^n` | `4^n / W` | `8 * 4^n / W` |
+| 状态     | 全局元素数 | 每 rank 元素数 | 每 rank 持久字节数 |
+| -------- | ---------: | -------------: | -----------------: |
+| 状态向量 |    `2^n` |    `2^n / W` |    `8 * 2^n / W` |
+| 密度矩阵 |    `4^n` |    `4^n / W` |    `8 * 4^n / W` |
 
 密度矩阵的分片方式是连续行块，因此每 rank 形状为
 `(2^n / W, 2^n)`。
@@ -799,31 +799,31 @@ HCCL 带宽、kernel 粒度和临时缓冲影响。
 
 ### 16.1 功能边界
 
-| 支持 | 不支持或拒绝 |
-| --- | --- |
-| `world_size=2^p` 且 `n_qubits >= p` | 非 2 的幂 world size |
-| 前向 `complex64` 状态向量 | autograd、`requires_grad=True` |
-| 行分片密度矩阵 | 任意二维分块或列分块 |
-| 能解析局部门矩阵的酉门 | 隐式完整全局酉矩阵 |
-| 门后触发的确定性局部 Kraus 噪声 | 随机纯态轨迹、全系统自定义 Kraus |
-| Pauli、Pauli Hamiltonian、显式目标的局部稠密 observable | 无结构的全系统稠密 observable |
-| 末端 Z 基 shots 和逻辑比特子集 | 中途测量、reset、非 Z 末端采样 |
-| `shots=1, collapse=True` | 多 shot collapse |
-| rank 0 完整初态或所有 rank 的匹配 `DistState` | 混合初态提供模式 |
-| 显式 root gather | 隐式完整状态/概率 gather |
+| 支持                                                    | 不支持或拒绝                     |
+| ------------------------------------------------------- | -------------------------------- |
+| `world_size=2^p` 且 `n_qubits >= p`                 | 非 2 的幂 world size             |
+| 前向`complex64` 状态向量                              | autograd、`requires_grad=True` |
+| 行分片密度矩阵                                          | 任意二维分块或列分块             |
+| 能解析局部门矩阵的酉门                                  | 隐式完整全局酉矩阵               |
+| 门后触发的确定性局部 Kraus 噪声                         | 随机纯态轨迹、全系统自定义 Kraus |
+| Pauli、Pauli Hamiltonian、显式目标的局部稠密 observable | 无结构的全系统稠密 observable    |
+| 末端 Z 基 shots 和逻辑比特子集                          | 中途测量、reset、非 Z 末端采样   |
+| `shots=1, collapse=True`                              | 多 shot collapse                 |
+| rank 0 完整初态或所有 rank 的匹配`DistState`          | 混合初态提供模式                 |
+| 显式 root gather                                        | 隐式完整状态/概率 gather         |
 
 ### 16.2 常见预检错误
 
-| 错误条件 | 处理 |
-| --- | --- |
-| `initial_state` 和 `initial_density_matrix` 同时非空 | 抛出 `ValueError` |
-| `shots <= 0` | 抛出 `ValueError` |
-| `collapse=True` 且 `shots != 1` | 抛出 `ValueError` |
-| 线路包含 measure/reset/控制流 | 在状态分配和门执行前拒绝 |
-| 门参数 `requires_grad=True` | 在门规划时拒绝 |
-| layout 不是完整排列 | 抛出 `ValueError` |
-| 不同 rank 的线路或关键选项不一致 | 摘要一致性检查失败 |
-| 复用的 `DistState` 属于另一 backend/layout | 抛出 `ValueError` |
+| 错误条件                                                 | 处理                     |
+| -------------------------------------------------------- | ------------------------ |
+| `initial_state` 和 `initial_density_matrix` 同时非空 | 抛出`ValueError`       |
+| `shots <= 0`                                           | 抛出`ValueError`       |
+| `collapse=True` 且 `shots != 1`                      | 抛出`ValueError`       |
+| 线路包含 measure/reset/控制流                            | 在状态分配和门执行前拒绝 |
+| 门参数`requires_grad=True`                             | 在门规划时拒绝           |
+| layout 不是完整排列                                      | 抛出`ValueError`       |
+| 不同 rank 的线路或关键选项不一致                         | 摘要一致性检查失败       |
+| 复用的`DistState` 属于另一 backend/layout              | 抛出`ValueError`       |
 
 首期没有容错恢复或弹性 rank 变更；任一进程异常退出后，应由外部启动
 和作业系统终止整个任务。
@@ -868,15 +868,15 @@ PYTHONPATH=. pytest tests/distributed -q
 
 ### 17.3 常见故障
 
-| 现象 | 检查 |
-| --- | --- |
-| `world_size` 不是 2 的幂 | 调整 `--nproc-per-node` 为 1、2、4、8 等 |
-| `n_qubits < log2(world_size)` | 减少进程数或增加线路量子比特数 |
-| rank 卡在 collective | 检查所有 rank 是否调用了同一 `run()`/gather，且线路一致 |
-| 分片不在预期 NPU | 检查 `LOCAL_RANK` 和启动器配置，不要自行重映射可见设备 |
-| gather 后 root 内存不足 | 避免完整 gather，只消费分片概率、标量期望值或 counts |
-| 噪声后状态变成 matrix | 这是确定性 Kraus 演化的预期行为 |
-| CPU/Gloo 通过但 HCCL 失败 | 以目标 CANN、PyTorch、torch-npu 组合的真机探针为准 |
+| 现象                            | 检查                                                     |
+| ------------------------------- | -------------------------------------------------------- |
+| `world_size` 不是 2 的幂      | 调整`--nproc-per-node` 为 1、2、4、8 等                |
+| `n_qubits < log2(world_size)` | 减少进程数或增加线路量子比特数                           |
+| rank 卡在 collective            | 检查所有 rank 是否调用了同一`run()`/gather，且线路一致 |
+| 分片不在预期 NPU                | 检查`LOCAL_RANK` 和启动器配置，不要自行重映射可见设备  |
+| gather 后 root 内存不足         | 避免完整 gather，只消费分片概率、标量期望值或 counts     |
+| 噪声后状态变成 matrix           | 这是确定性 Kraus 演化的预期行为                          |
+| CPU/Gloo 通过但 HCCL 失败       | 以目标 CANN、PyTorch、torch-npu 组合的真机探针为准       |
 
 ---
 
