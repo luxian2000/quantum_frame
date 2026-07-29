@@ -146,9 +146,7 @@ class DistState:
                 device=self._local_data.device,
             )
             columns = rows + self._spec.global_start
-            probabilities = torch.real(
-                self._local_data[rows, columns]
-            )
+            probabilities = torch.real(self._local_data)[rows, columns]
             probabilities = torch.clamp(probabilities, min=0)
 
         total = self._backend.communicator.all_reduce_sum(

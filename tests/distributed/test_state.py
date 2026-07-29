@@ -1,9 +1,19 @@
 import numpy as np
 import pytest
 import torch
+from torch.utils._python_dispatch import TorchDispatchMode
 
 from aicir.distributed import DistNPUBackend, DistState
 from aicir.distributed.layout import _Layout, _ShardSpec
+
+
+class _RejectComplexIndex(TorchDispatchMode):
+    """Model Ascend's aclnnIndex dtype restriction on a CPU test run."""
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        if func is torch.ops.aten.index.Tensor and args[0].is_complex():
+            raise RuntimeError("complex indexing is not supported")
+        return func(*args, **(kwargs or {}))
 
 
 def _backend(monkeypatch):
@@ -90,6 +100,29 @@ def test_density_local_probabilities_use_global_diagonal(monkeypatch):
     )
 
 
+def test_density_local_probabilities_do_not_index_complex_tensor(monkeypatch):
+    backend = _backend(monkeypatch)
+    rho = torch.diag(
+        torch.tensor(
+            [0.1, 0.2, 0.3, 0.4, 0.0, 0.0, 0.0, 0.0],
+            dtype=torch.complex64,
+        )
+    )
+    state = DistState.from_local(
+        rho,
+        spec=_spec("matrix"),
+        backend=backend,
+    )
+
+    with _RejectComplexIndex():
+        probabilities = state.local_probabilities()
+
+    torch.testing.assert_close(
+        probabilities,
+        torch.tensor([0.1, 0.2, 0.3, 0.4, 0.0, 0.0, 0.0, 0.0]),
+    )
+
+
 def test_single_rank_gather_returns_existing_state(monkeypatch):
     backend = _backend(monkeypatch)
     local = torch.arange(8, dtype=torch.float32).to(torch.complex64).reshape(8, 1)
@@ -99,4 +132,3 @@ def test_single_rank_gather_returns_existing_state(monkeypatch):
 
     np.testing.assert_array_equal(gathered.to_numpy(), np.arange(8))
     np.testing.assert_array_equal(state.to_numpy(root=0), np.arange(8))
-
