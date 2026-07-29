@@ -129,6 +129,25 @@ class _Communicator:
             ]
         return self._all_gather_tensor(tensor)
 
+    def broadcast(self, tensor, *, root: int = 0):
+        root = int(root)
+        if not 0 <= root < self.world_size:
+            raise ValueError(
+                f"root={root} 必须位于 [0, {self.world_size})"
+            )
+        if self.world_size == 1:
+            return tensor.clone()
+        self._require_process_group()
+        if torch.is_complex(tensor):
+            real = torch.real(tensor).contiguous()
+            imag = torch.imag(tensor).contiguous()
+            self._dist.broadcast(real, src=root, group=self.group)
+            self._dist.broadcast(imag, src=root, group=self.group)
+            return torch.complex(real, imag).to(dtype=tensor.dtype)
+        result = tensor.clone()
+        self._dist.broadcast(result, src=root, group=self.group)
+        return result
+
     def _gather_tensor(self, tensor, root: int):
         gathered = (
             [torch.empty_like(tensor) for _ in range(self.world_size)]

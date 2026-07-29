@@ -122,6 +122,11 @@ class _MatrixKernel:
             output = self._backend.add(output, contribution)
         return output
 
+    def apply_left(self, state: DistState, plan):
+        if state.kind != "matrix":
+            raise TypeError("_MatrixKernel 仅接受 matrix DistState")
+        return self._apply_left(state, plan)
+
     def apply_unitary(self, state: DistState, plan) -> DistState:
         if state.kind != "matrix":
             raise TypeError("_MatrixKernel 仅接受 matrix DistState")
