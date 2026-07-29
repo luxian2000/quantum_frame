@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import socket
 
+import pytest
 import torch
 import torch.multiprocessing as mp
 
@@ -58,16 +59,21 @@ def _section_worker(rank, world_size, port, output_dir):
         torch.distributed.destroy_process_group()
 
 
-def test_two_rank_api_probe_sections_are_collective_safe(tmp_path):
+@pytest.mark.parametrize("world_size", [2, 4])
+def test_api_probe_sections_are_collective_safe(world_size, tmp_path):
     mp.spawn(
         _section_worker,
-        args=(2, _free_port(), str(tmp_path)),
-        nprocs=2,
+        args=(world_size, _free_port(), str(tmp_path)),
+        nprocs=world_size,
         join=True,
     )
 
-    root = json.loads((tmp_path / "rank-0.json").read_text())
-    nonroot = json.loads((tmp_path / "rank-1.json").read_text())
+    payloads = [
+        json.loads((tmp_path / f"rank-{rank}.json").read_text())
+        for rank in range(world_size)
+    ]
+    root = payloads[0]
+    nonroots = payloads[1:]
 
     assert not root["evaluation_failure"]["passed"]
     assert root["evaluation_failure"]["metrics"][
@@ -76,17 +82,20 @@ def test_two_rank_api_probe_sections_are_collective_safe(tmp_path):
         "type": "RuntimeError",
         "message": "post-collective root evaluation failed",
     }
-    assert nonroot["evaluation_failure"]["passed"] is False
-    assert nonroot["evaluation_failure"]["metrics"] == {}
+    assert all(
+        payload["evaluation_failure"]["passed"] is False
+        and payload["evaluation_failure"]["metrics"] == {}
+        for payload in nonroots
+    )
 
     assert all(
         section["passed"]
         for section in root["sections"].values()
     )
     assert all(
-        section["passed"]
-        and section["metrics"] == {}
-        for section in nonroot["sections"].values()
+        section["passed"] and section["metrics"] == {}
+        for payload in nonroots
+        for section in payload["sections"].values()
     )
 
     state_metrics = root["sections"]["state"]["metrics"]
@@ -125,12 +134,53 @@ def test_two_rank_api_probe_sections_are_collective_safe(tmp_path):
     }
 
     noise_metrics = root["sections"]["noise"]["metrics"]
+    expected_distributed_axes = list(
+        range(world_size.bit_length() - 1)
+    )
+    expected_layout = list(
+        range(world_size.bit_length())
+    )
+    assert noise_metrics["targeted_distributed_axes"] == (
+        expected_distributed_axes
+    )
+    assert noise_metrics["logical_to_storage"] == expected_layout
+    assert noise_metrics["channel_targets"] == {
+        "amplitude_damping": expected_distributed_axes[0],
+        "bit_flip": expected_distributed_axes[
+            1 % len(expected_distributed_axes)
+        ],
+        "phase_flip": expected_distributed_axes[
+            2 % len(expected_distributed_axes)
+        ],
+        "depolarizing": expected_distributed_axes[
+            3 % len(expected_distributed_axes)
+        ],
+    }
+    for metric in (
+        "amplitude_damping_error",
+        "bit_flip_error",
+        "phase_flip_error",
+        "depolarizing_error",
+        "noise_sequence_error",
+        "rule_selection_error",
+    ):
+        assert noise_metrics[metric] <= probe.STATE_ATOL
     assert noise_metrics["noise_density_error"] <= probe.STATE_ATOL
     assert noise_metrics["noise_trace_error"] <= probe.REDUCTION_ATOL
     assert noise_metrics["noise_probability_error"] <= probe.REDUCTION_ATOL
     assert noise_metrics["channel_count"] == 4
+    assert "matched_gate_name" not in noise_metrics
 
     observable_metrics = root["sections"]["observable"]["metrics"]
+    assert observable_metrics["targeted_distributed_axes"] == (
+        expected_distributed_axes
+    )
+    assert observable_metrics["logical_to_storage"] == expected_layout
+    assert observable_metrics["local_dense_target"] == (
+        expected_distributed_axes[1]
+        if len(expected_distributed_axes) > 1
+        else expected_distributed_axes[0]
+    )
     assert observable_metrics["pauli_error"] <= probe.REDUCTION_ATOL
     assert observable_metrics["hamiltonian_error"] <= probe.REDUCTION_ATOL
     assert observable_metrics["local_dense_error"] <= probe.REDUCTION_ATOL

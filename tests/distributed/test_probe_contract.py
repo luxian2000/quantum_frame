@@ -71,6 +71,8 @@ def test_full_api_probe_has_sectioned_strict_contract():
     assert "fallback_to_cpu=False" in source
     assert "failed_invariants" in source
     assert "EXPECTED_SECTIONS" in source
+    assert ".kraus_operators(" not in source
+    assert "._local_kraus(" not in source
     for token in (
         "AmplitudeDampingChannel",
         "BitFlipChannel",
@@ -78,11 +80,18 @@ def test_full_api_probe_has_sectioned_strict_contract():
         "Hamiltonian",
         "Observable.matrix",
         "PhaseFlipChannel",
+        "amplitude_damping_error",
+        "bit_flip_error",
+        "depolarizing_error",
         "initial_density_matrix",
         "hamiltonian_error",
         "local_dense_error",
         "logical_to_storage",
         "noise_density_error",
+        "noise_sequence_error",
+        "phase_flip_error",
+        "rule_selection_error",
+        "targeted_distributed_axes",
         "continuation_vector_error",
         "continuation_density_error",
         "local_tensor_sizes",

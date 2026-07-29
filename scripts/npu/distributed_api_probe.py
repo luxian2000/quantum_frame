@@ -78,12 +78,76 @@ def _max_error(actual, expected):
     )
 
 
-def _apply_kraus_reference(rho, channel, n):
-    backend = NumpyBackend()
+def _embed_single_qubit_reference(operator, target, n):
+    identity = np.eye(2, dtype=np.complex64)
+    embedded = np.eye(1, dtype=np.complex64)
+    for qubit in range(n):
+        factor = operator if qubit == target else identity
+        embedded = np.kron(embedded, factor).astype(np.complex64)
+    return embedded
+
+
+def _single_qubit_kraus_reference(channel_name, parameter):
+    identity = np.eye(2, dtype=np.complex64)
+    pauli_x_matrix = np.array(
+        [[0.0, 1.0], [1.0, 0.0]],
+        dtype=np.complex64,
+    )
+    pauli_y_matrix = np.array(
+        [[0.0, -1.0j], [1.0j, 0.0]],
+        dtype=np.complex64,
+    )
+    pauli_z_matrix = np.array(
+        [[1.0, 0.0], [0.0, -1.0]],
+        dtype=np.complex64,
+    )
+    probability = np.float32(parameter)
+    if channel_name == "amplitude_damping":
+        return (
+            np.array(
+                [
+                    [1.0, 0.0],
+                    [0.0, np.sqrt(np.float32(1.0) - probability)],
+                ],
+                dtype=np.complex64,
+            ),
+            np.array(
+                [
+                    [0.0, np.sqrt(probability)],
+                    [0.0, 0.0],
+                ],
+                dtype=np.complex64,
+            ),
+        )
+    if channel_name == "bit_flip":
+        return (
+            np.sqrt(np.float32(1.0) - probability) * identity,
+            np.sqrt(probability) * pauli_x_matrix,
+        )
+    if channel_name == "phase_flip":
+        return (
+            np.sqrt(np.float32(1.0) - probability) * identity,
+            np.sqrt(probability) * pauli_z_matrix,
+        )
+    if channel_name == "depolarizing":
+        return (
+            np.sqrt(np.float32(1.0) - probability) * identity,
+            np.sqrt(probability / np.float32(3.0)) * pauli_x_matrix,
+            np.sqrt(probability / np.float32(3.0)) * pauli_y_matrix,
+            np.sqrt(probability / np.float32(3.0)) * pauli_z_matrix,
+        )
+    raise ValueError(f"未知 reference channel: {channel_name}")
+
+
+def _apply_kraus_reference(rho, local_operators, target, n):
     reference = np.asarray(rho, dtype=np.complex64)
     accumulated = np.zeros_like(reference, dtype=np.complex64)
-    for operator in channel.kraus_operators(n, backend):
-        kraus = np.asarray(operator, dtype=np.complex64)
+    for local_operator in local_operators:
+        kraus = _embed_single_qubit_reference(
+            local_operator,
+            target,
+            n,
+        )
         accumulated = (
             accumulated
             + kraus @ reference @ np.conjugate(kraus.T)
@@ -650,10 +714,19 @@ def _run_continuation_section(simulator):
     return _evaluate_root_section(backend, evaluate)
 
 
-def _coherent_density_matrix(n_qubits):
-    vector = np.zeros(1 << n_qubits, dtype=np.complex64)
-    vector[0] = np.float32(1.0 / np.sqrt(2.0))
-    vector[1 << (n_qubits - 1)] = np.float32(1.0 / np.sqrt(2.0))
+def _coherent_density_matrix(n_qubits, distributed_axes):
+    coherent = np.array(
+        [
+            np.sqrt(np.float32(0.7)),
+            np.sqrt(np.float32(0.3)) * (0.8 + 0.6j),
+        ],
+        dtype=np.complex64,
+    )
+    zero = np.array([1.0, 0.0], dtype=np.complex64)
+    vector = np.eye(1, dtype=np.complex64).reshape(-1)
+    for qubit in range(n_qubits):
+        factor = coherent if qubit < distributed_axes else zero
+        vector = np.kron(vector, factor).astype(np.complex64)
     return np.outer(vector, np.conjugate(vector)).astype(np.complex64)
 
 
@@ -661,82 +734,241 @@ def _run_noise_section(simulator):
     backend = simulator.backend
     distributed_axes = int(math.log2(backend.world_size))
     n_qubits = distributed_axes + 1
-    channels = (
-        AmplitudeDampingChannel(target_qubit=0, gamma=0.1),
-        BitFlipChannel(target_qubit=0, p=0.2),
-        PhaseFlipChannel(target_qubit=0, p=0.3),
-        DepolarizingChannel(target_qubit=0, p=0.15),
+    logical_to_storage = tuple(range(n_qubits))
+    channel_parameters = (
+        ("amplitude_damping", 0.1),
+        ("bit_flip", 0.2),
+        ("phase_flip", 0.3),
+        ("depolarizing", 0.15),
     )
-    noise_model = NoiseModel()
+    channel_targets = tuple(
+        index % distributed_axes
+        for index in range(len(channel_parameters))
+    )
+    channels = (
+        AmplitudeDampingChannel(
+            target_qubit=channel_targets[0],
+            gamma=channel_parameters[0][1],
+        ),
+        BitFlipChannel(
+            target_qubit=channel_targets[1],
+            p=channel_parameters[1][1],
+        ),
+        PhaseFlipChannel(
+            target_qubit=channel_targets[2],
+            p=channel_parameters[2][1],
+        ),
+        DepolarizingChannel(
+            target_qubit=channel_targets[3],
+            p=channel_parameters[3][1],
+        ),
+    )
+    references = tuple(
+        _single_qubit_kraus_reference(name, parameter)
+        for name, parameter in channel_parameters
+    )
+    initial_density_matrix = _root_only(
+        backend,
+        lambda: _coherent_density_matrix(
+            n_qubits,
+            distributed_axes,
+        ),
+    )
+
+    single_channel_densities = []
     for channel in channels:
-        noise_model.add_channel(
+        single_model = NoiseModel().add_channel(
             channel,
             after_gates=("pauli_x",),
         )
-    circuit = Circuit(pauli_x(0), n_qubits=n_qubits)
-    circuit.noise_model = noise_model
-    initial_density_matrix = _root_only(
-        backend,
-        lambda: _coherent_density_matrix(n_qubits),
-    )
+        single_circuit = Circuit(pauli_x(0), n_qubits=n_qubits)
+        single_circuit.noise_model = single_model
+        single_result = simulator.run(
+            single_circuit,
+            initial_density_matrix=initial_density_matrix,
+            layout=logical_to_storage,
+        )
+        single_channel_densities.append(
+            _gather_state_array(single_result.state)
+        )
 
-    result = simulator.run(
-        circuit,
+    sequence_model = NoiseModel()
+    for channel in channels:
+        sequence_model.add_channel(
+            channel,
+            after_gates=("pauli_x",),
+        )
+    sequence_circuit = Circuit(pauli_x(0), n_qubits=n_qubits)
+    sequence_circuit.noise_model = sequence_model
+    sequence_result = simulator.run(
+        sequence_circuit,
         initial_density_matrix=initial_density_matrix,
+        layout=logical_to_storage,
     )
-    density = _gather_state_array(result.state)
-    probabilities = result.gather_probabilities(root=0)
+    sequence_density = _gather_state_array(sequence_result.state)
+    sequence_probabilities = sequence_result.gather_probabilities(root=0)
+
+    selection_circuit = Circuit(pauli_z(0), n_qubits=n_qubits)
+    selection_circuit.noise_model = NoiseModel().add_channel(
+        AmplitudeDampingChannel(target_qubit=0, gamma=0.41),
+        after_gates=("pauli_x",),
+    )
+    selection_result = simulator.run(
+        selection_circuit,
+        initial_density_matrix=initial_density_matrix,
+        layout=logical_to_storage,
+    )
+    selection_density = _gather_state_array(selection_result.state)
 
     def evaluate():
         reference_backend = NumpyBackend()
-        unitary = np.asarray(
-            circuit.unitary(backend=reference_backend),
+        x_unitary = np.asarray(
+            Circuit(
+                pauli_x(0),
+                n_qubits=n_qubits,
+            ).unitary(backend=reference_backend),
             dtype=np.complex64,
         )
-        expected = (
-            unitary
+        after_x = (
+            x_unitary
             @ initial_density_matrix
-            @ np.conjugate(unitary.T)
+            @ np.conjugate(x_unitary.T)
         ).astype(np.complex64)
-        for channel in channels:
-            expected = _apply_kraus_reference(
-                expected,
-                channel,
+        single_channel_errors = {}
+        for (
+            (channel_name, _parameter),
+            target,
+            local_operators,
+            actual_density,
+        ) in zip(
+            channel_parameters,
+            channel_targets,
+            references,
+            single_channel_densities,
+        ):
+            expected_single = _apply_kraus_reference(
+                after_x,
+                local_operators,
+                target,
                 n_qubits,
             )
-        expected_probabilities = np.real(np.diag(expected))
-        noise_density_error = _max_error(density, expected)
-        noise_trace_error = float(abs(np.trace(density) - 1.0))
+            single_channel_errors[channel_name] = _max_error(
+                actual_density,
+                expected_single,
+            )
+
+        expected_sequence = after_x
+        for local_operators, target in zip(
+            references,
+            channel_targets,
+        ):
+            expected_sequence = _apply_kraus_reference(
+                expected_sequence,
+                local_operators,
+                target,
+                n_qubits,
+            )
+        expected_probabilities = np.real(np.diag(expected_sequence))
+        noise_sequence_error = _max_error(
+            sequence_density,
+            expected_sequence,
+        )
+        noise_trace_error = float(
+            abs(np.trace(sequence_density) - 1.0)
+        )
         noise_probability_error = _max_error(
-            probabilities,
+            sequence_probabilities,
             expected_probabilities,
         )
+        z_unitary = np.asarray(
+            Circuit(
+                pauli_z(0),
+                n_qubits=n_qubits,
+            ).unitary(backend=reference_backend),
+            dtype=np.complex64,
+        )
+        expected_selection = (
+            z_unitary
+            @ initial_density_matrix
+            @ np.conjugate(z_unitary.T)
+        ).astype(np.complex64)
+        rule_selection_error = _max_error(
+            selection_density,
+            expected_selection,
+        )
         metrics = {
-            "noise_density_error": noise_density_error,
+            "amplitude_damping_error": single_channel_errors[
+                "amplitude_damping"
+            ],
+            "bit_flip_error": single_channel_errors["bit_flip"],
+            "phase_flip_error": single_channel_errors["phase_flip"],
+            "depolarizing_error": single_channel_errors[
+                "depolarizing"
+            ],
+            "noise_density_error": noise_sequence_error,
+            "noise_sequence_error": noise_sequence_error,
             "noise_trace_error": noise_trace_error,
             "noise_probability_error": noise_probability_error,
+            "rule_selection_error": rule_selection_error,
             "channel_count": len(channels),
-            "matched_gate_name": "pauli_x",
+            "channel_targets": {
+                name: target
+                for (name, _parameter), target in zip(
+                    channel_parameters,
+                    channel_targets,
+                )
+            },
+            "targeted_distributed_axes": sorted(set(channel_targets)),
+            "logical_to_storage": list(
+                sequence_result.state.layout.logical_to_storage
+            ),
         }
         passed = (
-            noise_density_error <= STATE_ATOL
+            all(
+                error <= STATE_ATOL
+                for error in single_channel_errors.values()
+            )
+            and noise_sequence_error <= STATE_ATOL
             and noise_trace_error <= REDUCTION_ATOL
             and noise_probability_error <= REDUCTION_ATOL
+            and rule_selection_error <= STATE_ATOL
             and len(channels) == 4
+            and sorted(set(channel_targets))
+            == list(range(distributed_axes))
+            and sequence_result.state.layout.logical_to_storage
+            == logical_to_storage
         )
         return passed, metrics
 
     return _evaluate_root_section(backend, evaluate)
 
 
-def _observable_probe_circuit(n_qubits):
+def _observable_probe_circuit(n_qubits, distributed_axes):
     last = n_qubits - 1
-    return Circuit(
+    gates = [
         hadamard(0),
         rz(0.37, target_qubit=0),
-        hadamard(last),
-        cx(target_qubit=last, control_qubits=(0,)),
-        rz(-0.23, target_qubit=last),
+    ]
+    for axis in range(1, distributed_axes):
+        gates.extend(
+            (
+                hadamard(axis),
+                rz(0.11 * (axis + 1), target_qubit=axis),
+                cx(
+                    target_qubit=axis,
+                    control_qubits=(axis - 1,),
+                ),
+            )
+        )
+    gates.extend(
+        (
+            hadamard(last),
+            cx(target_qubit=last, control_qubits=(0,)),
+            rz(-0.23, target_qubit=last),
+        )
+    )
+    return Circuit(
+        *gates,
         n_qubits=n_qubits,
     )
 
@@ -745,20 +977,31 @@ def _run_observable_section(simulator):
     backend = simulator.backend
     distributed_axes = int(math.log2(backend.world_size))
     n_qubits = distributed_axes + 1
-    last = n_qubits - 1
-    circuit = _observable_probe_circuit(n_qubits)
+    logical_to_storage = tuple(range(n_qubits))
+    targeted_distributed_axes = tuple(range(distributed_axes))
+    local_dense_target = (
+        targeted_distributed_axes[1]
+        if distributed_axes > 1
+        else targeted_distributed_axes[0]
+    )
+    circuit = _observable_probe_circuit(
+        n_qubits,
+        distributed_axes,
+    )
     pauli = PauliString(
-        "XZ",
+        "X",
         n_qubits=n_qubits,
-        qubits=(0, last),
+        qubits=(0,),
     )
     hamiltonian = Hamiltonian(
         n_qubits=n_qubits,
-        terms=(
-            ("Z", 0.45, (0,)),
-            ("XX", -0.3, (0, last)),
-            ("Z", 0.2, (last,)),
-        ),
+        terms=[
+            *(
+                ("Z", 0.25 + 0.1 * axis, (axis,))
+                for axis in targeted_distributed_axes
+            ),
+            ("X", -0.2, (0,)),
+        ],
     )
     local_dense_matrix = np.array(
         [
@@ -769,7 +1012,7 @@ def _run_observable_section(simulator):
     )
     local_dense = Observable.matrix(
         local_dense_matrix,
-        metadata={"qubits": [last]},
+        metadata={"qubits": [local_dense_target]},
     )
     result = simulator.run(
         circuit,
@@ -778,6 +1021,7 @@ def _run_observable_section(simulator):
             "hamiltonian": hamiltonian,
             "local_dense": local_dense,
         },
+        layout=logical_to_storage,
     )
 
     def evaluate():
@@ -803,7 +1047,7 @@ def _run_observable_section(simulator):
         for qubit in range(n_qubits):
             factor = (
                 local_dense_matrix
-                if qubit == last
+                if qubit == local_dense_target
                 else np.eye(2, dtype=np.complex64)
             )
             local_dense_full = np.kron(
@@ -834,11 +1078,20 @@ def _run_observable_section(simulator):
             "pauli_error": pauli_error,
             "hamiltonian_error": hamiltonian_error,
             "local_dense_error": local_dense_error,
+            "targeted_distributed_axes": list(
+                targeted_distributed_axes
+            ),
+            "local_dense_target": local_dense_target,
+            "logical_to_storage": list(
+                result.state.layout.logical_to_storage
+            ),
         }
         passed = (
             pauli_error <= REDUCTION_ATOL
             and hamiltonian_error <= REDUCTION_ATOL
             and local_dense_error <= REDUCTION_ATOL
+            and result.state.layout.logical_to_storage
+            == logical_to_storage
         )
         return passed, metrics
 
