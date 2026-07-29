@@ -19,5 +19,6 @@ node_modules/
 demos/BeH2/output.txt
 compare.md
 CLAUDE.md
+.worktrees/
 CONTENTS.md
 NEXT.md
