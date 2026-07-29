@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, List, Mapping, Sequence
 
 import numpy as np
@@ -113,6 +113,14 @@ class _SingleQubitChannel(NoiseChannel):
     def _validate_target(self, n_qubits: int) -> None:
         if self.target_qubit < 0 or self.target_qubit >= n_qubits:
             raise ValueError(f"target_qubit={self.target_qubit} out of range [0, {n_qubits})")
+
+    def _local_kraus(self, n_qubits: int, backend):
+        self._validate_target(n_qubits)
+        local_channel = replace(self, target_qubit=0)
+        return tuple(
+            (matrix, (int(self.target_qubit),))
+            for matrix in local_channel.kraus_operators(1, backend)
+        )
 
 
 @dataclass
@@ -411,6 +419,17 @@ class TwoQubitDepolarizingChannel(NoiseChannel):
             kraus.append(_embed_operator(scale * product, targets, n_qubits, backend))
         return kraus
 
+    def _local_kraus(self, n_qubits: int, backend):
+        targets = _validate_target_qubits(
+            (self.qubit_1, self.qubit_2),
+            n_qubits,
+        )
+        local_channel = replace(self, qubit_1=0, qubit_2=1)
+        return tuple(
+            (matrix, targets)
+            for matrix in local_channel.kraus_operators(2, backend)
+        )
+
 
 @dataclass
 class CorrelatedTwoQubitPauliChannel(NoiseChannel):
@@ -451,6 +470,17 @@ class CorrelatedTwoQubitPauliChannel(NoiseChannel):
             if p > 0.0:
                 kraus.append(_embed_operator(np.sqrt(p) * op, targets, n_qubits, backend))
         return kraus
+
+    def _local_kraus(self, n_qubits: int, backend):
+        targets = _validate_target_qubits(
+            (self.qubit_1, self.qubit_2),
+            n_qubits,
+        )
+        local_channel = replace(self, qubit_1=0, qubit_2=1)
+        return tuple(
+            (matrix, targets)
+            for matrix in local_channel.kraus_operators(2, backend)
+        )
 
 
 @dataclass
@@ -524,6 +554,25 @@ class KrausChannel(NoiseChannel):
             return [backend.cast(op) for op in operators]
         targets = _validate_target_qubits(self.target_qubits, n_qubits)
         return [_embed_operator(op, targets, n_qubits, backend) for op in operators]
+
+    def _local_kraus(self, n_qubits: int, backend):
+        if self.target_qubits is None:
+            raise NotImplementedError(
+                "分布式 KrausChannel 要求显式 target_qubits"
+            )
+        targets = _validate_target_qubits(self.target_qubits, n_qubits)
+        if not self.kraus_ops:
+            raise ValueError("kraus_ops must not be empty")
+        dimension = 1 << len(targets)
+        operators = []
+        for operator in self.kraus_ops:
+            array = np.asarray(operator, dtype=np.complex64)
+            if array.shape != (dimension, dimension):
+                raise ValueError(
+                    f"local Kraus operator shape must be ({dimension}, {dimension})"
+                )
+            operators.append((backend.cast(array), targets))
+        return tuple(operators)
 
 
 __all__ = [

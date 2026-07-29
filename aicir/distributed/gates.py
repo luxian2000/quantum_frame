@@ -58,7 +58,32 @@ class _GatePlanner:
                 f"指令 {gate_type!r} 没有可用于分布式执行的局部门矩阵"
             )
 
+        matrix = _cast_local_matrix(
+            self._backend,
+            local,
+            cache_key=cache_key,
+        )
+        return self.plan_matrix(
+            matrix,
+            logical_axes,
+            instruction_index=instruction_index,
+        )
+
+    def plan_matrix(
+        self,
+        local_matrix,
+        logical_axes,
+        *,
+        instruction_index: int,
+    ) -> _GatePlan:
         logical_axes = tuple(int(axis) for axis in logical_axes)
+        if len(set(logical_axes)) != len(logical_axes):
+            raise ValueError("局部矩阵的逻辑量子比特不能重复")
+        if any(
+            logical < 0 or logical >= self._n_qubits
+            for logical in logical_axes
+        ):
+            raise ValueError("局部矩阵的逻辑量子比特超出范围")
         storage_axes = tuple(
             self._layout.logical_to_storage[logical]
             for logical in logical_axes
@@ -88,11 +113,15 @@ class _GatePlanner:
                     mask ^= bit
                 partner_masks.append(mask)
 
-        matrix = _cast_local_matrix(
-            self._backend,
-            local,
-            cache_key=cache_key,
-        )
+        matrix = self._backend.cast_local_matrix(local_matrix)
+        dimension = 1 << len(logical_axes)
+        if tuple(int(axis) for axis in matrix.shape) != (
+            dimension,
+            dimension,
+        ):
+            raise ValueError(
+                f"局部门矩阵形状必须是 ({dimension}, {dimension})"
+            )
         if getattr(matrix, "requires_grad", False):
             raise ValueError(
                 "分布式首期不支持 requires_grad=True 的门参数"

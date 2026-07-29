@@ -101,6 +101,34 @@ class _Communicator:
         )
         return result
 
+    def _all_gather_tensor(self, tensor):
+        gathered = [
+            torch.empty_like(tensor) for _ in range(self.world_size)
+        ]
+        self._dist.all_gather(
+            gathered,
+            tensor.contiguous(),
+            group=self.group,
+        )
+        return gathered
+
+    def all_gather(self, tensor):
+        if self.world_size == 1:
+            return [tensor.clone()]
+        self._require_process_group()
+        if torch.is_complex(tensor):
+            real_parts = self._all_gather_tensor(
+                torch.real(tensor).contiguous()
+            )
+            imag_parts = self._all_gather_tensor(
+                torch.imag(tensor).contiguous()
+            )
+            return [
+                torch.complex(real, imag).to(dtype=tensor.dtype)
+                for real, imag in zip(real_parts, imag_parts)
+            ]
+        return self._all_gather_tensor(tensor)
+
     def _gather_tensor(self, tensor, root: int):
         gathered = (
             [torch.empty_like(tensor) for _ in range(self.world_size)]
