@@ -2,7 +2,15 @@ import numpy as np
 import pytest
 import torch
 
-from aicir import Circuit, PauliString, hadamard, measure, rx
+from aicir import (
+    Circuit,
+    Hamiltonian,
+    Observable,
+    PauliString,
+    hadamard,
+    measure,
+    rx,
+)
 from aicir.distributed import DistNPUBackend, DistSimulator
 
 
@@ -104,3 +112,27 @@ def test_state_and_probability_return_flags_are_independent(monkeypatch):
     assert state_only.state is not None
     assert state_only.local_probabilities is None
     assert state_only.gather_probabilities() is None
+
+
+def test_structured_hamiltonian_and_local_dense_expectations(monkeypatch):
+    simulator = _simulator(monkeypatch)
+    circuit = Circuit(hadamard(0), n_qubits=2)
+    hamiltonian = Hamiltonian(
+        n_qubits=2,
+        terms=[("XI", 0.5), ("ZI", 0.25)],
+    )
+    local_x = Observable.matrix(
+        np.array([[0, 1], [1, 0]], dtype=np.complex64),
+        metadata={"qubits": [0]},
+    )
+
+    result = simulator.run(
+        circuit,
+        observables={
+            "hamiltonian": hamiltonian,
+            "local_x": local_x,
+        },
+    )
+
+    assert abs(result.expectations["hamiltonian"] - 0.5) < 1e-6
+    assert abs(result.expectations["local_x"] - 1.0) < 1e-6

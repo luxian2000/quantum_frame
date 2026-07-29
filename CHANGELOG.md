@@ -2,6 +2,12 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-07-29
+
+### Added
+
+- **显式多 NPU 单状态分片 API。** 新增仅从 `aicir.distributed` 导出的 `DistNPUBackend`、`DistState`、`DistSimulator` 和 `DistResult`，在 `world_size=2^p` 下把状态向量连续分片、密度矩阵按行分片；rank 只标识存储分片，不消耗逻辑量子比特。首期支持前向 complex64、静态线路感知 layout、局部/跨 rank 酉门、确定性局部 Kraus 噪声、结构化 Pauli/Hamiltonian/局部稠密期望值和末端 Z 采样；拒绝 autograd、中途测量/reset/控制流、隐式 CPU 回退与隐式完整 gather。现有 API 未改名或改变语义。CPU/Gloo 已覆盖 1/2/4 rank；Ascend 2/4 NPU HCCL 是否通过须以 `scripts/npu/distributed_state_probe.py` 在目标环境的严格探针结果为准，当前不作加速声明。使用说明见 `docs/distributed.md`。
+
 ## 2026-07-23
 
 ### Fixed

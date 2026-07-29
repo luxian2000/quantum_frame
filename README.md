@@ -33,6 +33,7 @@
 - **噪声模拟**：通过密度矩阵演化支持退相干、比特/相位翻转、振幅阻尼和离子阱噪声。
 - **OpenQASM 输入输出**：支持 OpenQASM 2.0/3.0 导入导出，并提供 Qiskit、PennyLane、WuYue 互操作。
 - **可插拔后端**：`NumpyBackend`（CPU）、`GPUBackend`（PyTorch/CUDA）、`NPUBackend`（Ascend），只需替换一行即可切换。
+- **显式分布式 NPU 状态分片**：`aicir.distributed` 可把同一个状态向量或密度矩阵行分片到 `2^p` 个 NPU；现有单机 API 保持不变，使用边界与 `torchrun` 示例见 [分布式 NPU 状态模拟](docs/distributed.md)。
 
 ### 1.2 安装
 
@@ -104,6 +105,18 @@ backend = GPUBackend(device="cuda:0")
 backend = NPUBackend.from_distributed_env(fallback_to_cpu=True)
 ```
 
+同一个量子态跨多张 NPU 的场景使用独立 API，不会由
+`NPUBackend` 自动启用：
+
+```python
+from aicir.distributed import DistSimulator
+
+simulator = DistSimulator.from_env(fallback_to_cpu=False)
+result = simulator.run(circuit, shots=1024)
+```
+
+启动与内存模型详见 [docs/distributed.md](docs/distributed.md)。
+
 ### 1.5 项目结构
 
 
@@ -113,6 +126,7 @@ aicir/
   ir/            # Operation、Measurement、ControlFlow、CircuitIR 等线路表示
   gates/         # GateSpec 注册表、门矩阵与门元信息
   backends/      # NumpyBackend、GPUBackend、NPUBackend、NPU 能力探测
+  distributed/   # 显式多 NPU 状态/密度矩阵分片、通信、规约和采样
   measure/       # Measure、Result、PauliEstimator、测量轨迹与统计结果
   primitives/    # Sampler / Estimator primitives
   qml/           # 参数移位、有限差分、autograd、QNG 等梯度工具

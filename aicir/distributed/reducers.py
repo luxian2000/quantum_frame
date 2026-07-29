@@ -7,7 +7,7 @@ import math
 import numpy as np
 import torch
 
-from ..core.operators import PauliString
+from ..core.operators import Hamiltonian, PauliString
 from ..ir import Observable
 from .density import _MatrixKernel
 from .gates import _GatePlanner, _VectorKernel
@@ -60,10 +60,68 @@ class _Reducer:
         return state.local_probabilities()
 
     def expectation(self, state: DistState, observable):
+        if isinstance(observable, Hamiltonian):
+            if observable.n_qubits != state.n_qubits:
+                raise ValueError(
+                    "Hamiltonian 的 n_qubits 与状态不一致"
+                )
+            return sum(
+                self.expectation(state, term)
+                for term in observable.terms
+            )
+        if (
+            isinstance(observable, Observable)
+            and observable.kind == "hamiltonian"
+        ):
+            return self.expectation(state, observable.value)
+        if (
+            isinstance(observable, Observable)
+            and observable.kind == "matrix"
+        ):
+            logical_axes = tuple(
+                int(qubit)
+                for qubit in observable.metadata.get("qubits", ())
+            )
+            if not logical_axes:
+                raise TypeError(
+                    "分布式稠密 observable 必须在 metadata['qubits'] "
+                    "中显式给出逻辑目标比特"
+                )
+            matrix = self._backend.cast_local_matrix(observable.value)
+            expected_dimension = 1 << len(logical_axes)
+            if tuple(int(axis) for axis in matrix.shape) != (
+                expected_dimension,
+                expected_dimension,
+            ):
+                raise ValueError(
+                    "稠密 observable 的矩阵维度与 metadata['qubits'] "
+                    "不一致"
+                )
+            return self._matrix_expectation(
+                state,
+                matrix,
+                logical_axes,
+            )
+
         pauli = _as_pauli(observable)
         if pauli.n_qubits != state.n_qubits:
             raise ValueError("Pauli observable 的 n_qubits 与状态不一致")
         matrix, logical_axes = _pauli_local_matrix(pauli)
+        return self._matrix_expectation(
+            state,
+            matrix,
+            logical_axes,
+            coefficient=complex(pauli.coefficient),
+        )
+
+    def _matrix_expectation(
+        self,
+        state,
+        matrix,
+        logical_axes,
+        *,
+        coefficient=1.0,
+    ):
         planner = _GatePlanner(
             self._backend,
             state.layout,
@@ -94,8 +152,7 @@ class _Reducer:
         total = self._backend.communicator.all_reduce_sum(
             local.reshape(())
         )
-        coefficient = complex(pauli.coefficient)
-        value = _scalar_value(total) * coefficient
+        value = _scalar_value(total) * complex(coefficient)
         if isinstance(value, complex) and abs(value.imag) < 1e-6:
             return value.real
         return value
@@ -148,7 +205,13 @@ class _Reducer:
         for storage_axis, bit in selected.items():
             shift = state.n_qubits - 1 - storage_axis
             row_mask = row_mask * (
-                ((local_indices >> shift) & 1) == bit
+                torch.remainder(
+                    torch.floor(
+                        local_indices.to(torch.float32) / float(1 << shift)
+                    ),
+                    2.0,
+                )
+                == float(bit)
             ).to(torch.float32)
 
         if state.kind == "vector":
@@ -174,7 +237,13 @@ class _Reducer:
             for storage_axis, bit in selected.items():
                 shift = state.n_qubits - 1 - storage_axis
                 column_mask = column_mask * (
-                    ((columns >> shift) & 1) == bit
+                    torch.remainder(
+                        torch.floor(
+                            columns.to(torch.float32) / float(1 << shift)
+                        ),
+                        2.0,
+                    )
+                    == float(bit)
                 ).to(torch.float32)
             data = self._backend.mul(
                 state.local_data,
