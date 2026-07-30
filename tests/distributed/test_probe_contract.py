@@ -165,3 +165,17 @@ def test_manual_documents_full_npu_api_acceptance_contract():
         "不能作为 NPU 验收",
     ):
         assert token in source
+    assert (
+        "`sections.<name>.status` | 正常支持项只能为 `PASS` 或 `FAIL`"
+        in source
+    )
+    assert "`sections.contract.metrics.case_statuses`" in source
+    assert (
+        "`sections.contract.metrics.case_evidence[*].status`"
+        in source
+    )
+    assert (
+        "正常支持项必须为 `PASS`；契约中的预期拒绝项记录为 "
+        "`EXPECTED_ERROR` 或 `UNSUPPORTED_AS_DESIGNED`"
+        not in source
+    )
