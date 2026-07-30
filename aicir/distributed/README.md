@@ -835,14 +835,17 @@ HCCL 带宽、kernel 粒度和临时缓冲影响。
 ### 17.1 完整 NPU API 验收
 
 完整验收必须在目标 Ascend 软硬件环境中分别使用 2 张和 4 张 NPU
-运行。两条命令都要从仓库根目录执行：
+运行。先按目标平台的实际安装方式加载 Ascend 环境，再从仓库根目录
+执行两条命令：
 
 ```bash
-source /usr/local/Ascend/cann/set_env.sh
-python -c "import tbe; print(tbe.__file__)"
 PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 scripts/npu/distributed_api_probe.py --section all
 PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 scripts/npu/distributed_api_probe.py --section all
 ```
+
+不要假设 CANN 固定安装在 `/usr/local/Ascend/cann`。环境初始化脚本和
+CANN 安装路径由部署平台决定；验收记录只能报告实际执行结果，不能从
+某个候选路径是否存在推断 CANN 版本。
 
 探针通过 `DistSimulator.from_env(fallback_to_cpu=False)` 强制使用 NPU，
 并检查每个 rank 的设备为 `npu:LOCAL_RANK`。其中
@@ -928,7 +931,45 @@ DistSimulator 首期仅支持前向模拟，不支持自动微分
 首期完整 NPU API 验收通过。通过只证明该软硬件组合的正确性，不证明
 多 NPU 性能加速。
 
-### 17.3 基础状态探针
+### 17.3 2026-07-30 真机验收记录
+
+2026-07-30 在同一远程 Ascend 作业环境完成 2 NPU 和 4 NPU 的
+`--section all` 严格验收。两次执行均满足：
+
+- 顶层 `passed=true`、`failed_invariants=[]`、
+  `fallback_to_cpu=false`；
+- `state`、`layout`、`continuation`、`noise`、`observable`、
+  `measure`、`result`、`communication`、`contract` 九个 section
+  全部为 `PASS`；
+- `contract` 的 14 个 case 在所有 rank 上均为精确类型、精确文本
+  匹配，且消息摘要一致；
+- `result` 四种返回组合的 `implicit_gather_deltas` 均为
+  `[0, 0, 0, 0]`。
+
+通信证据随 world size 扩展：
+
+| world size | 覆盖的分布式轴 | 每个 rank 的不同 peer 数 | 每个 rank 的 P2P 增量 |
+| --- | --- | --- | --- |
+| 2 | `[0]` | 1 | 2 |
+| 4 | `[0, 1]` | 2 | 4 |
+
+两次报告中最大的观测数值误差是 4 NPU `noise_trace_error`：
+`1.1925458218653903e-7`。该值低于探针的归约误差阈值 `1e-5`。
+
+部署时执行
+`source /usr/local/Ascend/cann/set_env.sh` 返回文件不存在，但当前
+shell 中的 `torch_npu` 与 HCCL 仍成功完成两次任务。这只说明作业环境
+可能已预先配置，或 CANN 位于其他路径；本次输出不足以确认具体 CANN
+版本和安装路径。执行期间还出现
+`HCCL doesn't support gather at the moment. Implemented with allgather instead.`
+警告，即当前 `torch_npu` 以 all-gather 实现 gather 语义。
+
+该记录证明 2/4 NPU、当前作业环境和本探针覆盖范围内的前向正确性与
+通信契约。它没有测量单卡对比、加速比、显存峰值、更大 world size、
+多节点、容错或梯度，因此不构成性能或规模结论；分布式自动微分仍不
+受支持。
+
+### 17.4 基础状态探针
 
 需要快速定位基本状态演化问题时，可运行较小的旧探针：
 
@@ -940,7 +981,7 @@ PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 scripts/npu/distributed_s
 它检查设备绑定、局部/通信门、状态向量、密度矩阵、概率、期望值和
 采样，但不覆盖完整 API 契约，不能替代 17.1 的完整验收。
 
-### 17.4 本地 Gloo 回归
+### 17.5 本地 Gloo 回归
 
 没有 Ascend NPU 时可以用 CPU/Gloo 验证数值和多进程通信契约：
 
@@ -951,7 +992,7 @@ PYTHONPATH=. pytest tests/distributed -q
 Gloo 不会执行 NPU kernel、CANN 或 HCCL 路径。本地 Gloo 通过不能作为 NPU 验收，
 也不能替代 2/4 NPU 的严格探针结果。
 
-### 17.5 常见故障
+### 17.6 常见故障
 
 | 现象                            | 检查                                                     |
 | ------------------------------- | -------------------------------------------------------- |
