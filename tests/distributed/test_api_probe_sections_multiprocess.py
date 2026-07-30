@@ -194,6 +194,8 @@ def _section_worker(rank, world_size, port, output_dir):
                 "observable",
                 "measure",
                 "result",
+                "communication",
+                "contract",
             )
         }
         payload = {
@@ -453,3 +455,57 @@ def test_api_probe_sections_are_collective_safe(world_size, tmp_path):
         (True, False): (True, False, True, False, 0, 1),
         (True, True): (True, True, True, True, 0, 2),
     }
+
+    communication_metrics = root["sections"]["communication"]["metrics"]
+    assert communication_metrics["targeted_distributed_axes"] == (
+        expected_distributed_axes
+    )
+    assert communication_metrics["logical_to_storage"] == expected_layout
+    assert communication_metrics["local_target"] == (
+        world_size.bit_length() - 1
+    )
+    per_rank_evidence = communication_metrics["per_rank_evidence"]
+    assert len(per_rank_evidence) == world_size
+    distributed_axis_count = world_size.bit_length() - 1
+    for rank, evidence in enumerate(per_rank_evidence):
+        assert evidence["rank"] == rank
+        assert evidence["local_p2p_delta"] == 0
+        assert evidence["distributed_p2p_delta"] > 0
+        assert len(evidence["distributed_axis_deltas"]) == (
+            distributed_axis_count
+        )
+        assert all(
+            delta > 0
+            for delta in evidence["distributed_axis_deltas"]
+        )
+        assert evidence["distributed_p2p_delta"] == sum(
+            evidence["distributed_axis_deltas"]
+        )
+        assert evidence["peer_mask"] >> world_size == 0
+        assert not evidence["peer_mask"] & (1 << rank)
+        assert evidence["peer_mask"].bit_count() >= distributed_axis_count
+        assert evidence["even_tag_count"] == evidence["odd_tag_count"]
+        assert evidence["even_tag_count"] > 0
+        assert evidence["paired_transport_tags"]
+
+    contract_metrics = root["sections"]["contract"]["metrics"]
+    assert contract_metrics["all_ranks_participated"]
+    assert contract_metrics["case_statuses"] == {
+        "inconsistent_rank_input_modes": "EXPECTED_ERROR",
+        "invalid_explicit_layout": "EXPECTED_ERROR",
+        "invalid_root_density_shape": "EXPECTED_ERROR",
+        "invalid_root_vector_shape": "EXPECTED_ERROR",
+        "mid_if": "EXPECTED_ERROR",
+        "mid_measure": "EXPECTED_ERROR",
+        "mid_reset": "EXPECTED_ERROR",
+        "mid_while": "EXPECTED_ERROR",
+        "trainable_custom_unitary": "UNSUPPORTED_AS_DESIGNED",
+        "trainable_numeric_gate": "UNSUPPORTED_AS_DESIGNED",
+        "trainable_root_density": "UNSUPPORTED_AS_DESIGNED",
+        "trainable_root_state": "UNSUPPORTED_AS_DESIGNED",
+    }
+    assert all(
+        evidence["matched_rank_count"] == world_size
+        and evidence["participating_rank_count"] == world_size
+        for evidence in contract_metrics["case_evidence"]
+    )

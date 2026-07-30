@@ -10,6 +10,7 @@ Run from repository root:
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 import json
 import math
 import sys
@@ -21,6 +22,7 @@ from aicir import (
     AmplitudeDampingChannel,
     BitFlipChannel,
     Circuit,
+    ClassicalRegister,
     DepolarizingChannel,
     Hamiltonian,
     NoiseModel,
@@ -30,11 +32,17 @@ from aicir import (
     PhaseFlipChannel,
     cx,
     hadamard,
+    if_,
+    measure,
     pauli_x,
     pauli_z,
+    reset,
+    rx,
     rz,
+    while_,
 )
 from aicir.distributed import DistSimulator
+from aicir.distributed._contracts import AUTOGRAD_ERROR
 
 
 STATE_ATOL = 1e-6
@@ -1370,6 +1378,425 @@ def _run_result_section(simulator):
     return _evaluate_root_section(backend, evaluate)
 
 
+class _ExchangeRecorder:
+    """Probe-local wrapper around one communicator's tensor exchange."""
+
+    def __init__(self, communicator):
+        self._communicator = communicator
+        self._original_exchange_tensor = None
+        self._original_supports_complex = None
+        self.events = []
+
+    def install(self):
+        if self._original_exchange_tensor is not None:
+            raise RuntimeError("_ExchangeRecorder 已安装")
+        self._original_exchange_tensor = (
+            self._communicator._exchange_tensor
+        )
+        self._original_supports_complex = (
+            self._communicator.supports_complex
+        )
+
+        def recorded_exchange(tensor, peer, tag):
+            self.events.append((int(peer), int(tag)))
+            return self._original_exchange_tensor(tensor, peer, tag)
+
+        self._communicator._exchange_tensor = recorded_exchange
+        # Exercise the NPU real/imag transport contract on CPU gloo too.
+        self._communicator.supports_complex = False
+
+    def restore(self):
+        if self._original_exchange_tensor is None:
+            return
+        self._communicator._exchange_tensor = (
+            self._original_exchange_tensor
+        )
+        self._communicator.supports_complex = (
+            self._original_supports_complex
+        )
+        self._original_exchange_tensor = None
+        self._original_supports_complex = None
+
+
+def _run_communication_section(simulator):
+    backend = simulator.backend
+    distributed_axes = int(math.log2(backend.world_size))
+    n_qubits = distributed_axes + 1
+    logical_to_storage = tuple(range(n_qubits))
+    local_target = n_qubits - 1
+    recorder = _ExchangeRecorder(backend.communicator)
+    recorder.install()
+    try:
+        before_local = len(recorder.events)
+        simulator.run(
+            Circuit(pauli_x(local_target), n_qubits=n_qubits),
+            layout=logical_to_storage,
+            return_probabilities=False,
+        )
+        local_p2p_delta = len(recorder.events) - before_local
+
+        distributed_axis_deltas = []
+        for target in range(distributed_axes):
+            before_distributed = len(recorder.events)
+            simulator.run(
+                Circuit(pauli_x(target), n_qubits=n_qubits),
+                layout=logical_to_storage,
+                return_probabilities=False,
+            )
+            distributed_axis_deltas.append(
+                len(recorder.events) - before_distributed
+            )
+        distributed_events = recorder.events[
+            before_local + local_p2p_delta:
+        ]
+    finally:
+        recorder.restore()
+
+    peer_mask = 0
+    peer_tag_counts = defaultdict(lambda: [0, 0])
+    valid_peers = True
+    for peer, tag in distributed_events:
+        peer_mask |= 1 << peer
+        valid_peers = (
+            valid_peers
+            and 0 <= peer < backend.world_size
+            and peer != backend.rank
+        )
+        peer_tag_counts[(peer, tag // 2)][tag % 2] += 1
+    even_tag_count = sum(
+        counts[0] for counts in peer_tag_counts.values()
+    )
+    odd_tag_count = sum(
+        counts[1] for counts in peer_tag_counts.values()
+    )
+    paired_transport_tags = (
+        bool(peer_tag_counts)
+        and all(
+            even_count == odd_count and even_count > 0
+            for even_count, odd_count in peer_tag_counts.values()
+        )
+    )
+    distributed_p2p_delta = sum(distributed_axis_deltas)
+    distinct_peer_count = peer_mask.bit_count()
+    evidence = _gather_long_evidence(
+        backend,
+        (
+            backend.rank,
+            local_p2p_delta,
+            distributed_p2p_delta,
+            peer_mask,
+            even_tag_count,
+            odd_tag_count,
+            paired_transport_tags,
+            valid_peers,
+            distinct_peer_count,
+            all(delta > 0 for delta in distributed_axis_deltas),
+            *distributed_axis_deltas,
+        ),
+    )
+
+    def evaluate():
+        per_rank_evidence = []
+        ranks_ok = True
+        for expected_rank, row in enumerate(evidence):
+            axis_deltas = row[10:]
+            rank_evidence = {
+                "rank": row[0],
+                "local_p2p_delta": row[1],
+                "distributed_p2p_delta": row[2],
+                "peer_mask": row[3],
+                "even_tag_count": row[4],
+                "odd_tag_count": row[5],
+                "paired_transport_tags": bool(row[6]),
+                "valid_peers": bool(row[7]),
+                "distinct_peer_count": row[8],
+                "distributed_axis_deltas": axis_deltas,
+            }
+            per_rank_evidence.append(rank_evidence)
+            ranks_ok = ranks_ok and (
+                row[0] == expected_rank
+                and row[1] == 0
+                and row[2] == sum(axis_deltas)
+                and row[2] > 0
+                and row[4] == row[5]
+                and row[4] > 0
+                and row[6] == 1
+                and row[7] == 1
+                and row[8] >= distributed_axes
+                and row[9] == 1
+                and len(axis_deltas) == distributed_axes
+            )
+        metrics = {
+            "targeted_distributed_axes": list(range(distributed_axes)),
+            "logical_to_storage": list(logical_to_storage),
+            "local_target": local_target,
+            "per_rank_evidence": per_rank_evidence,
+        }
+        return ranks_ok, metrics
+
+    return _evaluate_root_section(backend, evaluate)
+
+
+def _expected_error(call, match):
+    try:
+        call()
+    except Exception as error:  # noqa: BLE001
+        message = str(error)
+        return {
+            "matched": (
+                isinstance(error, ValueError)
+                and str(match) in message
+            ),
+            "type": type(error).__name__,
+            "message": message,
+        }
+    return {
+        "matched": False,
+        "type": None,
+        "message": "NO_EXPECTED_ERROR",
+    }
+
+
+def _run_contract_section(simulator):
+    backend = simulator.backend
+    distributed_axes = int(math.log2(backend.world_size))
+    n_qubits = distributed_axes + 1
+    dimension = 1 << n_qubits
+    identity_layout = tuple(range(n_qubits))
+    empty = Circuit(n_qubits=n_qubits)
+    classical = ClassicalRegister(1, "contract")
+    body = Circuit(pauli_x(0), n_qubits=n_qubits)
+    midcircuit_match = (
+        "分布式首期不支持中途测量、reset 或经典控制流"
+    )
+
+    def root_value(value):
+        return value if backend.rank == 0 else None
+
+    cases = (
+        (
+            "invalid_explicit_layout",
+            "EXPECTED_ERROR",
+            lambda: simulator.run(
+                empty,
+                layout=(0,) * n_qubits,
+            ),
+            "layout 必须是 range(n_qubits) 的完整双射",
+        ),
+        (
+            "invalid_root_vector_shape",
+            "EXPECTED_ERROR",
+            lambda: simulator.run(
+                empty,
+                initial_state=root_value(
+                    np.zeros(dimension - 1, dtype=np.complex64)
+                ),
+                layout=identity_layout,
+            ),
+            "initial_state 必须包含",
+        ),
+        (
+            "invalid_root_density_shape",
+            "EXPECTED_ERROR",
+            lambda: simulator.run(
+                empty,
+                initial_density_matrix=root_value(
+                    np.zeros(
+                        (dimension - 1, dimension - 1),
+                        dtype=np.complex64,
+                    )
+                ),
+                layout=identity_layout,
+            ),
+            "initial_density_matrix 形状必须是",
+        ),
+        (
+            "inconsistent_rank_input_modes",
+            "EXPECTED_ERROR",
+            lambda: simulator.run(
+                empty,
+                initial_state=(
+                    np.eye(1, dimension, dtype=np.complex64).reshape(-1)
+                    if backend.rank == 0
+                    else None
+                ),
+                initial_density_matrix=(
+                    np.eye(dimension, dtype=np.complex64)
+                    if backend.rank == 1
+                    else None
+                ),
+                layout=identity_layout,
+            ),
+            "初态必须由所有 rank 提供匹配的 DistState",
+        ),
+        (
+            "mid_measure",
+            "EXPECTED_ERROR",
+            lambda: simulator.run(
+                Circuit(measure(0), n_qubits=n_qubits),
+                layout=identity_layout,
+            ),
+            midcircuit_match,
+        ),
+        (
+            "mid_reset",
+            "EXPECTED_ERROR",
+            lambda: simulator.run(
+                Circuit(reset(0), n_qubits=n_qubits),
+                layout=identity_layout,
+            ),
+            midcircuit_match,
+        ),
+        (
+            "mid_if",
+            "EXPECTED_ERROR",
+            lambda: simulator.run(
+                Circuit(
+                    if_(classical[0] == 0, body),
+                    n_qubits=n_qubits,
+                ),
+                layout=identity_layout,
+            ),
+            midcircuit_match,
+        ),
+        (
+            "mid_while",
+            "EXPECTED_ERROR",
+            lambda: simulator.run(
+                Circuit(
+                    while_(
+                        classical[0] == 0,
+                        body,
+                        max_iterations=1,
+                    ),
+                    n_qubits=n_qubits,
+                ),
+                layout=identity_layout,
+            ),
+            midcircuit_match,
+        ),
+        (
+            "trainable_root_state",
+            "UNSUPPORTED_AS_DESIGNED",
+            lambda: simulator.run(
+                empty,
+                initial_state=root_value(
+                    torch.zeros(
+                        dimension,
+                        dtype=torch.complex64,
+                        requires_grad=True,
+                    )
+                ),
+                layout=identity_layout,
+            ),
+            AUTOGRAD_ERROR,
+        ),
+        (
+            "trainable_root_density",
+            "UNSUPPORTED_AS_DESIGNED",
+            lambda: simulator.run(
+                empty,
+                initial_density_matrix=root_value(
+                    torch.eye(
+                        dimension,
+                        dtype=torch.complex64,
+                        requires_grad=True,
+                    )
+                ),
+                layout=identity_layout,
+            ),
+            AUTOGRAD_ERROR,
+        ),
+        (
+            "trainable_numeric_gate",
+            "UNSUPPORTED_AS_DESIGNED",
+            lambda: simulator.run(
+                Circuit(
+                    rx(
+                        torch.tensor(0.2, requires_grad=True),
+                        target_qubit=0,
+                    ),
+                    n_qubits=n_qubits,
+                ),
+                layout=identity_layout,
+            ),
+            AUTOGRAD_ERROR,
+        ),
+        (
+            "trainable_custom_unitary",
+            "UNSUPPORTED_AS_DESIGNED",
+            lambda: simulator.run(
+                Circuit(
+                    {
+                        "type": "unitary",
+                        "parameter": torch.eye(
+                            2,
+                            dtype=torch.complex64,
+                            requires_grad=True,
+                        ),
+                        "n_qubits": 1,
+                        "qubits": [0],
+                    },
+                    n_qubits=n_qubits,
+                ),
+                layout=identity_layout,
+            ),
+            AUTOGRAD_ERROR,
+        ),
+    )
+
+    case_evidence = []
+    all_cases_matched = True
+    for name, expected_status, call, match in cases:
+        local_result = _expected_error(call, match)
+        gathered = _gather_long_evidence(
+            backend,
+            (
+                backend.rank,
+                1,
+                local_result["matched"],
+                local_result["type"] == "ValueError",
+            ),
+        )
+        if backend.rank == 0:
+            participating_rank_count = sum(row[1] for row in gathered)
+            matched_rank_count = sum(
+                row[2] and row[3] for row in gathered
+            )
+            matched = (
+                participating_rank_count == backend.world_size
+                and matched_rank_count == backend.world_size
+            )
+            actual_status = expected_status if matched else "FAIL"
+            case_evidence.append(
+                {
+                    "name": name,
+                    "status": actual_status,
+                    "message_match": match,
+                    "participating_rank_count": (
+                        participating_rank_count
+                    ),
+                    "matched_rank_count": matched_rank_count,
+                }
+            )
+            all_cases_matched = all_cases_matched and matched
+
+    def evaluate():
+        return all_cases_matched, {
+            "all_ranks_participated": all(
+                row["participating_rank_count"] == backend.world_size
+                for row in case_evidence
+            ),
+            "case_statuses": {
+                row["name"]: row["status"]
+                for row in case_evidence
+            },
+            "case_evidence": case_evidence,
+        }
+
+    return _evaluate_root_section(backend, evaluate)
+
+
 def _validate_runtime(backend):
     device = backend._device
     if backend.world_size not in {2, 4}:
@@ -1380,10 +1807,6 @@ def _validate_runtime(backend):
         raise RuntimeError("rank、local_rank 与 NPU device 不一致")
 
 
-def _pending_section(_simulator):
-    return _section(False, status="NOT_IMPLEMENTED")
-
-
 SECTION_RUNNERS = {
     "state": _run_state_section,
     "layout": _run_layout_section,
@@ -1392,8 +1815,8 @@ SECTION_RUNNERS = {
     "observable": _run_observable_section,
     "measure": _run_measure_section,
     "result": _run_result_section,
-    "communication": _pending_section,
-    "contract": _pending_section,
+    "communication": _run_communication_section,
+    "contract": _run_contract_section,
 }
 
 

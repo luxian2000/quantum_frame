@@ -101,8 +101,15 @@ def test_full_api_probe_has_sectioned_strict_contract():
         "return_state",
         "return_probabilities",
         "four_return_combinations",
+        "local_p2p_delta",
+        "distributed_p2p_delta",
+        "peer_mask",
+        "paired_transport_tags",
+        "UNSUPPORTED_AS_DESIGNED",
+        "EXPECTED_ERROR",
     ):
         assert token in source
+    assert '"local_gate": True' not in source
     assert '"communicating_gate": True' not in source
     for section in EXPECTED_SECTIONS:
         assert f'"{section}"' in source
