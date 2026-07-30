@@ -278,7 +278,32 @@ allocated_receive_buffers_per_rank, fallback_to_cpu
 ```
 
 Use 5 warmups and 30 measured runs for local-only, one distributed-axis gate,
-and two-distributed-axis gate circuits. Save raw JSON outside the repository.
+and two-distributed-axis gate circuits. Its CLI is:
+
+```text
+--mode {baseline,optimized}
+--n-qubits 20
+--depth 50
+--warmups 5
+--runs 30
+--output-json PATH
+```
+
+Before changing the kernels, run:
+
+```bash
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 \
+  scripts/npu/distributed_communication_benchmark.py \
+  --mode baseline --n-qubits 20 --depth 50 --warmups 5 --runs 30 \
+  --output-json /tmp/aicir-dist-comm-w2-baseline.json
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 \
+  scripts/npu/distributed_communication_benchmark.py \
+  --mode baseline --n-qubits 20 --depth 50 --warmups 5 --runs 30 \
+  --output-json /tmp/aicir-dist-comm-w4-baseline.json
+```
+
+Expected: both files contain 30 timing samples for all three gate paths,
+`fallback_to_cpu=false`, and the current allocation count.
 
 - [ ] **Step 3: Implement buffer reuse without overlap**
 
@@ -297,14 +322,44 @@ partner operations for one gate, compute the local-rank contribution, then
 wait and accumulate peer contributions. Tests must inject delayed fake work
 objects and prove local computation occurs before `wait()`.
 
-- [ ] **Step 5: Compare strict NPU benchmark samples**
+Run:
 
-Run the same benchmark configuration before and after optimization on world
-size 2 and 4. Report medians, p10/p90, peak memory, allocation counts and raw
-samples. Accept the change only if numerical tests pass and allocation count
-does not increase; do not require a fixed speedup threshold.
+```bash
+PYTHONPATH=. pytest \
+  tests/distributed/test_communication.py \
+  tests/distributed/test_communication_buffers.py \
+  tests/distributed/test_vector_kernel_multiprocess.py \
+  tests/distributed/test_density_kernel_multiprocess.py -q
+```
 
-- [ ] **Step 6: Commit**
+Expected: PASS; the delayed fake-work trace records local computation before
+the first `wait`, and vector/density errors remain at most `1e-6`.
+
+- [ ] **Step 5: Capture optimized strict NPU samples**
+
+```bash
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 \
+  scripts/npu/distributed_communication_benchmark.py \
+  --mode optimized --n-qubits 20 --depth 50 --warmups 5 --runs 30 \
+  --output-json /tmp/aicir-dist-comm-w2-optimized.json
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 \
+  scripts/npu/distributed_communication_benchmark.py \
+  --mode optimized --n-qubits 20 --depth 50 --warmups 5 --runs 30 \
+  --output-json /tmp/aicir-dist-comm-w4-optimized.json
+```
+
+Expected: both files contain 30 samples per gate path,
+`fallback_to_cpu=false`, unchanged numerical digests, and an allocation count
+not greater than the matching baseline.
+
+- [ ] **Step 6: Compare baseline and optimized reports**
+
+Report medians, p10/p90, peak memory, allocation counts and raw samples for
+each matching world-size/gate-path pair. Accept the change only if numerical
+tests pass and allocation count does not increase; do not require a fixed
+speedup threshold.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add aicir/distributed/communication.py aicir/distributed/gates.py \
@@ -334,7 +389,7 @@ Require vector and density runs for:
 single_npu: one process, one NPUBackend
 replicated: N processes, each process owns a complete NPUBackend state
 sharded: N processes, one DistSimulator state
-world_sizes: 1, 2, 4
+world_sizes: single_npu=[1], replicated=[1,2,4], sharded=[1,2,4]
 qubits: vector 16/20/24, density 8/10/12
 depths: 10, 50
 gather_modes: none, state, probabilities
@@ -346,29 +401,106 @@ The script must skip a case with `status="INSUFFICIENT_MEMORY"` after capturing
 the exception type and device memory snapshot; it must not silently reduce
 qubits.
 
-- [ ] **Step 2: Implement schema validation**
+Run: `PYTHONPATH=. pytest tests/distributed/test_mode_benchmark_contract.py -q`
+
+Expected: FAIL because `distributed_mode_benchmark.py` does not exist.
+
+- [ ] **Step 2: Implement the benchmark CLI and record schema**
+
+The CLI must accept:
+
+```text
+--mode {single_npu,replicated,sharded}
+--state-kind {vector,density}
+--n-qubits INT
+--depth INT
+--gather-mode {none,state,probabilities}
+--warmups 5
+--runs 30
+--seed 20260730
+--output-json PATH
+```
 
 Every record must include hardware-visible device names, dtype, circuit digest,
 seed, mode, world size, local/global state bytes, per-rank peak memory,
-wall-time samples, gather mode and status.
+wall-time samples, gather mode and status. Implement
+`validate_record(record: Mapping[str, object]) -> None` with these assertions:
+
+```python
+assert record["mode"] in {"single_npu", "replicated", "sharded"}
+assert record["state_kind"] in {"vector", "density"}
+assert record["gather_mode"] in {"none", "state", "probabilities"}
+assert record["status"] in {"PASS", "INSUFFICIENT_MEMORY"}
+assert record["warmup_runs"] == 5
+assert record["measured_runs"] == 30
+assert len(record["wall_time_samples_ms"]) == 30
+assert len(record["peak_memory_bytes_per_rank"]) == record["world_size"]
+assert record["local_state_bytes"] > 0
+assert record["global_state_bytes"] > 0
+assert record["seed"] == 20260730
+```
+
+For `INSUFFICIENT_MEMORY`, also require non-empty `exception_type` and
+`device_memory_snapshot`; for `PASS`, require `fallback_to_cpu=false`.
 
 Run: `PYTHONPATH=. pytest tests/distributed/test_mode_benchmark_contract.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 3: Execute each matrix cell independently**
+- [ ] **Step 3: Verify one CLI cell per mode**
+
+```bash
+PYTHONPATH=. python scripts/npu/distributed_mode_benchmark.py --help
+PYTHONPATH=. pytest tests/distributed/test_mode_benchmark_contract.py -q
+```
+
+Expected: help lists all nine options and the contract tests pass.
+
+- [ ] **Step 4: Execute each matrix cell independently**
 
 Use one fresh `torchrun` job per matrix cell to avoid allocator history leaking
-between modes. Retain raw JSON lines and compute summaries only after all jobs
-finish.
+between modes. Run the complete frozen matrix:
 
-- [ ] **Step 4: Publish bounded conclusions**
+```bash
+bash -lc '
+set -euo pipefail
+for mode in single_npu replicated sharded; do
+  for world_size in 1 2 4; do
+    if [ "$mode" = single_npu ] && [ "$world_size" -ne 1 ]; then
+      continue
+    fi
+    for state_spec in vector:16 vector:20 vector:24 density:8 density:10 density:12; do
+      state_kind=${state_spec%%:*}
+      n_qubits=${state_spec##*:}
+      for depth in 10 50; do
+        for gather_mode in none state probabilities; do
+          PYTHONPATH=.:${PYTHONPATH} torchrun \
+            --nproc-per-node="$world_size" \
+            scripts/npu/distributed_mode_benchmark.py \
+            --mode "$mode" --state-kind "$state_kind" \
+            --n-qubits "$n_qubits" --depth "$depth" \
+            --gather-mode "$gather_mode" \
+            --warmups 5 --runs 30 --seed 20260730 \
+            --output-json \
+            "/tmp/aicir-mode-${mode}-${state_kind}-q${n_qubits}-d${depth}-g${gather_mode}-w${world_size}.json"
+        done
+      done
+    done
+  done
+done
+'
+```
+
+Expected: each output passes `validate_record`; retain raw JSON and summarize
+only after all independent jobs finish.
+
+- [ ] **Step 5: Publish bounded conclusions**
 
 Document measured throughput, latency and peak-memory ratios for each completed
 cell. Separate gather cost because the 2026-07-30 environment implements HCCL
 gather via all-gather. Do not extrapolate beyond measured qubits/world sizes.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add scripts/npu/distributed_mode_benchmark.py \
@@ -417,8 +549,19 @@ Expected: PASS.
 
 - [ ] **Step 4: Run available NPU grid**
 
-Run world size 2, 4 and 8 as separate jobs. An unavailable 8-NPU allocation is
-recorded as unavailable evidence, not a pass and not a failure of 2/4 support.
+```bash
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 \
+  scripts/npu/distributed_stress_probe.py
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 \
+  scripts/npu/distributed_stress_probe.py
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=8 \
+  scripts/npu/distributed_stress_probe.py
+```
+
+Expected: every scheduled grid cell has `PASS`, `INSUFFICIENT_MEMORY`, or
+`UNAVAILABLE_WORLD_SIZE`; successful cells have `fallback_to_cpu=false`.
+An unavailable 8-NPU allocation is unavailable evidence, not a pass and not a
+failure of 2/4 support.
 
 - [ ] **Step 5: Document and commit**
 
@@ -449,6 +592,10 @@ Cover duplicate global rank, out-of-range local rank, mismatched
 Every invalid case must fail before the first state collective with identical
 error type/text on participating ranks.
 
+Run: `PYTHONPATH=. pytest tests/distributed/test_multinode_contract.py -q`
+
+Expected: FAIL because `_validate_rank_topology` and the probe are absent.
+
 - [ ] **Step 2: Specify the launch contract**
 
 The design must require `RANK`, `LOCAL_RANK`, `WORLD_SIZE`,
@@ -460,6 +607,11 @@ describe global rank ownership and device binding without assuming a CANN path.
 The probe must report host identifier digest, global/local rank, node rank,
 device, peer masks, cross-node peer count, distributed-axis P2P deltas,
 gather/all-gather bytes and no-fallback status.
+
+Run: `PYTHONPATH=. pytest tests/distributed/test_multinode_contract.py -q`
+
+Expected: PASS; all invalid topologies fail before state collectives and valid
+synthetic two-node topologies report unique global-rank ownership.
 
 - [ ] **Step 4: Run a two-node launch**
 
@@ -542,11 +694,31 @@ Run:
 
 Expected: PASS; no child process remains after the 30-second deadline.
 
-- [ ] **Step 6: Run NPU recovery probe and commit**
+- [ ] **Step 6: Run the NPU recovery probe**
 
-Run separate 2/4 NPU jobs that checkpoint, destroy the process group, relaunch,
-continue from `DistState`, and compare with uninterrupted evolution at
-`atol=1e-6`.
+Run separate save and resume jobs so process-group destruction occurs between
+commands:
+
+```bash
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 \
+  scripts/npu/distributed_recovery_probe.py \
+  --mode save --checkpoint-dir /tmp/aicir-dist-recovery-w2
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 \
+  scripts/npu/distributed_recovery_probe.py \
+  --mode resume --checkpoint-dir /tmp/aicir-dist-recovery-w2
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 \
+  scripts/npu/distributed_recovery_probe.py \
+  --mode save --checkpoint-dir /tmp/aicir-dist-recovery-w4
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 \
+  scripts/npu/distributed_recovery_probe.py \
+  --mode resume --checkpoint-dir /tmp/aicir-dist-recovery-w4
+```
+
+Expected: both resume reports have `passed=true`, `fallback_to_cpu=false`,
+matching manifest/shard digests, and uninterrupted-evolution error at most
+`1e-6`.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-07-30-distributed-recovery-design.md \
@@ -585,33 +757,61 @@ transpose, conjugation, complex construction, all-reduce, P2P send/receive,
 and every density reducer operation under backward. Compare gradients with
 float64 CPU finite differences and Task 2 parameter-shift at `atol=1e-4`.
 
-- [ ] **Step 3: Require rank-synchronous backward evidence**
+Run: `PYTHONPATH=. pytest tests/distributed/test_native_autograd_gate.py -q`
+
+Expected: FAIL because `distributed_backward_kernel_probe.py` and its evidence
+schema are absent.
+
+- [ ] **Step 3: Implement and validate the evidence schema**
+
+The probe must emit per-primitive `forward_passed`, `backward_passed`,
+`finite_gradients`, `gradient_digest`, `gradient_error`, and
+`retained_memory_growth`; the top level must include `world_size`,
+`fallback_to_cpu`, `gate_status`, and `failed_primitives`.
+
+Run: `PYTHONPATH=. pytest tests/distributed/test_native_autograd_gate.py -q`
+
+Expected: PASS for schema construction, exact blocked/pass decision logic, and
+CPU reference calculations; this does not pass the NPU gate.
+
+- [ ] **Step 4: Require rank-synchronous backward evidence**
 
 For world size 2 and 4, require every primitive to report
 `forward_passed=true`, `backward_passed=true`, finite gradients,
 rank-consistent SHA-256 gradient digests, and no CPU fallback. Any unsupported
 primitive keeps native autograd blocked.
 
-- [ ] **Step 4: Test graph lifetime and memory**
+```bash
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 \
+  scripts/npu/distributed_backward_kernel_probe.py
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 \
+  scripts/npu/distributed_backward_kernel_probe.py
+```
+
+Expected: each command emits one rank-0 JSON. `gate_status=PASS` is permitted
+only when every primitive passes on both world sizes; otherwise the report is
+`gate_status=BLOCKED` with exact failing primitives and errors.
+
+- [ ] **Step 5: Test graph lifetime and memory**
 
 Run 100 forward/backward iterations for vector and density cases. Report peak
 memory per rank and assert iteration 100 retained memory is no more than 5%
 above iteration 20 after allocator synchronization.
 
-- [ ] **Step 5: Decide the gate**
+- [ ] **Step 6: Decide the gate**
 
 Write `gate_status: PASS` only if all primitive, 2/4 NPU, correctness and memory
 conditions pass. Otherwise write `gate_status: BLOCKED` plus the exact failing
 primitive and error. Parameter-shift remains the supported gradient path.
 
-- [ ] **Step 6: Write the separate native-autograd plan only on PASS**
+- [ ] **Step 7: Write the separate native-autograd plan only on PASS**
 
 The generated plan must preserve the explicit distributed API, specify custom
 autograd ownership for P2P/collectives, add gradcheck-style 2/4 rank tests, and
 remove the forward-only rejection only for explicitly supported inputs. A
 blocked gate must not create or modify that implementation plan.
 
-- [ ] **Step 7: Commit evidence**
+- [ ] **Step 8: Commit evidence**
 
 ```bash
 git add docs/superpowers/specs/2026-07-30-distributed-native-autograd-gate.md \
