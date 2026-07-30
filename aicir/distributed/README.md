@@ -832,41 +832,126 @@ HCCL 带宽、kernel 粒度和临时缓冲影响。
 
 ## 17. 真机验证与故障定位
 
-### 17.1 严格 Ascend 探针
+### 17.1 完整 NPU API 验收
 
-从仓库根目录运行：
+完整验收必须在目标 Ascend 软硬件环境中分别使用 2 张和 4 张 NPU
+运行。两条命令都要从仓库根目录执行：
 
 ```bash
 source /usr/local/Ascend/cann/set_env.sh
 python -c "import tbe; print(tbe.__file__)"
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 scripts/npu/distributed_api_probe.py --section all
+PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 scripts/npu/distributed_api_probe.py --section all
+```
+
+探针通过 `DistSimulator.from_env(fallback_to_cpu=False)` 强制使用 NPU，
+并检查每个 rank 的设备为 `npu:LOCAL_RANK`。其中
+`fallback_to_cpu=False` 是不可放宽的验收条件。NPU、HCCL 或 CANN
+不可用时必须失败，不允许静默转到 CPU；因此这是严格 no-fallback
+验收。独立数值 oracle 的最终演算和判定在 rank 0 执行；各 rank
+仍可能使用 NumPy 构造或整理探针输入。
+NumPy 不参与被测的分布式状态演化，也不是模拟 fallback。
+
+可用 `--section <名称>` 单独复查失败项。九个 section 的验收范围是：
+
+| section | 验收内容 |
+| --- | --- |
+| `state` | 隐式零态、显式状态向量、直接密度矩阵输入，及范数、trace、概率和每 rank 分片大小 |
+| `layout` | 非恒等显式 layout、自动 layout，并与逻辑顺序的独立参考结果比较 |
+| `continuation` | 把已有向量或密度矩阵 `DistState` 传回 `run()` 继续演化 |
+| `noise` | 振幅阻尼、比特翻转、相位翻转、退极化、顺序组合和规则选择 |
+| `observable` | Pauli、Hamiltonian 和局部稠密 observable 的期望值 |
+| `measure` | 全寄存器/子集 shots、单 shot collapse 和坍缩后 `DistState` |
+| `result` | `return_state`/`return_probabilities` 四种组合，以及只在显式调用时发生的 root gather |
+| `communication` | 局部门零 P2P、分布式轴门实际 P2P、peer 覆盖及实部/虚部成对 tag |
+| `contract` | 14 个不支持或非法调用在所有 rank 上得到完全相同的类型和精确错误文本 |
+
+`contract` 包含训练输入。首期只支持前向；状态、密度矩阵或门参数带
+`requires_grad=True` 时必须在所有 rank 精确报错：
+
+```text
+DistSimulator 首期仅支持前向模拟，不支持自动微分
+```
+
+14 个 case 分为：
+
+- `EXPECTED_ERROR`：`invalid_explicit_layout`、
+  `invalid_root_vector_shape`、`invalid_root_density_shape`、
+  `dual_root_initial_values`、`inconsistent_rank_input_modes`、
+  `mid_measure`、`mid_reset`、`mid_if`、`mid_while`；
+- `UNSUPPORTED_AS_DESIGNED`：`trainable_root_state`、
+  `trainable_root_density`、`trainable_dist_state`、
+  `trainable_numeric_gate`、`trainable_custom_unitary`。
+
+### 17.2 读取验收 JSON
+
+每次执行只有 rank 0 输出一行最终 JSON。每个 section 都包含
+`status`、`passed` 和 `metrics`；顶层字段：
+
+| 字段 | 判定方法 |
+| --- | --- |
+| `passed` | 只有所有 rank、所有所选 section 均通过时才为 `true` |
+| `world_size` | 必须与本次 `--nproc-per-node` 相同，即分别为 2 和 4 |
+| `fallback_to_cpu` | 必须为 `false` |
+| `sections.<name>.status` | 正常支持项只能为 `PASS` 或 `FAIL` |
+| `sections.<name>.passed` | 该 section 的数值、行为和跨 rank 证据是否全部满足 |
+| `sections.<name>.metrics` | 该 section 的具体误差、计数、布局或通信证据 |
+| `sections.contract.metrics.case_statuses` | 每个错误契约 case 的状态映射；预期拒绝项为 `EXPECTED_ERROR` 或 `UNSUPPORTED_AS_DESIGNED` |
+| `sections.contract.metrics.case_evidence[*].status` | 对应 case 的状态及错误类型、精确文本和跨 rank 摘要证据 |
+| `failed_invariants` | 必须为空列表；列出任何未通过的 section 名称 |
+
+每条 `case_evidence` 包含 `name`、`status`、`expected_type`、
+`expected_message`、`actual_type`、`actual_message`、`exact_type`、
+`exact_message`、`message_digest`、`message_digest_agreement`、
+`participating_rank_count` 和 `matched_rank_count`。验收时两个 rank
+计数字段必须等于 `world_size`，两个 `exact_*` 和
+`message_digest_agreement` 必须为 `true`。
+
+主要数值指标这样解释：
+
+- `*_error`、`*_max_error`、`*_norm_error`、`*_trace_error` 越接近
+  0 越好；探针内部按状态误差 `1e-6`、归约误差 `1e-5` 判定；
+- `*_probability_sum_error` 检查概率和是否为 1；
+- `local_tensor_sizes` 检查各 rank 分片形状/元素数是否符合
+  world size；
+- `implicit_gather_delta` 必须为 0，`explicit_gather_delta` 只随用户
+  显式聚合请求增加；
+- `local_p2p_delta` 必须为 0，`distributed_p2p_delta` 和各
+  `distributed_axis_deltas` 必须大于 0；`peer_mask`、成对 transport
+  tags 用于证明真实通信路径被调用；
+- `case_evidence` 中 `exact_message`、`exact_type` 和
+  `message_digest_agreement` 必须都为真，证明错误契约在所有 rank
+  一致。
+
+命令退出码也属于验收结果：任一不变量失败时所有 rank 应非零退出。
+只有 2 NPU 与 4 NPU 两次 `--section all` 都满足上述条件，才能记录为
+首期完整 NPU API 验收通过。通过只证明该软硬件组合的正确性，不证明
+多 NPU 性能加速。
+
+### 17.3 基础状态探针
+
+需要快速定位基本状态演化问题时，可运行较小的旧探针：
+
+```bash
 PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 scripts/npu/distributed_state_probe.py
 PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 scripts/npu/distributed_state_probe.py
 ```
 
-探针强制 `fallback_to_cpu=False`，并检查：
+它检查设备绑定、局部/通信门、状态向量、密度矩阵、概率、期望值和
+采样，但不覆盖完整 API 契约，不能替代 17.1 的完整验收。
 
-- 每个分片位于 `npu:LOCAL_RANK`；
-- rank、local rank 和设备对应关系；
-- 局部门和通信门；
-- 状态向量数值、范数和概率；
-- 密度矩阵、Kraus 噪声和 trace；
-- 结构化期望值；
-- 末端采样；
-- 每 rank 本地张量元素数。
+### 17.4 本地 Gloo 回归
 
-只有 rank 0 输出最终 JSON。任一不变量失败时，所有 rank 应以非零状态
-退出。探针通过证明该软硬件组合完成了本组正确性检查，但不证明获得
-多 NPU 加速。
-
-### 17.2 本地 Gloo 回归
-
-没有 Ascend NPU 时可以验证通信契约，但不能代替 HCCL 真机结果：
+没有 Ascend NPU 时可以用 CPU/Gloo 验证数值和多进程通信契约：
 
 ```bash
 PYTHONPATH=. pytest tests/distributed -q
 ```
 
-### 17.3 常见故障
+Gloo 不会执行 NPU kernel、CANN 或 HCCL 路径。本地 Gloo 通过不能作为 NPU 验收，
+也不能替代 2/4 NPU 的严格探针结果。
+
+### 17.5 常见故障
 
 | 现象                            | 检查                                                     |
 | ------------------------------- | -------------------------------------------------------- |

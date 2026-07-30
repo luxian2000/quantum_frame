@@ -7,6 +7,7 @@ import torch
 
 from ..backends.numpy_backend import NumpyBackend
 from ..core.state import State
+from ._contracts import reject_requires_grad
 from .layout import _Layout, _ShardSpec
 
 
@@ -21,10 +22,7 @@ class DistState:
         backend,
         bit_order: str = "msb",
     ):
-        if getattr(local_data, "requires_grad", False):
-            raise ValueError(
-                "分布式首期不支持 requires_grad=True"
-            )
+        reject_requires_grad(local_data)
         casted = backend.cast(local_data)
         if tuple(int(axis) for axis in casted.shape) != spec.local_shape:
             raise ValueError(

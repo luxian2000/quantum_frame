@@ -55,8 +55,30 @@ def test_dist_state_rejects_automatic_differentiation(monkeypatch):
         requires_grad=True,
     )
 
-    with pytest.raises(ValueError, match="requires_grad"):
+    with pytest.raises(
+        ValueError,
+        match="DistSimulator 首期仅支持前向模拟，不支持自动微分",
+    ):
         DistState.from_local(local, spec=_spec(), backend=backend)
+
+
+def test_autograd_contract_detects_nested_state_data():
+    from aicir import NPUBackend, State
+    from aicir.distributed._contracts import contains_requires_grad
+
+    tensor = torch.tensor(
+        [1.0, 0.0],
+        dtype=torch.complex64,
+        requires_grad=True,
+    )
+    state = State(tensor, 1, NPUBackend(fallback_to_cpu=True))
+    dist_state = object.__new__(DistState)
+    dist_state._local_data = tensor
+
+    assert contains_requires_grad(tensor)
+    assert contains_requires_grad({"payload": [state]})
+    assert contains_requires_grad(dist_state)
+    assert not contains_requires_grad({"payload": ["text", b"bytes"]})
 
 
 def test_zero_state_and_properties(monkeypatch):

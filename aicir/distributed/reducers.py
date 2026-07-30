@@ -49,6 +49,12 @@ def _scalar_value(tensor):
     return value.real if abs(value.imag) < 1e-6 else value
 
 
+def _complex_diagonal_sum(matrix, rows, columns):
+    real = torch.real(matrix)[rows, columns].sum()
+    imag = torch.imag(matrix)[rows, columns].sum()
+    return torch.complex(real, imag)
+
+
 class _Reducer:
     """Reduce rank-local state information without implicit full gathers."""
 
@@ -148,7 +154,7 @@ class _Reducer:
                 device=product.device,
             )
             columns = rows + state.spec.global_start
-            local = product[rows, columns].sum()
+            local = _complex_diagonal_sum(product, rows, columns)
         total = self._backend.communicator.all_reduce_sum(
             local.reshape(())
         )
@@ -255,7 +261,9 @@ class _Reducer:
                 dtype=torch.long,
                 device=device,
             )
-            diagonal = data[rows, rows + state.spec.global_start].sum()
+            diagonal = torch.real(data)[
+                rows, rows + state.spec.global_start
+            ].sum()
             trace = self._backend.communicator.all_reduce_sum(
                 diagonal.reshape(())
             )

@@ -12,6 +12,7 @@ from ..core.gates import (
 )
 from ..gates import canonical_gate_name
 from ..ir import as_instruction, instruction_name
+from ._contracts import reject_requires_grad
 from .state import DistState
 
 
@@ -122,10 +123,7 @@ class _GatePlanner:
             raise ValueError(
                 f"局部门矩阵形状必须是 ({dimension}, {dimension})"
             )
-        if getattr(matrix, "requires_grad", False):
-            raise ValueError(
-                "分布式首期不支持 requires_grad=True 的门参数"
-            )
+        reject_requires_grad(matrix)
         return _GatePlan(
             instruction_index=int(instruction_index),
             local_matrix=matrix,
