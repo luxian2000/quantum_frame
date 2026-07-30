@@ -745,8 +745,10 @@ git commit -m "feat(distributed): add checkpoint and failure protocols"
 **Interfaces:**
 - Consumes: current exact forward-only rejection, parameter-shift oracle from Task 2, and PyTorch/torch_npu backward behavior.
 - Produces: a signed pass/fail evidence matrix and, only on pass, a separate implementation plan; it does not modify `DistSimulator.run`.
-- Produces: probe CLI `distributed_backward_kernel_probe.py --iterations INT`; the gate commands use `--iterations 100`.
-- Produces: rank-0 JSON containing per-primitive forward/backward evidence, per-rank retained-memory samples/growth, `memory_gate_passed`, `failed_primitives`, and `gate_status`.
+- Produces: per-run CLI `distributed_backward_kernel_probe.py --iterations INT --output-json PATH`; the NPU commands use `--iterations 100`.
+- Produces: aggregation CLI `distributed_backward_kernel_probe.py --aggregate REPORT2 REPORT4 --output-json PATH`.
+- Produces: each per-run rank-0 JSON contains `world_size`, `run_status`, `conditions`, per-primitive evidence, per-rank retained-memory samples/growth, `failed_primitives`, `failed_conditions`, and `fallback_to_cpu`; it never contains `gate_status`.
+- Produces: the aggregation JSON contains `world_sizes`, `run_statuses`, `gate_status`, `failed_primitives`, `failed_conditions`, and the SHA-256 digest of each source report.
 
 - [ ] **Step 1: Keep the current rejection as a regression gate**
 
@@ -756,7 +758,7 @@ Run:
 
 Expected: all trainable inputs retain the exact forward-only error.
 
-- [ ] **Step 2: Write backward-primitive gate tests**
+- [ ] **Step 2: Write failing per-run backward tests**
 
 Write cases for complex64 real/imag transport, local matrix application, reshape,
 transpose, conjugation, complex construction, all-reduce, P2P send/receive,
@@ -768,21 +770,50 @@ Run: `PYTHONPATH=. pytest tests/distributed/test_native_autograd_gate.py -q`
 Expected: FAIL because `distributed_backward_kernel_probe.py` and its evidence
 schema are absent.
 
-- [ ] **Step 3: Implement and validate the evidence schema**
+- [ ] **Step 3: Implement the per-run primitive schema**
 
 Implement the Step 2 primitive operations outside `DistSimulator` and their
 CPU finite-difference/parameter-shift comparisons.
 The probe must emit per-primitive `forward_passed`, `backward_passed`,
-`finite_gradients`, `gradient_digest`, `gradient_error`, and
-`retained_memory_growth`; the top level must include `world_size`,
-`fallback_to_cpu`, `gate_status`, and `failed_primitives`.
+`finite_gradients`, `gradient_digest`, and `gradient_error`. The top level
+must include `world_size`, `fallback_to_cpu`, `run_status`,
+`failed_primitives`, `failed_conditions`, and this complete condition map:
+
+```text
+all_forward_passed
+all_backward_passed
+all_gradients_finite
+gradient_digests_agree
+gradient_errors_within_tolerance
+no_cpu_fallback
+memory_gate_passed
+```
+
+Use exact failure labels `primitive_forward_failed`,
+`primitive_backward_failed`, `nonfinite_gradient`,
+`gradient_digest_mismatch`, `gradient_error_exceeded`, `cpu_fallback`, and
+`memory_gate_failed`. Add entries to `failed_primitives` only when the
+condition identifies a primitive. In Step 3 fixtures set
+`memory_gate_passed=true`; Step 5 replaces that fixture value with measured
+memory evidence. Set `run_status=PASS` only when all seven conditions are true.
 
 Run: `PYTHONPATH=. pytest tests/distributed/test_native_autograd_gate.py -q`
 
-Expected: PASS for schema construction, exact blocked/pass decision logic, and
-CPU reference calculations; this does not pass the NPU gate.
+Expected: PASS for primitive schema construction, per-run blocked/pass logic,
+and CPU reference calculations; no final `gate_status` is produced.
 
-- [ ] **Step 4: Implement and test graph lifetime and memory**
+- [ ] **Step 4: Write failing graph-lifetime tests**
+
+Add cases for the 100-iteration schedule, retained-memory sampling at
+iterations 20 and 100, the exact 5% boundary, and a memory-only failure with
+`failed_primitives=[]` and `failed_conditions=["memory_gate_failed"]`.
+
+Run: `PYTHONPATH=. pytest tests/distributed/test_native_autograd_gate.py -q`
+
+Expected: FAIL because retained-memory evidence and
+`memory_gate_failed` are not implemented.
+
+- [ ] **Step 5: Implement graph-lifetime evidence**
 
 Run 100 forward/backward iterations for vector and density cases. Synchronize
 the allocator before sampling retained memory at iterations 20 and 100.
@@ -791,14 +822,45 @@ Compute
 `memory_gate_passed=true` only when every rank reports growth at most `0.05`.
 Include `iterations=100`, both retained-memory samples,
 `retained_memory_growth`, and `memory_gate_passed` in the rank evidence.
+When the memory condition fails, append `memory_gate_failed` to
+`failed_conditions` and set `run_status=BLOCKED` without adding a fabricated
+primitive name to `failed_primitives`.
 
 Run: `PYTHONPATH=. pytest tests/distributed/test_native_autograd_gate.py -q`
 
 Expected: PASS for the 100-iteration schedule, growth calculation, 5% boundary
 cases and the rule that `memory_gate_passed=false` forces
-`gate_status=BLOCKED`.
+`run_status=BLOCKED`.
 
-- [ ] **Step 5: Collect rank-synchronous NPU backward and memory evidence**
+- [ ] **Step 6: Write failing cross-world aggregation tests**
+
+Add cases requiring exactly one report for world size 2 and one for world size
+4. Cover both passing, missing world size 4, duplicate world size 2,
+primitive failure, CPU fallback and memory-only failure. A memory-only failure
+must produce `gate_status=BLOCKED`,
+`failed_conditions=["world_size_4:memory_gate_failed"]`, and may keep
+`failed_primitives=[]`.
+
+Run: `PYTHONPATH=. pytest tests/distributed/test_native_autograd_gate.py -q`
+
+Expected: FAIL because the `--aggregate` path is absent.
+
+- [ ] **Step 7: Implement cross-world aggregation**
+
+Read both JSON files, verify their SHA-256 digests, reject any world-size set
+other than `{2, 4}`, and set final `gate_status=PASS` only when both
+`run_status` values are `PASS`, both have `fallback_to_cpu=false`, every
+primitive condition passes, and both have `memory_gate_passed=true`.
+Prefix propagated conditions and primitive names with `world_size_2:` or
+`world_size_4:`. Use `missing_world_size_2`, `missing_world_size_4`, and
+`duplicate_world_size` for report-set failures.
+
+Run: `PYTHONPATH=. pytest tests/distributed/test_native_autograd_gate.py -q`
+
+Expected: PASS for per-run schema, memory-only failure, exact 2/4 aggregation,
+source digests and final gate decisions.
+
+- [ ] **Step 8: Collect 2/4 NPU per-run evidence**
 
 For world size 2 and 4, require every primitive to report
 `forward_passed=true`, `backward_passed=true`, finite gradients,
@@ -808,30 +870,40 @@ keeps native autograd blocked.
 
 ```bash
 PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 \
-  scripts/npu/distributed_backward_kernel_probe.py --iterations 100
+  scripts/npu/distributed_backward_kernel_probe.py --iterations 100 \
+  --output-json /tmp/aicir-dist-backward-w2.json
 PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 \
-  scripts/npu/distributed_backward_kernel_probe.py --iterations 100
+  scripts/npu/distributed_backward_kernel_probe.py --iterations 100 \
+  --output-json /tmp/aicir-dist-backward-w4.json
 ```
 
-Expected: each command emits one rank-0 JSON. `gate_status=PASS` is permitted
-only when every primitive passes and `memory_gate_passed=true` on both world
-sizes; otherwise the report is `gate_status=BLOCKED` with exact failing
-primitives, errors, retained-memory samples and growth ratios.
+Expected: each command writes one rank-0 JSON with `run_status`, complete
+primitive and memory conditions, exact `failed_primitives` and
+`failed_conditions`, and no `gate_status`.
 
-- [ ] **Step 6: Decide the gate**
+- [ ] **Step 9: Aggregate the final gate**
 
-Write `gate_status: PASS` only if all primitive, 2/4 NPU, correctness and memory
-conditions pass. Otherwise write `gate_status: BLOCKED` plus the exact failing
-primitive and error. Parameter-shift remains the supported gradient path.
+```bash
+PYTHONPATH=. python scripts/npu/distributed_backward_kernel_probe.py \
+  --aggregate /tmp/aicir-dist-backward-w2.json \
+  /tmp/aicir-dist-backward-w4.json \
+  --output-json /tmp/aicir-dist-backward-gate.json
+```
 
-- [ ] **Step 7: Write the separate native-autograd plan only on PASS**
+Expected: the final report lists `world_sizes=[2, 4]` and their source
+digests. It sets `gate_status=PASS` only when both complete run reports pass;
+otherwise it sets `gate_status=BLOCKED` and preserves all prefixed
+`failed_conditions`. Parameter-shift remains the supported gradient path
+when blocked.
+
+- [ ] **Step 10: Write the separate native-autograd plan only on PASS**
 
 The generated plan must preserve the explicit distributed API, specify custom
 autograd ownership for P2P/collectives, add gradcheck-style 2/4 rank tests, and
 remove the forward-only rejection only for explicitly supported inputs. A
 blocked gate must not create or modify that implementation plan.
 
-- [ ] **Step 8: Commit evidence**
+- [ ] **Step 11: Commit evidence**
 
 ```bash
 git add docs/superpowers/specs/2026-07-30-distributed-native-autograd-gate.md \
