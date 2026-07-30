@@ -111,6 +111,11 @@ def test_full_api_probe_has_sectioned_strict_contract():
         assert token in source
     assert '"local_gate": True' not in source
     assert '"communicating_gate": True' not in source
+    assert (
+        "def _expected_error(call, expected_message, expected_type):"
+        in source
+    )
+    assert "str(match) in message" not in source
     for section in EXPECTED_SECTIONS:
         assert f'"{section}"' in source
 

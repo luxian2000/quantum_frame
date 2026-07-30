@@ -507,5 +507,12 @@ def test_api_probe_sections_are_collective_safe(world_size, tmp_path):
     assert all(
         evidence["matched_rank_count"] == world_size
         and evidence["participating_rank_count"] == world_size
+        and evidence["exact_message"]
+        and evidence["exact_type"]
+        and evidence["message_digest_agreement"]
+        and evidence["expected_type"] == "ValueError"
+        and evidence["actual_type"] == "ValueError"
+        and evidence["actual_message"] == evidence["expected_message"]
+        and len(evidence["message_digest"]) == 64
         for evidence in contract_metrics["case_evidence"]
     )

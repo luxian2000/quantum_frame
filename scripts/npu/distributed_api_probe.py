@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+import hashlib
 import json
 import math
 import sys
@@ -1537,21 +1538,20 @@ def _run_communication_section(simulator):
     return _evaluate_root_section(backend, evaluate)
 
 
-def _expected_error(call, match):
+def _expected_error(call, expected_message, expected_type):
     try:
         call()
     except Exception as error:  # noqa: BLE001
         message = str(error)
         return {
-            "matched": (
-                isinstance(error, ValueError)
-                and str(match) in message
-            ),
+            "exact_message": message == expected_message,
+            "exact_type": type(error) is expected_type,
             "type": type(error).__name__,
             "message": message,
         }
     return {
-        "matched": False,
+        "exact_message": False,
+        "exact_type": False,
         "type": None,
         "message": "NO_EXPECTED_ERROR",
     }
@@ -1582,6 +1582,7 @@ def _run_contract_section(simulator):
                 layout=(0,) * n_qubits,
             ),
             "layout 必须是 range(n_qubits) 的完整双射",
+            ValueError,
         ),
         (
             "invalid_root_vector_shape",
@@ -1593,7 +1594,8 @@ def _run_contract_section(simulator):
                 ),
                 layout=identity_layout,
             ),
-            "initial_state 必须包含",
+            f"initial_state 必须包含 {dimension} 个振幅",
+            ValueError,
         ),
         (
             "invalid_root_density_shape",
@@ -1608,7 +1610,11 @@ def _run_contract_section(simulator):
                 ),
                 layout=identity_layout,
             ),
-            "initial_density_matrix 形状必须是",
+            (
+                "initial_density_matrix 形状必须是 "
+                f"({dimension}, {dimension})"
+            ),
+            ValueError,
         ),
         (
             "inconsistent_rank_input_modes",
@@ -1627,7 +1633,11 @@ def _run_contract_section(simulator):
                 ),
                 layout=identity_layout,
             ),
-            "初态必须由所有 rank 提供匹配的 DistState",
+            (
+                "初态必须由所有 rank 提供匹配的 DistState，或仅由 "
+                "rank 0 提供完整 statevector/density matrix"
+            ),
+            ValueError,
         ),
         (
             "mid_measure",
@@ -1637,6 +1647,7 @@ def _run_contract_section(simulator):
                 layout=identity_layout,
             ),
             midcircuit_match,
+            ValueError,
         ),
         (
             "mid_reset",
@@ -1646,6 +1657,7 @@ def _run_contract_section(simulator):
                 layout=identity_layout,
             ),
             midcircuit_match,
+            ValueError,
         ),
         (
             "mid_if",
@@ -1658,6 +1670,7 @@ def _run_contract_section(simulator):
                 layout=identity_layout,
             ),
             midcircuit_match,
+            ValueError,
         ),
         (
             "mid_while",
@@ -1674,6 +1687,7 @@ def _run_contract_section(simulator):
                 layout=identity_layout,
             ),
             midcircuit_match,
+            ValueError,
         ),
         (
             "trainable_root_state",
@@ -1690,6 +1704,7 @@ def _run_contract_section(simulator):
                 layout=identity_layout,
             ),
             AUTOGRAD_ERROR,
+            ValueError,
         ),
         (
             "trainable_root_density",
@@ -1706,6 +1721,7 @@ def _run_contract_section(simulator):
                 layout=identity_layout,
             ),
             AUTOGRAD_ERROR,
+            ValueError,
         ),
         (
             "trainable_numeric_gate",
@@ -1721,6 +1737,7 @@ def _run_contract_section(simulator):
                 layout=identity_layout,
             ),
             AUTOGRAD_ERROR,
+            ValueError,
         ),
         (
             "trainable_custom_unitary",
@@ -1742,37 +1759,88 @@ def _run_contract_section(simulator):
                 layout=identity_layout,
             ),
             AUTOGRAD_ERROR,
+            ValueError,
         ),
     )
 
     case_evidence = []
     all_cases_matched = True
-    for name, expected_status, call, match in cases:
-        local_result = _expected_error(call, match)
+    for (
+        name,
+        expected_status,
+        call,
+        expected_message,
+        expected_type,
+    ) in cases:
+        local_result = _expected_error(
+            call,
+            expected_message,
+            expected_type,
+        )
+        digest_payload = (
+            f"{local_result['type']}\0{local_result['message']}"
+            .encode("utf-8")
+        )
+        local_digest = hashlib.sha256(digest_payload).digest()
+        digest_tensor = torch.tensor(
+            list(local_digest),
+            dtype=torch.uint8,
+            device=backend._device,
+        )
+        gathered_digests = backend.communicator.all_gather(
+            digest_tensor
+        )
         gathered = _gather_long_evidence(
             backend,
             (
                 backend.rank,
                 1,
-                local_result["matched"],
-                local_result["type"] == "ValueError",
+                local_result["exact_message"],
+                local_result["exact_type"],
             ),
         )
         if backend.rank == 0:
+            digest_values = [
+                bytes(item.detach().cpu().tolist())
+                for item in gathered_digests
+            ]
+            expected_digest = hashlib.sha256(
+                (
+                    f"{expected_type.__name__}\0{expected_message}"
+                ).encode("utf-8")
+            ).digest()
             participating_rank_count = sum(row[1] for row in gathered)
             matched_rank_count = sum(
                 row[2] and row[3] for row in gathered
             )
+            exact_message = all(row[2] == 1 for row in gathered)
+            exact_type = all(row[3] == 1 for row in gathered)
+            message_digest_agreement = (
+                len(set(digest_values)) == 1
+                and digest_values[0] == expected_digest
+            )
             matched = (
                 participating_rank_count == backend.world_size
                 and matched_rank_count == backend.world_size
+                and exact_message
+                and exact_type
+                and message_digest_agreement
             )
             actual_status = expected_status if matched else "FAIL"
             case_evidence.append(
                 {
                     "name": name,
                     "status": actual_status,
-                    "message_match": match,
+                    "expected_type": expected_type.__name__,
+                    "expected_message": expected_message,
+                    "actual_type": local_result["type"],
+                    "actual_message": local_result["message"],
+                    "exact_message": exact_message,
+                    "exact_type": exact_type,
+                    "message_digest": digest_values[0].hex(),
+                    "message_digest_agreement": (
+                        message_digest_agreement
+                    ),
                     "participating_rank_count": (
                         participating_rank_count
                     ),
