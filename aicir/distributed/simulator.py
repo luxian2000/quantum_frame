@@ -170,15 +170,15 @@ class DistSimulator:
 
     def _initial_modes(self, initial_state, initial_density_matrix):
         if initial_state is not None and initial_density_matrix is not None:
-            raise ValueError(
-                "initial_state 与 initial_density_matrix 不能同时提供"
-            )
-        value = (
-            initial_state
-            if initial_state is not None
-            else initial_density_matrix
-        )
-        if isinstance(value, DistState):
+            local_mode = 4
+        elif isinstance(
+            (
+                initial_state
+                if initial_state is not None
+                else initial_density_matrix
+            ),
+            DistState,
+        ):
             local_mode = 3
         elif initial_state is not None:
             local_mode = 1
@@ -191,10 +191,15 @@ class DistSimulator:
             dtype=torch.long,
             device=self._backend._device,
         )
-        return tuple(
+        modes = tuple(
             int(item.detach().cpu().item())
             for item in self._backend.communicator.all_gather(mode_tensor)
         )
+        if any(mode == 4 for mode in modes):
+            raise ValueError(
+                "initial_state 与 initial_density_matrix 不能同时提供"
+            )
+        return modes
 
     def _validate_dist_state(
         self,

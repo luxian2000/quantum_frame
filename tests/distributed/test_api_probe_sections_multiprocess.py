@@ -168,6 +168,51 @@ def _root_preparation_error_worker(
     torch.distributed.destroy_process_group()
 
 
+def _dual_root_initial_values_worker(
+    rank,
+    world_size,
+    port,
+    output_dir,
+):
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(port)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ["RANK"] = str(rank)
+    os.environ["LOCAL_RANK"] = str(rank)
+
+    simulator = DistSimulator.from_env(
+        fallback_to_cpu=True,
+        process_group_backend="gloo",
+    )
+    error = None
+    try:
+        simulator.run(
+            probe.Circuit(n_qubits=2),
+            initial_state=(
+                probe.np.eye(1, 4, dtype=probe.np.complex64).reshape(-1)
+                if rank == 0
+                else None
+            ),
+            initial_density_matrix=(
+                probe.np.eye(4, dtype=probe.np.complex64)
+                if rank == 0
+                else None
+            ),
+        )
+    except Exception as caught:  # noqa: BLE001
+        error = {
+            "type": type(caught).__name__,
+            "message": str(caught),
+        }
+
+    torch.distributed.barrier()
+    Path(output_dir, f"dual-initial-rank-{rank}.json").write_text(
+        json.dumps(error, sort_keys=True),
+        encoding="utf-8",
+    )
+    torch.distributed.destroy_process_group()
+
+
 def _section_worker(rank, world_size, port, output_dir):
     os.environ["MASTER_ADDR"] = "127.0.0.1"
     os.environ["MASTER_PORT"] = str(port)
@@ -282,6 +327,28 @@ def test_root_preparation_error_is_bounded_and_collective_safe(
             "_UnprintableRootPreparationError: "
             "<unprintable exception>"
         )
+
+
+def test_dual_root_initial_values_are_collective_safe(tmp_path):
+    context = mp.spawn(
+        _dual_root_initial_values_worker,
+        args=(2, _free_port(), str(tmp_path)),
+        nprocs=2,
+        join=False,
+    )
+    _join_spawn_context(context)
+
+    errors = [
+        json.loads(
+            (tmp_path / f"dual-initial-rank-{rank}.json").read_text()
+        )
+        for rank in range(2)
+    ]
+    expected = {
+        "type": "ValueError",
+        "message": "initial_state 与 initial_density_matrix 不能同时提供",
+    }
+    assert errors == [expected, expected]
 
 
 @pytest.mark.parametrize("world_size", [2, 4])
