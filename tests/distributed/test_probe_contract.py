@@ -138,6 +138,7 @@ def test_full_api_probe_launch_preserves_cann_pythonpath():
 
 def test_manual_documents_full_npu_api_acceptance_contract():
     source = MANUAL.read_text(encoding="utf-8")
+    normalized = " ".join(source.split())
 
     for token in (
         "完整 NPU API 验收",
@@ -157,9 +158,6 @@ def test_manual_documents_full_npu_api_acceptance_contract():
         "`failed_invariants`",
         "`local_tensor_sizes`",
         "`fallback_to_cpu=False`",
-        "NumPy",
-        "参考 oracle",
-        "不是模拟 fallback",
         "DistSimulator 首期仅支持前向模拟，不支持自动微分",
         "Gloo",
         "不能作为 NPU 验收",
@@ -178,4 +176,10 @@ def test_manual_documents_full_npu_api_acceptance_contract():
         "正常支持项必须为 `PASS`；契约中的预期拒绝项记录为 "
         "`EXPECTED_ERROR` 或 `UNSUPPORTED_AS_DESIGNED`"
         not in source
+    )
+    assert (
+        "独立数值 oracle 的最终演算和判定在 rank 0 执行；各 rank "
+        "仍可能使用 NumPy 构造或整理探针输入。 NumPy 不参与被测的"
+        "分布式状态演化，也不是模拟 fallback。"
+        in normalized
     )

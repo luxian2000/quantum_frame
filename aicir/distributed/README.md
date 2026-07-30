@@ -848,8 +848,9 @@ PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 scripts/npu/distributed_a
 并检查每个 rank 的设备为 `npu:LOCAL_RANK`。其中
 `fallback_to_cpu=False` 是不可放宽的验收条件。NPU、HCCL 或 CANN
 不可用时必须失败，不允许静默转到 CPU；因此这是严格 no-fallback
-验收。探针中的 NumPy 只在 rank 0 计算独立的数值参考 oracle，用于
-比较分布式结果，不参与被测状态演化，也不是模拟 fallback。
+验收。独立数值 oracle 的最终演算和判定在 rank 0 执行；各 rank
+仍可能使用 NumPy 构造或整理探针输入。
+NumPy 不参与被测的分布式状态演化，也不是模拟 fallback。
 
 可用 `--section <名称>` 单独复查失败项。九个 section 的验收范围是：
 
