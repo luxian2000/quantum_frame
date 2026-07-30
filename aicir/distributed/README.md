@@ -158,8 +158,7 @@ backend.local_rank
 
 ### 4.1 自动构建零态
 
-不传 `initial_state` 和 `initial_density_matrix` 时，模拟器建立
-\(\lvert 0\cdots0\rangle\)：
+不传 `initial_state` 和 `initial_density_matrix` 时，模拟器建立$\lvert 0\cdots0\rangle$：
 
 ```python
 from aicir import Circuit
@@ -857,17 +856,17 @@ NumPy 不参与被测的分布式状态演化，也不是模拟 fallback。
 
 可用 `--section <名称>` 单独复查失败项。九个 section 的验收范围是：
 
-| section | 验收内容 |
-| --- | --- |
-| `state` | 隐式零态、显式状态向量、直接密度矩阵输入，及范数、trace、概率和每 rank 分片大小 |
-| `layout` | 非恒等显式 layout、自动 layout，并与逻辑顺序的独立参考结果比较 |
-| `continuation` | 把已有向量或密度矩阵 `DistState` 传回 `run()` 继续演化 |
-| `noise` | 振幅阻尼、比特翻转、相位翻转、退极化、顺序组合和规则选择 |
-| `observable` | Pauli、Hamiltonian 和局部稠密 observable 的期望值 |
-| `measure` | 全寄存器/子集 shots、单 shot collapse 和坍缩后 `DistState` |
-| `result` | `return_state`/`return_probabilities` 四种组合，以及只在显式调用时发生的 root gather |
-| `communication` | 局部门零 P2P、分布式轴门实际 P2P、peer 覆盖及实部/虚部成对 tag |
-| `contract` | 14 个不支持或非法调用在所有 rank 上得到完全相同的类型和精确错误文本 |
+| section           | 验收内容                                                                                 |
+| ----------------- | ---------------------------------------------------------------------------------------- |
+| `state`         | 隐式零态、显式状态向量、直接密度矩阵输入，及范数、trace、概率和每 rank 分片大小          |
+| `layout`        | 非恒等显式 layout、自动 layout，并与逻辑顺序的独立参考结果比较                           |
+| `continuation`  | 把已有向量或密度矩阵`DistState` 传回 `run()` 继续演化                                |
+| `noise`         | 振幅阻尼、比特翻转、相位翻转、退极化、顺序组合和规则选择                                 |
+| `observable`    | Pauli、Hamiltonian 和局部稠密 observable 的期望值                                        |
+| `measure`       | 全寄存器/子集 shots、单 shot collapse 和坍缩后`DistState`                              |
+| `result`        | `return_state`/`return_probabilities` 四种组合，以及只在显式调用时发生的 root gather |
+| `communication` | 局部门零 P2P、分布式轴门实际 P2P、peer 覆盖及实部/虚部成对 tag                           |
+| `contract`      | 14 个不支持或非法调用在所有 rank 上得到完全相同的类型和精确错误文本                      |
 
 `contract` 包含训练输入。首期只支持前向；状态、密度矩阵或门参数带
 `requires_grad=True` 时必须在所有 rank 精确报错：
@@ -891,17 +890,17 @@ DistSimulator 首期仅支持前向模拟，不支持自动微分
 每次执行只有 rank 0 输出一行最终 JSON。每个 section 都包含
 `status`、`passed` 和 `metrics`；顶层字段：
 
-| 字段 | 判定方法 |
-| --- | --- |
-| `passed` | 只有所有 rank、所有所选 section 均通过时才为 `true` |
-| `world_size` | 必须与本次 `--nproc-per-node` 相同，即分别为 2 和 4 |
-| `fallback_to_cpu` | 必须为 `false` |
-| `sections.<name>.status` | 正常支持项只能为 `PASS` 或 `FAIL` |
-| `sections.<name>.passed` | 该 section 的数值、行为和跨 rank 证据是否全部满足 |
-| `sections.<name>.metrics` | 该 section 的具体误差、计数、布局或通信证据 |
-| `sections.contract.metrics.case_statuses` | 每个错误契约 case 的状态映射；预期拒绝项为 `EXPECTED_ERROR` 或 `UNSUPPORTED_AS_DESIGNED` |
-| `sections.contract.metrics.case_evidence[*].status` | 对应 case 的状态及错误类型、精确文本和跨 rank 摘要证据 |
-| `failed_invariants` | 必须为空列表；列出任何未通过的 section 名称 |
+| 字段                                                  | 判定方法                                                                                    |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `passed`                                            | 只有所有 rank、所有所选 section 均通过时才为`true`                                        |
+| `world_size`                                        | 必须与本次`--nproc-per-node` 相同，即分别为 2 和 4                                        |
+| `fallback_to_cpu`                                   | 必须为`false`                                                                             |
+| `sections.<name>.status`                            | 正常支持项只能为`PASS` 或 `FAIL`                                                        |
+| `sections.<name>.passed`                            | 该 section 的数值、行为和跨 rank 证据是否全部满足                                           |
+| `sections.<name>.metrics`                           | 该 section 的具体误差、计数、布局或通信证据                                                 |
+| `sections.contract.metrics.case_statuses`           | 每个错误契约 case 的状态映射；预期拒绝项为`EXPECTED_ERROR` 或 `UNSUPPORTED_AS_DESIGNED` |
+| `sections.contract.metrics.case_evidence[*].status` | 对应 case 的状态及错误类型、精确文本和跨 rank 摘要证据                                      |
+| `failed_invariants`                                 | 必须为空列表；列出任何未通过的 section 名称                                                 |
 
 每条 `case_evidence` 包含 `name`、`status`、`expected_type`、
 `expected_message`、`actual_type`、`actual_message`、`exact_type`、
@@ -949,9 +948,9 @@ DistSimulator 首期仅支持前向模拟，不支持自动微分
 通信证据随 world size 扩展：
 
 | world size | 覆盖的分布式轴 | 每个 rank 的不同 peer 数 | 每个 rank 的 P2P 增量 |
-| --- | --- | --- | --- |
-| 2 | `[0]` | 1 | 2 |
-| 4 | `[0, 1]` | 2 | 4 |
+| ---------- | -------------- | ------------------------ | --------------------- |
+| 2          | `[0]`        | 1                        | 2                     |
+| 4          | `[0, 1]`     | 2                        | 4                     |
 
 两次报告中最大的观测数值误差是 4 NPU `noise_trace_error`：
 `1.1925458218653903e-7`。该值低于探针的归约误差阈值 `1e-5`。
