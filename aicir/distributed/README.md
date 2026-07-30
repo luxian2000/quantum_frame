@@ -402,8 +402,7 @@ print(state.local_shape)
 
 ## 8. 密度矩阵模拟
 
-传入 `initial_density_matrix` 后，酉门按
-\(\rho \mapsto U\rho U^\dagger\) 演化行分片：
+传入 `initial_density_matrix` 后，酉门按 (\rho \mapsto U\rho U^\dagger\) 演化行分片：
 
 ```python
 import numpy as np
