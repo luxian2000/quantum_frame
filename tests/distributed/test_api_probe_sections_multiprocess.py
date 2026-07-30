@@ -22,6 +22,52 @@ def _raise_root_evaluation_error():
     raise RuntimeError("post-collective root evaluation failed")
 
 
+class _LongRootPreparationError(Exception):
+    def __str__(self):
+        return "异常\ud800" + ("很长" * 5000)
+
+
+class _UnprintableRootPreparationError(Exception):
+    def __str__(self):
+        raise RuntimeError("exception stringification failed")
+
+
+class _ArrayConversionFailure:
+    def __init__(self, failure_mode):
+        self.failure_mode = failure_mode
+
+    def __array__(self, dtype=None, copy=None):
+        del dtype, copy
+        if self.failure_mode == "long":
+            raise _LongRootPreparationError()
+        raise _UnprintableRootPreparationError()
+
+
+def _join_spawn_context(context, *, timeout=20):
+    try:
+        deadline = time.monotonic() + timeout
+        while not context.join(
+            timeout=max(0.0, deadline - time.monotonic())
+        ):
+            assert time.monotonic() < deadline, (
+                "distributed worker collective sequence timed out"
+            )
+    finally:
+        for process in context.processes:
+            if process.is_alive():
+                process.terminate()
+        for process in context.processes:
+            process.join(timeout=5)
+        for process in context.processes:
+            if process.is_alive():
+                process.kill()
+        for process in context.processes:
+            process.join(timeout=5)
+
+    assert all(not process.is_alive() for process in context.processes)
+    assert [process.exitcode for process in context.processes] == [0, 0]
+
+
 def _invalid_root_shape_worker(
     rank,
     world_size,
@@ -71,6 +117,50 @@ def _invalid_root_shape_worker(
     Path(
         output_dir,
         f"invalid-{initial_kind}-shape-rank-{rank}.json",
+    ).write_text(
+        json.dumps(error, sort_keys=True),
+        encoding="utf-8",
+    )
+    torch.distributed.destroy_process_group()
+
+
+def _root_preparation_error_worker(
+    rank,
+    world_size,
+    port,
+    output_dir,
+    failure_mode,
+):
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(port)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ["RANK"] = str(rank)
+    os.environ["LOCAL_RANK"] = str(rank)
+
+    simulator = DistSimulator.from_env(
+        fallback_to_cpu=True,
+        process_group_backend="gloo",
+    )
+    error = None
+    try:
+        simulator.run(
+            probe.Circuit(n_qubits=2),
+            initial_state=(
+                _ArrayConversionFailure(failure_mode)
+                if rank == 0
+                else None
+            ),
+        )
+    except Exception as caught:  # noqa: BLE001
+        error = {
+            "type": type(caught).__name__,
+            "message": str(caught),
+        }
+
+    torch.distributed.barrier()
+    Path(
+        output_dir,
+        f"preparation-{failure_mode}-rank-{rank}.json",
     ).write_text(
         json.dumps(error, sort_keys=True),
         encoding="utf-8",
@@ -136,24 +226,7 @@ def test_invalid_root_initial_shape_is_collective_safe(
         nprocs=2,
         join=False,
     )
-    try:
-        deadline = time.monotonic() + 10
-        while not context.join(
-            timeout=max(0.0, deadline - time.monotonic())
-        ):
-            assert time.monotonic() < deadline, (
-                "invalid root initial shape split ranks across "
-                "scatter/barrier"
-            )
-    finally:
-        for process in context.processes:
-            if process.is_alive():
-                process.terminate()
-        for process in context.processes:
-            process.join(timeout=5)
-
-    assert all(not process.is_alive() for process in context.processes)
-    assert [process.exitcode for process in context.processes] == [0, 0]
+    _join_spawn_context(context)
     errors = [
         json.loads(
             (
@@ -167,6 +240,46 @@ def test_invalid_root_initial_shape_is_collective_safe(
         {"type": "ValueError", "message": expected_message},
         {"type": "ValueError", "message": expected_message},
     ]
+
+
+@pytest.mark.parametrize("failure_mode", ["long", "unprintable"])
+def test_root_preparation_error_is_bounded_and_collective_safe(
+    tmp_path,
+    failure_mode,
+):
+    context = mp.spawn(
+        _root_preparation_error_worker,
+        args=(2, _free_port(), str(tmp_path), failure_mode),
+        nprocs=2,
+        join=False,
+    )
+    _join_spawn_context(context)
+
+    errors = [
+        json.loads(
+            (
+                tmp_path
+                / f"preparation-{failure_mode}-rank-{rank}.json"
+            ).read_text()
+        )
+        for rank in range(2)
+    ]
+    assert errors[0] == errors[1]
+    assert errors[0]["type"] == "RuntimeError"
+    prefix = "rank 0 初态准备失败: "
+    message = errors[0]["message"]
+    assert message.startswith(prefix)
+    serialized = message.removeprefix(prefix)
+    assert len(serialized.encode("utf-8")) <= 4096
+
+    if failure_mode == "long":
+        assert serialized.startswith("_LongRootPreparationError: 异常?")
+        assert serialized.endswith("... <truncated>")
+    else:
+        assert serialized == (
+            "_UnprintableRootPreparationError: "
+            "<unprintable exception>"
+        )
 
 
 @pytest.mark.parametrize("world_size", [2, 4])

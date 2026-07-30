@@ -26,6 +26,11 @@ from .result import DistResult
 from .state import DistState
 
 
+_ROOT_STATE_ERROR_MAX_BYTES = 4096
+_ROOT_STATE_ERROR_TRUNCATION_SUFFIX = b"... <truncated>"
+_ROOT_STATE_ERROR_PROTOCOL_MESSAGE = "rank 0 初态准备失败同步协议无效"
+
+
 class DistSimulator:
     """Coordinate one sharded simulation across a process group."""
 
@@ -281,9 +286,27 @@ class DistSimulator:
                     ]
             except Exception as error:  # noqa: BLE001
                 failure_code = 3
+                try:
+                    error_text = str(error)
+                except Exception:  # noqa: BLE001
+                    error_text = "<unprintable exception>"
                 failure_message = (
-                    f"{type(error).__name__}: {error}".encode("utf-8")
+                    f"{type(error).__name__}: {error_text}".encode(
+                        "utf-8",
+                        errors="replace",
+                    )
                 )
+                if len(failure_message) > _ROOT_STATE_ERROR_MAX_BYTES:
+                    keep = (
+                        _ROOT_STATE_ERROR_MAX_BYTES
+                        - len(_ROOT_STATE_ERROR_TRUNCATION_SUFFIX)
+                    )
+                    failure_message = (
+                        failure_message[:keep]
+                        .decode("utf-8", errors="ignore")
+                        .encode("utf-8")
+                        + _ROOT_STATE_ERROR_TRUNCATION_SUFFIX
+                    )
 
         status = torch.tensor(
             [failure_code, len(failure_message)],
@@ -291,10 +314,16 @@ class DistSimulator:
             device=self._backend._device,
         )
         status = self._backend.communicator.broadcast(status, root=0)
-        failure_code, message_size = (
-            int(item)
-            for item in status.detach().cpu().tolist()
-        )
+        status_values = status.detach().cpu().reshape(-1).tolist()
+        if len(status_values) != 2:
+            raise RuntimeError(_ROOT_STATE_ERROR_PROTOCOL_MESSAGE)
+        failure_code, message_size = map(int, status_values)
+        if (
+            failure_code not in {0, 1, 2, 3}
+            or not 0 <= message_size <= _ROOT_STATE_ERROR_MAX_BYTES
+            or (failure_code == 3) != (message_size > 0)
+        ):
+            raise RuntimeError(_ROOT_STATE_ERROR_PROTOCOL_MESSAGE)
         if failure_code == 1:
             raise ValueError(
                 f"initial_state 必须包含 {spec.global_shape[0]} 个振幅"
