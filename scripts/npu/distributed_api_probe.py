@@ -1225,6 +1225,7 @@ def _run_result_section(simulator):
     original_gather_to_root = communicator.gather_to_root
     gather_calls = 0
     return_combinations = []
+    implicit_gather_deltas = []
     local_fields_ok = True
 
     def counted_gather_to_root(tensor, *, root=0):
@@ -1234,32 +1235,26 @@ def _run_result_section(simulator):
 
     communicator.gather_to_root = counted_gather_to_root
     try:
-        gather_calls_before_run = gather_calls
-        implicit_result = simulator.run(
-            circuit,
-            layout=logical_to_storage,
-        )
-        implicit_gather_delta = gather_calls - gather_calls_before_run
-
-        gather_calls_before_explicit = gather_calls
-        implicit_result.state.to_numpy(root=0)
-        implicit_result.gather_probabilities(root=0)
-        explicit_gather_delta = (
-            gather_calls - gather_calls_before_explicit
-        )
-
         for return_state in (False, True):
             for return_probabilities in (False, True):
+                gather_calls_before_run = gather_calls
                 result = simulator.run(
                     circuit,
                     layout=logical_to_storage,
                     return_state=return_state,
                     return_probabilities=return_probabilities,
                 )
+                combination_implicit_gather_delta = (
+                    gather_calls - gather_calls_before_run
+                )
+                implicit_gather_deltas.append(
+                    combination_implicit_gather_delta
+                )
                 state_present = result.state is not None
                 local_probabilities_present = (
                     result.local_probabilities is not None
                 )
+                gather_calls_before_explicit = gather_calls
                 state_array = (
                     result.state.to_numpy(root=0)
                     if return_state
@@ -1270,8 +1265,14 @@ def _run_result_section(simulator):
                     if return_probabilities
                     else None
                 )
+                combination_explicit_gather_delta = (
+                    gather_calls - gather_calls_before_explicit
+                )
                 local_fields_ok = local_fields_ok and (
-                    state_present == return_state
+                    combination_implicit_gather_delta == 0
+                    and combination_explicit_gather_delta
+                    == int(return_state) + int(return_probabilities)
+                    and state_present == return_state
                     and local_probabilities_present
                     == return_probabilities
                     and dict(result.expectations) == {}
@@ -1297,6 +1298,12 @@ def _run_result_section(simulator):
                             "probabilities_materialized": (
                                 probability_array is not None
                             ),
+                            "implicit_gather_delta": (
+                                combination_implicit_gather_delta
+                            ),
+                            "explicit_gather_delta": (
+                                combination_explicit_gather_delta
+                            ),
                         }
                     )
     finally:
@@ -1318,10 +1325,10 @@ def _run_result_section(simulator):
             )
         )
         expected_combinations = {
-            (False, False): (False, False, False, False),
-            (False, True): (False, True, False, True),
-            (True, False): (True, False, True, False),
-            (True, True): (True, True, True, True),
+            (False, False): (False, False, False, False, 0, 0),
+            (False, True): (False, True, False, True, 0, 1),
+            (True, False): (True, False, True, False, 0, 1),
+            (True, True): (True, True, True, True, 0, 2),
         }
         actual_combinations = {
             (
@@ -1332,12 +1339,19 @@ def _run_result_section(simulator):
                 row["local_probabilities_present"],
                 row["state_materialized"],
                 row["probabilities_materialized"],
+                row["implicit_gather_delta"],
+                row["explicit_gather_delta"],
             )
             for row in return_combinations
         }
         four_return_combinations = (
             fields_ok
             and actual_combinations == expected_combinations
+        )
+        implicit_gather_delta = sum(implicit_gather_deltas)
+        explicit_gather_delta = sum(
+            row["explicit_gather_delta"]
+            for row in return_combinations
         )
         passed = (
             implicit_gather_delta == 0
@@ -1348,6 +1362,7 @@ def _run_result_section(simulator):
             "four_return_combinations": four_return_combinations,
             "implicit_gather_delta": implicit_gather_delta,
             "explicit_gather_delta": explicit_gather_delta,
+            "implicit_gather_deltas": implicit_gather_deltas,
             "return_combinations": return_combinations,
         }
         return passed, metrics

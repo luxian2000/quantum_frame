@@ -211,6 +211,7 @@ def test_api_probe_sections_are_collective_safe(world_size, tmp_path):
     assert result_metrics["four_return_combinations"]
     assert result_metrics["implicit_gather_delta"] == 0
     assert result_metrics["explicit_gather_delta"] > 0
+    assert result_metrics["implicit_gather_deltas"] == [0, 0, 0, 0]
     assert len(result_metrics["return_combinations"]) == 4
     assert {
         (
@@ -221,11 +222,13 @@ def test_api_probe_sections_are_collective_safe(world_size, tmp_path):
             combination["local_probabilities_present"],
             combination["state_materialized"],
             combination["probabilities_materialized"],
+            combination["implicit_gather_delta"],
+            combination["explicit_gather_delta"],
         )
         for combination in result_metrics["return_combinations"]
     } == {
-        (False, False): (False, False, False, False),
-        (False, True): (False, True, False, True),
-        (True, False): (True, False, True, False),
-        (True, True): (True, True, True, True),
+        (False, False): (False, False, False, False, 0, 0),
+        (False, True): (False, True, False, True, 0, 1),
+        (True, False): (True, False, True, False, 0, 1),
+        (True, True): (True, True, True, True, 0, 2),
     }
