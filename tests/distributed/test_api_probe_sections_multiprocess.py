@@ -558,6 +558,7 @@ def test_api_probe_sections_are_collective_safe(world_size, tmp_path):
     contract_metrics = root["sections"]["contract"]["metrics"]
     assert contract_metrics["all_ranks_participated"]
     assert contract_metrics["case_statuses"] == {
+        "dual_root_initial_values": "EXPECTED_ERROR",
         "inconsistent_rank_input_modes": "EXPECTED_ERROR",
         "invalid_explicit_layout": "EXPECTED_ERROR",
         "invalid_root_density_shape": "EXPECTED_ERROR",
@@ -567,10 +568,12 @@ def test_api_probe_sections_are_collective_safe(world_size, tmp_path):
         "mid_reset": "EXPECTED_ERROR",
         "mid_while": "EXPECTED_ERROR",
         "trainable_custom_unitary": "UNSUPPORTED_AS_DESIGNED",
+        "trainable_dist_state": "UNSUPPORTED_AS_DESIGNED",
         "trainable_numeric_gate": "UNSUPPORTED_AS_DESIGNED",
         "trainable_root_density": "UNSUPPORTED_AS_DESIGNED",
         "trainable_root_state": "UNSUPPORTED_AS_DESIGNED",
     }
+    assert len(contract_metrics["case_evidence"]) == 14
     assert all(
         evidence["matched_rank_count"] == world_size
         and evidence["participating_rank_count"] == world_size

@@ -864,7 +864,7 @@ NumPy 不参与被测的分布式状态演化，也不是模拟 fallback。
 | `measure` | 全寄存器/子集 shots、单 shot collapse 和坍缩后 `DistState` |
 | `result` | `return_state`/`return_probabilities` 四种组合，以及只在显式调用时发生的 root gather |
 | `communication` | 局部门零 P2P、分布式轴门实际 P2P、peer 覆盖及实部/虚部成对 tag |
-| `contract` | 12 个不支持或非法调用在所有 rank 上得到完全相同的类型和精确错误文本 |
+| `contract` | 14 个不支持或非法调用在所有 rank 上得到完全相同的类型和精确错误文本 |
 
 `contract` 包含训练输入。首期只支持前向；状态、密度矩阵或门参数带
 `requires_grad=True` 时必须在所有 rank 精确报错：
@@ -872,6 +872,16 @@ NumPy 不参与被测的分布式状态演化，也不是模拟 fallback。
 ```text
 DistSimulator 首期仅支持前向模拟，不支持自动微分
 ```
+
+14 个 case 分为：
+
+- `EXPECTED_ERROR`：`invalid_explicit_layout`、
+  `invalid_root_vector_shape`、`invalid_root_density_shape`、
+  `dual_root_initial_values`、`inconsistent_rank_input_modes`、
+  `mid_measure`、`mid_reset`、`mid_if`、`mid_while`；
+- `UNSUPPORTED_AS_DESIGNED`：`trainable_root_state`、
+  `trainable_root_density`、`trainable_dist_state`、
+  `trainable_numeric_gate`、`trainable_custom_unitary`。
 
 ### 17.2 读取验收 JSON
 
@@ -889,6 +899,13 @@ DistSimulator 首期仅支持前向模拟，不支持自动微分
 | `sections.contract.metrics.case_statuses` | 每个错误契约 case 的状态映射；预期拒绝项为 `EXPECTED_ERROR` 或 `UNSUPPORTED_AS_DESIGNED` |
 | `sections.contract.metrics.case_evidence[*].status` | 对应 case 的状态及错误类型、精确文本和跨 rank 摘要证据 |
 | `failed_invariants` | 必须为空列表；列出任何未通过的 section 名称 |
+
+每条 `case_evidence` 包含 `name`、`status`、`expected_type`、
+`expected_message`、`actual_type`、`actual_message`、`exact_type`、
+`exact_message`、`message_digest`、`message_digest_agreement`、
+`participating_rank_count` 和 `matched_rank_count`。验收时两个 rank
+计数字段必须等于 `world_size`，两个 `exact_*` 和
+`message_digest_agreement` 必须为 `true`。
 
 主要数值指标这样解释：
 

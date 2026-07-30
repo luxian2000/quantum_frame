@@ -1569,6 +1569,12 @@ def _run_contract_section(simulator):
     midcircuit_match = (
         "分布式首期不支持中途测量、reset 或经典控制流"
     )
+    trainable_dist_state = simulator.run(
+        empty,
+        layout=identity_layout,
+        return_probabilities=False,
+    ).state
+    trainable_dist_state.local_data.requires_grad_(True)
 
     def root_value(value):
         return value if backend.rank == 0 else None
@@ -1614,6 +1620,26 @@ def _run_contract_section(simulator):
                 "initial_density_matrix 形状必须是 "
                 f"({dimension}, {dimension})"
             ),
+            ValueError,
+        ),
+        (
+            "dual_root_initial_values",
+            "EXPECTED_ERROR",
+            lambda: simulator.run(
+                empty,
+                initial_state=root_value(
+                    np.eye(
+                        1,
+                        dimension,
+                        dtype=np.complex64,
+                    ).reshape(-1)
+                ),
+                initial_density_matrix=root_value(
+                    np.eye(dimension, dtype=np.complex64)
+                ),
+                layout=identity_layout,
+            ),
+            "initial_state 与 initial_density_matrix 不能同时提供",
             ValueError,
         ),
         (
@@ -1718,6 +1744,17 @@ def _run_contract_section(simulator):
                         requires_grad=True,
                     )
                 ),
+                layout=identity_layout,
+            ),
+            AUTOGRAD_ERROR,
+            ValueError,
+        ),
+        (
+            "trainable_dist_state",
+            "UNSUPPORTED_AS_DESIGNED",
+            lambda: simulator.run(
+                empty,
+                initial_state=trainable_dist_state,
                 layout=identity_layout,
             ),
             AUTOGRAD_ERROR,

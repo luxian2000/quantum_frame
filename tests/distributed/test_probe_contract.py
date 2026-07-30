@@ -107,6 +107,8 @@ def test_full_api_probe_has_sectioned_strict_contract():
         "paired_transport_tags",
         "UNSUPPORTED_AS_DESIGNED",
         "EXPECTED_ERROR",
+        "dual_root_initial_values",
+        "trainable_dist_state",
     ):
         assert token in source
     assert '"local_gate": True' not in source
@@ -159,6 +161,7 @@ def test_manual_documents_full_npu_api_acceptance_contract():
         "`local_tensor_sizes`",
         "`fallback_to_cpu=False`",
         "DistSimulator 首期仅支持前向模拟，不支持自动微分",
+        "14 个不支持或非法调用",
         "Gloo",
         "不能作为 NPU 验收",
     ):
