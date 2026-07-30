@@ -255,6 +255,8 @@ git commit -m "feat(distributed): make sampling deterministic"
 **Interfaces:**
 - Consumes: `_Communicator.exchange(tensor, *, peer, tag)` and `_GatePlan.partner_masks`.
 - Produces: internal `_Communicator.exchange_into(tensor, receive, *, peer, tag) -> torch.Tensor` and `_ExchangeBufferPool.acquire(shape, dtype, device, peer) -> torch.Tensor`.
+- Produces: benchmark CLI `distributed_communication_benchmark.py --mode {baseline,optimized} --n-qubits INT --depth INT --warmups INT --runs INT --output-json PATH`.
+- Produces: rank-0 JSON with `mode`, `world_size`, `n_qubits`, `depth`, `warmup_runs`, `measured_runs`, `wall_time_samples_ms`, `peak_memory_bytes_per_rank`, `exchange_count_per_rank`, `allocated_receive_buffers_per_rank`, `numerical_digest`, and `fallback_to_cpu`.
 
 - [ ] **Step 1: Add allocation and equivalence tests**
 
@@ -474,7 +476,7 @@ for mode in single_npu replicated sharded; do
       n_qubits=${state_spec##*:}
       for depth in 10 50; do
         for gather_mode in none state probabilities; do
-          PYTHONPATH=.:${PYTHONPATH} torchrun \
+          PYTHONPATH=.:${PYTHONPATH:-} torchrun \
             --nproc-per-node="$world_size" \
             scripts/npu/distributed_mode_benchmark.py \
             --mode "$mode" --state-kind "$state_kind" \
@@ -658,6 +660,8 @@ git commit -m "feat(distributed): validate multi-node topology"
 **Interfaces:**
 - Consumes: `DistState`, `_ShardSpec`, `_Layout.digest()`, and communicator collectives.
 - Produces: internal `_save_checkpoint(state, directory, *, step) -> pathlib.Path`, `_load_checkpoint(directory, *, backend, expected_layout) -> DistState`, and `_synchronize_failure(local_error, *, communicator, phase) -> None`.
+- Produces: recovery CLI `distributed_recovery_probe.py --mode {save,resume} --checkpoint-dir PATH`.
+- Produces: save JSON with `mode="save"`, manifest/shard digests, world size and `fallback_to_cpu`; resume JSON additionally contains `passed` and `uninterrupted_evolution_error`.
 
 - [ ] **Step 1: Write failure-first tests**
 
@@ -741,6 +745,8 @@ git commit -m "feat(distributed): add checkpoint and failure protocols"
 **Interfaces:**
 - Consumes: current exact forward-only rejection, parameter-shift oracle from Task 2, and PyTorch/torch_npu backward behavior.
 - Produces: a signed pass/fail evidence matrix and, only on pass, a separate implementation plan; it does not modify `DistSimulator.run`.
+- Produces: probe CLI `distributed_backward_kernel_probe.py --iterations INT`; the gate commands use `--iterations 100`.
+- Produces: rank-0 JSON containing per-primitive forward/backward evidence, per-rank retained-memory samples/growth, `memory_gate_passed`, `failed_primitives`, and `gate_status`.
 
 - [ ] **Step 1: Keep the current rejection as a regression gate**
 
@@ -750,9 +756,9 @@ Run:
 
 Expected: all trainable inputs retain the exact forward-only error.
 
-- [ ] **Step 2: Probe NPU backward primitives outside DistSimulator**
+- [ ] **Step 2: Write backward-primitive gate tests**
 
-Test complex64 real/imag transport, local matrix application, reshape,
+Write cases for complex64 real/imag transport, local matrix application, reshape,
 transpose, conjugation, complex construction, all-reduce, P2P send/receive,
 and every density reducer operation under backward. Compare gradients with
 float64 CPU finite differences and Task 2 parameter-shift at `atol=1e-4`.
@@ -764,6 +770,8 @@ schema are absent.
 
 - [ ] **Step 3: Implement and validate the evidence schema**
 
+Implement the Step 2 primitive operations outside `DistSimulator` and their
+CPU finite-difference/parameter-shift comparisons.
 The probe must emit per-primitive `forward_passed`, `backward_passed`,
 `finite_gradients`, `gradient_digest`, `gradient_error`, and
 `retained_memory_growth`; the top level must include `world_size`,
@@ -774,29 +782,41 @@ Run: `PYTHONPATH=. pytest tests/distributed/test_native_autograd_gate.py -q`
 Expected: PASS for schema construction, exact blocked/pass decision logic, and
 CPU reference calculations; this does not pass the NPU gate.
 
-- [ ] **Step 4: Require rank-synchronous backward evidence**
+- [ ] **Step 4: Implement and test graph lifetime and memory**
+
+Run 100 forward/backward iterations for vector and density cases. Synchronize
+the allocator before sampling retained memory at iterations 20 and 100.
+Compute
+`retained_memory_growth = (bytes_at_100 - bytes_at_20) / bytes_at_20` and set
+`memory_gate_passed=true` only when every rank reports growth at most `0.05`.
+Include `iterations=100`, both retained-memory samples,
+`retained_memory_growth`, and `memory_gate_passed` in the rank evidence.
+
+Run: `PYTHONPATH=. pytest tests/distributed/test_native_autograd_gate.py -q`
+
+Expected: PASS for the 100-iteration schedule, growth calculation, 5% boundary
+cases and the rule that `memory_gate_passed=false` forces
+`gate_status=BLOCKED`.
+
+- [ ] **Step 5: Collect rank-synchronous NPU backward and memory evidence**
 
 For world size 2 and 4, require every primitive to report
 `forward_passed=true`, `backward_passed=true`, finite gradients,
-rank-consistent SHA-256 gradient digests, and no CPU fallback. Any unsupported
-primitive keeps native autograd blocked.
+rank-consistent SHA-256 gradient digests, no CPU fallback, and a passing
+100-iteration memory gate. Any unsupported primitive or failed memory gate
+keeps native autograd blocked.
 
 ```bash
 PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=2 \
-  scripts/npu/distributed_backward_kernel_probe.py
+  scripts/npu/distributed_backward_kernel_probe.py --iterations 100
 PYTHONPATH=.:${PYTHONPATH} torchrun --nproc-per-node=4 \
-  scripts/npu/distributed_backward_kernel_probe.py
+  scripts/npu/distributed_backward_kernel_probe.py --iterations 100
 ```
 
 Expected: each command emits one rank-0 JSON. `gate_status=PASS` is permitted
-only when every primitive passes on both world sizes; otherwise the report is
-`gate_status=BLOCKED` with exact failing primitives and errors.
-
-- [ ] **Step 5: Test graph lifetime and memory**
-
-Run 100 forward/backward iterations for vector and density cases. Report peak
-memory per rank and assert iteration 100 retained memory is no more than 5%
-above iteration 20 after allocator synchronization.
+only when every primitive passes and `memory_gate_passed=true` on both world
+sizes; otherwise the report is `gate_status=BLOCKED` with exact failing
+primitives, errors, retained-memory samples and growth ratios.
 
 - [ ] **Step 6: Decide the gate**
 
