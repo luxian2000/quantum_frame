@@ -250,25 +250,82 @@ class DistSimulator:
             layout,
         )
         tensors = None
+        failure_code = 0
+        failure_message = b""
         if self._backend.rank == 0:
-            array = self._as_numpy(value).astype(np.complex64, copy=False)
-            expected = spec.global_shape
-            if kind == "vector":
-                if array.size != expected[0]:
-                    raise ValueError(
-                        f"initial_state 必须包含 {expected[0]} 个振幅"
-                    )
-                array = array.reshape(expected)
-            elif tuple(array.shape) != expected:
-                raise ValueError(
-                    f"initial_density_matrix 形状必须是 {expected}"
+            try:
+                array = self._as_numpy(value).astype(
+                    np.complex64,
+                    copy=False,
                 )
-            storage = self._storage_order(array, layout, kind=kind)
-            full = self._backend.cast(storage)
-            tensors = [
-                part.contiguous()
-                for part in torch.split(full, spec.local_shape[0], dim=0)
-            ]
+                expected = spec.global_shape
+                if kind == "vector" and array.size != expected[0]:
+                    failure_code = 1
+                elif kind == "matrix" and tuple(array.shape) != expected:
+                    failure_code = 2
+                else:
+                    array = array.reshape(expected)
+                    storage = self._storage_order(
+                        array,
+                        layout,
+                        kind=kind,
+                    )
+                    full = self._backend.cast(storage)
+                    tensors = [
+                        part.contiguous()
+                        for part in torch.split(
+                            full,
+                            spec.local_shape[0],
+                            dim=0,
+                        )
+                    ]
+            except Exception as error:  # noqa: BLE001
+                failure_code = 3
+                failure_message = (
+                    f"{type(error).__name__}: {error}".encode("utf-8")
+                )
+
+        status = torch.tensor(
+            [failure_code, len(failure_message)],
+            dtype=torch.long,
+            device=self._backend._device,
+        )
+        status = self._backend.communicator.broadcast(status, root=0)
+        failure_code, message_size = (
+            int(item)
+            for item in status.detach().cpu().tolist()
+        )
+        if failure_code == 1:
+            raise ValueError(
+                f"initial_state 必须包含 {spec.global_shape[0]} 个振幅"
+            )
+        if failure_code == 2:
+            raise ValueError(
+                "initial_density_matrix 形状必须是 "
+                f"{spec.global_shape}"
+            )
+        if failure_code == 3:
+            message_tensor = (
+                torch.tensor(
+                    list(failure_message),
+                    dtype=torch.uint8,
+                    device=self._backend._device,
+                )
+                if self._backend.rank == 0
+                else torch.empty(
+                    message_size,
+                    dtype=torch.uint8,
+                    device=self._backend._device,
+                )
+            )
+            message_tensor = self._backend.communicator.broadcast(
+                message_tensor,
+                root=0,
+            )
+            message = bytes(
+                message_tensor.detach().cpu().tolist()
+            ).decode("utf-8", errors="replace")
+            raise RuntimeError(f"rank 0 初态准备失败: {message}")
         local = self._backend.communicator.scatter_from_root(
             tensors,
             root=0,

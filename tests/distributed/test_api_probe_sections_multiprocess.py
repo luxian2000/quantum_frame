@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import time
 
 import pytest
 import torch
@@ -19,6 +20,62 @@ def _free_port():
 
 def _raise_root_evaluation_error():
     raise RuntimeError("post-collective root evaluation failed")
+
+
+def _invalid_root_shape_worker(
+    rank,
+    world_size,
+    port,
+    output_dir,
+    initial_kind,
+):
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(port)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ["RANK"] = str(rank)
+    os.environ["LOCAL_RANK"] = str(rank)
+
+    simulator = DistSimulator.from_env(
+        fallback_to_cpu=True,
+        process_group_backend="gloo",
+    )
+    error = None
+    root_value = None
+    if rank == 0:
+        root_value = (
+            probe.np.zeros(3, dtype=probe.np.complex64)
+            if initial_kind == "vector"
+            else probe.np.zeros((3, 3), dtype=probe.np.complex64)
+        )
+    try:
+        simulator.run(
+            probe.Circuit(n_qubits=2),
+            **{
+                (
+                    "initial_state"
+                    if initial_kind == "vector"
+                    else "initial_density_matrix"
+                ): root_value,
+            },
+        )
+    except Exception as caught:  # noqa: BLE001
+        error = {
+            "type": type(caught).__name__,
+            "message": str(caught),
+        }
+
+    # A contract probe must be able to continue with a collective after every
+    # expected-error case.  If only root observes the validation failure while
+    # peers enter scatter, this barrier exposes the collective-order deadlock.
+    torch.distributed.barrier()
+    Path(
+        output_dir,
+        f"invalid-{initial_kind}-shape-rank-{rank}.json",
+    ).write_text(
+        json.dumps(error, sort_keys=True),
+        encoding="utf-8",
+    )
+    torch.distributed.destroy_process_group()
 
 
 def _section_worker(rank, world_size, port, output_dir):
@@ -59,6 +116,57 @@ def _section_worker(rank, world_size, port, output_dir):
         )
     finally:
         torch.distributed.destroy_process_group()
+
+
+@pytest.mark.parametrize(
+    ("initial_kind", "expected_message"),
+    [
+        ("vector", "initial_state 必须包含 4 个振幅"),
+        ("matrix", "initial_density_matrix 形状必须是 (4, 4)"),
+    ],
+)
+def test_invalid_root_initial_shape_is_collective_safe(
+    tmp_path,
+    initial_kind,
+    expected_message,
+):
+    context = mp.spawn(
+        _invalid_root_shape_worker,
+        args=(2, _free_port(), str(tmp_path), initial_kind),
+        nprocs=2,
+        join=False,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not context.join(
+            timeout=max(0.0, deadline - time.monotonic())
+        ):
+            assert time.monotonic() < deadline, (
+                "invalid root initial shape split ranks across "
+                "scatter/barrier"
+            )
+    finally:
+        for process in context.processes:
+            if process.is_alive():
+                process.terminate()
+        for process in context.processes:
+            process.join(timeout=5)
+
+    assert all(not process.is_alive() for process in context.processes)
+    assert [process.exitcode for process in context.processes] == [0, 0]
+    errors = [
+        json.loads(
+            (
+                tmp_path
+                / f"invalid-{initial_kind}-shape-rank-{rank}.json"
+            ).read_text()
+        )
+        for rank in range(2)
+    ]
+    assert errors == [
+        {"type": "ValueError", "message": expected_message},
+        {"type": "ValueError", "message": expected_message},
+    ]
 
 
 @pytest.mark.parametrize("world_size", [2, 4])
