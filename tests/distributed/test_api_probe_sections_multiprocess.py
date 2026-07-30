@@ -3,12 +3,14 @@ import os
 from pathlib import Path
 import socket
 import time
+from dataclasses import replace
 
 import pytest
 import torch
 import torch.multiprocessing as mp
 
-from aicir.distributed import DistSimulator
+from aicir.distributed import DistSimulator, DistState
+from aicir.distributed.layout import _Layout, _ShardSpec
 from scripts.npu import distributed_api_probe as probe
 
 
@@ -65,7 +67,7 @@ def _join_spawn_context(context, *, timeout=20):
             process.join(timeout=5)
 
     assert all(not process.is_alive() for process in context.processes)
-    assert [process.exitcode for process in context.processes] == [0, 0]
+    assert all(process.exitcode == 0 for process in context.processes)
 
 
 def _invalid_root_shape_worker(
@@ -213,6 +215,91 @@ def _dual_root_initial_values_worker(
     torch.distributed.destroy_process_group()
 
 
+def _invalid_dist_state_worker(
+    rank,
+    world_size,
+    port,
+    output_dir,
+    scenario,
+):
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(port)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ["RANK"] = str(rank)
+    os.environ["LOCAL_RANK"] = str(rank)
+
+    simulator = DistSimulator.from_env(
+        fallback_to_cpu=True,
+        process_group_backend="gloo",
+    )
+    layout = _Layout.explicit(
+        range(2),
+        n_qubits=2,
+        distributed_axes=1,
+    )
+
+    def state(kind):
+        spec = _ShardSpec.build(
+            n_qubits=2,
+            world_size=world_size,
+            rank=rank,
+            kind=kind,
+            layout=layout,
+        )
+        return DistState.from_local(
+            torch.zeros(spec.local_shape, dtype=torch.complex64),
+            spec=spec,
+            backend=simulator.backend,
+        )
+
+    vector_state = state("vector")
+    density_state = state("matrix")
+    arguments = {"initial_state": vector_state}
+    if scenario == "slot_mismatch" and rank == 1:
+        arguments = {"initial_density_matrix": density_state}
+    elif scenario == "kind_mismatch" and rank == 1:
+        arguments = {"initial_state": density_state}
+    elif scenario == "backend_mismatch" and rank == 0:
+        vector_state._backend = object()
+    elif scenario == "layout_mismatch" and rank == 0:
+        other_layout = _Layout.explicit(
+            (1, 0),
+            n_qubits=2,
+            distributed_axes=1,
+        )
+        vector_state._spec = replace(
+            vector_state.spec,
+            layout=other_layout,
+        )
+    elif scenario == "spec_mismatch" and rank == 0:
+        vector_state._spec = replace(vector_state.spec, rank=1)
+    elif scenario == "local_invalid" and rank == 0:
+        vector_state._local_data = torch.zeros(
+            (1, 1),
+            dtype=torch.complex64,
+        )
+
+    error = None
+    try:
+        simulator.run(
+            probe.Circuit(n_qubits=2),
+            layout=tuple(range(2)),
+            **arguments,
+        )
+    except Exception as caught:  # noqa: BLE001
+        error = {
+            "type": type(caught).__name__,
+            "message": str(caught),
+        }
+
+    torch.distributed.barrier()
+    Path(output_dir, f"{scenario}-rank-{rank}.json").write_text(
+        json.dumps(error, sort_keys=True),
+        encoding="utf-8",
+    )
+    torch.distributed.destroy_process_group()
+
+
 def _section_worker(rank, world_size, port, output_dir):
     os.environ["MASTER_ADDR"] = "127.0.0.1"
     os.environ["MASTER_PORT"] = str(port)
@@ -351,14 +438,68 @@ def test_dual_root_initial_values_are_collective_safe(tmp_path):
     assert errors == [expected, expected]
 
 
+@pytest.mark.parametrize(
+    ("scenario", "expected_message"),
+    [
+        (
+            "slot_mismatch",
+            "初态必须由所有 rank 提供匹配的 DistState，或仅由 rank 0 "
+            "提供完整 statevector/density matrix",
+        ),
+        (
+            "kind_mismatch",
+            "初态类型应为 'vector'，实际为 'matrix'",
+        ),
+        (
+            "backend_mismatch",
+            "DistState 必须属于当前 DistSimulator.backend",
+        ),
+        (
+            "layout_mismatch",
+            "DistState 的 n_qubits/layout 与线路不一致",
+        ),
+        (
+            "spec_mismatch",
+            "spec 的 rank/world_size 与 backend 不一致",
+        ),
+        (
+            "local_invalid",
+            "local_data shape=(1, 1) 与 local_shape=(2, 1) 不一致",
+        ),
+    ],
+)
+def test_invalid_dist_state_is_collective_safe(
+    tmp_path,
+    scenario,
+    expected_message,
+):
+    context = mp.spawn(
+        _invalid_dist_state_worker,
+        args=(2, _free_port(), str(tmp_path), scenario),
+        nprocs=2,
+        join=False,
+    )
+    _join_spawn_context(context)
+
+    errors = [
+        json.loads(
+            (tmp_path / f"{scenario}-rank-{rank}.json").read_text()
+        )
+        for rank in range(2)
+    ]
+    expected = {"type": "ValueError", "message": expected_message}
+    assert errors == [expected, expected]
+
+
 @pytest.mark.parametrize("world_size", [2, 4])
 def test_api_probe_sections_are_collective_safe(world_size, tmp_path):
-    mp.spawn(
+    context = mp.spawn(
         _section_worker,
         args=(world_size, _free_port(), str(tmp_path)),
         nprocs=world_size,
-        join=True,
+        join=False,
     )
+    _join_spawn_context(context)
 
     payloads = [
         json.loads((tmp_path / f"rank-{rank}.json").read_text())

@@ -29,6 +29,7 @@ from .state import DistState
 _ROOT_STATE_ERROR_MAX_BYTES = 4096
 _ROOT_STATE_ERROR_TRUNCATION_SUFFIX = b"... <truncated>"
 _ROOT_STATE_ERROR_PROTOCOL_MESSAGE = "rank 0 初态准备失败同步协议无效"
+_DIST_STATE_ERROR_PROTOCOL_MESSAGE = "DistState 本地校验同步协议无效"
 
 
 class DistSimulator:
@@ -170,7 +171,7 @@ class DistSimulator:
 
     def _initial_modes(self, initial_state, initial_density_matrix):
         if initial_state is not None and initial_density_matrix is not None:
-            local_mode = 4
+            local_mode = 5
         elif isinstance(
             (
                 initial_state
@@ -179,7 +180,7 @@ class DistSimulator:
             ),
             DistState,
         ):
-            local_mode = 3
+            local_mode = 3 if initial_state is not None else 4
         elif initial_state is not None:
             local_mode = 1
         elif initial_density_matrix is not None:
@@ -195,7 +196,7 @@ class DistSimulator:
             int(item.detach().cpu().item())
             for item in self._backend.communicator.all_gather(mode_tensor)
         )
-        if any(mode == 4 for mode in modes):
+        if any(mode == 5 for mode in modes):
             raise ValueError(
                 "initial_state 与 initial_density_matrix 不能同时提供"
             )
@@ -209,15 +210,129 @@ class DistSimulator:
         layout: _Layout,
         expected_kind: str | None,
     ) -> DistState:
-        if state.backend is not self._backend:
-            raise ValueError("DistState 必须属于当前 DistSimulator.backend")
-        if state.n_qubits != n_qubits or state.layout != layout:
-            raise ValueError("DistState 的 n_qubits/layout 与线路不一致")
-        if expected_kind is not None and state.kind != expected_kind:
-            raise ValueError(
-                f"初态类型应为 {expected_kind!r}，实际为 {state.kind!r}"
+        local_message = None
+        try:
+            if state.backend is not self._backend:
+                local_message = (
+                    "DistState 必须属于当前 DistSimulator.backend"
+                )
+            elif state.n_qubits != n_qubits or state.layout != layout:
+                local_message = (
+                    "DistState 的 n_qubits/layout 与线路不一致"
+                )
+            elif (
+                state.spec.rank != self._backend.rank
+                or state.spec.world_size != self._backend.world_size
+            ):
+                local_message = (
+                    "spec 的 rank/world_size 与 backend 不一致"
+                )
+            elif expected_kind is not None and state.kind != expected_kind:
+                local_message = (
+                    f"初态类型应为 {expected_kind!r}，"
+                    f"实际为 {state.kind!r}"
+                )
+            else:
+                expected_spec = _ShardSpec.build(
+                    n_qubits,
+                    self._backend.world_size,
+                    self._backend.rank,
+                    state.kind,
+                    layout,
+                )
+                if state.spec != expected_spec:
+                    local_message = (
+                        "DistState.spec 与线路/backend 不一致"
+                    )
+                elif tuple(
+                    int(axis) for axis in state.local_data.shape
+                ) != state.local_shape:
+                    local_message = (
+                        "local_data shape="
+                        f"{tuple(state.local_data.shape)} 与 "
+                        f"local_shape={state.local_shape} 不一致"
+                    )
+                elif state.local_data.dtype != torch.complex64:
+                    local_message = (
+                        "DistState 首期仅支持 torch.complex64"
+                    )
+        except Exception as error:  # noqa: BLE001
+            try:
+                error_text = str(error)
+            except Exception:  # noqa: BLE001
+                error_text = "<unprintable exception>"
+            local_message = (
+                "DistState 本地校验失败: "
+                f"{type(error).__name__}: {error_text}"
             )
-        return state
+
+        failure = torch.tensor(
+            [int(local_message is not None)],
+            dtype=torch.long,
+            device=self._backend._device,
+        )
+        failures = self._backend.communicator.all_gather(failure)
+        source = next(
+            (
+                rank
+                for rank, item in enumerate(failures)
+                if int(item.detach().cpu().item()) != 0
+            ),
+            None,
+        )
+        if source is None:
+            return state
+
+        encoded = (
+            local_message.encode("utf-8", errors="replace")
+            if self._backend.rank == source
+            else b""
+        )
+        if len(encoded) > _ROOT_STATE_ERROR_MAX_BYTES:
+            keep = (
+                _ROOT_STATE_ERROR_MAX_BYTES
+                - len(_ROOT_STATE_ERROR_TRUNCATION_SUFFIX)
+            )
+            encoded = (
+                encoded[:keep]
+                .decode("utf-8", errors="ignore")
+                .encode("utf-8")
+                + _ROOT_STATE_ERROR_TRUNCATION_SUFFIX
+            )
+        size = torch.tensor(
+            [len(encoded)],
+            dtype=torch.long,
+            device=self._backend._device,
+        )
+        size = self._backend.communicator.broadcast(size, root=source)
+        size_values = size.detach().cpu().reshape(-1).tolist()
+        if (
+            len(size_values) != 1
+            or not 0 < int(size_values[0]) <= _ROOT_STATE_ERROR_MAX_BYTES
+        ):
+            raise RuntimeError(_DIST_STATE_ERROR_PROTOCOL_MESSAGE)
+        message_size = int(size_values[0])
+        message_tensor = (
+            torch.tensor(
+                list(encoded),
+                dtype=torch.uint8,
+                device=self._backend._device,
+            )
+            if self._backend.rank == source
+            else torch.empty(
+                message_size,
+                dtype=torch.uint8,
+                device=self._backend._device,
+            )
+        )
+        message_tensor = self._backend.communicator.broadcast(
+            message_tensor,
+            root=source,
+        )
+        message = bytes(
+            message_tensor.detach().cpu().tolist()
+        ).decode("utf-8", errors="replace")
+        raise ValueError(message)
 
     def _as_numpy(self, value):
         if isinstance(value, State):
@@ -387,16 +502,14 @@ class DistSimulator:
                 backend=self._backend,
                 layout=layout,
             )
-        if all(mode == 3 for mode in modes):
+        if all(mode == 3 for mode in modes) or all(
+            mode == 4 for mode in modes
+        ):
+            expected_kind = "vector" if modes[0] == 3 else "matrix"
             value = (
                 initial_state
-                if initial_state is not None
+                if expected_kind == "vector"
                 else initial_density_matrix
-            )
-            expected_kind = (
-                "vector"
-                if initial_state is not None
-                else "matrix"
             )
             return self._validate_dist_state(
                 value,
