@@ -45,6 +45,8 @@ def _section_worker(rank, world_size, port, output_dir):
                 "continuation",
                 "noise",
                 "observable",
+                "measure",
+                "result",
             )
         }
         payload = {
@@ -184,3 +186,46 @@ def test_api_probe_sections_are_collective_safe(world_size, tmp_path):
     assert observable_metrics["pauli_error"] <= probe.REDUCTION_ATOL
     assert observable_metrics["hamiltonian_error"] <= probe.REDUCTION_ATOL
     assert observable_metrics["local_dense_error"] <= probe.REDUCTION_ATOL
+
+    measure_metrics = root["sections"]["measure"]["metrics"]
+    assert measure_metrics["logical_to_storage"] != list(
+        range(world_size.bit_length())
+    )
+    assert measure_metrics["measure_qubits"] == [0]
+    assert measure_metrics["full_register_shots"] == 128
+    assert measure_metrics["subset_shots"] == 128
+    assert measure_metrics["collapse_shots"] == 1
+    assert all(
+        len(key) == world_size.bit_length()
+        for key in measure_metrics["full_register_support"]
+    )
+    assert all(
+        len(key) == 1
+        for key in measure_metrics["subset_support"]
+    )
+    assert measure_metrics["collapsed_support_error"] <= probe.STATE_ATOL
+    assert measure_metrics["collapsed_norm_error"] <= probe.REDUCTION_ATOL
+    assert measure_metrics["collapse_count_state_consistent"]
+
+    result_metrics = root["sections"]["result"]["metrics"]
+    assert result_metrics["four_return_combinations"]
+    assert result_metrics["implicit_gather_delta"] == 0
+    assert result_metrics["explicit_gather_delta"] > 0
+    assert len(result_metrics["return_combinations"]) == 4
+    assert {
+        (
+            combination["return_state"],
+            combination["return_probabilities"],
+        ): (
+            combination["state_present"],
+            combination["local_probabilities_present"],
+            combination["state_materialized"],
+            combination["probabilities_materialized"],
+        )
+        for combination in result_metrics["return_combinations"]
+    } == {
+        (False, False): (False, False, False, False),
+        (False, True): (False, True, False, True),
+        (True, False): (True, False, True, False),
+        (True, True): (True, True, True, True),
+    }

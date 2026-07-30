@@ -95,6 +95,12 @@ def test_full_api_probe_has_sectioned_strict_contract():
         "continuation_vector_error",
         "continuation_density_error",
         "local_tensor_sizes",
+        "collapse=True",
+        "measure_qubits",
+        "collapsed_support_error",
+        "return_state",
+        "return_probabilities",
+        "four_return_combinations",
     ):
         assert token in source
     assert '"communicating_gate": True' not in source

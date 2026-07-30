@@ -1098,6 +1098,263 @@ def _run_observable_section(simulator):
     return _evaluate_root_section(backend, evaluate)
 
 
+def _ghz_probe_circuit(n_qubits):
+    gates = [hadamard(0)]
+    gates.extend(
+        cx(target_qubit=target, control_qubits=(0,))
+        for target in range(1, n_qubits)
+    )
+    return Circuit(*gates, n_qubits=n_qubits)
+
+
+def _nonidentity_probe_layout(n_qubits):
+    return tuple(list(range(1, n_qubits)) + [0])
+
+
+def _run_measure_section(simulator):
+    backend = simulator.backend
+    distributed_axes = int(math.log2(backend.world_size))
+    n_qubits = distributed_axes + 1
+    logical_to_storage = _nonidentity_probe_layout(n_qubits)
+    measure_qubits = (0,)
+    circuit = _ghz_probe_circuit(n_qubits)
+
+    full_result = simulator.run(
+        circuit,
+        shots=128,
+        seed=2718,
+        layout=logical_to_storage,
+    )
+    subset_result = simulator.run(
+        circuit,
+        shots=128,
+        measure_qubits=measure_qubits,
+        seed=3141,
+        layout=logical_to_storage,
+    )
+    collapse_result = simulator.run(
+        circuit,
+        shots=1,
+        measure_qubits=measure_qubits,
+        collapse=True,
+        seed=1618,
+        layout=logical_to_storage,
+    )
+
+    # Recompute probabilities from the returned collapsed DistState.  The
+    # collapse run's local_probabilities intentionally describe the state
+    # before sampling, so they are not valid collapse evidence.
+    collapsed_probabilities_result = simulator.run(
+        Circuit(n_qubits=n_qubits),
+        initial_state=collapse_result.state,
+        layout=logical_to_storage,
+        return_state=False,
+        return_probabilities=True,
+    )
+    collapsed_probabilities = (
+        collapsed_probabilities_result.gather_probabilities(root=0)
+    )
+
+    def evaluate():
+        full_counts = dict(full_result.counts)
+        subset_counts = dict(subset_result.counts)
+        collapse_counts = dict(collapse_result.counts)
+        expected_full_support = {
+            "0" * n_qubits,
+            "1" * n_qubits,
+        }
+        expected_subset_support = {"0", "1"}
+        measured_bit = next(iter(collapse_counts))
+        mismatched_probability = sum(
+            float(probability)
+            for index, probability in enumerate(
+                collapsed_probabilities
+            )
+            if format(index, f"0{n_qubits}b")[0] != measured_bit
+        )
+        collapsed_norm_error = float(
+            abs(np.sum(collapsed_probabilities) - 1.0)
+        )
+        collapse_count_state_consistent = (
+            len(collapse_counts) == 1
+            and sum(collapse_counts.values()) == 1
+            and mismatched_probability <= STATE_ATOL
+        )
+        full_shots = sum(full_counts.values())
+        subset_shots = sum(subset_counts.values())
+        collapse_shots = sum(collapse_counts.values())
+        passed = (
+            full_shots == 128
+            and subset_shots == 128
+            and collapse_shots == 1
+            and set(full_counts) == expected_full_support
+            and set(subset_counts) == expected_subset_support
+            and mismatched_probability <= STATE_ATOL
+            and collapsed_norm_error <= REDUCTION_ATOL
+            and collapse_count_state_consistent
+            and collapse_result.state is not None
+            and collapse_result.state.layout.logical_to_storage
+            == logical_to_storage
+        )
+        metrics = {
+            "logical_to_storage": list(logical_to_storage),
+            "measure_qubits": list(measure_qubits),
+            "full_register_shots": full_shots,
+            "subset_shots": subset_shots,
+            "collapse_shots": collapse_shots,
+            "full_register_support": sorted(full_counts),
+            "subset_support": sorted(subset_counts),
+            "collapsed_support_error": mismatched_probability,
+            "collapsed_norm_error": collapsed_norm_error,
+            "collapse_count_state_consistent": (
+                collapse_count_state_consistent
+            ),
+        }
+        return passed, metrics
+
+    return _evaluate_root_section(backend, evaluate)
+
+
+def _run_result_section(simulator):
+    backend = simulator.backend
+    distributed_axes = int(math.log2(backend.world_size))
+    n_qubits = distributed_axes + 1
+    logical_to_storage = _nonidentity_probe_layout(n_qubits)
+    circuit = _ghz_probe_circuit(n_qubits)
+    communicator = backend.communicator
+    original_gather_to_root = communicator.gather_to_root
+    gather_calls = 0
+    return_combinations = []
+    local_fields_ok = True
+
+    def counted_gather_to_root(tensor, *, root=0):
+        nonlocal gather_calls
+        gather_calls += 1
+        return original_gather_to_root(tensor, root=root)
+
+    communicator.gather_to_root = counted_gather_to_root
+    try:
+        gather_calls_before_run = gather_calls
+        implicit_result = simulator.run(
+            circuit,
+            layout=logical_to_storage,
+        )
+        implicit_gather_delta = gather_calls - gather_calls_before_run
+
+        gather_calls_before_explicit = gather_calls
+        implicit_result.state.to_numpy(root=0)
+        implicit_result.gather_probabilities(root=0)
+        explicit_gather_delta = (
+            gather_calls - gather_calls_before_explicit
+        )
+
+        for return_state in (False, True):
+            for return_probabilities in (False, True):
+                result = simulator.run(
+                    circuit,
+                    layout=logical_to_storage,
+                    return_state=return_state,
+                    return_probabilities=return_probabilities,
+                )
+                state_present = result.state is not None
+                local_probabilities_present = (
+                    result.local_probabilities is not None
+                )
+                state_array = (
+                    result.state.to_numpy(root=0)
+                    if return_state
+                    else None
+                )
+                probability_array = (
+                    result.gather_probabilities(root=0)
+                    if return_probabilities
+                    else None
+                )
+                local_fields_ok = local_fields_ok and (
+                    state_present == return_state
+                    and local_probabilities_present
+                    == return_probabilities
+                    and dict(result.expectations) == {}
+                    and result.counts is None
+                    and result.rank == backend.rank
+                    and result.world_size == backend.world_size
+                    and result.is_root == (backend.rank == 0)
+                )
+                if backend.rank == 0:
+                    return_combinations.append(
+                        {
+                            "return_state": return_state,
+                            "return_probabilities": (
+                                return_probabilities
+                            ),
+                            "state_present": state_present,
+                            "local_probabilities_present": (
+                                local_probabilities_present
+                            ),
+                            "state_materialized": (
+                                state_array is not None
+                            ),
+                            "probabilities_materialized": (
+                                probability_array is not None
+                            ),
+                        }
+                    )
+    finally:
+        communicator.gather_to_root = original_gather_to_root
+
+    field_evidence = _gather_long_evidence(
+        backend,
+        (
+            backend.rank,
+            local_fields_ok,
+        ),
+    )
+
+    def evaluate():
+        fields_ok = all(
+            rank == index and rank_fields_ok == 1
+            for index, (rank, rank_fields_ok) in enumerate(
+                field_evidence
+            )
+        )
+        expected_combinations = {
+            (False, False): (False, False, False, False),
+            (False, True): (False, True, False, True),
+            (True, False): (True, False, True, False),
+            (True, True): (True, True, True, True),
+        }
+        actual_combinations = {
+            (
+                row["return_state"],
+                row["return_probabilities"],
+            ): (
+                row["state_present"],
+                row["local_probabilities_present"],
+                row["state_materialized"],
+                row["probabilities_materialized"],
+            )
+            for row in return_combinations
+        }
+        four_return_combinations = (
+            fields_ok
+            and actual_combinations == expected_combinations
+        )
+        passed = (
+            implicit_gather_delta == 0
+            and explicit_gather_delta > 0
+            and four_return_combinations
+        )
+        metrics = {
+            "four_return_combinations": four_return_combinations,
+            "implicit_gather_delta": implicit_gather_delta,
+            "explicit_gather_delta": explicit_gather_delta,
+            "return_combinations": return_combinations,
+        }
+        return passed, metrics
+
+    return _evaluate_root_section(backend, evaluate)
+
+
 def _validate_runtime(backend):
     device = backend._device
     if backend.world_size not in {2, 4}:
@@ -1118,8 +1375,8 @@ SECTION_RUNNERS = {
     "continuation": _run_continuation_section,
     "noise": _run_noise_section,
     "observable": _run_observable_section,
-    "measure": _pending_section,
-    "result": _pending_section,
+    "measure": _run_measure_section,
+    "result": _run_result_section,
     "communication": _pending_section,
     "contract": _pending_section,
 }
