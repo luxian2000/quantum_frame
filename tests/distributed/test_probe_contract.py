@@ -134,3 +134,34 @@ def test_full_api_probe_launch_preserves_cann_pythonpath():
         line.startswith("PYTHONPATH=.:${PYTHONPATH} torchrun")
         for line in launch_lines
     )
+
+
+def test_manual_documents_full_npu_api_acceptance_contract():
+    source = MANUAL.read_text(encoding="utf-8")
+
+    for token in (
+        "完整 NPU API 验收",
+        "source /usr/local/Ascend/cann/set_env.sh",
+        "torchrun --nproc-per-node=2 scripts/npu/distributed_api_probe.py --section all",
+        "torchrun --nproc-per-node=4 scripts/npu/distributed_api_probe.py --section all",
+        "`state`",
+        "`layout`",
+        "`continuation`",
+        "`noise`",
+        "`observable`",
+        "`measure`",
+        "`result`",
+        "`communication`",
+        "`contract`",
+        "`status`",
+        "`failed_invariants`",
+        "`local_tensor_sizes`",
+        "`fallback_to_cpu=False`",
+        "NumPy",
+        "参考 oracle",
+        "不是模拟 fallback",
+        "DistSimulator 首期仅支持前向模拟，不支持自动微分",
+        "Gloo",
+        "不能作为 NPU 验收",
+    ):
+        assert token in source
