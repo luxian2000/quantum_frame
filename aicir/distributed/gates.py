@@ -263,6 +263,16 @@ class _GatePlanner:
 
         if isinstance(local_matrix, torch.Tensor) and torch.is_complex(local_matrix) and local_matrix.requires_grad:
             raise TypeError("plan_matrix 不接受 requires_grad complex matrix；请提供 _Pair(real, imag)")
+        if isinstance(local_matrix, torch.Tensor) and local_matrix.requires_grad:
+            if self._execution_context is None:
+                raise RuntimeError(
+                    "trainable distributed gate planning requires an explicit _AutogradExecutionContext"
+                )
+            local_matrix = _Pair(
+                self._wrap_trainable_tensor(local_matrix),
+                torch.zeros_like(local_matrix).detach(),
+            )
+            _autograd_wrapped = True
         if isinstance(local_matrix, _Pair) and (
             local_matrix.real.requires_grad or local_matrix.imag.requires_grad
         ):

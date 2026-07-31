@@ -198,6 +198,41 @@ def _probability_worker(rank, world_size, port, output_path):
     torch.distributed.destroy_process_group()
 
 
+def _unnormalized_probability_vjp_worker(rank, world_size, port, output_path):
+    """Check the normalization denominator adjoint for sharded state leaves."""
+
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), WORLD_SIZE=str(world_size), RANK=str(rank), LOCAL_RANK=str(rank))
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, process_group_backend="gloo")
+    n_qubits = int(np.log2(world_size)) + 1
+    layout = _Layout.explicit(tuple(range(n_qubits)), n_qubits=n_qubits, distributed_axes=int(np.log2(world_size)))
+    spec = _ShardSpec.build(n_qubits, world_size, rank, "vector", layout)
+    dimension = 1 << n_qubits
+    global_indices = np.arange(dimension, dtype=np.float64)
+    full_real = (0.2 + global_indices / 7.0).reshape(-1, 1)
+    full_imag = ((-0.3 + (global_indices % 3) / 5.0)).reshape(-1, 1)
+    weights = np.linspace(-0.7, 0.9, dimension, dtype=np.float64).reshape(-1, 1)
+    real = torch.tensor(full_real[spec.global_start : spec.global_stop], dtype=torch.float32, requires_grad=True)
+    imag = torch.tensor(full_imag[spec.global_start : spec.global_stop], dtype=torch.float32, requires_grad=True)
+    probabilities = _PairReducer(backend).probabilities(_Pair(real, imag), spec)
+    local_weights = torch.tensor(weights[spec.global_start : spec.global_stop], dtype=torch.float32)
+    (probabilities.reshape(-1, 1) * local_weights).sum().backward()
+    gathered_real = [torch.zeros_like(real.grad) for _ in range(world_size)]
+    gathered_imag = [torch.zeros_like(imag.grad) for _ in range(world_size)]
+    torch.distributed.all_gather(gathered_real, real.grad)
+    torch.distributed.all_gather(gathered_imag, imag.grad)
+    if rank == 0:
+        reference_real = torch.tensor(full_real, dtype=torch.float64, requires_grad=True)
+        reference_imag = torch.tensor(full_imag, dtype=torch.float64, requires_grad=True)
+        reference_probability = (reference_real.square() + reference_imag.square())
+        reference_probability = reference_probability / reference_probability.sum()
+        (reference_probability * torch.tensor(weights, dtype=torch.float64)).sum().backward()
+        Path(output_path).write_text(json.dumps({
+            "real_error": float(np.max(np.abs(torch.cat(gathered_real).numpy() - reference_real.grad.numpy()))),
+            "imag_error": float(np.max(np.abs(torch.cat(gathered_imag).numpy() - reference_imag.grad.numpy()))),
+        }), encoding="utf-8")
+    torch.distributed.destroy_process_group()
+
+
 def _custom_pair_reference(real, imag, *, n_qubits, axis):
     """Independent complex128 full-state oracle for the custom paired unitary."""
 
@@ -289,6 +324,15 @@ def test_cross_shard_probability_full_local_vector_jacobian_matches_parameter_sh
     output = tmp_path / f"probability-world-{world_size}.json"
     mp.spawn(_probability_worker, args=(world_size, _free_port(), str(output)), nprocs=world_size, join=True)
     assert json.loads(output.read_text(encoding="utf-8"))["max_abs_error"] <= 1e-4
+
+
+@pytest.mark.parametrize("world_size", (2, 4))
+def test_unnormalized_state_probability_vjp_matches_float64_normalization_derivative(tmp_path, world_size):
+    output = tmp_path / f"unnormalized-probability-world-{world_size}.json"
+    mp.spawn(_unnormalized_probability_vjp_worker, args=(world_size, _free_port(), str(output)), nprocs=world_size, join=True)
+    errors = json.loads(output.read_text(encoding="utf-8"))
+    assert errors["real_error"] <= 1e-4
+    assert errors["imag_error"] <= 1e-4
 
 
 @pytest.mark.parametrize("world_size", (2, 4))

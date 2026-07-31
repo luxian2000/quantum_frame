@@ -27,11 +27,12 @@ class _PairReducer:
             probabilities.sum().reshape(()),
             communicator=self._backend.communicator,
         )
-        # The collective primitive has replicated-*mean* backward semantics.
-        # Probability normalization needs the physical global sum in forward
-        # while retaining that replicated-loss adjoint convention.
-        world_size = float(self._backend.world_size)
-        total = world_size * mean_total.detach() + mean_total - mean_total.detach()
+        # The collective primitive returns a replicated mean in both forward
+        # and backward.  Probability normalization needs the physical sum;
+        # retaining this factor in the graph scales each backward seed before
+        # its mean reduction and therefore restores the global denominator
+        # derivative for sharded probability VJPs.
+        total = float(self._backend.world_size) * mean_total
         if float(total.detach().cpu()) <= 0.0:
             raise ValueError("分布式状态的全局概率和必须大于 0")
         return probabilities / total

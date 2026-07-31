@@ -374,6 +374,56 @@ def test_plan_matrix_requires_context_for_trainable_paired_real_matrix(monkeypat
         ).plan_matrix(matrix, (0,), instruction_index=0)
 
 
+def test_plan_matrix_requires_context_for_trainable_real_matrix(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    matrix = torch.eye(2, dtype=torch.float32, requires_grad=True)
+
+    with pytest.raises(RuntimeError, match="explicit _AutogradExecutionContext"):
+        _GatePlanner(
+            backend,
+            _Layout.explicit((0,), n_qubits=1, distributed_axes=0),
+            1,
+        ).plan_matrix(matrix, (0,), instruction_index=0)
+
+
+@pytest.mark.parametrize("world_size", (2, 4))
+def test_trainable_real_matrix_is_wrapped_once_and_has_global_gradient(monkeypatch, world_size):
+    class RecordingCommunicator:
+        def __init__(self, size):
+            self.world_size = size
+            self.calls = 0
+
+        def all_reduce_sum_real(self, gradient):
+            self.calls += 1
+            return gradient * self.world_size
+
+    monkeypatch.setenv("WORLD_SIZE", str(world_size))
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    backend._communicator = RecordingCommunicator(world_size)
+    n_qubits = int(np.log2(world_size))
+    layout = _Layout.explicit(tuple(range(n_qubits)), n_qubits=n_qubits, distributed_axes=n_qubits)
+    theta = torch.tensor(0.31, dtype=torch.float32, requires_grad=True)
+    matrix = theta * torch.eye(2, dtype=torch.float32)
+    plan = _GatePlanner(backend, layout, n_qubits, execution_context=_AutogradExecutionContext()).plan_matrix(
+        matrix, (0,), instruction_index=0
+    )
+
+    plan.local_matrix.real.sum().backward()
+
+    epsilon = 1e-6
+    reference = (
+        world_size * 2.0 * (0.31 + epsilon)
+        - world_size * 2.0 * (0.31 - epsilon)
+    ) / (2.0 * epsilon)
+    assert float(theta.grad) == pytest.approx(reference, abs=1e-5)
+    assert backend.communicator.calls == 1
+
+
 @pytest.mark.parametrize(
     "observable",
     (
