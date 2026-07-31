@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import itertools
 import math
+import torch
 
 from ..core.gates import (
     _apply_local_matrix_to_state,
@@ -13,8 +14,9 @@ from ..core.gates import (
     _unitary_parameter_matrix,
 )
 from ..gates import canonical_gate_name
-from ..ir import as_instruction, instruction_name, instruction_n_qubits, instruction_parameter, instruction_with_parameter
+from ..ir import as_instruction, instruction_controls, instruction_name, instruction_n_qubits, instruction_parameter, instruction_qubits, instruction_with_parameter
 from .autograd._parameters import replicated_parameter
+from .autograd._pair import _Pair
 from .state import DistState
 
 
@@ -38,6 +40,45 @@ class _GatePlan:
         return int(self.instruction_index) * 4096 + int(mask)
 
 
+def _trainable_pair_matrix(instruction, gate_type):
+    """Build parameterized matrices directly as independent real tensors."""
+
+    parameter = instruction_parameter(instruction)
+    values = tuple(parameter) if isinstance(parameter, (list, tuple)) else (parameter,)
+    if not any(isinstance(value, torch.Tensor) and value.requires_grad for value in values):
+        return None
+    ref = next(value for value in values if isinstance(value, torch.Tensor))
+    zero, one = torch.zeros((), dtype=torch.float32, device=ref.device), torch.ones((), dtype=torch.float32, device=ref.device)
+    def mat(real, imag): return _Pair(torch.stack([torch.stack(row) for row in real]), torch.stack([torch.stack(row) for row in imag]))
+    t = values[0]
+    c, s = torch.cos(t / 2.0), torch.sin(t / 2.0)
+    if gate_type in {"rx", "ry", "rz", "crx", "cry", "crz"}:
+        if gate_type.endswith("x"):
+            base = mat([[c, zero], [zero, c]], [[zero, -s], [-s, zero]])
+        elif gate_type.endswith("y"):
+            base = mat([[c, -s], [s, c]], [[zero, zero], [zero, zero]])
+        else:
+            base = mat([[c, zero], [zero, c]], [[ -s, zero], [zero, s]])
+        if instruction_controls(instruction):
+            # Controls precede targets in the established planner axis order.
+            return _Pair(
+                torch.stack([torch.stack([one if row == col and row < 2 else base.real[row - 2, col - 2] if row >= 2 and col >= 2 else zero for col in range(4)]) for row in range(4)]),
+                torch.stack([torch.stack([base.imag[row - 2, col - 2] if row >= 2 and col >= 2 else zero for col in range(4)]) for row in range(4)]),
+            )
+        return base
+    if gate_type == "rzz":
+        return mat([[c,zero,zero,zero],[zero,c,zero,zero],[zero,zero,c,zero],[zero,zero,zero,c]], [[-s,zero,zero,zero],[zero,s,zero,zero],[zero,zero,s,zero],[zero,zero,zero,-s]])
+    if gate_type == "rxx":
+        return mat([[c,zero,zero,zero],[zero,c,zero,zero],[zero,zero,c,zero],[zero,zero,zero,c]], [[zero,zero,zero,-s],[zero,zero,-s,zero],[zero,-s,zero,zero],[-s,zero,zero,zero]])
+    if gate_type == "u2":
+        phi, lam = values; q = one / math.sqrt(2.0)
+        return mat([[q,-q*torch.cos(lam)],[q*torch.cos(phi),q*torch.cos(phi+lam)]], [[zero,-q*torch.sin(lam)],[q*torch.sin(phi),q*torch.sin(phi+lam)]])
+    if gate_type == "u3":
+        theta, phi, lam = values; c, s = torch.cos(theta/2), torch.sin(theta/2)
+        return mat([[c,-s*torch.cos(lam)],[s*torch.cos(phi),c*torch.cos(phi+lam)]], [[zero,-s*torch.sin(lam)],[s*torch.sin(phi),c*torch.sin(phi+lam)]])
+    return None
+
+
 class _GatePlanner:
     """Resolve a typed instruction into storage axes and rank partners."""
 
@@ -45,6 +86,10 @@ class _GatePlanner:
         self._backend = backend
         self._layout = layout
         self._n_qubits = int(n_qubits)
+        # A planner is one bounded circuit-planning context.  Sharing the
+        # wrapper here makes a repeated physical tensor one autograd node, so
+        # its accumulated adjoint crosses the collective exactly once.
+        self._replicated_parameter_cache = {}
         if layout.n_qubits != self._n_qubits:
             raise ValueError("layout 与 n_qubits 不一致")
 
@@ -57,10 +102,27 @@ class _GatePlanner:
                     return tuple(_wrap(item) for item in value)
                 if isinstance(value, list):
                     return [_wrap(item) for item in value]
-                return replicated_parameter(value, communicator=self._backend.communicator)
+                if not getattr(value, "requires_grad", False):
+                    return value
+                key = id(value)
+                wrapped = self._replicated_parameter_cache.get(key)
+                if wrapped is None:
+                    wrapped = replicated_parameter(
+                        value,
+                        communicator=self._backend.communicator,
+                    )
+                    self._replicated_parameter_cache[key] = wrapped
+                return wrapped
 
             instruction = instruction_with_parameter(instruction, _wrap(parameter))
         gate_type = canonical_gate_name(instruction_name(instruction))
+        pair_matrix = _trainable_pair_matrix(instruction, gate_type)
+        if pair_matrix is not None:
+            return self.plan_matrix(
+                pair_matrix,
+                tuple(instruction_controls(instruction)) + tuple(instruction_qubits(instruction)),
+                instruction_index=instruction_index,
+            )
         if gate_type == "unitary":
             matrix = _unitary_parameter_matrix(
                 instruction_parameter(instruction), self._backend
@@ -144,9 +206,14 @@ class _GatePlanner:
                     mask ^= bit
                 partner_masks.append(mask)
 
-        matrix = self._backend.cast_local_matrix(local_matrix)
+        matrix = (
+            local_matrix
+            if isinstance(local_matrix, _Pair)
+            else self._backend.cast_local_matrix(local_matrix)
+        )
         dimension = 1 << len(logical_axes)
-        if tuple(int(axis) for axis in matrix.shape) != (
+        matrix_shape = matrix.real.shape if isinstance(matrix, _Pair) else matrix.shape
+        if tuple(int(axis) for axis in matrix_shape) != (
             dimension,
             dimension,
         ):

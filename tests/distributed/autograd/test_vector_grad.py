@@ -167,3 +167,51 @@ def test_custom_unitary_uses_the_same_paired_real_kernel(monkeypatch):
     torch.testing.assert_close(result.real, torch.zeros_like(result.real))
     torch.testing.assert_close(result.imag, torch.tensor([[0.0], [1.0]]))
     torch.testing.assert_close(state.real.grad, torch.tensor([[2.0], [0.0]]))
+
+
+def test_shared_trainable_leaf_reduces_its_accumulated_adjoint_once(monkeypatch):
+    class RecordingCommunicator:
+        world_size = 2
+
+        def __init__(self):
+            self.calls = 0
+
+        def all_reduce_sum_real(self, gradient):
+            self.calls += 1
+            return gradient * self.world_size
+
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    backend._communicator = RecordingCommunicator()
+    planner = _GatePlanner(
+        backend,
+        _Layout.explicit((0, 1), n_qubits=2, distributed_axes=1),
+        2,
+    )
+    theta = torch.tensor(0.23, dtype=torch.float32, requires_grad=True)
+
+    first = planner.plan(ry(theta, 1), instruction_index=0)
+    second = planner.plan(ry(theta, 1), instruction_index=1)
+    (first.local_matrix.real.sum() + second.local_matrix.real.sum()).backward()
+
+    assert backend.communicator.calls == 1
+
+
+def test_trainable_gate_planning_never_enters_complex_matrix_route(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    monkeypatch.setattr(
+        "aicir.distributed.gates._gate_local_matrix",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("complex matrix route invoked")),
+    )
+    theta = torch.tensor(0.1, dtype=torch.float32, requires_grad=True)
+
+    plan = _GatePlanner(backend, _Layout.explicit((0,), n_qubits=1, distributed_axes=0), 1).plan(
+        ry(theta, 0), instruction_index=0
+    )
+
+    assert isinstance(plan.local_matrix, _Pair)

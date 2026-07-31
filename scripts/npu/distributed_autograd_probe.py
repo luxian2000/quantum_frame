@@ -16,10 +16,17 @@ from pathlib import Path
 import sys
 
 import torch
+import numpy as np
 
-from aicir.distributed import DistNPUBackend
+from aicir import Hamiltonian, PauliString
+from aicir.core.circuit import ry
+from aicir.distributed import DistNPUBackend, parameter_shift_gradient
 from aicir.distributed.autograd._collectives import _exchange_pair
 from aicir.distributed.autograd._pair import _Pair
+from aicir.distributed.autograd._reducers import _PairReducer
+from aicir.distributed.autograd._vector import _PairVectorKernel
+from aicir.distributed.gates import _GatePlanner
+from aicir.distributed.layout import _Layout, _ShardSpec
 
 
 SECTIONS = (
@@ -245,6 +252,62 @@ def _communication_section(backend: DistNPUBackend) -> dict[str, object]:
         "transport_bytes": sum(record["bytes"] for record in records),
         "all_handles_complete": True,
     }
+
+
+def _native_pair_value(backend, theta, axis, *, probability=False, observable=None):
+    """One paired-real circuit evaluation used by strict gradient sections."""
+
+    n_qubits = backend.world_size.bit_length()
+    layout = _Layout.explicit(tuple(range(n_qubits)), n_qubits=n_qubits, distributed_axes=n_qubits - 1)
+    spec = _ShardSpec.build(n_qubits, backend.world_size, backend.rank, "vector", layout)
+    full = torch.arange(1, (1 << n_qubits) + 1, dtype=torch.float32, device=backend._device)
+    full = full / torch.sqrt(full.square().sum())
+    local = full[spec.global_start : spec.global_stop].reshape(-1, 1)
+    pair = _Pair(local, torch.zeros_like(local))
+    plan = _GatePlanner(backend, layout, n_qubits).plan(ry(theta, axis), axis)
+    evolved = _PairVectorKernel(backend).apply(pair, plan, operation_index=axis)
+    reducer = _PairReducer(backend)
+    if probability:
+        return reducer.probabilities(evolved, spec)
+    return reducer.expectation(
+        evolved,
+        spec,
+        observable or PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits),
+    )
+
+
+def _gradient_section(backend: DistNPUBackend, *, probability=False, observable=None):
+    errors = []
+    for axis in range(backend.world_size.bit_length() - 1):
+        theta = torch.tensor(0.31, dtype=torch.float32, device=backend._device, requires_grad=True)
+        value = _native_pair_value(backend, theta, axis, probability=probability, observable=observable)
+        loss = value.sum() if probability else value
+        loss.backward()
+        shifted = parameter_shift_gradient(
+            lambda values: float(_native_pair_value(backend, torch.tensor(float(values[0]), dtype=torch.float32, device=backend._device), axis, probability=probability, observable=observable).sum().detach().cpu()),
+            np.array([0.31]),
+        )[0]
+        errors.append(abs(float(theta.grad.detach().cpu()) - float(shifted)))
+    maximum = max(errors, default=0.0)
+    return {"status": "PASS" if maximum <= 1e-4 else "FAIL", "passed": maximum <= 1e-4, "max_abs_error": maximum, "distributed_axes": list(range(backend.world_size.bit_length() - 1))}
+
+
+def _statevector_section(backend):
+    return _gradient_section(backend)
+
+
+def _gates_section(backend):
+    return _gradient_section(backend)
+
+
+def _probability_section(backend):
+    return _gradient_section(backend, probability=True)
+
+
+def _observable_section(backend):
+    n_qubits = backend.world_size.bit_length()
+    observable = Hamiltonian([("Z" + "I" * (n_qubits - 1), 0.7)])
+    return _gradient_section(backend, observable=observable)
 def _bounded_exception_message(error: Exception) -> str:
     try:
         message = str(error)
@@ -356,6 +419,10 @@ def _run_probe(selected: str, output_json: Path) -> bool:
             name,
             runner={
                 "environment": _environment_section,
+                "statevector": _statevector_section,
+                "gates": _gates_section,
+                "probability": _probability_section,
+                "observable": _observable_section,
                 "communication": _communication_section,
             }.get(name),
         )
