@@ -12,7 +12,8 @@ import pytest
 import torch
 import torch.multiprocessing as mp
 
-from aicir import PauliString
+from aicir import Hamiltonian, PauliString
+from aicir.ir import Observable
 from aicir.core.circuit import ry
 from aicir.distributed import DistNPUBackend, parameter_shift_gradient
 from aicir.distributed.autograd._pair import _Pair
@@ -60,11 +61,15 @@ def _worker(rank, world_size, port, output_path):
     full = np.arange(1, (1 << n_qubits) + 1, dtype=np.float32)
     full = full / np.linalg.norm(full)
     local = full[spec.global_start : spec.global_stop].reshape(-1, 1)
-    observable = PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits)
+    observables = (
+        PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits),
+        Hamiltonian([("Z" + "I" * (n_qubits - 1), 0.7), ("X" + "I" * (n_qubits - 1), -0.2)]),
+        Observable("matrix", np.array([[1.0, 0.0], [0.0, -1.0]], dtype=np.complex64), metadata={"qubits": (0,)}),
+    )
 
     results = []
     for axis in range(layout.distributed_axes):
-        def objective(value, *, trainable=False, state_trainable=False):
+        def objective(value, observable, *, trainable=False, state_trainable=False):
             theta = torch.tensor(float(value), dtype=torch.float32, requires_grad=trainable)
             real = torch.tensor(local, dtype=torch.float32, requires_grad=state_trainable)
             imag = torch.zeros_like(real, requires_grad=state_trainable)
@@ -75,14 +80,16 @@ def _worker(rank, world_size, port, output_path):
             value = _PairReducer(backend).expectation(evolved, spec, observable)
             return value, theta, real, imag
 
-        value, theta, real, imag = objective(0.31, trainable=True, state_trainable=True)
+        # Pauli also carries the independent initial-state float64 reference;
+        # Hamiltonian and dense observables reuse the same distributed axis.
+        value, theta, real, imag = objective(0.31, observables[0], trainable=True, state_trainable=True)
         value.backward()
         records = backend.communicator.communication_records
         exchanges = [record for record in records if record["kind"] == "exchange"]
         forward = sum(record["tag"] % 8 < 4 for record in exchanges)
         backward = sum(record["tag"] % 8 >= 4 for record in exchanges)
         shifted = parameter_shift_gradient(
-            lambda values: float(objective(values[0])[0].detach()), np.array([0.31])
+            lambda values: float(objective(values[0], observables[0])[0].detach()), np.array([0.31])
         )[0]
         assert abs(float(theta.grad) - float(shifted)) <= 1e-4, (
             f"rank={rank} axis={axis} native={float(theta.grad)} shifted={float(shifted)}"
@@ -101,6 +108,13 @@ def _worker(rank, world_size, port, output_path):
             np.testing.assert_allclose(
                 torch.cat(gathered_imag).numpy(), reference_imag, atol=2e-4, rtol=2e-4
             )
+        for observable in observables[1:]:
+            current, current_theta, _, _ = objective(0.31, observable, trainable=True)
+            current.backward()
+            shifted_observable = parameter_shift_gradient(
+                lambda values, observable=observable: float(objective(values[0], observable)[0].detach()), np.array([0.31])
+            )[0]
+            assert abs(float(current_theta.grad) - float(shifted_observable)) <= 1e-4
         results.append({"axis": axis, "gradient": float(theta.grad), "forward": forward, "backward": backward})
 
     if rank == 0:

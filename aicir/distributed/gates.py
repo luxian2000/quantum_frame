@@ -40,6 +40,18 @@ class _GatePlan:
         return int(self.instruction_index) * 4096 + int(mask)
 
 
+class _AutogradExecutionContext:
+    """Bounded cache for one native-autograd circuit execution.
+
+    Reuse this object for every planner participating in one circuit; a
+    physical leaf is then wrapped once and reduced once after all uses.
+    Contexts are intentionally caller-owned, never process-global.
+    """
+
+    def __init__(self):
+        self.parameter_cache = {}
+
+
 def _trainable_pair_matrix(instruction, gate_type):
     """Build parameterized matrices directly as independent real tensors."""
 
@@ -82,14 +94,14 @@ def _trainable_pair_matrix(instruction, gate_type):
 class _GatePlanner:
     """Resolve a typed instruction into storage axes and rank partners."""
 
-    def __init__(self, backend, layout, n_qubits: int):
+    def __init__(self, backend, layout, n_qubits: int, *, execution_context=None):
         self._backend = backend
         self._layout = layout
         self._n_qubits = int(n_qubits)
         # A planner is one bounded circuit-planning context.  Sharing the
         # wrapper here makes a repeated physical tensor one autograd node, so
         # its accumulated adjoint crosses the collective exactly once.
-        self._replicated_parameter_cache = {}
+        self._execution_context = execution_context or _AutogradExecutionContext()
         if layout.n_qubits != self._n_qubits:
             raise ValueError("layout 与 n_qubits 不一致")
 
@@ -106,13 +118,13 @@ class _GatePlanner:
                 if not getattr(value, "requires_grad", False):
                     return value
                 key = id(value)
-                wrapped = self._replicated_parameter_cache.get(key)
+                wrapped = self._execution_context.parameter_cache.get(key)
                 if wrapped is None:
                     wrapped = replicated_parameter(
                         value,
                         communicator=self._backend.communicator,
                     )
-                    self._replicated_parameter_cache[key] = wrapped
+                    self._execution_context.parameter_cache[key] = wrapped
                 return wrapped
 
             instruction = instruction_with_parameter(instruction, _wrap(parameter))

@@ -15,7 +15,7 @@ from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.autograd._reducers import _PairReducer
 from aicir.distributed.autograd._vector import _PairVectorKernel
 from aicir.distributed.backend import DistNPUBackend
-from aicir.distributed.gates import _GatePlanner
+from aicir.distributed.gates import _AutogradExecutionContext, _GatePlanner
 from aicir.distributed.layout import _Layout, _ShardSpec
 from aicir.qml.deriv import psr4
 
@@ -242,15 +242,12 @@ def test_shared_trainable_leaf_reduces_its_accumulated_adjoint_once(monkeypatch)
     monkeypatch.setenv("LOCAL_RANK", "0")
     backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
     backend._communicator = RecordingCommunicator()
-    planner = _GatePlanner(
-        backend,
-        _Layout.explicit((0, 1), n_qubits=2, distributed_axes=1),
-        2,
-    )
+    context = _AutogradExecutionContext()
+    planner = _GatePlanner(backend, _Layout.explicit((0, 1), n_qubits=2, distributed_axes=1), 2, execution_context=context)
     theta = torch.tensor(0.23, dtype=torch.float32, requires_grad=True)
 
     first = planner.plan(ry(theta, 1), instruction_index=0)
-    second = planner.plan(ry(theta, 1), instruction_index=1)
+    second = _GatePlanner(backend, planner._layout, 2, execution_context=context).plan(ry(theta, 1), instruction_index=1)
     (first.local_matrix.real.sum() + second.local_matrix.real.sum()).backward()
 
     assert backend.communicator.calls == 1
