@@ -8,6 +8,7 @@ import torch
 from ..backends.numpy_backend import NumpyBackend
 from ..core.state import State
 from ._contracts import reject_requires_grad
+from .autograd._pair import _Pair
 from .layout import _Layout, _ShardSpec
 
 
@@ -37,6 +38,7 @@ class DistState:
             raise ValueError("spec 的 rank/world_size 与 backend 不一致")
 
         self._local_data = casted
+        self._pair = None
         self._spec = spec
         self._backend = backend
         self._bit_order = bit_order
@@ -56,6 +58,38 @@ class DistState:
             backend=backend,
             bit_order=bit_order,
         )
+
+    @classmethod
+    def from_pair(
+        cls,
+        pair,
+        *,
+        spec: _ShardSpec,
+        backend,
+        bit_order: str = "msb",
+    ) -> "DistState":
+        """Create a graph-carrying state from its internal paired-real form."""
+
+        if not isinstance(pair, _Pair):
+            raise TypeError("DistState.from_pair 需要 _Pair")
+        if tuple(int(axis) for axis in pair.real.shape) != spec.local_shape:
+            raise ValueError(
+                f"pair shape={tuple(pair.real.shape)} 与 "
+                f"local_shape={spec.local_shape} 不一致"
+            )
+        if pair.real.device != backend._device:
+            raise ValueError("paired-real 初态必须位于当前 backend device")
+        if bit_order not in {"msb", "lsb"}:
+            raise ValueError("bit_order 必须是 'msb' 或 'lsb'")
+        if spec.rank != backend.rank or spec.world_size != backend.world_size:
+            raise ValueError("spec 的 rank/world_size 与 backend 不一致")
+        instance = cls.__new__(cls)
+        instance._pair = pair
+        instance._local_data = None
+        instance._spec = spec
+        instance._backend = backend
+        instance._bit_order = bit_order
+        return instance
 
     @classmethod
     def zero(
@@ -85,6 +119,10 @@ class DistState:
 
     @property
     def local_data(self):
+        """Compatibility complex boundary; kernels must consume ``_pair``."""
+
+        if self._pair is not None:
+            return self._pair.combine()
         return self._local_data
 
     @property
@@ -132,6 +170,17 @@ class DistState:
         return self._backend
 
     def local_probabilities(self):
+        if self._pair is not None:
+            if self.kind != "vector":
+                raise NotImplementedError(
+                    "paired-real density-matrix probabilities 由后续 native autograd 任务提供"
+                )
+            from .autograd._reducers import _PairReducer
+
+            return _PairReducer(self._backend).probabilities(
+                self._pair,
+                self._spec,
+            )
         if self.kind == "vector":
             probabilities = self._backend.abs_sq(
                 self._local_data.reshape(-1)
@@ -168,6 +217,26 @@ class DistState:
         return tensor.transpose(permutation).reshape(self.global_shape)
 
     def gather(self, *, root: int = 0):
+        if self._pair is not None:
+            real_parts = self._backend.communicator.gather_to_root_real(
+                self._pair.real.detach(), root=root
+            )
+            imag_parts = self._backend.communicator.gather_to_root_real(
+                self._pair.imag.detach(), root=root
+            )
+            if self.rank != int(root):
+                return None
+            storage_order = (
+                torch.cat(real_parts, dim=0).cpu().numpy()
+                + 1j * torch.cat(imag_parts, dim=0).cpu().numpy()
+            ).astype(np.complex64, copy=False)
+            logical_order = self._restore_logical_order(storage_order)
+            return State(
+                logical_order,
+                self.n_qubits,
+                NumpyBackend(),
+                bit_order=self.bit_order,
+            )
         shards = self._backend.communicator.gather_to_root(
             self._local_data,
             root=root,

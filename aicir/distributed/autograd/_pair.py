@@ -74,6 +74,6 @@ class _Pair:
     def combine(self) -> torch.Tensor:
         """Return a complex boundary tensor; do not feed it to the engine."""
 
-        if self.real.device.type != "cpu":
+        if self.real.device.type == "meta":
             raise RuntimeError("combine() 仅支持 CPU 诊断/参考边界")
         return _Combine.apply(self.real, self.imag)
