@@ -15,6 +15,7 @@ _FORWARD_PHASE = "forward"
 _MAX_DESCRIPTOR_DIMENSIONS = 7
 _MAX_DESCRIPTOR_INTEGER = 2**24 - 1
 _DESCRIPTOR_WIDTH = 16
+_DESCRIPTOR_VALUE_START = 2
 
 
 def _is_forward_phase(value) -> bool:
@@ -60,9 +61,21 @@ def _descriptor(*, valid, code=0, values=(), communicator) -> torch.Tensor:
     )
     result[0] = float(bool(valid))
     result[1] = float(code)
-    for index, value in enumerate(values, start=2):
+    for index, value in enumerate(values, start=_DESCRIPTOR_VALUE_START):
         result[index] = float(value)
     return result
+
+
+def _shape_fields(length_field: int) -> tuple[int, ...]:
+    """Return the length slot plus every fixed-width encoded shape dimension."""
+
+    return tuple(
+        range(length_field, length_field + 1 + _MAX_DESCRIPTOR_DIMENSIONS)
+    )
+
+
+def _shape_field_names(length_field: int, name: str) -> dict[int, str]:
+    return {field: name for field in _shape_fields(length_field)}
 
 
 def _raise_preflight_failure(descriptors, *, names) -> None:
@@ -116,10 +129,10 @@ def _pair_shape(pair, *, communicator, expected_shape=None):
         or tuple(real.shape) != tuple(imag.shape)
     ):
         return None
-    shape = _safe_shape(real.shape)
-    if shape is None or (expected_shape is not None and shape != expected_shape):
-        return None
-    return shape
+    actual_shape = tuple(real.shape)
+    if expected_shape is not None:
+        return actual_shape if actual_shape == expected_shape else None
+    return _safe_shape(actual_shape)
 
 
 def _real_tensor_shape(tensor, *, communicator):
@@ -300,18 +313,11 @@ def _exchange_pair(pair, *, communicator, peer, operation_index, phase) -> _Pair
             5: "operation_index",
             6: "phase",
         },
-        fields=(3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+        fields=(3, 4, *_shape_fields(5)),
         field_names={
             3: "operation_index",
             4: "phase",
-            5: "pair shape",
-            6: "pair shape",
-            7: "pair shape",
-            8: "pair shape",
-            9: "pair shape",
-            10: "pair shape",
-            11: "pair shape",
-            12: "pair shape",
+            **_shape_field_names(5, "pair shape"),
         },
     )
     for rank, candidate in enumerate(descriptors):
@@ -343,8 +349,8 @@ def _replicated_all_reduce(tensor, *, communicator) -> torch.Tensor:
         communicator,
         descriptor,
         names={1: "tensor", 2: "tensor shape", 3: "tensor shape", 4: "tensor shape", 5: "tensor shape", 6: "tensor shape", 7: "tensor shape", 8: "tensor shape", 9: "tensor shape"},
-        fields=(2, 3, 4, 5, 6, 7, 8, 9),
-        field_names={field: "tensor shape" for field in range(2, 10)},
+        fields=_shape_fields(2),
+        field_names=_shape_field_names(2, "tensor shape"),
     )
     return _ReplicatedAllReduceFn.apply(tensor, communicator)
 
@@ -391,8 +397,8 @@ def _scatter_root_pair(pair_or_none, *, communicator, root, local_shape) -> _Pai
         communicator,
         descriptor,
         names={1: "root", 2: "root", 3: "local_shape", 4: "root pair"},
-        fields=(2, 3, 4, 5, 6, 7, 8, 9),
-        field_names={2: "root", **{field: "local_shape" for field in range(3, 10)}},
+        fields=(2, *_shape_fields(3)),
+        field_names={2: "root", **_shape_field_names(3, "local_shape")},
     )
     root = parsed_root
     local_shape = parsed_shape
@@ -447,8 +453,8 @@ def _gather_root_pair(pair, *, communicator, root) -> _Pair | None:
         communicator,
         descriptor,
         names={1: "root", 2: "root", 3: "pair", 4: "pair shape", 5: "pair shape", 6: "pair shape", 7: "pair shape", 8: "pair shape", 9: "pair shape"},
-        fields=(2, 3, 4, 5, 6, 7, 8, 9),
-        field_names={2: "root", **{field: "pair shape" for field in range(3, 10)}},
+        fields=(2, *_shape_fields(3)),
+        field_names={2: "root", **_shape_field_names(3, "pair shape")},
     )
     root = parsed_root
     real_parts = communicator.gather_to_root_real(pair.real, root=root)

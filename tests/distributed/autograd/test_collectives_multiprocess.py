@@ -229,6 +229,87 @@ def test_shape_mismatch_is_collective_safe_and_processes_are_cleaned_up(tmp_path
     assert "local_shape" in payload["message"]
 
 
+def _seven_dim_shape_mismatch_worker(rank, world_size, port, output_path):
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(port)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ["RANK"] = str(rank)
+    os.environ["LOCAL_RANK"] = str(rank)
+    torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
+
+    class _GuardedCommunicator(_Communicator):
+        def scatter_from_root_real(self, *_args, **_kwargs):
+            raise AssertionError("seven-dimensional mismatch reached scatter data plane")
+
+        def gather_to_root_real(self, *_args, **_kwargs):
+            raise AssertionError("seven-dimensional mismatch reached gather data plane")
+
+    try:
+        communicator = _GuardedCommunicator(
+            rank=rank,
+            world_size=world_size,
+            device=torch.device("cpu"),
+        )
+        local_shape = (1, 1, 1, 1, 1, 1, 1 if rank == 0 else 2)
+        root_pair = (
+            _Pair(
+                torch.ones((world_size, 1, 1, 1, 1, 1, 1, 1), dtype=torch.float32),
+                torch.zeros((world_size, 1, 1, 1, 1, 1, 1, 1), dtype=torch.float32),
+            )
+            if rank == 0
+            else None
+        )
+        gather_pair = _Pair(
+            torch.ones(local_shape, dtype=torch.float32),
+            torch.zeros(local_shape, dtype=torch.float32),
+        )
+        messages = {}
+        for name, call in {
+            "scatter": lambda: _scatter_root_pair(
+                root_pair,
+                communicator=communicator,
+                root=0,
+                local_shape=local_shape,
+            ),
+            "gather": lambda: _gather_root_pair(
+                gather_pair,
+                communicator=communicator,
+                root=0,
+            ),
+        }.items():
+            try:
+                call()
+            except ValueError as error:
+                messages[name] = str(error)
+            else:
+                raise AssertionError(f"{name} must reject a 7D mismatch before data transport")
+            torch.distributed.barrier()
+        gathered = [None] * world_size
+        torch.distributed.all_gather_object(gathered, messages)
+        if rank == 0:
+            with open(output_path, "w", encoding="utf-8") as handle:
+                json.dump({"messages": gathered, "barrier": True}, handle)
+    finally:
+        torch.distributed.destroy_process_group()
+
+
+def test_seven_dim_shape_mismatch_is_collective_safe_before_scatter_or_gather(tmp_path):
+    output_path = str(tmp_path / "seven-dim-shape-mismatch.json")
+    context = mp.spawn(
+        _seven_dim_shape_mismatch_worker,
+        args=(2, _free_port(), output_path),
+        nprocs=2,
+        join=False,
+    )
+    _join_spawn_context(context)
+
+    payload = json.loads((tmp_path / "seven-dim-shape-mismatch.json").read_text())
+    assert payload["barrier"] is True
+    assert payload["messages"][0] == payload["messages"][1]
+    assert "local_shape" in payload["messages"][0]["scatter"]
+    assert "pair shape" in payload["messages"][0]["gather"]
+
+
 def _mutated_pair(*, dtype=torch.float32, device="cpu", shape=(1,)):
     pair = _Pair(
         torch.ones(shape, dtype=torch.float32),
