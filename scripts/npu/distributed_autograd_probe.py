@@ -52,6 +52,10 @@ BLOCKED_BY_TASK = {
     "contract": 11,
 }
 
+_FAILURE_TYPE_BYTES = 128
+_FAILURE_MESSAGE_BYTES = 512
+_FAILURE_PAYLOAD_BYTES = 5 + _FAILURE_TYPE_BYTES + _FAILURE_MESSAGE_BYTES
+
 
 def _strict_backend(*, fallback_to_cpu: bool = False) -> DistNPUBackend:
     """Build the probe backend, rejecting every possible CPU fallback path."""
@@ -93,10 +97,89 @@ def _blocked_section(name: str) -> dict[str, object]:
     }
 
 
-def _run_section_collectively(backend: DistNPUBackend, name: str) -> dict[str, object]:
-    """Run one placeholder on every rank and share its failure before teardown."""
+def _bounded_exception_message(error: Exception) -> str:
+    try:
+        message = str(error)
+    except Exception:  # noqa: BLE001 - probes must preserve collective order
+        message = "<unprintable exception>"
+    return message.replace("\n", " ").replace("\r", " ")
 
-    result = _blocked_section(name)
+
+def _encode_failure_payload(backend, error: Exception | None) -> torch.Tensor:
+    """Encode a bounded local error record for device-side collective transport."""
+
+    payload = bytearray(_FAILURE_PAYLOAD_BYTES)
+    if error is not None:
+        type_bytes = type(error).__name__.encode("utf-8")[:_FAILURE_TYPE_BYTES]
+        message_bytes = _bounded_exception_message(error).encode("utf-8")[:_FAILURE_MESSAGE_BYTES]
+        payload[0] = 1
+        payload[1:3] = len(type_bytes).to_bytes(2, byteorder="big")
+        payload[3:5] = len(message_bytes).to_bytes(2, byteorder="big")
+        type_end = 5 + len(type_bytes)
+        payload[5:type_end] = type_bytes
+        payload[type_end : type_end + len(message_bytes)] = message_bytes
+    return torch.tensor(
+        list(payload),
+        dtype=torch.uint8,
+        device=backend._device,
+    )
+
+
+def _decode_failure_payload(payload: torch.Tensor) -> dict[str, str] | None:
+    raw = bytes(payload.detach().cpu().tolist())
+    if raw[0] == 0:
+        return None
+    type_length = int.from_bytes(raw[1:3], byteorder="big")
+    message_length = int.from_bytes(raw[3:5], byteorder="big")
+    type_end = 5 + min(type_length, _FAILURE_TYPE_BYTES)
+    message_end = type_end + min(message_length, _FAILURE_MESSAGE_BYTES)
+    return {
+        "type": raw[5:type_end].decode("utf-8", errors="replace"),
+        "message": raw[type_end:message_end].decode("utf-8", errors="replace"),
+    }
+
+
+def _synchronize_section_failure(backend, error: Exception | None):
+    """Return the canonical first-rank failure after every rank receives it."""
+
+    gathered = backend.communicator.all_gather(
+        _encode_failure_payload(backend, error)
+    )
+    failures = [
+        (rank, decoded)
+        for rank, payload in enumerate(gathered)
+        if (decoded := _decode_failure_payload(payload)) is not None
+    ]
+    if not failures:
+        return None
+    rank, payload = failures[0]
+    torch.distributed.barrier()
+    return {"rank": rank, **payload}
+
+
+def _run_section_collectively(
+    backend: DistNPUBackend,
+    name: str,
+    *,
+    runner=None,
+) -> dict[str, object]:
+    """Run a section and synchronize one bounded failure before teardown."""
+
+    error = None
+    try:
+        result = _blocked_section(name) if runner is None else runner()
+    except Exception as caught:  # noqa: BLE001 - preserve collective order
+        error = caught
+        result = None
+
+    synchronized_error = _synchronize_section_failure(backend, error)
+    if synchronized_error is not None:
+        return {
+            "status": "FAIL",
+            "passed": False,
+            "error": synchronized_error,
+        }
+
     local_failed = torch.tensor(
         [int(not result["passed"])],
         dtype=torch.long,
