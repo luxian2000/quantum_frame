@@ -64,7 +64,12 @@ def test_pair_vector_kernel_applies_trainable_local_matrix_with_real_leaves(monk
         ),
         torch.zeros((2, 2), dtype=torch.float32),
     )
-    plan = _GatePlanner(backend, layout, 1).plan_matrix(
+    plan = _GatePlanner(
+        backend,
+        layout,
+        1,
+        execution_context=_AutogradExecutionContext(),
+    ).plan_matrix(
         matrix,
         (0,),
         instruction_index=0,
@@ -226,6 +231,25 @@ def test_custom_unitary_uses_the_same_paired_real_kernel(monkeypatch):
     torch.testing.assert_close(state.real.grad, torch.tensor([[2.0], [0.0]]))
 
 
+def test_custom_unitary_honors_its_explicit_logical_target(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    layout = _Layout.explicit((0, 1), n_qubits=2, distributed_axes=0)
+    plan = _GatePlanner(backend, layout, 2).plan(
+        {
+            "type": "unitary",
+            "parameter": np.eye(2, dtype=np.complex64),
+            "n_qubits": 1,
+            "qubits": (1,),
+        },
+        instruction_index=0,
+    )
+
+    assert plan.logical_axes == (1,)
+
+
 def test_shared_trainable_leaf_reduces_its_accumulated_adjoint_once(monkeypatch):
     class RecordingCommunicator:
         world_size = 2
@@ -250,6 +274,36 @@ def test_shared_trainable_leaf_reduces_its_accumulated_adjoint_once(monkeypatch)
     second = _GatePlanner(backend, planner._layout, 2, execution_context=context).plan(ry(theta, 1), instruction_index=1)
     (first.local_matrix.real.sum() + second.local_matrix.real.sum()).backward()
 
+    assert backend.communicator.calls == 1
+
+
+@pytest.mark.parametrize("world_size", (2, 4))
+def test_shared_real_leaf_across_two_planners_has_one_global_reduction(monkeypatch, world_size):
+    class RecordingCommunicator:
+        def __init__(self, size):
+            self.world_size = size
+            self.calls = 0
+
+        def all_reduce_sum_real(self, gradient):
+            self.calls += 1
+            return gradient * self.world_size
+
+    monkeypatch.setenv("WORLD_SIZE", str(world_size))
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    backend._communicator = RecordingCommunicator(world_size)
+    n_qubits = int(np.log2(world_size))
+    layout = _Layout.explicit(tuple(range(n_qubits)), n_qubits=n_qubits, distributed_axes=n_qubits)
+    theta = torch.tensor(0.23, dtype=torch.float32, requires_grad=True)
+    context = _AutogradExecutionContext()
+    first = _GatePlanner(backend, layout, n_qubits, execution_context=context).plan(ry(theta, 0), 0)
+    second = _GatePlanner(backend, layout, n_qubits, execution_context=context).plan(ry(theta, 0), 1)
+
+    (first.local_matrix.real.sum() + second.local_matrix.real.sum()).backward()
+
+    expected = world_size * -2.0 * np.sin(0.23 / 2.0)
+    assert float(theta.grad) == pytest.approx(expected, abs=1e-6)
     assert backend.communicator.calls == 1
 
 
@@ -300,6 +354,24 @@ def test_plan_matrix_rejects_trainable_complex_matrix(monkeypatch):
         _GatePlanner(backend, _Layout.explicit((0,), n_qubits=1, distributed_axes=0), 1).plan_matrix(
             torch.eye(2, dtype=torch.complex64, requires_grad=True), (0,), instruction_index=0
         )
+
+
+def test_plan_matrix_requires_context_for_trainable_paired_real_matrix(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    matrix = _Pair(
+        torch.eye(2, dtype=torch.float32, requires_grad=True),
+        torch.zeros((2, 2), dtype=torch.float32, requires_grad=True),
+    )
+
+    with pytest.raises(RuntimeError, match="explicit _AutogradExecutionContext"):
+        _GatePlanner(
+            backend,
+            _Layout.explicit((0,), n_qubits=1, distributed_axes=0),
+            1,
+        ).plan_matrix(matrix, (0,), instruction_index=0)
 
 
 @pytest.mark.parametrize(

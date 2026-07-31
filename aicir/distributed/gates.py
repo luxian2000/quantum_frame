@@ -105,6 +105,25 @@ class _GatePlanner:
         if layout.n_qubits != self._n_qubits:
             raise ValueError("layout 与 n_qubits 不一致")
 
+    def _wrap_trainable_tensor(self, value):
+        """Wrap one caller-owned real leaf once in this execution context."""
+
+        if not getattr(value, "requires_grad", False):
+            return value
+        if self._execution_context is None:
+            raise RuntimeError(
+                "trainable distributed gate planning requires an explicit _AutogradExecutionContext"
+            )
+        key = id(value)
+        wrapped = self._execution_context.parameter_cache.get(key)
+        if wrapped is None:
+            wrapped = replicated_parameter(
+                value,
+                communicator=self._backend.communicator,
+            )
+            self._execution_context.parameter_cache[key] = wrapped
+        return wrapped
+
     def plan(self, gate, instruction_index: int) -> _GatePlan:
         instruction = as_instruction(gate)
         gate_type = canonical_gate_name(instruction_name(instruction))
@@ -123,17 +142,7 @@ class _GatePlanner:
                     return tuple(_wrap(item) for item in value)
                 if isinstance(value, list):
                     return [_wrap(item) for item in value]
-                if not getattr(value, "requires_grad", False):
-                    return value
-                key = id(value)
-                wrapped = self._execution_context.parameter_cache.get(key)
-                if wrapped is None:
-                    wrapped = replicated_parameter(
-                        value,
-                        communicator=self._backend.communicator,
-                    )
-                    self._execution_context.parameter_cache[key] = wrapped
-                return wrapped
+                return self._wrap_trainable_tensor(value)
 
             instruction = instruction_with_parameter(instruction, _wrap(parameter))
         pair_matrix = _trainable_pair_matrix(instruction, gate_type)
@@ -142,6 +151,7 @@ class _GatePlanner:
                 pair_matrix,
                 tuple(instruction_controls(instruction)) + tuple(instruction_qubits(instruction)),
                 instruction_index=instruction_index,
+                _autograd_wrapped=True,
             )
         if gate_type == "unitary":
             parameter = instruction_parameter(instruction)
@@ -152,15 +162,9 @@ class _GatePlanner:
                     raise RuntimeError(
                         "trainable distributed gate planning requires an explicit _AutogradExecutionContext"
                     )
-                def _wrap_component(value):
-                    key = id(value)
-                    cached = self._execution_context.parameter_cache.get(key)
-                    if cached is None:
-                        cached = replicated_parameter(value, communicator=self._backend.communicator)
-                        self._execution_context.parameter_cache[key] = cached
-                    return cached
                 parameter = _Pair(
-                    _wrap_component(parameter.real), _wrap_component(parameter.imag)
+                    self._wrap_trainable_tensor(parameter.real),
+                    self._wrap_trainable_tensor(parameter.imag),
                 )
             if isinstance(parameter, torch.Tensor) and parameter.requires_grad:
                 if torch.is_complex(parameter):
@@ -179,10 +183,17 @@ class _GatePlanner:
             gate_qubits = int(instruction_n_qubits(instruction, inferred))
             if gate_qubits != inferred:
                 raise ValueError("unitary 门的 n_qubits 与矩阵维度不一致")
+            logical_axes = tuple(instruction_qubits(instruction))
+            if not logical_axes:
+                logical_axes = tuple(range(gate_qubits))
+            if len(logical_axes) != gate_qubits:
+                raise ValueError("unitary 门的 qubits 与矩阵维度不一致")
             return self.plan_matrix(
                 matrix,
-                tuple(range(gate_qubits)),
+                logical_axes,
                 instruction_index=instruction_index,
+                _autograd_wrapped=isinstance(matrix, _Pair)
+                and (matrix.real.requires_grad or matrix.imag.requires_grad),
             )
         local, logical_axes, cache_key = _gate_local_matrix(
             instruction,
@@ -211,6 +222,7 @@ class _GatePlanner:
         logical_axes,
         *,
         instruction_index: int,
+        _autograd_wrapped: bool = False,
     ) -> _GatePlan:
         logical_axes = tuple(int(axis) for axis in logical_axes)
         if len(set(logical_axes)) != len(logical_axes):
@@ -251,6 +263,18 @@ class _GatePlanner:
 
         if isinstance(local_matrix, torch.Tensor) and torch.is_complex(local_matrix) and local_matrix.requires_grad:
             raise TypeError("plan_matrix 不接受 requires_grad complex matrix；请提供 _Pair(real, imag)")
+        if isinstance(local_matrix, _Pair) and (
+            local_matrix.real.requires_grad or local_matrix.imag.requires_grad
+        ):
+            if self._execution_context is None:
+                raise RuntimeError(
+                    "trainable distributed gate planning requires an explicit _AutogradExecutionContext"
+                )
+            if not _autograd_wrapped:
+                local_matrix = _Pair(
+                    self._wrap_trainable_tensor(local_matrix.real),
+                    self._wrap_trainable_tensor(local_matrix.imag),
+                )
         matrix = (
             local_matrix
             if isinstance(local_matrix, _Pair)

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Strict multi-NPU acceptance scaffold for distributed gradient validation.
+"""Strict multi-NPU acceptance probe for the paired-real statevector kernel.
 
-Run this probe with ``torchrun``.  It has no CPU fallback and does not make the
-forward-only :class:`aicir.distributed.DistSimulator` differentiable.  Until
-the later implementation tasks land, every section is reported as blocked with
-the task number that owns it.
+Run this probe with ``torchrun`` on Ascend hardware.  It has no CPU fallback,
+does not claim that forward-only :class:`aicir.distributed.DistSimulator` is
+differentiable, and records no live-NPU result until the command is run.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -19,14 +19,16 @@ import torch
 import numpy as np
 
 from aicir import Hamiltonian, PauliString
-from aicir.core.circuit import ry
+from aicir.core.circuit import crx, cry, crz, rx, rxx, ry, rz, rzz, u2, u3
+from aicir.ir import Observable
 from aicir.distributed import DistNPUBackend, parameter_shift_gradient
 from aicir.distributed.autograd._collectives import _exchange_pair
 from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.autograd._reducers import _PairReducer
 from aicir.distributed.autograd._vector import _PairVectorKernel
-from aicir.distributed.gates import _GatePlanner
+from aicir.distributed.gates import _AutogradExecutionContext, _GatePlanner
 from aicir.distributed.layout import _Layout, _ShardSpec
+from aicir.qml.deriv import psr4
 
 
 SECTIONS = (
@@ -254,62 +256,231 @@ def _communication_section(backend: DistNPUBackend) -> dict[str, object]:
     }
 
 
-def _native_pair_value(backend, theta, axis, *, probability=False, observable=None):
-    """One paired-real circuit evaluation used by strict gradient sections."""
-
+def _layout_and_spec(backend):
     n_qubits = backend.world_size.bit_length()
-    layout = _Layout.explicit(tuple(range(n_qubits)), n_qubits=n_qubits, distributed_axes=n_qubits - 1)
-    spec = _ShardSpec.build(n_qubits, backend.world_size, backend.rank, "vector", layout)
-    full = torch.arange(1, (1 << n_qubits) + 1, dtype=torch.float32, device=backend._device)
-    full = full / torch.sqrt(full.square().sum())
-    local = full[spec.global_start : spec.global_stop].reshape(-1, 1)
-    pair = _Pair(local, torch.zeros_like(local))
-    plan = _GatePlanner(backend, layout, n_qubits).plan(ry(theta, axis), axis)
-    evolved = _PairVectorKernel(backend).apply(pair, plan, operation_index=axis)
-    reducer = _PairReducer(backend)
-    if probability:
-        return reducer.probabilities(evolved, spec)
-    return reducer.expectation(
-        evolved,
-        spec,
-        observable or PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits),
+    layout = _Layout.explicit(
+        tuple(range(n_qubits)), n_qubits=n_qubits, distributed_axes=n_qubits - 1
+    )
+    return layout, _ShardSpec.build(
+        n_qubits, backend.world_size, backend.rank, "vector", layout
     )
 
 
-def _gradient_section(backend: DistNPUBackend, *, probability=False, observable=None):
+def _local_initial_pair(backend, spec, *, requires_grad=False):
+    """Build exactly this rank's normalized shard from global indices."""
+
+    indices = torch.arange(
+        spec.global_start, spec.global_stop, dtype=torch.float32, device=backend._device
+    )
+    dimension = 1 << spec.n_qubits
+    norm_sq = dimension * (dimension + 1) * (2 * dimension + 1) / 6.0
+    real = ((indices + 1.0) / math.sqrt(norm_sq)).reshape(-1, 1)
+    if requires_grad:
+        real = real.detach().requires_grad_(True)
+    return _Pair(real, torch.zeros_like(real, requires_grad=requires_grad))
+
+
+def _native_pair_value(
+    backend,
+    theta,
+    axis,
+    *,
+    probability=False,
+    observable=None,
+    gate_factory=ry,
+    trainable_state=False,
+):
+    """One paired-real evaluation with a fresh explicit planning context."""
+
+    layout, spec = _layout_and_spec(backend)
+    pair = _local_initial_pair(backend, spec, requires_grad=trainable_state)
+    context = _AutogradExecutionContext()
+    planner = _GatePlanner(
+        backend, layout, spec.n_qubits, execution_context=context
+    )
+    parameters = theta if isinstance(theta, tuple) else (theta,)
+    plan = planner.plan(gate_factory(*parameters, axis), axis)
+    evolved = _PairVectorKernel(backend).apply(pair, plan, operation_index=axis)
+    reducer = _PairReducer(backend)
+    value = reducer.probabilities(evolved, spec) if probability else reducer.expectation(
+        evolved,
+        spec,
+        observable or PauliString("Z" + "I" * (spec.n_qubits - 1), n_qubits=spec.n_qubits),
+    )
+    return value, pair, spec
+
+
+def _custom_pair_unitary(theta, axis):
+    """A trainable RX matrix supplied through the public custom-_Pair route."""
+
+    zero = torch.zeros((), dtype=torch.float32, device=theta.device)
+    c, s = torch.cos(theta / 2.0), torch.sin(theta / 2.0)
+    return {
+        "type": "unitary",
+        "parameter": _Pair(
+            torch.stack((torch.stack((c, zero)), torch.stack((zero, c)))),
+            torch.stack((torch.stack((zero, -s)), torch.stack((-s, zero)))),
+        ),
+        "n_qubits": 1,
+        "qubits": (axis,),
+    }
+
+
+def _gradient_section(backend: DistNPUBackend, *, gate_factory=ry, values=(0.31,), observable=None, four_term=False):
     errors = []
     for axis in range(backend.world_size.bit_length() - 1):
-        theta = torch.tensor(0.31, dtype=torch.float32, device=backend._device, requires_grad=True)
-        value = _native_pair_value(backend, theta, axis, probability=probability, observable=observable)
-        # A normalized probability sum is identically one.  Select a local
-        # VJP basis component instead, so this checks a Jacobian row.
-        loss = value[axis % value.numel()] if probability else value
-        loss.backward()
-        shifted = parameter_shift_gradient(
-            lambda values: float((_native_pair_value(backend, torch.tensor(float(values[0]), dtype=torch.float32, device=backend._device), axis, probability=probability, observable=observable)[axis % value.numel()] if probability else _native_pair_value(backend, torch.tensor(float(values[0]), dtype=torch.float32, device=backend._device), axis, observable=observable)).detach().cpu()),
-            np.array([0.31]),
-        )[0]
-        errors.append(abs(float(theta.grad.detach().cpu()) - float(shifted)))
+        leaves = tuple(
+            torch.tensor(value, dtype=torch.float32, device=backend._device, requires_grad=True)
+            for value in values
+        )
+        value, _, _ = _native_pair_value(
+            backend, leaves, axis, gate_factory=gate_factory, observable=observable
+        )
+        value.backward()
+        native = np.array([float(leaf.grad.detach().cpu()) for leaf in leaves])
+        shift = psr4 if four_term else parameter_shift_gradient
+        shifted = shift(
+            lambda point: float(_native_pair_value(
+                backend,
+                tuple(torch.tensor(float(item), dtype=torch.float32, device=backend._device) for item in point),
+                axis,
+                gate_factory=gate_factory,
+                observable=observable,
+            )[0].detach().cpu()),
+            np.asarray(values, dtype=np.float64),
+        )
+        errors.append(float(np.max(np.abs(native - shifted))))
     maximum = max(errors, default=0.0)
     return {"status": "PASS" if maximum <= 1e-4 else "FAIL", "passed": maximum <= 1e-4, "max_abs_error": maximum, "distributed_axes": list(range(backend.world_size.bit_length() - 1))}
 
 
 def _statevector_section(backend):
-    return _gradient_section(backend)
+    errors, gradients = [], []
+    n_qubits = backend.world_size.bit_length()
+    observable = PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits)
+    for axis in range(n_qubits - 1):
+        theta = torch.tensor(0.31, dtype=torch.float32, device=backend._device, requires_grad=True)
+        value, pair, _ = _native_pair_value(
+            backend, theta, axis, observable=observable, trainable_state=True
+        )
+        value.backward()
+        gradients.extend((pair.real.grad, pair.imag.grad))
+        errors.append(_gradient_section(backend, observable=observable)["max_abs_error"])
+    maximum = max(errors, default=0.0)
+    state_finite = all(bool(torch.isfinite(item).all().detach().cpu()) for item in gradients)
+    passed = state_finite and maximum <= 1e-4
+    return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(range(n_qubits - 1)), "initial_state_gradient_finite": state_finite, "max_abs_error": maximum}
 
 
 def _gates_section(backend):
-    return _gradient_section(backend)
+    n_qubits = backend.world_size.bit_length()
+    local_axis = n_qubits - 1
+    cases = (
+        ("rx", rx, (0.31,), False), ("ry", ry, (-0.47,), False), ("rz", rz, (0.29,), False),
+        ("crx", lambda theta, axis: crx(theta, axis, (local_axis,)), (0.23,), True),
+        ("cry", lambda theta, axis: cry(theta, axis, (local_axis,)), (-0.41,), True),
+        ("crz", lambda theta, axis: crz(theta, axis, (local_axis,)), (0.37,), True),
+        ("rzz", lambda theta, axis: rzz(theta, axis, local_axis), (-0.19,), False),
+        ("rxx", lambda theta, axis: rxx(theta, axis, local_axis), (0.53,), False),
+        ("u2", u2, (0.17, -0.29), False), ("u3", u3, (0.21, -0.33, 0.45), False),
+        ("custom_pair_unitary", _custom_pair_unitary, (0.31,), False),
+    )
+    observable = PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits)
+    errors = {name: _gradient_section(backend, gate_factory=factory, values=values, observable=observable, four_term=four_term)["max_abs_error"] for name, factory, values, four_term in cases}
+    maximum = max(errors.values(), default=0.0)
+    return {"status": "PASS" if maximum <= 1e-4 else "FAIL", "passed": maximum <= 1e-4, "distributed_axes": list(range(n_qubits - 1)), "gate_errors": errors, "max_abs_error": maximum}
 
 
 def _probability_section(backend):
-    return _gradient_section(backend, probability=True)
+    """Check every global probability Jacobian row through VJP bases."""
+
+    _, spec = _layout_and_spec(backend)
+    n_qubits = spec.n_qubits
+    errors = []
+    for axis in range(n_qubits - 1):
+        for global_component in range(1 << n_qubits):
+            theta = torch.tensor(0.31, dtype=torch.float32, device=backend._device, requires_grad=True)
+            probabilities, _, _ = _native_pair_value(backend, theta, axis, probability=True)
+            if spec.global_start <= global_component < spec.global_stop:
+                loss = probabilities[global_component - spec.global_start]
+            else:
+                loss = probabilities.sum() * 0.0
+            loss.backward()
+            shifted = parameter_shift_gradient(
+                lambda values: float(backend.communicator.all_reduce_sum(
+                    _native_pair_value(
+                        backend,
+                        torch.tensor(float(values[0]), dtype=torch.float32, device=backend._device),
+                        axis,
+                        probability=True,
+                    )[0][global_component - spec.global_start].reshape(())
+                    if spec.global_start <= global_component < spec.global_stop
+                    else torch.zeros((), dtype=torch.float32, device=backend._device)
+                ).detach().cpu()),
+                np.array([0.31]),
+            )[0]
+            errors.append(abs(float(theta.grad.detach().cpu()) - float(shifted)))
+    maximum = max(errors, default=0.0)
+    return {"status": "PASS" if maximum <= 1e-4 else "FAIL", "passed": maximum <= 1e-4, "distributed_axes": list(range(n_qubits - 1)), "jacobian_rows": 1 << n_qubits, "max_abs_error": maximum}
+
+
+def _cpu_ry_amplitude(index, n_qubits, theta, axis):
+    """Independent scalar complex128 oracle with no full-state allocation."""
+
+    dimension = 1 << n_qubits
+    norm = math.sqrt(dimension * (dimension + 1) * (2 * dimension + 1) / 6.0)
+    bit = 1 << (n_qubits - 1 - axis)
+    own = np.complex128((index + 1) / norm)
+    partner = np.complex128(((index ^ bit) + 1) / norm)
+    c, s = math.cos(theta / 2.0), math.sin(theta / 2.0)
+    return c * own + (s if index & bit else -s) * partner
+
+
+def _cpu_pauli_expectation(n_qubits, theta, axis, word):
+    total = np.complex128(0.0)
+    for output in range(1 << n_qubits):
+        source, phase = output, np.complex128(1.0)
+        for qubit, symbol in enumerate(word):
+            bit = 1 << (n_qubits - 1 - qubit)
+            if symbol == "X":
+                source ^= bit
+            elif symbol == "Y":
+                source ^= bit
+                phase *= 1j if output & bit else -1j
+            elif symbol == "Z" and output & bit:
+                phase *= -1.0
+        total += np.conj(_cpu_ry_amplitude(output, n_qubits, theta, axis)) * phase * _cpu_ry_amplitude(source, n_qubits, theta, axis)
+    return float(total.real)
+
+
+def _cpu_complex128_expectation(n_qubits, theta, axis, kind):
+    """Oracle values for Pauli, a multi-term Hamiltonian, and dense local Z."""
+
+    z_word = "Z" + "I" * (n_qubits - 1)
+    if kind in {"pauli", "dense"}:
+        return _cpu_pauli_expectation(n_qubits, theta, axis, z_word)
+    if kind == "hamiltonian":
+        return 0.7 * _cpu_pauli_expectation(n_qubits, theta, axis, z_word) - 0.2 * _cpu_pauli_expectation(n_qubits, theta, axis, "X" + "I" * (n_qubits - 1))
+    raise AssertionError(kind)
 
 
 def _observable_section(backend):
     n_qubits = backend.world_size.bit_length()
-    observable = Hamiltonian([("Z" + "I" * (n_qubits - 1), 0.7)])
-    return _gradient_section(backend, observable=observable)
+    z_word = "Z" + "I" * (n_qubits - 1)
+    cases = (
+        ("pauli", PauliString(z_word, n_qubits=n_qubits)),
+        ("hamiltonian", Hamiltonian([(z_word, 0.7), ("X" + "I" * (n_qubits - 1), -0.2)])),
+        ("dense", Observable("matrix", np.array([[1.0, 0.0], [0.0, -1.0]], dtype=np.complex64), metadata={"qubits": (0,)})),
+    )
+    values, gradients = {}, {}
+    for kind, observable in cases:
+        values[kind] = max(
+            abs(float(_native_pair_value(backend, torch.tensor(0.31, dtype=torch.float32, device=backend._device), axis, observable=observable)[0].detach().cpu()) - _cpu_complex128_expectation(n_qubits, 0.31, axis, kind))
+            for axis in range(n_qubits - 1)
+        )
+        gradients[kind] = _gradient_section(backend, observable=observable)["max_abs_error"]
+    maximum = max((*values.values(), *gradients.values()), default=0.0)
+    return {"status": "PASS" if maximum <= 1e-4 else "FAIL", "passed": maximum <= 1e-4, "distributed_axes": list(range(n_qubits - 1)), "value_errors": values, "gradient_errors": gradients, "max_abs_error": maximum}
 def _bounded_exception_message(error: Exception) -> str:
     try:
         message = str(error)

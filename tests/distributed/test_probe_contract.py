@@ -13,6 +13,12 @@ API_PROBE = (
     / "npu"
     / "distributed_api_probe.py"
 )
+AUTOGRAD_PROBE = (
+    Path(__file__).resolve().parents[2]
+    / "scripts"
+    / "npu"
+    / "distributed_autograd_probe.py"
+)
 MANUAL = (
     Path(__file__).resolve().parents[2]
     / "aicir"
@@ -186,3 +192,14 @@ def test_manual_documents_full_npu_api_acceptance_contract():
         "分布式状态演化，也不是模拟 fallback。"
         in normalized
     )
+
+
+def test_native_autograd_probe_keeps_trainable_paths_contextual_and_sharded():
+    source = AUTOGRAD_PROBE.read_text(encoding="utf-8")
+
+    assert "_AutogradExecutionContext()" in source
+    assert "def _local_initial_pair" in source
+    assert "spec.global_start, spec.global_stop" in source
+    assert "for global_component in range(1 << n_qubits)" in source
+    assert "_cpu_complex128_expectation" in source
+    assert "DistSimulator" in source
