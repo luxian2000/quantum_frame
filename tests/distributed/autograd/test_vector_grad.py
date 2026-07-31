@@ -133,7 +133,7 @@ def test_parameterized_gate_gradients_match_parameter_shift(monkeypatch, gate_fa
             torch.tensor(float(value), dtype=torch.float32, requires_grad=gradient)
             for value in values
         )
-        plan = _GatePlanner(backend, layout, n_qubits).plan(
+        plan = _GatePlanner(backend, layout, n_qubits, execution_context=_AutogradExecutionContext()).plan(
             gate_factory(values_t), instruction_index=0
         )
         evolved = _PairVectorKernel(backend).apply(initial, plan, operation_index=0)
@@ -168,7 +168,7 @@ def test_named_gate_values_and_parameter_shift_match_independent_float64_oracle(
     state = _Pair(torch.tensor([[.5],[.5],[.5],[.5]], dtype=torch.float32), torch.tensor([[.1],[-.2],[.3],[-.4]], dtype=torch.float32))
     def native(point):
         leaves = tuple(torch.tensor(float(x), dtype=torch.float32) for x in point)
-        plan = _GatePlanner(backend, layout, 2).plan(factory(leaves), 0)
+        plan = _GatePlanner(backend, layout, 2, execution_context=_AutogradExecutionContext()).plan(factory(leaves), 0)
         return float(_PairReducer(backend).expectation(_PairVectorKernel(backend).apply(state, plan, operation_index=0), spec, PauliString("XI", n_qubits=2)).detach())
     np.testing.assert_allclose(native(values), _float64_gate_objective(name, values), atol=2e-5, rtol=2e-5)
     oracle = psr4 if four_term else parameter_shift_gradient
@@ -188,7 +188,7 @@ def test_thirty_two_parameter_circuit_gradient_matches_parameter_shift(monkeypat
         torch.zeros((2, 1), dtype=torch.float32),
     )
     kernel = _PairVectorKernel(backend)
-    planner = _GatePlanner(backend, layout, 1)
+    planner = _GatePlanner(backend, layout, 1, execution_context=_AutogradExecutionContext())
     for index, parameter in enumerate(parameters):
         state = kernel.apply(state, planner.plan(ry(parameter, 0), index), operation_index=index)
     value = _PairReducer(backend).expectation(state, spec, PauliString("Z", n_qubits=1))
@@ -264,7 +264,7 @@ def test_trainable_gate_planning_never_enters_complex_matrix_route(monkeypatch):
     )
     theta = torch.tensor(0.1, dtype=torch.float32, requires_grad=True)
 
-    plan = _GatePlanner(backend, _Layout.explicit((0,), n_qubits=1, distributed_axes=0), 1).plan(
+    plan = _GatePlanner(backend, _Layout.explicit((0,), n_qubits=1, distributed_axes=0), 1, execution_context=_AutogradExecutionContext()).plan(
         ry(theta, 0), instruction_index=0
     )
 
@@ -281,6 +281,24 @@ def test_trainable_complex_custom_unitary_is_rejected_at_native_boundary(monkeyp
     with pytest.raises(TypeError, match="requires_grad complex unitary"):
         _GatePlanner(backend, _Layout.explicit((0,), n_qubits=1, distributed_axes=0), 1).plan(
             {"type": "unitary", "parameter": matrix, "n_qubits": 1}, instruction_index=0
+        )
+
+
+def test_trainable_planning_requires_explicit_execution_context(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "1"); monkeypatch.setenv("RANK", "0"); monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    with pytest.raises(RuntimeError, match="explicit _AutogradExecutionContext"):
+        _GatePlanner(backend, _Layout.explicit((0,), n_qubits=1, distributed_axes=0), 1).plan(
+            ry(torch.tensor(0.2, dtype=torch.float32, requires_grad=True), 0), 0
+        )
+
+
+def test_plan_matrix_rejects_trainable_complex_matrix(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "1"); monkeypatch.setenv("RANK", "0"); monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    with pytest.raises(TypeError, match="requires_grad complex matrix"):
+        _GatePlanner(backend, _Layout.explicit((0,), n_qubits=1, distributed_axes=0), 1).plan_matrix(
+            torch.eye(2, dtype=torch.complex64, requires_grad=True), (0,), instruction_index=0
         )
 
 
@@ -304,7 +322,7 @@ def test_pair_reducer_observable_values_and_gradients_match_parameter_shift(monk
     def objective(value, grad=False):
         theta = torch.tensor(float(value), dtype=torch.float32, requires_grad=grad)
         state = _Pair(torch.tensor([[0.8], [0.6]], dtype=torch.float32), torch.zeros((2, 1), dtype=torch.float32))
-        plan = _GatePlanner(backend, layout, 1).plan(ry(theta, 0), 0)
+        plan = _GatePlanner(backend, layout, 1, execution_context=_AutogradExecutionContext()).plan(ry(theta, 0), 0)
         return _PairReducer(backend).expectation(_PairVectorKernel(backend).apply(state, plan, operation_index=0), spec, observable), theta
 
     value, theta = objective(0.31, grad=True)
@@ -325,7 +343,7 @@ def test_probability_jacobian_matches_parameter_shift_vjp_basis(monkeypatch):
     def probabilities(value, grad=False):
         theta = torch.tensor(float(value), dtype=torch.float32, requires_grad=grad)
         state = _Pair(torch.tensor([[1.0], [0.0]], dtype=torch.float32), torch.zeros((2, 1), dtype=torch.float32))
-        plan = _GatePlanner(backend, layout, 1).plan(ry(theta, 0), 0)
+        plan = _GatePlanner(backend, layout, 1, execution_context=_AutogradExecutionContext()).plan(ry(theta, 0), 0)
         return _PairReducer(backend).probabilities(_PairVectorKernel(backend).apply(state, plan, operation_index=0), spec), theta
 
     native = []

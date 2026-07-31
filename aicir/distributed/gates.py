@@ -101,7 +101,7 @@ class _GatePlanner:
         # A planner is one bounded circuit-planning context.  Sharing the
         # wrapper here makes a repeated physical tensor one autograd node, so
         # its accumulated adjoint crosses the collective exactly once.
-        self._execution_context = execution_context or _AutogradExecutionContext()
+        self._execution_context = execution_context
         if layout.n_qubits != self._n_qubits:
             raise ValueError("layout 与 n_qubits 不一致")
 
@@ -110,6 +110,14 @@ class _GatePlanner:
         gate_type = canonical_gate_name(instruction_name(instruction))
         parameter = instruction_parameter(instruction)
         if parameter is not None and gate_type != "unitary":
+            if getattr(parameter, "requires_grad", False) or any(
+                getattr(value, "requires_grad", False)
+                for value in (parameter if isinstance(parameter, (tuple, list)) else ())
+            ):
+                if self._execution_context is None:
+                    raise RuntimeError(
+                        "trainable distributed gate planning requires an explicit _AutogradExecutionContext"
+                    )
             def _wrap(value):
                 if isinstance(value, tuple):
                     return tuple(_wrap(item) for item in value)
@@ -137,6 +145,23 @@ class _GatePlanner:
             )
         if gate_type == "unitary":
             parameter = instruction_parameter(instruction)
+            if isinstance(parameter, _Pair) and (
+                parameter.real.requires_grad or parameter.imag.requires_grad
+            ):
+                if self._execution_context is None:
+                    raise RuntimeError(
+                        "trainable distributed gate planning requires an explicit _AutogradExecutionContext"
+                    )
+                def _wrap_component(value):
+                    key = id(value)
+                    cached = self._execution_context.parameter_cache.get(key)
+                    if cached is None:
+                        cached = replicated_parameter(value, communicator=self._backend.communicator)
+                        self._execution_context.parameter_cache[key] = cached
+                    return cached
+                parameter = _Pair(
+                    _wrap_component(parameter.real), _wrap_component(parameter.imag)
+                )
             if isinstance(parameter, torch.Tensor) and parameter.requires_grad:
                 if torch.is_complex(parameter):
                     raise TypeError(
@@ -224,6 +249,8 @@ class _GatePlanner:
                     mask ^= bit
                 partner_masks.append(mask)
 
+        if isinstance(local_matrix, torch.Tensor) and torch.is_complex(local_matrix) and local_matrix.requires_grad:
+            raise TypeError("plan_matrix 不接受 requires_grad complex matrix；请提供 _Pair(real, imag)")
         matrix = (
             local_matrix
             if isinstance(local_matrix, _Pair)

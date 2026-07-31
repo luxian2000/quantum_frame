@@ -19,7 +19,7 @@ from aicir.distributed import DistNPUBackend, parameter_shift_gradient
 from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.autograd._reducers import _PairReducer
 from aicir.distributed.autograd._vector import _PairVectorKernel
-from aicir.distributed.gates import _GatePlanner
+from aicir.distributed.gates import _AutogradExecutionContext, _GatePlanner
 from aicir.distributed.layout import _Layout, _ShardSpec
 
 
@@ -74,7 +74,7 @@ def _worker(rank, world_size, port, output_path):
             real = torch.tensor(local, dtype=torch.float32, requires_grad=state_trainable)
             imag = torch.zeros_like(real, requires_grad=state_trainable)
             pair = _Pair(real, imag)
-            plan = _GatePlanner(backend, layout, n_qubits).plan(ry(theta, axis), axis)
+            plan = _GatePlanner(backend, layout, n_qubits, execution_context=_AutogradExecutionContext()).plan(ry(theta, axis), axis)
             backend.communicator.clear_communication_records()
             evolved = _PairVectorKernel(backend).apply(pair, plan, operation_index=axis)
             value = _PairReducer(backend).expectation(evolved, spec, observable)
