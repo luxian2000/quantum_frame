@@ -145,9 +145,13 @@ def test_thirty_two_parameter_circuit_gradient_matches_parameter_shift(monkeypat
     value = _PairReducer(backend).expectation(state, spec, PauliString("Z", n_qubits=1))
     value.backward()
 
-    total = float(parameters.detach().sum())
-    expected = -np.cos(total) * np.ones(32, dtype=np.float64)
-    np.testing.assert_allclose(parameters.grad.detach().numpy(), expected, atol=2e-4, rtol=2e-4)
+    values = parameters.detach().numpy().astype(np.float64)
+    # Independent float64 parameter-shift oracle: this does not call the
+    # paired-real kernel or any production gate-matrix helper.
+    shifted = parameter_shift_gradient(
+        lambda point: -np.sin(np.sum(point)), values
+    )
+    np.testing.assert_allclose(parameters.grad.detach().numpy(), shifted, atol=2e-4, rtol=2e-4)
 
 
 def test_custom_unitary_uses_the_same_paired_real_kernel(monkeypatch):

@@ -28,6 +28,23 @@ def _free_port():
         return sock.getsockname()[1]
 
 
+def _float64_ry_reference(full, theta, axis, n_qubits):
+    """Independent CPU float64 full-state reference for one RY and Z_0."""
+
+    real = torch.tensor(full, dtype=torch.float64, requires_grad=True)
+    imag = torch.zeros_like(real, requires_grad=True)
+    t = torch.tensor(float(theta), dtype=torch.float64)
+    gate = torch.stack((torch.stack((torch.cos(t / 2), -torch.sin(t / 2))), torch.stack((torch.sin(t / 2), torch.cos(t / 2)))) )
+    unitary = torch.ones((1, 1), dtype=torch.float64)
+    identity = torch.eye(2, dtype=torch.float64)
+    for qubit in range(n_qubits):
+        unitary = torch.kron(unitary, gate if qubit == axis else identity)
+    out_r, out_i = unitary @ real, unitary @ imag
+    signs = torch.tensor([1.0 if index < (1 << (n_qubits - 1)) else -1.0 for index in range(1 << n_qubits)], dtype=torch.float64).reshape(-1, 1)
+    (signs * (out_r.square() + out_i.square())).sum().backward()
+    return real.grad.numpy(), imag.grad.numpy()
+
+
 def _worker(rank, world_size, port, output_path):
     os.environ.update(
         MASTER_ADDR="127.0.0.1",
@@ -72,6 +89,18 @@ def _worker(rank, world_size, port, output_path):
         )
         assert forward > 0 and backward > 0
         assert real.grad is not None and imag.grad is not None
+        gathered_real = [torch.zeros_like(real.grad) for _ in range(world_size)]
+        gathered_imag = [torch.zeros_like(imag.grad) for _ in range(world_size)]
+        torch.distributed.all_gather(gathered_real, real.grad)
+        torch.distributed.all_gather(gathered_imag, imag.grad)
+        if rank == 0:
+            reference_real, reference_imag = _float64_ry_reference(full.reshape(-1, 1), 0.31, axis, n_qubits)
+            np.testing.assert_allclose(
+                torch.cat(gathered_real).numpy(), reference_real, atol=2e-4, rtol=2e-4
+            )
+            np.testing.assert_allclose(
+                torch.cat(gathered_imag).numpy(), reference_imag, atol=2e-4, rtol=2e-4
+            )
         results.append({"axis": axis, "gradient": float(theta.grad), "forward": forward, "backward": backward})
 
     if rank == 0:
