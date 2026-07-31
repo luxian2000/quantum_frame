@@ -95,8 +95,9 @@ class _GatePlanner:
 
     def plan(self, gate, instruction_index: int) -> _GatePlan:
         instruction = as_instruction(gate)
+        gate_type = canonical_gate_name(instruction_name(instruction))
         parameter = instruction_parameter(instruction)
-        if parameter is not None:
+        if parameter is not None and gate_type != "unitary":
             def _wrap(value):
                 if isinstance(value, tuple):
                     return tuple(_wrap(item) for item in value)
@@ -115,7 +116,6 @@ class _GatePlanner:
                 return wrapped
 
             instruction = instruction_with_parameter(instruction, _wrap(parameter))
-        gate_type = canonical_gate_name(instruction_name(instruction))
         pair_matrix = _trainable_pair_matrix(instruction, gate_type)
         if pair_matrix is not None:
             return self.plan_matrix(
@@ -124,10 +124,16 @@ class _GatePlanner:
                 instruction_index=instruction_index,
             )
         if gate_type == "unitary":
-            matrix = _unitary_parameter_matrix(
-                instruction_parameter(instruction), self._backend
-            )
-            shape = tuple(int(dim) for dim in matrix.shape)
+            parameter = instruction_parameter(instruction)
+            if isinstance(parameter, torch.Tensor) and parameter.requires_grad:
+                if torch.is_complex(parameter):
+                    raise TypeError(
+                        "原生 distributed autograd 不接受 requires_grad complex unitary；"
+                        "请提供 _Pair(real, imag) 或在 CPU 参考路径构造该矩阵"
+                    )
+                raise TypeError("trainable unitary 必须以 _Pair(real, imag) 提供")
+            matrix = parameter if isinstance(parameter, _Pair) else _unitary_parameter_matrix(parameter, self._backend)
+            shape = tuple(int(dim) for dim in (matrix.real.shape if isinstance(matrix, _Pair) else matrix.shape))
             if len(shape) != 2 or shape[0] != shape[1] or shape[0] <= 0:
                 raise ValueError("unitary 门参数必须是正方阵")
             inferred = int(round(math.log2(shape[0])))

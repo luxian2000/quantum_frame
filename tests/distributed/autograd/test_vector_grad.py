@@ -6,7 +6,8 @@ import torch
 import numpy as np
 import pytest
 
-from aicir import PauliString
+from aicir import Hamiltonian, PauliString
+from aicir.ir import Observable
 from aicir.core.circuit import Circuit
 from aicir.core.circuit import crx, cry, crz, rx, rxx, ry, rz, rzz, u2, u3
 from aicir.distributed import parameter_shift_gradient
@@ -29,12 +30,15 @@ def test_pair_vector_kernel_applies_trainable_local_matrix_with_real_leaves(monk
     )
     layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
     theta = torch.tensor(0.37, dtype=torch.float32, requires_grad=True)
-    matrix = torch.stack(
-        (
-            torch.stack((torch.cos(theta / 2.0), torch.zeros_like(theta))),
-            torch.stack((torch.zeros_like(theta), torch.cos(theta / 2.0))),
-        )
-    ).to(torch.complex64)
+    matrix = _Pair(
+        torch.stack(
+            (
+                torch.stack((torch.cos(theta / 2.0), torch.zeros_like(theta))),
+                torch.stack((torch.zeros_like(theta), torch.cos(theta / 2.0))),
+            )
+        ),
+        torch.zeros((2, 2), dtype=torch.float32),
+    )
     plan = _GatePlanner(backend, layout, 1).plan_matrix(
         matrix,
         (0,),
@@ -215,3 +219,46 @@ def test_trainable_gate_planning_never_enters_complex_matrix_route(monkeypatch):
     )
 
     assert isinstance(plan.local_matrix, _Pair)
+
+
+def test_trainable_complex_custom_unitary_is_rejected_at_native_boundary(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    matrix = torch.eye(2, dtype=torch.complex64, requires_grad=True)
+
+    with pytest.raises(TypeError, match="requires_grad complex unitary"):
+        _GatePlanner(backend, _Layout.explicit((0,), n_qubits=1, distributed_axes=0), 1).plan(
+            {"type": "unitary", "parameter": matrix, "n_qubits": 1}, instruction_index=0
+        )
+
+
+@pytest.mark.parametrize(
+    "observable",
+    (
+        PauliString("Z", n_qubits=1),
+        Hamiltonian([("Z", 0.7), ("X", -0.2)]),
+        Observable("matrix", np.array([[1.0, 0.0], [0.0, -1.0]], dtype=np.complex64), metadata={"qubits": (0,)}),
+    ),
+    ids=("pauli", "hamiltonian", "dense"),
+)
+def test_pair_reducer_observable_values_and_gradients_match_parameter_shift(monkeypatch, observable):
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
+    spec = _ShardSpec.build(1, 1, 0, "vector", layout)
+
+    def objective(value, grad=False):
+        theta = torch.tensor(float(value), dtype=torch.float32, requires_grad=grad)
+        state = _Pair(torch.tensor([[0.8], [0.6]], dtype=torch.float32), torch.zeros((2, 1), dtype=torch.float32))
+        plan = _GatePlanner(backend, layout, 1).plan(ry(theta, 0), 0)
+        return _PairReducer(backend).expectation(_PairVectorKernel(backend).apply(state, plan, operation_index=0), spec, observable), theta
+
+    value, theta = objective(0.31, grad=True)
+    value.backward()
+    shifted = parameter_shift_gradient(lambda values: float(objective(values[0])[0].detach()), np.array([0.31]))[0]
+    assert np.isfinite(float(value.detach()))
+    assert float(theta.grad) == pytest.approx(float(shifted), abs=1e-4)
