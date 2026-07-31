@@ -242,7 +242,7 @@ def _run_section_collectively(
 
     error = None
     try:
-        result = _blocked_section(name) if runner is None else runner()
+        result = _blocked_section(name) if runner is None else runner(backend)
     except Exception as caught:  # noqa: BLE001 - preserve collective order
         error = caught
         result = None
@@ -261,11 +261,12 @@ def _run_section_collectively(
         device=backend._device,
     )
     failed_ranks = backend.communicator.all_reduce_sum(local_failed)
-    if int(failed_ranks[0].detach().cpu()) != backend.world_size:
+    failed_rank_count = int(failed_ranks[0].detach().cpu())
+    if failed_rank_count not in {0, backend.world_size}:
         return {
             "status": "FAIL",
             "passed": False,
-            "failed_ranks": int(failed_ranks[0].detach().cpu()),
+            "failed_ranks": failed_rank_count,
         }
     return result
 

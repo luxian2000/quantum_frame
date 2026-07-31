@@ -53,6 +53,36 @@ class _CpuCollectiveBackend:
         )
 
 
+def test_environment_section_is_invoked_with_its_backend(monkeypatch):
+    backend = _CpuCollectiveBackend(rank=0, world_size=1)
+    backend.local_rank = 0
+    backend._dtype = torch.complex64
+    monkeypatch.setattr(probe.torch.distributed, "get_backend", lambda: "gloo")
+    monkeypatch.setattr(probe.torch.distributed, "barrier", lambda: None)
+
+    result = probe._run_section_collectively(
+        backend,
+        "environment",
+        runner=probe._environment_section,
+    )
+
+    assert result["passed"] is True
+    assert result["device_mapping"] == {
+        "rank": 0,
+        "local_rank": 0,
+        "device": "cpu",
+    }
+    assert set(result["paired_real_on_npu"]) == {
+        "add",
+        "mul",
+        "div_real",
+        "matmul",
+        "dagger",
+        "index_select",
+        "abs_sq",
+    }
+
+
 def _failure_worker(rank, world_size, port, output_path):
     os.environ["MASTER_ADDR"] = "127.0.0.1"
     os.environ["MASTER_PORT"] = str(port)
@@ -64,7 +94,7 @@ def _failure_worker(rank, world_size, port, output_path):
     try:
         backend = _CpuCollectiveBackend(rank, world_size)
 
-        def runner():
+        def runner(_backend):
             if rank == 1:
                 raise RuntimeError("one-rank section failure")
             return {"status": "PASS", "passed": True}

@@ -58,6 +58,16 @@ def test_pair_combine_uses_a_complex_view_only_at_the_explicit_boundary():
     np.testing.assert_allclose(pair.imag.grad.numpy(), np.ones(2), atol=1e-6)
 
 
+def test_pair_combine_rejects_non_cpu_boundary_tensor():
+    pair = _Pair(
+        torch.ones(2, dtype=torch.float32, device="meta"),
+        torch.zeros(2, dtype=torch.float32, device="meta"),
+    )
+
+    with pytest.raises(RuntimeError, match=r"combine\(\) 仅支持 CPU 诊断/参考边界"):
+        pair.combine()
+
+
 def test_pair_rejects_non_float32_or_mismatched_components():
     with pytest.raises(TypeError, match="_Pair.real 必须是 torch.float32"):
         _Pair(torch.ones(2, dtype=torch.float64), torch.ones(2, dtype=torch.float32))
