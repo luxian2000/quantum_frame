@@ -9,6 +9,36 @@ import torch
 from ._pair import _Pair
 
 
+class _ReplicatedParameterFn(torch.autograd.Function):
+    """Identity forward with one real global parameter-adjoint reduction."""
+
+    @staticmethod
+    def forward(ctx, value: torch.Tensor, communicator):
+        ctx.communicator = communicator
+        return value
+
+    @staticmethod
+    def backward(ctx, gradient: torch.Tensor):
+        return ctx.communicator.all_reduce_sum_real(gradient), None
+
+
+def replicated_parameter(value, *, communicator):
+    """Mark a real trainable gate leaf as replicated across all ranks.
+
+    This wrapper belongs at the gate parameter leaf, before the parameter is
+    expanded into multiple matrix entries.  Reducing individual matrix parts
+    would count a shared angle once per real/imaginary entry.
+    """
+
+    if not isinstance(value, torch.Tensor) or not value.requires_grad:
+        return value
+    if value.dtype != torch.float32 or torch.is_complex(value):
+        raise TypeError("分布式 statevector 参数必须是实数 torch.float32")
+    if communicator.world_size == 1:
+        return value
+    return _ReplicatedParameterFn.apply(value, communicator)
+
+
 @dataclass(frozen=True)
 class PureStateParam:
     """Unconstrained paired-real amplitudes for a normalized pure state."""

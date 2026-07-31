@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import itertools
+import math
 
 from ..core.gates import (
     _apply_local_matrix_to_state,
     _cast_local_matrix,
     _gate_local_matrix,
+    _unitary_parameter_matrix,
 )
 from ..gates import canonical_gate_name
-from ..ir import as_instruction, instruction_name
-from ._contracts import reject_requires_grad
+from ..ir import as_instruction, instruction_name, instruction_n_qubits, instruction_parameter, instruction_with_parameter
+from .autograd._parameters import replicated_parameter
 from .state import DistState
 
 
@@ -48,7 +50,35 @@ class _GatePlanner:
 
     def plan(self, gate, instruction_index: int) -> _GatePlan:
         instruction = as_instruction(gate)
+        parameter = instruction_parameter(instruction)
+        if parameter is not None:
+            def _wrap(value):
+                if isinstance(value, tuple):
+                    return tuple(_wrap(item) for item in value)
+                if isinstance(value, list):
+                    return [_wrap(item) for item in value]
+                return replicated_parameter(value, communicator=self._backend.communicator)
+
+            instruction = instruction_with_parameter(instruction, _wrap(parameter))
         gate_type = canonical_gate_name(instruction_name(instruction))
+        if gate_type == "unitary":
+            matrix = _unitary_parameter_matrix(
+                instruction_parameter(instruction), self._backend
+            )
+            shape = tuple(int(dim) for dim in matrix.shape)
+            if len(shape) != 2 or shape[0] != shape[1] or shape[0] <= 0:
+                raise ValueError("unitary 门参数必须是正方阵")
+            inferred = int(round(math.log2(shape[0])))
+            if (1 << inferred) != shape[0]:
+                raise ValueError("unitary 门矩阵维度必须是 2 的幂")
+            gate_qubits = int(instruction_n_qubits(instruction, inferred))
+            if gate_qubits != inferred:
+                raise ValueError("unitary 门的 n_qubits 与矩阵维度不一致")
+            return self.plan_matrix(
+                matrix,
+                tuple(range(gate_qubits)),
+                instruction_index=instruction_index,
+            )
         local, logical_axes, cache_key = _gate_local_matrix(
             instruction,
             gate_type,
@@ -123,7 +153,6 @@ class _GatePlanner:
             raise ValueError(
                 f"局部门矩阵形状必须是 ({dimension}, {dimension})"
             )
-        reject_requires_grad(matrix)
         return _GatePlan(
             instruction_index=int(instruction_index),
             local_matrix=matrix,
