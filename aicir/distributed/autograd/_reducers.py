@@ -23,10 +23,15 @@ class _PairReducer:
     def probabilities(self, state_pair: _Pair, spec) -> torch.Tensor:
         del spec
         probabilities = state_pair.abs_sq().reshape(-1)
-        total = _replicated_all_reduce(
+        mean_total = _replicated_all_reduce(
             probabilities.sum().reshape(()),
             communicator=self._backend.communicator,
         )
+        # The collective primitive has replicated-*mean* backward semantics.
+        # Probability normalization needs the physical global sum in forward
+        # while retaining that replicated-loss adjoint convention.
+        world_size = float(self._backend.world_size)
+        total = world_size * mean_total.detach() + mean_total - mean_total.detach()
         if float(total.detach().cpu()) <= 0.0:
             raise ValueError("分布式状态的全局概率和必须大于 0")
         return probabilities / total
