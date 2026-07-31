@@ -18,6 +18,7 @@ import sys
 import torch
 
 from aicir.distributed import DistNPUBackend
+from aicir.distributed.autograd._pair import _Pair
 
 
 SECTIONS = (
@@ -37,7 +38,6 @@ SECTIONS = (
 )
 
 BLOCKED_BY_TASK = {
-    "environment": 2,
     "statevector": 2,
     "density": 3,
     "gates": 4,
@@ -94,6 +94,81 @@ def _blocked_section(name: str) -> dict[str, object]:
         "status": "BLOCKED",
         "passed": False,
         "blocked_by_task": BLOCKED_BY_TASK[name],
+    }
+
+
+def _torch_npu_version() -> str | None:
+    try:
+        import torch_npu  # type: ignore
+    except Exception:  # noqa: BLE001 - probe records unavailable optional runtime
+        return None
+    return str(getattr(torch_npu, "__version__", "unknown"))
+
+
+def _cann_identity() -> str:
+    """Return the runtime CANN identity when exposed, otherwise ``unknown``."""
+
+    candidates = (
+        getattr(torch.version, "cann", None),
+        os.environ.get("CANN_VERSION"),
+        os.environ.get("ASCEND_VERSION"),
+    )
+    for candidate in candidates:
+        if candidate:
+            return str(candidate)
+    return "unknown"
+
+
+def _environment_section(backend: DistNPUBackend) -> dict[str, object]:
+    """Exercise paired-real kernels and report the strict runtime identity."""
+
+    device = backend._device
+    real = torch.ones((2, 2), dtype=torch.float32, device=device)
+    imag = torch.zeros((2, 2), dtype=torch.float32, device=device)
+    left = _Pair(real, imag)
+    right = _Pair(real * 2.0, imag)
+    index = torch.tensor([1, 0], dtype=torch.long, device=device)
+    operations = {
+        "add": left.add(right),
+        "mul": left.mul(right),
+        "div_real": left.div_real(torch.tensor(2.0, dtype=torch.float32, device=device)),
+        "matmul": left.matmul(right),
+        "dagger": left.dagger(),
+        "index_select": left.index_select(0, index),
+    }
+    operations["abs_sq"] = left.abs_sq()
+    paired_real_on_npu = {
+        name: (
+            value.real.device == device
+            and value.imag.device == device
+            and value.real.dtype == torch.float32
+            and value.imag.dtype == torch.float32
+        )
+        if isinstance(value, _Pair)
+        else value.device == device and value.dtype == torch.float32
+        for name, value in operations.items()
+    }
+    passed = all(paired_real_on_npu.values())
+    return {
+        "status": "PASS" if passed else "FAIL",
+        "passed": passed,
+        "device_mapping": {
+            "rank": backend.rank,
+            "local_rank": backend.local_rank,
+            "device": str(device),
+        },
+        "backend": torch.distributed.get_backend(),
+        "dtype_capabilities": {
+            "paired_real": "float32",
+            "backend_state": str(backend._dtype),
+            "complex_collectives": bool(getattr(backend.communicator, "supports_complex", False)),
+        },
+        "versions": {
+            "torch": str(torch.__version__),
+            "torch_npu": _torch_npu_version(),
+            "cann": _cann_identity(),
+        },
+        "paired_real_on_npu": paired_real_on_npu,
     }
 
 
@@ -202,7 +277,11 @@ def _selected_sections(selected: str) -> tuple[str, ...]:
 def _run_probe(selected: str, output_json: Path) -> bool:
     backend = _strict_backend(fallback_to_cpu=False)
     sections = {
-        name: _run_section_collectively(backend, name)
+        name: _run_section_collectively(
+            backend,
+            name,
+            runner=_environment_section if name == "environment" else None,
+        )
         for name in _selected_sections(selected)
     }
     local_passed = torch.tensor(

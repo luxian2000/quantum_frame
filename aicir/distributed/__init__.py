@@ -1,6 +1,7 @@
 """Explicit multi-NPU state-sharding API."""
 
 from .backend import DistNPUBackend
+from .autograd import DensityParam, PureStateParam, StinespringParam
 from .grad import (
     finite_difference_gradient,
     parameter_shift_gradient,
