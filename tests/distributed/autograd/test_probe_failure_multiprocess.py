@@ -99,6 +99,11 @@ def test_communication_section_reports_only_real_completed_p2p_payloads():
         def clear_communication_records(self):
             self._records.clear()
 
+        def all_gather_real(self, descriptor):
+            remote = descriptor.clone()
+            remote[2] = 0.0
+            return [descriptor, remote]
+
         def exchange_real(self, tensor, *, peer, tag):
             self._records.append(
                 {

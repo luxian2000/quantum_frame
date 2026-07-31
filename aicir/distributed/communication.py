@@ -36,7 +36,13 @@ class _Communicator:
 
     @property
     def communication_counters(self):
-        """Count real transport operations by dtype, peer, tag, and bytes."""
+        """Count real transport endpoints by dtype, peer, tag, and bytes.
+
+        ``bytes`` is the logical payload volume observed at this rank, not a
+        backend wire-byte estimate.  A P2P exchange counts one sent and one
+        received component; root scatter/gather count all root chunks, while
+        a non-root endpoint counts its one local chunk.
+        """
 
         records = self._communication_records
         return {
@@ -298,7 +304,7 @@ class _Communicator:
             tensor,
             kind="gather",
             peer=root,
-            copies=1,
+            copies=self.world_size if self.rank == root else 1,
         )
         return gathered
 
@@ -386,6 +392,6 @@ class _Communicator:
             result,
             kind="scatter",
             peer=root,
-            copies=1,
+            copies=self.world_size if self.rank == root else 1,
         )
         return result

@@ -11,16 +11,138 @@ import torch
 from ._pair import _Pair
 
 
-_PHASE_IDS = {"forward": 0, "backward": 1}
+_FORWARD_PHASE = "forward"
+_MAX_DESCRIPTOR_DIMENSIONS = 7
+_MAX_DESCRIPTOR_INTEGER = 2**24 - 1
+_DESCRIPTOR_WIDTH = 16
+
+
+def _is_forward_phase(value) -> bool:
+    """Reject non-string phase controls without invoking user equality hooks."""
+
+    return type(value) is str and value == _FORWARD_PHASE
+
+
+def _safe_int(value):
+    """Convert a control value without letting one rank skip preflight."""
+
+    try:
+        return int(value)
+    except Exception:  # noqa: BLE001 - malformed controls must synchronize
+        return None
+
+
+def _safe_shape(value):
+    """Return a compact, float32-exact shape or a deterministic failure."""
+
+    try:
+        shape = tuple(value)
+    except Exception:  # noqa: BLE001 - malformed controls must synchronize
+        return None
+    if len(shape) > _MAX_DESCRIPTOR_DIMENSIONS:
+        return None
+    converted = []
+    for size in shape:
+        converted_size = _safe_int(size)
+        if converted_size is None or not 0 <= converted_size <= _MAX_DESCRIPTOR_INTEGER:
+            return None
+        converted.append(converted_size)
+    return tuple(converted)
+
+
+def _descriptor(*, valid, code=0, values=(), communicator) -> torch.Tensor:
+    """Build a fixed-size float32 control-plane payload."""
+
+    result = torch.zeros(
+        _DESCRIPTOR_WIDTH,
+        dtype=torch.float32,
+        device=communicator.device,
+    )
+    result[0] = float(bool(valid))
+    result[1] = float(code)
+    for index, value in enumerate(values, start=2):
+        result[index] = float(value)
+    return result
+
+
+def _raise_preflight_failure(descriptors, *, names) -> None:
+    """Raise one deterministic error after every rank has joined preflight."""
+
+    first_invalid = next(
+        descriptor for descriptor in descriptors if not bool(descriptor[0].item())
+    )
+    code = int(first_invalid[1].item())
+    name = names.get(code, "参数")
+    raise ValueError(f"分布式 autograd collective 参数无效: {name}")
+
+
+def _synchronize_preflight(
+    communicator,
+    descriptor,
+    *,
+    names,
+    fields=(),
+    field_names=None,
+):
+    """Synchronize validation before any data-plane collective is entered."""
+
+    descriptors = communicator.all_gather_real(descriptor)
+    if any(not bool(candidate[0].item()) for candidate in descriptors):
+        _raise_preflight_failure(descriptors, names=names)
+    for field in fields:
+        values = [candidate[field].item() for candidate in descriptors]
+        if any(value != values[0] for value in values[1:]):
+            name = (field_names or {}).get(field, "参数")
+            raise ValueError(f"分布式 autograd collective 参数不一致: {name}")
+    return descriptors
+
+
+def _pair_shape(pair, *, communicator, expected_shape=None):
+    """Validate a possibly externally-mutated paired-real value without raising."""
+
+    if not isinstance(pair, _Pair):
+        return None
+    real = getattr(pair, "real", None)
+    imag = getattr(pair, "imag", None)
+    if not isinstance(real, torch.Tensor) or not isinstance(imag, torch.Tensor):
+        return None
+    if (
+        real.dtype != torch.float32
+        or imag.dtype != torch.float32
+        or torch.is_complex(real)
+        or torch.is_complex(imag)
+        or real.device != imag.device
+        or real.device != communicator.device
+        or tuple(real.shape) != tuple(imag.shape)
+    ):
+        return None
+    shape = _safe_shape(real.shape)
+    if shape is None or (expected_shape is not None and shape != expected_shape):
+        return None
+    return shape
+
+
+def _real_tensor_shape(tensor, *, communicator):
+    if not isinstance(tensor, torch.Tensor):
+        return None
+    if (
+        tensor.dtype != torch.float32
+        or torch.is_complex(tensor)
+        or tensor.device != communicator.device
+    ):
+        return None
+    return _safe_shape(tensor.shape)
 
 
 def _tag(operation_index: int, *, phase: str, direction: int, component: int) -> int:
     """Allocate a deterministic paired-real P2P tag."""
 
-    try:
-        phase_id = _PHASE_IDS[phase]
-    except KeyError as error:
-        raise ValueError("phase 必须是 'forward' 或 'backward'") from error
+    if phase == _FORWARD_PHASE:
+        phase_id = 0
+    elif phase == "backward":
+        phase_id = 1
+    else:
+        raise ValueError("phase 必须是 'forward' 或 'backward'")
     operation_index = int(operation_index)
     if operation_index < 0 or direction not in {0, 1} or component not in {0, 1}:
         raise ValueError("operation_index、direction 和 component 必须有效")
@@ -41,12 +163,12 @@ class _PairExchangeFn(torch.autograd.Function):
             communicator.exchange_real(
                 real,
                 peer=peer,
-                tag=_tag(operation_index, phase=phase, direction=0, component=0),
+                tag=_tag(operation_index, phase=_FORWARD_PHASE, direction=0, component=0),
             ),
             communicator.exchange_real(
                 imag,
                 peer=peer,
-                tag=_tag(operation_index, phase=phase, direction=0, component=1),
+                tag=_tag(operation_index, phase=_FORWARD_PHASE, direction=0, component=1),
             ),
         )
 
@@ -126,36 +248,83 @@ class _RootScatterPairFn(torch.autograd.Function):
         return torch.stack(real_parts), torch.stack(imag_parts), None, None, None
 
 
-def _validate_matching_shape(shape, *, communicator) -> tuple[int, ...]:
-    shape = tuple(int(size) for size in shape)
-    if len(shape) > 7 or any(size < 0 for size in shape):
-        raise ValueError("local_shape 必须是至多七维的非负整数 shape")
-    descriptor = torch.zeros(8, dtype=torch.float32, device=communicator.device)
-    descriptor[0] = len(shape)
-    if shape:
-        descriptor[1 : len(shape) + 1] = torch.tensor(
-            shape,
-            dtype=torch.float32,
-            device=communicator.device,
-        )
-    descriptors = communicator.all_gather_real(descriptor)
-    if any(not torch.equal(descriptor, candidate) for candidate in descriptors):
-        raise ValueError("所有 rank 的 local_shape 必须一致")
-    return shape
-
-
 def _exchange_pair(pair, *, communicator, peer, operation_index, phase) -> _Pair:
     """Exchange one paired-real value with custom real-valued backward P2P."""
 
-    if not isinstance(pair, _Pair):
-        raise TypeError("pair 必须是 _Pair")
+    parsed_peer = _safe_int(peer)
+    parsed_operation = _safe_int(operation_index)
+    pair_shape = _pair_shape(pair, communicator=communicator)
+    valid = (
+        pair_shape is not None
+        and parsed_peer is not None
+        and 0 <= parsed_peer < communicator.world_size
+        and parsed_peer != communicator.rank
+        and parsed_operation is not None
+        and 0 <= parsed_operation <= _MAX_DESCRIPTOR_INTEGER
+        and _is_forward_phase(phase)
+    )
+    descriptor = _descriptor(
+        valid=valid,
+        code=(
+            1
+            if pair_shape is None
+            else 2
+            if parsed_peer is None
+            else 3
+            if not 0 <= parsed_peer < communicator.world_size
+            else 4
+            if parsed_peer == communicator.rank
+            else 5
+            if parsed_operation is None or not 0 <= parsed_operation <= _MAX_DESCRIPTOR_INTEGER
+            else 6
+            if not _is_forward_phase(phase)
+            else 0
+        ),
+        values=(
+            parsed_peer if parsed_peer is not None else 0,
+            parsed_operation if parsed_operation is not None else 0,
+            0 if _is_forward_phase(phase) else 1,
+            len(pair_shape) if pair_shape is not None else 0,
+            *(pair_shape or ()),
+        ),
+        communicator=communicator,
+    )
+    descriptors = _synchronize_preflight(
+        communicator,
+        descriptor,
+        names={
+            1: "pair",
+            2: "peer",
+            3: "peer",
+            4: "peer",
+            5: "operation_index",
+            6: "phase",
+        },
+        fields=(3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+        field_names={
+            3: "operation_index",
+            4: "phase",
+            5: "pair shape",
+            6: "pair shape",
+            7: "pair shape",
+            8: "pair shape",
+            9: "pair shape",
+            10: "pair shape",
+            11: "pair shape",
+            12: "pair shape",
+        },
+    )
+    for rank, candidate in enumerate(descriptors):
+        candidate_peer = int(candidate[2].item())
+        if int(descriptors[candidate_peer][2].item()) != rank:
+            raise ValueError("分布式 autograd collective 参数不一致: peer")
     real, imag = _PairExchangeFn.apply(
         pair.real,
         pair.imag,
         communicator,
-        int(peer),
-        int(operation_index),
-        phase,
+        parsed_peer,
+        parsed_operation,
+        _FORWARD_PHASE,
     )
     return _Pair(real, imag)
 
@@ -163,30 +332,71 @@ def _exchange_pair(pair, *, communicator, peer, operation_index, phase) -> _Pair
 def _replicated_all_reduce(tensor, *, communicator) -> torch.Tensor:
     """Return the replicated mean with a world-size-normalized backward."""
 
-    communicator._require_real_float32(tensor)
+    shape = _real_tensor_shape(tensor, communicator=communicator)
+    descriptor = _descriptor(
+        valid=shape is not None,
+        code=1,
+        values=(len(shape) if shape is not None else 0, *(shape or ())),
+        communicator=communicator,
+    )
+    _synchronize_preflight(
+        communicator,
+        descriptor,
+        names={1: "tensor", 2: "tensor shape", 3: "tensor shape", 4: "tensor shape", 5: "tensor shape", 6: "tensor shape", 7: "tensor shape", 8: "tensor shape", 9: "tensor shape"},
+        fields=(2, 3, 4, 5, 6, 7, 8, 9),
+        field_names={field: "tensor shape" for field in range(2, 10)},
+    )
     return _ReplicatedAllReduceFn.apply(tensor, communicator)
 
 
 def _scatter_root_pair(pair_or_none, *, communicator, root, local_shape) -> _Pair:
     """Scatter root-owned paired-real shards and gather their gradients to root."""
 
-    root = int(root)
-    if not 0 <= root < communicator.world_size:
-        raise ValueError(f"root={root} 必须位于 [0, {communicator.world_size})")
-    local_shape = _validate_matching_shape(local_shape, communicator=communicator)
-    is_root = communicator.rank == root
-    valid_input = is_root and isinstance(pair_or_none, _Pair)
-    if is_root and valid_input:
-        expected_shape = (communicator.world_size,) + local_shape
-        valid_input = pair_or_none.real.shape == expected_shape
-    valid = torch.tensor(
-        [float(valid_input if is_root else pair_or_none is None)],
-        dtype=torch.float32,
-        device=communicator.device,
+    parsed_root = _safe_int(root)
+    parsed_shape = _safe_shape(local_shape)
+    root_is_valid = parsed_root is not None and 0 <= parsed_root < communicator.world_size
+    expected_shape = (
+        (communicator.world_size,) + parsed_shape
+        if root_is_valid and parsed_shape is not None
+        else None
     )
-    valid_count = communicator.all_reduce_sum_real(valid)
-    if int(valid_count.item()) != communicator.world_size:
-        raise ValueError("root 必须提供 shape 为 (world_size, *local_shape) 的 _Pair")
+    if root_is_valid and communicator.rank == parsed_root:
+        input_is_valid = _pair_shape(
+            pair_or_none,
+            communicator=communicator,
+            expected_shape=expected_shape,
+        ) is not None
+    else:
+        input_is_valid = pair_or_none is None
+    valid = root_is_valid and parsed_shape is not None and input_is_valid
+    descriptor = _descriptor(
+        valid=valid,
+        code=(
+            1
+            if parsed_root is None
+            else 2
+            if not root_is_valid
+            else 3
+            if parsed_shape is None
+            else 4
+        ),
+        values=(
+            parsed_root if parsed_root is not None else 0,
+            len(parsed_shape) if parsed_shape is not None else 0,
+            *(parsed_shape or ()),
+        ),
+        communicator=communicator,
+    )
+    _synchronize_preflight(
+        communicator,
+        descriptor,
+        names={1: "root", 2: "root", 3: "local_shape", 4: "root pair"},
+        fields=(2, 3, 4, 5, 6, 7, 8, 9),
+        field_names={2: "root", **{field: "local_shape" for field in range(3, 10)}},
+    )
+    root = parsed_root
+    local_shape = parsed_shape
+    is_root = communicator.rank == root
 
     if is_root:
         root_real, root_imag = pair_or_none.real, pair_or_none.imag
@@ -216,9 +426,31 @@ def _scatter_root_pair(pair_or_none, *, communicator, root, local_shape) -> _Pai
 def _gather_root_pair(pair, *, communicator, root) -> _Pair | None:
     """Gather paired-real local values to root without complex transport."""
 
-    if not isinstance(pair, _Pair):
-        raise TypeError("pair 必须是 _Pair")
-    root = int(root)
+    parsed_root = _safe_int(root)
+    pair_shape = _pair_shape(pair, communicator=communicator)
+    valid = (
+        parsed_root is not None
+        and 0 <= parsed_root < communicator.world_size
+        and pair_shape is not None
+    )
+    descriptor = _descriptor(
+        valid=valid,
+        code=(1 if parsed_root is None else 2 if not 0 <= parsed_root < communicator.world_size else 3),
+        values=(
+            parsed_root if parsed_root is not None else 0,
+            len(pair_shape) if pair_shape is not None else 0,
+            *(pair_shape or ()),
+        ),
+        communicator=communicator,
+    )
+    _synchronize_preflight(
+        communicator,
+        descriptor,
+        names={1: "root", 2: "root", 3: "pair", 4: "pair shape", 5: "pair shape", 6: "pair shape", 7: "pair shape", 8: "pair shape", 9: "pair shape"},
+        fields=(2, 3, 4, 5, 6, 7, 8, 9),
+        field_names={2: "root", **{field: "pair shape" for field in range(3, 10)}},
+    )
+    root = parsed_root
     real_parts = communicator.gather_to_root_real(pair.real, root=root)
     imag_parts = communicator.gather_to_root_real(pair.imag, root=root)
     if communicator.rank != root:
