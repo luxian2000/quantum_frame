@@ -167,6 +167,16 @@ def _probability_worker(rank, world_size, port, output_path):
     local = ((indices + 1.0) / np.sqrt(dimension * (dimension + 1) * (2 * dimension + 1) / 6.0)).reshape(-1, 1)
     errors = []
 
+    def cpu_probability(global_component, theta, axis):
+        bit = 1 << (n_qubits - 1 - axis)
+        norm = np.sqrt(dimension * (dimension + 1) * (2 * dimension + 1) / 6.0)
+        own = (global_component + 1.0) / norm
+        partner = ((global_component ^ bit) + 1.0) / norm
+        amplitude = np.cos(theta / 2.0) * own + (
+            np.sin(theta / 2.0) if global_component & bit else -np.sin(theta / 2.0)
+        ) * partner
+        return float(amplitude * amplitude)
+
     def probabilities(value, axis, *, gradient=False):
         theta = torch.tensor(float(value), dtype=torch.float32, requires_grad=gradient)
         pair = _Pair(torch.tensor(local, dtype=torch.float32), torch.zeros_like(torch.tensor(local, dtype=torch.float32)))
@@ -179,11 +189,7 @@ def _probability_worker(rank, world_size, port, output_path):
             loss = values[global_component - spec.global_start] if spec.global_start <= global_component < spec.global_stop else values.sum() * 0.0
             loss.backward()
             shifted = parameter_shift_gradient(
-                lambda point: float(backend.communicator.all_reduce_sum(
-                    probabilities(point[0], axis)[0][global_component - spec.global_start].reshape(())
-                    if spec.global_start <= global_component < spec.global_stop
-                    else torch.zeros((), dtype=torch.float32)
-                )),
+                lambda point: cpu_probability(global_component, point[0], axis),
                 np.array([0.31]),
             )[0]
             errors.append(abs(float(theta.grad) - float(shifted)))

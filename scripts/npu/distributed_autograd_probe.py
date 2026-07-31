@@ -407,16 +407,11 @@ def _probability_section(backend):
                 loss = probabilities.sum() * 0.0
             loss.backward()
             shifted = parameter_shift_gradient(
-                lambda values: float(backend.communicator.all_reduce_sum(
-                    _native_pair_value(
-                        backend,
-                        torch.tensor(float(values[0]), dtype=torch.float32, device=backend._device),
-                        axis,
-                        probability=True,
-                    )[0][global_component - spec.global_start].reshape(())
-                    if spec.global_start <= global_component < spec.global_stop
-                    else torch.zeros((), dtype=torch.float32, device=backend._device)
-                ).detach().cpu()),
+                lambda values: abs(
+                    _cpu_ry_amplitude(
+                        global_component, n_qubits, float(values[0]), axis
+                    )
+                ) ** 2,
                 np.array([0.31]),
             )[0]
             errors.append(abs(float(theta.grad.detach().cpu()) - float(shifted)))
