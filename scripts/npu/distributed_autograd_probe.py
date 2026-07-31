@@ -18,6 +18,7 @@ import sys
 import torch
 
 from aicir.distributed import DistNPUBackend
+from aicir.distributed.autograd._collectives import _exchange_pair
 from aicir.distributed.autograd._pair import _Pair
 
 
@@ -172,6 +173,78 @@ def _environment_section(backend: DistNPUBackend) -> dict[str, object]:
     }
 
 
+def _communication_section(backend: DistNPUBackend) -> dict[str, object]:
+    """Exercise each distributed axis with paired-real forward/backward P2P.
+
+    ``exchange_real`` records only after its asynchronous P2P work handles
+    have completed, so the returned evidence is also a teardown-safety check.
+    """
+
+    communicator = backend.communicator
+    communicator.clear_communication_records()
+    axes = tuple(range(backend.world_size.bit_length() - 1))
+    real = torch.tensor(
+        [float(backend.rank + 1)],
+        dtype=torch.float32,
+        device=backend._device,
+        requires_grad=True,
+    )
+    imag = torch.tensor(
+        [-float(backend.rank + 1)],
+        dtype=torch.float32,
+        device=backend._device,
+        requires_grad=True,
+    )
+    pair = _Pair(real, imag)
+    for axis in axes:
+        pair = _exchange_pair(
+            pair,
+            communicator=communicator,
+            peer=backend.rank ^ (1 << axis),
+            operation_index=axis,
+            phase="forward",
+        )
+
+    before_local_gate = len(communicator.communication_records)
+    local_gate_pair = pair.mul(pair)
+    local_gate_p2p_delta = len(communicator.communication_records) - before_local_gate
+    local_gate_pair.abs_sq().sum().backward()
+    records = list(communicator.communication_records)
+    exchange_records = [record for record in records if record["kind"] == "exchange"]
+    forward_tags = sorted(
+        record["tag"] for record in exchange_records if record["tag"] % 8 < 4
+    )
+    backward_tags = sorted(
+        record["tag"] for record in exchange_records if record["tag"] % 8 >= 4
+    )
+    payload_dtypes = sorted({record["dtype"] for record in records})
+    peers = sorted({record["peer"] for record in exchange_records})
+    expected_per_phase = 2 * len(axes)
+    forward_p2p = len(forward_tags)
+    backward_p2p = len(backward_tags)
+    passed = (
+        local_gate_p2p_delta == 0
+        and forward_p2p == expected_per_phase
+        and backward_p2p == expected_per_phase
+        and payload_dtypes == ["torch.float32"]
+        and all(peer is not None and peer != backend.rank and 0 <= peer < backend.world_size for peer in peers)
+        and set(forward_tags).isdisjoint(backward_tags)
+        and all(record["bytes"] > 0 for record in records)
+    )
+    return {
+        "status": "PASS" if passed else "FAIL",
+        "passed": passed,
+        "distributed_axes": list(axes),
+        "local_gate_p2p_delta": local_gate_p2p_delta,
+        "forward_p2p": forward_p2p,
+        "backward_p2p": backward_p2p,
+        "payload_dtypes": payload_dtypes,
+        "peers": peers,
+        "forward_tags": forward_tags,
+        "backward_tags": backward_tags,
+        "transport_bytes": sum(record["bytes"] for record in records),
+        "all_handles_complete": True,
+    }
 def _bounded_exception_message(error: Exception) -> str:
     try:
         message = str(error)
@@ -281,7 +354,10 @@ def _run_probe(selected: str, output_json: Path) -> bool:
         name: _run_section_collectively(
             backend,
             name,
-            runner=_environment_section if name == "environment" else None,
+            runner={
+                "environment": _environment_section,
+                "communication": _communication_section,
+            }.get(name),
         )
         for name in _selected_sections(selected)
     }

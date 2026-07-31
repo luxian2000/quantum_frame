@@ -83,6 +83,53 @@ def test_environment_section_is_invoked_with_its_backend(monkeypatch):
     }
 
 
+def test_communication_section_reports_only_real_completed_p2p_payloads():
+    class _RecordingCommunicator:
+        rank = 0
+        world_size = 2
+        device = torch.device("cpu")
+
+        def __init__(self):
+            self._records = []
+
+        @property
+        def communication_records(self):
+            return tuple(self._records)
+
+        def clear_communication_records(self):
+            self._records.clear()
+
+        def exchange_real(self, tensor, *, peer, tag):
+            self._records.append(
+                {
+                    "kind": "exchange",
+                    "dtype": str(tensor.dtype),
+                    "peer": peer,
+                    "tag": tag,
+                    "bytes": tensor.numel() * tensor.element_size() * 2,
+                }
+            )
+            return tensor.clone()
+
+    class _Backend:
+        rank = 0
+        world_size = 2
+        _device = torch.device("cpu")
+
+        def __init__(self):
+            self.communicator = _RecordingCommunicator()
+
+    result = probe._communication_section(_Backend())
+
+    assert result["passed"] is True
+    assert result["local_gate_p2p_delta"] == 0
+    assert result["forward_p2p"] == 2
+    assert result["backward_p2p"] == 2
+    assert result["payload_dtypes"] == ["torch.float32"]
+    assert result["all_handles_complete"] is True
+    assert set(result["forward_tags"]).isdisjoint(result["backward_tags"])
+
+
 def _failure_worker(rank, world_size, port, output_path):
     os.environ["MASTER_ADDR"] = "127.0.0.1"
     os.environ["MASTER_PORT"] = str(port)
