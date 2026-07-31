@@ -281,10 +281,12 @@ def _gradient_section(backend: DistNPUBackend, *, probability=False, observable=
     for axis in range(backend.world_size.bit_length() - 1):
         theta = torch.tensor(0.31, dtype=torch.float32, device=backend._device, requires_grad=True)
         value = _native_pair_value(backend, theta, axis, probability=probability, observable=observable)
-        loss = value.sum() if probability else value
+        # A normalized probability sum is identically one.  Select a local
+        # VJP basis component instead, so this checks a Jacobian row.
+        loss = value[axis % value.numel()] if probability else value
         loss.backward()
         shifted = parameter_shift_gradient(
-            lambda values: float(_native_pair_value(backend, torch.tensor(float(values[0]), dtype=torch.float32, device=backend._device), axis, probability=probability, observable=observable).sum().detach().cpu()),
+            lambda values: float((_native_pair_value(backend, torch.tensor(float(values[0]), dtype=torch.float32, device=backend._device), axis, probability=probability, observable=observable)[axis % value.numel()] if probability else _native_pair_value(backend, torch.tensor(float(values[0]), dtype=torch.float32, device=backend._device), axis, observable=observable)).detach().cpu()),
             np.array([0.31]),
         )[0]
         errors.append(abs(float(theta.grad.detach().cpu()) - float(shifted)))

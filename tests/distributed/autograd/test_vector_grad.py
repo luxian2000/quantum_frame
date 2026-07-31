@@ -262,3 +262,29 @@ def test_pair_reducer_observable_values_and_gradients_match_parameter_shift(monk
     shifted = parameter_shift_gradient(lambda values: float(objective(values[0])[0].detach()), np.array([0.31]))[0]
     assert np.isfinite(float(value.detach()))
     assert float(theta.grad) == pytest.approx(float(shifted), abs=1e-4)
+
+
+def test_probability_jacobian_matches_parameter_shift_vjp_basis(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
+    spec = _ShardSpec.build(1, 1, 0, "vector", layout)
+
+    def probabilities(value, grad=False):
+        theta = torch.tensor(float(value), dtype=torch.float32, requires_grad=grad)
+        state = _Pair(torch.tensor([[1.0], [0.0]], dtype=torch.float32), torch.zeros((2, 1), dtype=torch.float32))
+        plan = _GatePlanner(backend, layout, 1).plan(ry(theta, 0), 0)
+        return _PairReducer(backend).probabilities(_PairVectorKernel(backend).apply(state, plan, operation_index=0), spec), theta
+
+    native = []
+    for basis in torch.eye(2, dtype=torch.float32):
+        result, theta = probabilities(0.31, grad=True)
+        (result * basis).sum().backward()
+        native.append(float(theta.grad))
+    shifted = [
+        parameter_shift_gradient(lambda values, index=index: float(probabilities(values[0])[0][index]), np.array([0.31]))[0]
+        for index in range(2)
+    ]
+    np.testing.assert_allclose(native, shifted, atol=1e-4, rtol=1e-4)
