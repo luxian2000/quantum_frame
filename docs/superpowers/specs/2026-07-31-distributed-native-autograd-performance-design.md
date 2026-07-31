@@ -14,7 +14,9 @@ The implementation must:
 
 - retain one public execution entrypoint, `DistSimulator.run()`;
 - support every power-of-two process count, `world_size = 2^p`;
-- use distributed parameter-shift as the correctness oracle;
+- use distributed parameter-shift for shift-rule parameters and CPU float64
+  central finite differences for unconstrained state, density-factor, and
+  Stinespring parameters;
 - enable native PyTorch/torch_npu autograd only after complete 2-, 4-, and
   8-NPU release gates pass;
 - preserve sharded statevector and density-matrix execution;
@@ -22,8 +24,8 @@ The implementation must:
   expectations, built-in noise parameters, and arbitrary Kraus channels
   represented by a physical Stinespring parameterization;
 - prohibit silent CPU or parameter-shift fallback;
-- make native autograd faster than parameter-shift for the fixed workloads
-  with at least 32 trainable parameters.
+- make native autograd faster than the applicable explicit oracle for the
+  fixed workloads with at least 32 trainable parameters.
 
 This design concerns classical multi-NPU parallelism for one simulated
 quantum system. It does not add quantum-network nodes, LOCC, EPR links, or
@@ -61,9 +63,9 @@ remote-QPU protocol semantics.
   follow-on slice after the single-node 2/4/8-NPU gate.
 - Parameter sharding. Circuit parameters are small relative to the quantum
   state and remain replicated.
-- A fixed speedup multiplier. Native autograd must be faster than
-  parameter-shift, but the release gate does not require `1.5x` or another
-  hardware-fragile ratio.
+- A fixed speedup multiplier. Native autograd must be faster than the
+  applicable explicit oracle, but the release gate does not require `1.5x`
+  or another hardware-fragile ratio.
 
 ## 3. Public API
 
@@ -291,13 +293,24 @@ This prevents a replicated loss from multiplying gradients by
 
 ### 6.2 Parameter ownership
 
-Circuit, noise, state-factor, and Stinespring parameters are replicated.
-Each rank computes its local contribution, packs gradients into float32
-buckets, and performs one bucketed all-reduce.
+Circuit, noise, and Stinespring parameters are replicated. Each rank
+computes its local contribution, packs gradients into float32 buckets, and
+performs one bucketed all-reduce.
 
 Real parameters use one buffer. Complex physical parameters use independent
 real and imaginary buffers. Every rank then performs the same optimizer
 step and must retain identical optimizer state.
+
+Initial-state parameters are the ownership exception:
+
+- a root-owned full state/factor is optimized only on root and scattered
+  again on the next run;
+- a sharded `DistState` factor is optimized shard-locally on every rank;
+- neither form enters the replicated parameter-gradient bucket.
+
+Optimizer and parameter equality checks apply to replicated circuit,
+noise, and Stinespring parameters. Initial-state checks instead validate
+the declared root-owned or sharded ownership contract.
 
 ### 6.3 Initial-state ownership
 
@@ -415,8 +428,10 @@ tests/distributed/autograd/
 ```
 
 CPU float64 finite difference and distributed parameter-shift are separate
-oracles. Tests must exercise non-identity layouts and every distributed
-axis.
+oracles. Parameter-shift is used only when the parameterized generator or
+channel has a valid shift rule. Raw pure-state, density-factor, and
+Stinespring parameters use central finite differences. Tests must exercise
+non-identity layouts and every distributed axis.
 
 ### 9.2 Real NPU probe
 
@@ -471,7 +486,8 @@ For each path and world size:
 Every 2-, 4-, and 8-NPU run must satisfy:
 
 - maximum error against CPU float64 `<= 1e-4`;
-- maximum error against parameter-shift `<= 1e-4`;
+- maximum error against the applicable parameter-shift or central
+  finite-difference oracle `<= 1e-4`;
 - replicated rank gradients agree within `1e-6`;
 - density outputs remain Hermitian, PSD, and trace one;
 - Stinespring completeness error `<= 1e-5`;
@@ -484,10 +500,14 @@ Every 2-, 4-, and 8-NPU run must satisfy:
 ### 9.5 Performance release gate
 
 For every fixed workload with at least 32 trainable parameters and for each
-world size independently:
+world size independently, compare against the applicable explicit oracle:
 
 ```text
-native_autograd_median < parameter_shift_median
+shift-rule parameters:
+    native_autograd_median < parameter_shift_median
+
+raw state/density/Stinespring parameters:
+    native_autograd_median < finite_difference_median
 ```
 
 A failure at world size 2, 4, or 8 blocks that path from release. The design
@@ -499,7 +519,9 @@ Each path runs 100 optimizer iterations:
 
 - peak memory must not grow monotonically;
 - memory growth from the stable phase to iteration 100 must be at most 1%;
-- parameters and optimizer state must agree on all ranks;
+- replicated parameters and their optimizer state must agree on all ranks;
+- root-owned and sharded initial-state parameters must preserve their
+  declared ownership and global physical constraints;
 - no HCCL work handle may remain unfinished;
 - no P2P tag may collide;
 - process-group teardown must complete.
@@ -574,7 +596,8 @@ autograd rejection. Partial native-autograd support is not exposed.
   simulator.
 - Use paired-real internal graphs rather than raw complex64 autograd.
 - Replicate parameters and optimizer state; shard only the quantum state.
-- Use parameter-shift as an explicit oracle, never a silent fallback.
+- Use parameter-shift for valid shift-rule parameters and central finite
+  differences for raw physical parameters; neither is a silent fallback.
 - Support exact statevector and density-matrix engines; exclude MPS native
   autograd.
 - Differentiate physical continuous outputs; keep sampling and collapse
@@ -582,5 +605,6 @@ autograd rejection. Partial native-autograd support is not exposed.
 - Parameterize arbitrary Kraus channels through Stinespring isometries.
 - Officially support `world_size = 2^p`; require 2/4/8 NPU evidence for
   release.
-- Require native autograd to beat parameter-shift at 32 or more parameters.
+- Require native autograd to beat the applicable explicit oracle at 32 or
+  more parameters.
 - Keep multi-node qualification separate from this single-node release.
