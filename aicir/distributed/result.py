@@ -18,7 +18,7 @@ class DistResult:
 
     state: DistState | None
     local_probabilities: object | None
-    expectations: Mapping[str, float | complex]
+    expectations: Mapping[str, torch.Tensor | float | complex]
     counts: Mapping[str, int] | None
     rank: int
     world_size: int
@@ -58,7 +58,7 @@ class DistResult:
                 "gather_probabilities 需要 result.state 的布局元数据"
             )
         shards = metadata_state.backend.communicator.gather_to_root(
-            self.local_probabilities.reshape(-1),
+            self.local_probabilities.detach().reshape(-1),
             root=root,
         )
         if self.rank != int(root):

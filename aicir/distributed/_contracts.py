@@ -19,7 +19,21 @@ def contains_requires_grad(value) -> bool:
     from .state import DistState
 
     if isinstance(value, DistState):
+        pair = getattr(value, "_pair", None)
+        if pair is not None:
+            return (
+                contains_requires_grad(pair.real)
+                or contains_requires_grad(pair.imag)
+            )
         return contains_requires_grad(value.local_data)
+    from .autograd._parameters import (
+        DensityParam,
+        PureStateParam,
+        StinespringParam,
+    )
+
+    if isinstance(value, (PureStateParam, DensityParam, StinespringParam)):
+        return any(contains_requires_grad(item) for item in value.parameters())
     if isinstance(value, State):
         return contains_requires_grad(value.data)
     if isinstance(value, Mapping):

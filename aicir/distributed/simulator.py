@@ -17,6 +17,9 @@ from ..ir import (
     instruction_to_gate_dict,
 )
 from ._contracts import AUTOGRAD_ERROR, contains_requires_grad
+from .autograd._collectives import _scatter_root_pair
+from .autograd._pair import _Pair
+from .autograd._parameters import PureStateParam
 from .backend import DistNPUBackend
 from .density import _MatrixKernel
 from .gates import _GatePlanner, _VectorKernel
@@ -244,6 +247,21 @@ class DistSimulator:
                     local_message = (
                         "DistState.spec 与线路/backend 不一致"
                     )
+                elif state._pair is not None:
+                    pair = state._pair
+                    if tuple(int(axis) for axis in pair.real.shape) != state.local_shape:
+                        local_message = (
+                            "pair shape="
+                            f"{tuple(pair.real.shape)} 与 "
+                            f"local_shape={state.local_shape} 不一致"
+                        )
+                    elif (
+                        pair.real.dtype != torch.float32
+                        or pair.imag.dtype != torch.float32
+                        or pair.real.device != self._backend._device
+                        or pair.imag.device != self._backend._device
+                    ):
+                        local_message = "DistState paired-real 初态必须是当前 backend 的实数 torch.float32"
                 elif tuple(
                     int(axis) for axis in state.local_data.shape
                 ) != state.local_shape:
@@ -281,6 +299,30 @@ class DistSimulator:
             None,
         )
         if source is None:
+            pair_flags = self._backend.communicator.all_gather(
+                torch.tensor(
+                    [
+                        int(state._pair is not None),
+                        int(
+                            state._pair is not None
+                            and (
+                                state._pair.real.requires_grad
+                                or state._pair.imag.requires_grad
+                            )
+                        ),
+                    ],
+                    dtype=torch.long,
+                    device=self._backend._device,
+                )
+            )
+            pair_modes = [int(item[0].detach().cpu().item()) for item in pair_flags]
+            pair_grad_modes = [int(item[1].detach().cpu().item()) for item in pair_flags]
+            if any(mode != pair_modes[0] for mode in pair_modes[1:]):
+                raise ValueError("DistState paired-real 表示在各 rank 间不一致")
+            if pair_modes[0] and any(
+                mode != pair_grad_modes[0] for mode in pair_grad_modes[1:]
+            ):
+                raise ValueError("DistState paired-real requires_grad 在各 rank 间不一致")
             return state
 
         encoded = (
@@ -487,6 +529,104 @@ class DistSimulator:
             backend=self._backend,
         )
 
+    def _raise_root_initial_error(self, message: str | None) -> None:
+        """Broadcast one bounded root-preparation error before raising it."""
+
+        encoded = (
+            message.encode("utf-8", errors="replace")
+            if self._backend.rank == 0 and message is not None
+            else b""
+        )
+        if len(encoded) > _ROOT_STATE_ERROR_MAX_BYTES:
+            encoded = encoded[:_ROOT_STATE_ERROR_MAX_BYTES]
+        size = self._backend.communicator.broadcast(
+            torch.tensor(
+                [len(encoded)], dtype=torch.long, device=self._backend._device
+            ),
+            root=0,
+        )
+        message_size = int(size.detach().cpu().reshape(-1).item())
+        if not 0 <= message_size <= _ROOT_STATE_ERROR_MAX_BYTES:
+            raise RuntimeError(_ROOT_STATE_ERROR_PROTOCOL_MESSAGE)
+        if message_size == 0:
+            return
+        payload = (
+            torch.tensor(
+                list(encoded), dtype=torch.uint8, device=self._backend._device
+            )
+            if self._backend.rank == 0
+            else torch.empty(
+                message_size, dtype=torch.uint8, device=self._backend._device
+            )
+        )
+        payload = self._backend.communicator.broadcast(payload, root=0)
+        raise ValueError(
+            bytes(payload.detach().cpu().tolist()).decode(
+                "utf-8", errors="replace"
+            )
+        )
+
+    def _scatter_root_pure_state(
+        self,
+        value: PureStateParam | None,
+        *,
+        n_qubits: int,
+        layout: _Layout,
+    ) -> DistState:
+        """Normalize one root-owned real pair and scatter differentiable shards."""
+
+        spec = _ShardSpec.build(
+            n_qubits,
+            self._backend.world_size,
+            self._backend.rank,
+            "vector",
+            layout,
+        )
+        pair = None
+        error = None
+        if self._backend.rank == 0:
+            try:
+                if not isinstance(value, PureStateParam):
+                    raise TypeError("initial_state 必须是 PureStateParam")
+                pair = value._raw_pair()
+                if pair.real.device != self._backend._device:
+                    raise ValueError("PureStateParam 必须位于当前 backend device")
+                if pair.real.numel() != spec.global_shape[0]:
+                    raise ValueError(
+                        f"initial_state 必须包含 {spec.global_shape[0]} 个振幅"
+                    )
+                storage_pair = _Pair(
+                    pair.real.reshape([2] * n_qubits)
+                    .permute(layout.storage_to_logical)
+                    .reshape(spec.global_shape),
+                    pair.imag.reshape([2] * n_qubits)
+                    .permute(layout.storage_to_logical)
+                    .reshape(spec.global_shape),
+                )
+                norm = torch.sqrt(storage_pair.abs_sq().sum())
+                if float(norm.detach().cpu()) == 0.0:
+                    raise ValueError("纯态参数的范数必须大于 0")
+                pair = storage_pair.div_real(norm).real.reshape(
+                    (self._backend.world_size,) + spec.local_shape
+                )
+                imag = storage_pair.div_real(norm).imag.reshape(
+                    (self._backend.world_size,) + spec.local_shape
+                )
+                pair = _Pair(pair, imag)
+            except Exception as caught:  # noqa: BLE001 - synchronize root failure
+                error = str(caught)
+        self._raise_root_initial_error(error)
+        return DistState.from_pair(
+            _scatter_root_pair(
+                pair,
+                communicator=self._backend.communicator,
+                root=0,
+                local_shape=spec.local_shape,
+            ),
+            spec=spec,
+            backend=self._backend,
+        )
+
     def _prepare_initial_state(
         self,
         *,
@@ -524,6 +664,36 @@ class DistSimulator:
                 if kind == "vector"
                 else initial_density_matrix
             )
+            if kind == "vector":
+                root_is_pure = self._backend.communicator.broadcast(
+                    torch.tensor(
+                        [
+                            int(
+                                self._backend.rank == 0
+                                and isinstance(value, PureStateParam)
+                            )
+                        ],
+                        dtype=torch.long,
+                        device=self._backend._device,
+                    ),
+                    root=0,
+                )
+                direct_complex_error = (
+                    "原生 distributed autograd 不接受 requires_grad complex initial_state；"
+                    "请使用 PureStateParam(real, imag)"
+                    if self._backend.rank == 0
+                    and isinstance(value, torch.Tensor)
+                    and torch.is_complex(value)
+                    and value.requires_grad
+                    else None
+                )
+                self._raise_root_initial_error(direct_complex_error)
+                if int(root_is_pure.detach().cpu().item()):
+                    return self._scatter_root_pure_state(
+                        value,
+                        n_qubits=n_qubits,
+                        layout=layout,
+                    )
             return self._scatter_root_state(
                 value,
                 n_qubits=n_qubits,

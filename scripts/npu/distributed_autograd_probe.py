@@ -18,10 +18,17 @@ import sys
 import torch
 import numpy as np
 
-from aicir import Hamiltonian, PauliString
+from aicir import Circuit, Hamiltonian, PauliString
 from aicir.core.circuit import crx, cry, crz, rx, rxx, ry, rz, rzz, u2, u3
 from aicir.ir import Observable
-from aicir.distributed import DistNPUBackend, parameter_shift_gradient
+from aicir.distributed import (
+    DistNPUBackend,
+    DistSimulator,
+    DistState,
+    PureStateParam,
+    parameter_shift_gradient,
+)
+from aicir.distributed._contracts import AUTOGRAD_ERROR
 from aicir.distributed.autograd._collectives import _exchange_pair
 from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.autograd._reducers import _PairReducer
@@ -368,8 +375,214 @@ def _statevector_section(backend):
         errors.append(_gradient_section(backend, observable=observable)["max_abs_error"])
     maximum = max(errors, default=0.0)
     state_finite = all(bool(torch.isfinite(item).all().detach().cpu()) for item in gradients)
-    passed = state_finite and maximum <= 1e-4
-    return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(range(n_qubits - 1)), "initial_state_gradient_finite": state_finite, "max_abs_error": maximum}
+    simulator = DistSimulator(backend)
+    layout = _Layout.explicit(
+        tuple(reversed(range(n_qubits))),
+        n_qubits=n_qubits,
+        distributed_axes=n_qubits - 1,
+    )
+    spec = _ShardSpec.build(
+        n_qubits, backend.world_size, backend.rank, "vector", layout
+    )
+    dimension = 1 << n_qubits
+    root_real = (
+        torch.arange(
+            1, dimension + 1, dtype=torch.float32, device=backend._device,
+        ).requires_grad_()
+        if backend.rank == 0
+        else None
+    )
+    root_imag = (
+        torch.arange(
+            dimension, dtype=torch.float32, device=backend._device,
+        ).requires_grad_()
+        if backend.rank == 0
+        else None
+    )
+    root_state = simulator._prepare_initial_state(
+        n_qubits=n_qubits,
+        layout=layout,
+        initial_state=(PureStateParam(root_real, root_imag) if backend.rank == 0 else None),
+        initial_density_matrix=None,
+    )
+    root_loss = _PairReducer(backend).expectation(
+        root_state._pair,
+        spec,
+        PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits),
+    )
+    root_loss.backward()
+    root_owned_gradient_finite = (
+        True
+        if backend.rank != 0
+        else all(
+            gradient is not None and bool(torch.isfinite(gradient).all().detach().cpu())
+            for gradient in (root_real.grad, root_imag.grad)
+        )
+    )
+
+    shard_real = torch.full(
+        spec.local_shape,
+        float(backend.rank + 1),
+        dtype=torch.float32,
+        device=backend._device,
+        requires_grad=True,
+    )
+    shard_imag = torch.full(
+        spec.local_shape,
+        float(-backend.rank),
+        dtype=torch.float32,
+        device=backend._device,
+        requires_grad=True,
+    )
+    sharded_state = simulator._prepare_initial_state(
+        n_qubits=n_qubits,
+        layout=layout,
+        initial_state=DistState.from_pair(
+            _Pair(shard_real, shard_imag), spec=spec, backend=backend
+        ),
+        initial_density_matrix=None,
+    )
+    _PairReducer(backend).expectation(
+        sharded_state._pair,
+        spec,
+        PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits),
+    ).backward()
+    sharded_gradient_finite = all(
+        gradient is not None and bool(torch.isfinite(gradient).all().detach().cpu())
+        for gradient in (shard_real.grad, shard_imag.grad)
+    )
+    passed = (
+        state_finite
+        and root_owned_gradient_finite
+        and sharded_gradient_finite
+        and maximum <= 1e-4
+    )
+    return {
+        "status": "PASS" if passed else "FAIL",
+        "passed": passed,
+        "distributed_axes": list(range(n_qubits - 1)),
+        "initial_state_gradient_finite": state_finite,
+        "root_owned_initial_state_gradient_finite": root_owned_gradient_finite,
+        "sharded_initial_state_gradient_finite": sharded_gradient_finite,
+        "layout": list(layout.logical_to_storage),
+        "max_abs_error": maximum,
+    }
+
+
+def _contract_section(backend):
+    """Check the private initial-state contracts without exposing ``run`` autograd."""
+
+    n_qubits = backend.world_size.bit_length()
+    layout = _Layout.explicit(
+        tuple(reversed(range(n_qubits))),
+        n_qubits=n_qubits,
+        distributed_axes=n_qubits - 1,
+    )
+    spec = _ShardSpec.build(
+        n_qubits, backend.world_size, backend.rank, "vector", layout
+    )
+    simulator = DistSimulator(backend)
+    direct_complex_message = (
+        "原生 distributed autograd 不接受 requires_grad complex initial_state；"
+        "请使用 PureStateParam(real, imag)"
+    )
+    try:
+        simulator._prepare_initial_state(
+            n_qubits=n_qubits,
+            layout=layout,
+            initial_state=(
+                torch.zeros(
+                    1 << n_qubits,
+                    dtype=torch.complex64,
+                    device=backend._device,
+                    requires_grad=True,
+                )
+                if backend.rank == 0
+                else None
+            ),
+            initial_density_matrix=None,
+        )
+    except ValueError as error:
+        direct_complex_leaf_rejected = str(error) == direct_complex_message
+    else:
+        direct_complex_leaf_rejected = False
+    if backend.world_size > 1:
+        torch.distributed.barrier()
+
+    if backend.world_size == 1:
+        rank_requires_grad_mismatch_rejected = None
+    else:
+        mismatch = DistState.from_pair(
+            _Pair(
+                torch.ones(
+                    spec.local_shape,
+                    dtype=torch.float32,
+                    device=backend._device,
+                    requires_grad=backend.rank == 0,
+                ),
+                torch.zeros(
+                    spec.local_shape,
+                    dtype=torch.float32,
+                    device=backend._device,
+                    requires_grad=backend.rank == 0,
+                ),
+            ),
+            spec=spec,
+            backend=backend,
+        )
+        try:
+            simulator._prepare_initial_state(
+                n_qubits=n_qubits,
+                layout=layout,
+                initial_state=mismatch,
+                initial_density_matrix=None,
+            )
+        except ValueError as error:
+            rank_requires_grad_mismatch_rejected = (
+                str(error) == "DistState paired-real requires_grad 在各 rank 间不一致"
+            )
+        else:
+            rank_requires_grad_mismatch_rejected = False
+        torch.distributed.barrier()
+
+    public_gate_held = False
+    try:
+        simulator.run(
+            Circuit(n_qubits=n_qubits),
+            initial_state=(
+                PureStateParam(
+                    torch.ones(
+                        1 << n_qubits,
+                        dtype=torch.float32,
+                        device=backend._device,
+                        requires_grad=True,
+                    ),
+                    torch.zeros(
+                        1 << n_qubits,
+                        dtype=torch.float32,
+                        device=backend._device,
+                        requires_grad=True,
+                    ),
+                )
+                if backend.rank == 0
+                else None
+            ),
+        )
+    except ValueError as error:
+        public_gate_held = str(error) == AUTOGRAD_ERROR
+    return {
+        "status": "PASS"
+        if direct_complex_leaf_rejected
+        and rank_requires_grad_mismatch_rejected is not False
+        and public_gate_held
+        else "FAIL",
+        "passed": direct_complex_leaf_rejected
+        and rank_requires_grad_mismatch_rejected is not False
+        and public_gate_held,
+        "direct_complex_leaf_rejected": direct_complex_leaf_rejected,
+        "rank_requires_grad_mismatch_rejected": rank_requires_grad_mismatch_rejected,
+        "public_forward_only_gate_held": public_gate_held,
+    }
 
 
 def _gates_section(backend):
@@ -592,6 +805,7 @@ def _run_probe(selected: str, output_json: Path) -> bool:
                 "probability": _probability_section,
                 "observable": _observable_section,
                 "communication": _communication_section,
+                "contract": _contract_section,
             }.get(name),
         )
         for name in _selected_sections(selected)

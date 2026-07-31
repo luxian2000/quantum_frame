@@ -10,6 +10,7 @@ from aicir.distributed import DistNPUBackend, DistResult, DistState
 from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.autograd._reducers import _PairReducer
 from aicir.distributed.layout import _Layout, _ShardSpec
+from scripts.npu import distributed_autograd_probe as probe
 
 
 def _backend(monkeypatch):
@@ -52,9 +53,22 @@ def test_paired_result_scalars_keep_graph_and_materializers_detach(monkeypatch):
     assert imag.grad is not None
 
     gathered = result.state.gather()
-    assert not gathered.data.requires_grad
+    assert isinstance(gathered.data, np.ndarray)
     materialized_state = result.state.to_numpy()
     materialized_probabilities = result.gather_probabilities()
     assert isinstance(materialized_state, np.ndarray)
     assert isinstance(materialized_probabilities, np.ndarray)
     np.testing.assert_allclose(materialized_probabilities, probabilities.detach().numpy())
+
+
+def test_probe_initial_state_sections_cover_private_trainable_contracts(monkeypatch):
+    backend = _backend(monkeypatch)
+
+    statevector = probe._statevector_section(backend)
+    contract = probe._contract_section(backend)
+
+    assert statevector["root_owned_initial_state_gradient_finite"]
+    assert statevector["sharded_initial_state_gradient_finite"]
+    assert contract["direct_complex_leaf_rejected"]
+    assert contract["rank_requires_grad_mismatch_rejected"] is None
+    assert contract["public_forward_only_gate_held"]

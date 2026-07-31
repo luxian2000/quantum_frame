@@ -121,8 +121,9 @@ class DistState:
     def local_data(self):
         """Compatibility complex boundary; kernels must consume ``_pair``."""
 
-        if self._pair is not None:
-            return self._pair.combine()
+        pair = getattr(self, "_pair", None)
+        if pair is not None:
+            return pair.combine()
         return self._local_data
 
     @property
@@ -238,7 +239,7 @@ class DistState:
                 bit_order=self.bit_order,
             )
         shards = self._backend.communicator.gather_to_root(
-            self._local_data,
+            self._local_data.detach(),
             root=root,
         )
         if self.rank != int(root):

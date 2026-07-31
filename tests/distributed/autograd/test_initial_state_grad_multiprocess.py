@@ -107,13 +107,16 @@ def _worker(rank, world_size, port, output_path):
         else:
             sample_error = "NO_ERROR"
         torch.distributed.barrier()
+        errors = [None] * world_size
+        torch.distributed.all_gather_object(
+            errors,
+            (mismatch_error, complex_error, sample_error),
+        )
         if rank == 0:
             Path(output_path).write_text(json.dumps({
                 "root_grad": root_real.grad is not None and root_imag.grad is not None,
                 "local_grad": local_real.grad is not None and local_imag.grad is not None,
-                "mismatch_error": mismatch_error,
-                "complex_error": complex_error,
-                "sample_error": sample_error,
+                "errors": errors,
             }), encoding="utf-8")
     finally:
         torch.distributed.destroy_process_group()
@@ -125,6 +128,10 @@ def test_paired_initial_states_keep_owner_gradients_and_recover_from_errors(tmp_
     result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert result["root_grad"]
     assert result["local_grad"]
-    assert result["mismatch_error"] == "DistState paired-real requires_grad 在各 rank 间不一致"
-    assert result["complex_error"] == "原生 distributed autograd 不接受 requires_grad complex initial_state；请使用 PureStateParam(real, imag)"
-    assert result["sample_error"] == AUTOGRAD_ERROR
+    assert result["errors"] == [
+        [
+            "DistState paired-real requires_grad 在各 rank 间不一致",
+            "原生 distributed autograd 不接受 requires_grad complex initial_state；请使用 PureStateParam(real, imag)",
+            AUTOGRAD_ERROR,
+        ],
+    ] * 2
