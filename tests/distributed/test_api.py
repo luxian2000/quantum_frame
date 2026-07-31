@@ -6,6 +6,9 @@ def test_public_api_uses_explicit_names_only():
         "DistState",
         "DistSimulator",
         "DistResult",
+        "parameter_shift_gradient",
+        "parameter_shift_jacobian",
+        "finite_difference_gradient",
     ]
     assert not hasattr(distributed, "Backend")
     assert not hasattr(distributed, "State")
