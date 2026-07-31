@@ -894,7 +894,7 @@ DistSimulator 首期仅支持前向模拟，不支持自动微分
 | `passed`                                            | 只有所有 rank、所有所选 section 均通过时才为`true`                                        |
 | `world_size`                                        | 必须与本次`--nproc-per-node` 相同，即分别为 2 和 4                                        |
 | `fallback_to_cpu`                                   | 必须为`false`                                                                             |
-| `sections.<name>.status`                            | 正常支持项只能为`PASS` 或 `FAIL`                                                        |
+| `sections.<name>.status` | 正常支持项只能为 `PASS` 或 `FAIL` |
 | `sections.<name>.passed`                            | 该 section 的数值、行为和跨 rank 证据是否全部满足                                           |
 | `sections.<name>.metrics`                           | 该 section 的具体误差、计数、布局或通信证据                                                 |
 | `sections.contract.metrics.case_statuses`           | 每个错误契约 case 的状态映射；预期拒绝项为`EXPECTED_ERROR` 或 `UNSUPPORTED_AS_DESIGNED` |
