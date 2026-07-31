@@ -20,6 +20,31 @@ from aicir.distributed.layout import _Layout, _ShardSpec
 from aicir.qml.deriv import psr4
 
 
+def _float64_gate_objective(name, values):
+    """Independent complex128 full-state oracle for the native gate suite."""
+
+    values = np.asarray(values, dtype=np.float64)
+    c, s = np.cos(values[0] / 2.0), np.sin(values[0] / 2.0)
+    if name in {"rx", "crx"}: base = np.array([[c, -1j*s], [-1j*s, c]], dtype=np.complex128)
+    elif name in {"ry", "cry"}: base = np.array([[c, -s], [s, c]], dtype=np.complex128)
+    elif name in {"rz", "crz"}: base = np.diag([c-1j*s, c+1j*s]).astype(np.complex128)
+    elif name == "rzz": base = np.diag([c-1j*s, c+1j*s, c+1j*s, c-1j*s]).astype(np.complex128)
+    elif name == "rxx": base = c*np.eye(4, dtype=np.complex128)-1j*s*np.kron(np.array([[0,1],[1,0]]), np.array([[0,1],[1,0]]))
+    elif name == "u2":
+        phi, lam = values; base = np.array([[1, -np.exp(1j*lam)], [np.exp(1j*phi), np.exp(1j*(phi+lam))]], dtype=np.complex128)/np.sqrt(2)
+    elif name == "u3":
+        theta, phi, lam = values; base = np.array([[np.cos(theta/2), -np.exp(1j*lam)*np.sin(theta/2)], [np.exp(1j*phi)*np.sin(theta/2), np.exp(1j*(phi+lam))*np.cos(theta/2)]], dtype=np.complex128)
+    elif name == "custom": base = np.array([[0, -1j], [1j, 0]], dtype=np.complex128)
+    else: raise AssertionError(name)
+    if name.startswith("cr"):
+        base = np.block([[np.eye(2), np.zeros((2,2))], [np.zeros((2,2)), base]])
+    elif base.shape == (2,2): base = np.kron(base, np.eye(2))
+    psi = np.array([.5+.1j, .5-.2j, .5+.3j, .5-.4j], dtype=np.complex128)
+    observable = np.kron(np.array([[0,1],[1,0]], dtype=np.complex128), np.eye(2))
+    out = base @ psi
+    return float(np.real(np.vdot(out, observable @ out)))
+
+
 def test_pair_vector_kernel_applies_trainable_local_matrix_with_real_leaves(monkeypatch):
     monkeypatch.setenv("WORLD_SIZE", "1")
     monkeypatch.setenv("RANK", "0")
@@ -124,6 +149,30 @@ def test_parameterized_gate_gradients_match_parameter_shift(monkeypatch, gate_fa
     )
 
     np.testing.assert_allclose(native, shifted, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.parametrize(
+    ("name", "factory", "values", "four_term"),
+    (
+        ("rx", lambda p: rx(p[0], 0), (0.31,), False), ("ry", lambda p: ry(p[0], 0), (-.47,), False),
+        ("rz", lambda p: rz(p[0], 0), (.29,), False), ("crx", lambda p: crx(p[0], 1, (0,)), (.23,), True),
+        ("cry", lambda p: cry(p[0], 1, (0,)), (-.41,), True), ("crz", lambda p: crz(p[0], 1, (0,)), (.37,), True),
+        ("rzz", lambda p: rzz(p[0], 0, 1), (-.19,), False), ("rxx", lambda p: rxx(p[0], 0, 1), (.53,), False),
+        ("u2", lambda p: u2(p[0], p[1], 0), (.17,-.29), False), ("u3", lambda p: u3(p[0], p[1], p[2], 0), (.21,-.33,.45), False),
+    ),
+)
+def test_named_gate_values_and_parameter_shift_match_independent_float64_oracle(monkeypatch, name, factory, values, four_term):
+    monkeypatch.setenv("WORLD_SIZE", "1"); monkeypatch.setenv("RANK", "0"); monkeypatch.setenv("LOCAL_RANK", "0")
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, init_process_group=False)
+    layout = _Layout.explicit((0, 1), n_qubits=2, distributed_axes=0); spec = _ShardSpec.build(2, 1, 0, "vector", layout)
+    state = _Pair(torch.tensor([[.5],[.5],[.5],[.5]], dtype=torch.float32), torch.tensor([[.1],[-.2],[.3],[-.4]], dtype=torch.float32))
+    def native(point):
+        leaves = tuple(torch.tensor(float(x), dtype=torch.float32) for x in point)
+        plan = _GatePlanner(backend, layout, 2).plan(factory(leaves), 0)
+        return float(_PairReducer(backend).expectation(_PairVectorKernel(backend).apply(state, plan, operation_index=0), spec, PauliString("XI", n_qubits=2)).detach())
+    np.testing.assert_allclose(native(values), _float64_gate_objective(name, values), atol=2e-5, rtol=2e-5)
+    oracle = psr4 if four_term else parameter_shift_gradient
+    np.testing.assert_allclose(oracle(lambda point: _float64_gate_objective(name, point), np.asarray(values)), oracle(lambda point: native(point), np.asarray(values)), atol=2e-4, rtol=2e-4)
 
 
 def test_thirty_two_parameter_circuit_gradient_matches_parameter_shift(monkeypatch):
