@@ -66,6 +66,42 @@ def test_householder_stinespring_isometry_and_kraus_completeness():
     np.testing.assert_allclose(sum(value.conj().T @ value for value in kraus), np.eye(2), atol=1e-5)
 
 
+def test_householder_is_exact_for_zero_tiny_and_mixed_reflections():
+    """A nonzero reflection must not be regularized by an additive epsilon."""
+
+    real = torch.tensor(
+        [[0.0, 0.0, 0.0, 0.0], [1e-8, -2e-8, 3e-8, -4e-8], [0.3, -0.5, 0.7, -0.2], [0.0, 0.4, -0.1, 0.8]],
+        dtype=torch.float32,
+    )
+    imag = torch.tensor(
+        [[0.0, 0.0, 0.0, 0.0], [-2e-8, 1e-8, 4e-8, -3e-8], [0.1, 0.6, -0.2, 0.5], [0.2, -0.3, 0.9, -0.4]],
+        dtype=torch.float32,
+    )
+    parameter = StinespringParam(2, 2, 2, real, imag)
+    isometry = _complex(_householder_isometry(parameter))
+    kraus = [_complex(value) for value in _stinespring_kraus(parameter)]
+    np.testing.assert_allclose(isometry.conj().T @ isometry, np.eye(2), atol=1e-5)
+    np.testing.assert_allclose(sum(value.conj().T @ value for value in kraus), np.eye(2), atol=1e-5)
+
+    rho = np.diag([0.0, 1.0]).astype(np.complex128)
+    out = sum(value @ rho @ value.conj().T for value in kraus)
+    np.testing.assert_allclose(out, out.conj().T, atol=1e-5)
+    assert np.linalg.eigvalsh(out).min() >= -1e-5
+    assert abs(np.trace(out) - 1.0) <= 1e-5
+
+    differentiable = StinespringParam(
+        2,
+        2,
+        2,
+        real.detach().clone().requires_grad_(True),
+        imag.detach().clone().requires_grad_(True),
+    )
+    isometry_pair = _householder_isometry(differentiable)
+    (isometry_pair.real[0, 0] + isometry_pair.imag[1, 1]).backward()
+    assert torch.isfinite(differentiable.real.grad).all()
+    assert torch.isfinite(differentiable.imag.grad).all()
+
+
 def test_stinespring_channel_is_tp_psd_and_raw_real_imag_gradients_match_float64(monkeypatch):
     backend = _backend(monkeypatch)
     parameter = _parameter()

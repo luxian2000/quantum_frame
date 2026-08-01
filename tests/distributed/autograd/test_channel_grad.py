@@ -121,6 +121,47 @@ def test_channel_sequence_keeps_all_probability_leaves_differentiable(monkeypatc
     assert torch.isfinite(first.grad) and torch.isfinite(second.grad)
 
 
+def test_channel_sequence_and_probability_endpoints_match_complex128_finite_differences(monkeypatch):
+    backend = _backend(monkeypatch)
+    for value, expected in ((0.0, -1.0), (1.0, 1.0)):
+        evolved = _PairMatrixKernel(backend).apply_channel(_one_density(backend), BitFlipChannel(0, value), instruction_index=45)
+        actual = _PairReducer(backend).expectation(evolved._pair, evolved.spec, PauliString("Z", n_qubits=1))
+        assert abs(float(actual) - expected) <= 1e-6
+
+    first = torch.tensor(0.17, dtype=torch.float32, requires_grad=True)
+    second = torch.tensor(0.31, dtype=torch.float32, requires_grad=True)
+    kernel = _PairMatrixKernel(backend)
+    evolved = kernel.apply_channel(_one_density(backend), BitFlipChannel(0, first), instruction_index=46)
+    evolved = kernel.apply_channel(evolved, AmplitudeDampingChannel(0, second), instruction_index=47)
+    objective = _PairReducer(backend).expectation(evolved._pair, evolved.spec, PauliString("Z", n_qubits=1))
+    objective.backward()
+
+    def reference(p1, p2):
+        rho = np.diag([0.0, 1.0]).astype(np.complex128)
+        x = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.complex128)
+        bit = (np.sqrt(1.0 - p1) * np.eye(2), np.sqrt(p1) * x)
+        damp = (
+            np.array([[1.0, 0.0], [0.0, np.sqrt(1.0 - p2)]], dtype=np.complex128),
+            np.array([[0.0, np.sqrt(p2)], [0.0, 0.0]], dtype=np.complex128),
+        )
+        for operators in (bit, damp):
+            rho = sum(matrix @ rho @ matrix.conj().T for matrix in operators)
+        return float(np.trace(rho @ np.diag([1.0, -1.0])).real)
+
+    epsilon = 1e-6
+    first_fd = (reference(0.17 + epsilon, 0.31) - reference(0.17 - epsilon, 0.31)) / (2 * epsilon)
+    second_fd = (reference(0.17, 0.31 + epsilon) - reference(0.17, 0.31 - epsilon)) / (2 * epsilon)
+    assert abs(float(first.grad) - first_fd) <= 1e-4
+    assert abs(float(second.grad) - second_fd) <= 1e-4
+
+
+@pytest.mark.parametrize("channel", (BitFlipChannel(0, -0.1), PhaseFlipChannel(0, 1.1), DepolarizingChannel(0, float("nan")), AmplitudeDampingChannel(0, -0.2)))
+def test_builtin_channel_domains_fail_before_density_transport(monkeypatch, channel):
+    backend = _backend(monkeypatch)
+    with pytest.raises(ValueError, match="channel probability"):
+        _PairMatrixKernel(backend).apply_channel(_one_density(backend), channel, instruction_index=48)
+
+
 def test_noise_rule_selection_honors_gate_filter_and_excluded_target():
     bit = BitFlipChannel(0, 0.1)
     phase = PhaseFlipChannel(1, 0.2)

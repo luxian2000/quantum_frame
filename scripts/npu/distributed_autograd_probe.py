@@ -714,7 +714,7 @@ def _noise_section(backend):
         ("depolarizing", DepolarizingChannel, False, "Z", lambda p: -1.0 + 4.0 * p / 3.0, 4.0 / 3.0),
         ("amplitude_damping", AmplitudeDampingChannel, False, "Z", lambda p: -1.0 + 2.0 * p, 2.0),
     )
-    errors, transport, probability_gradients = {}, {}, {}
+    errors, transport, probability_gradients, probability_errors = {}, {}, {}, {}
     for logical_axis in logical_axes:
         storage_axis = layout.logical_to_storage[logical_axis]
         for name, factory, plus, word, reference, derivative in cases:
@@ -723,20 +723,33 @@ def _noise_section(backend):
             backend.communicator.clear_communication_records()
             evolved = _PairMatrixKernel(backend).apply_channel(state, factory(logical_axis, probability), instruction_index=700 + logical_axis * 8 + len(errors))
             probabilities = _PairReducer(backend).probabilities(evolved._pair, matrix_spec)
-            observable = PauliString((word if logical_axis == 0 else "I") + "I" * (vector_spec.n_qubits - 1), n_qubits=vector_spec.n_qubits)
             # Logical Pauli words use logical index order, so construct it explicitly.
             labels = ["I"] * vector_spec.n_qubits; labels[logical_axis] = word
             observable = PauliString("".join(labels), n_qubits=vector_spec.n_qubits)
             value = _PairReducer(backend).expectation(evolved._pair, matrix_spec, observable)
             value.backward()
             key = f"{name}:axis{storage_axis}"
-            errors[key] = max(abs(float(value.detach().cpu()) - reference(0.23)), abs(float(probability.grad.detach().cpu()) - derivative))
+            dimension = 1 << vector_spec.n_qubits
+            bit = 1 << (vector_spec.n_qubits - 1 - storage_axis)
+            expected_probabilities = np.zeros(dimension, dtype=np.float64)
+            if plus:
+                expected_probabilities[0], expected_probabilities[bit] = 0.5, 0.5
+            elif name == "depolarizing":
+                expected_probabilities[0], expected_probabilities[bit] = 2.0 * 0.23 / 3.0, 1.0 - 2.0 * 0.23 / 3.0
+            else:
+                expected_probabilities[0], expected_probabilities[bit] = 0.23, 0.77
+            actual_probabilities = np.concatenate([
+                part.detach().cpu().numpy()
+                for part in backend.communicator.all_gather_real(probabilities.detach())
+            ])
+            probability_errors[key] = float(np.max(np.abs(actual_probabilities - expected_probabilities)))
+            errors[key] = max(abs(float(value.detach().cpu()) - reference(0.23)), abs(float(probability.grad.detach().cpu()) - derivative), probability_errors[key])
             probability_gradients[key] = float(probability.grad.detach().cpu())
             records = [record for record in backend.communicator.communication_records if record["kind"] == "exchange"]
             transport[key] = {0, 1, 4, 5}.issubset({record["tag"] % 8 for record in records}) and all(record["dtype"] == "torch.float32" and record["bytes"] > 0 for record in records)
-    maximum = max(errors.values(), default=0.0)
+    maximum = max((*errors.values(), *probability_errors.values()), default=0.0)
     passed = maximum <= 1e-4 and all(transport.values())
-    return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(range(layout.distributed_axes)), "channel_errors": errors, "probability_pauli_gradients": probability_gradients, "forward_backward_p2p": transport, "max_abs_error": maximum}
+    return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(range(layout.distributed_axes)), "channel_errors": errors, "probability_errors": probability_errors, "probability_pauli_gradients": probability_gradients, "forward_backward_p2p": transport, "max_abs_error": maximum}
 
 
 def _stinespring_section(backend):
@@ -768,8 +781,11 @@ def _stinespring_section(backend):
     transport = {0, 1, 4, 5}.issubset({record["tag"] % 8 for record in records}) and all(record["dtype"] == "torch.float32" and record["bytes"] > 0 for record in records)
     raw_gradient = max(float(real_leaf.grad.detach().abs().max().cpu()), float(imag_leaf.grad.detach().abs().max().cpu()))
     trace_error = abs(float(trace.detach().cpu()) - 1.0)
-    passed = completeness_error <= 1e-5 and trace_error <= 1e-5 and transport and math.isfinite(raw_gradient)
-    return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(range(layout.distributed_axes)), "kraus_order": list(range(2)), "completeness_error": completeness_error, "trace_error": trace_error, "positivity_error": 0.0, "max_raw_parameter_gradient": raw_gradient, "forward_backward_p2p": transport}
+    actual = np.concatenate([part.detach().cpu().numpy() for part in backend.communicator.all_gather_real(evolved._pair.real.detach())], axis=0) + 1j * np.concatenate([part.detach().cpu().numpy() for part in backend.communicator.all_gather_real(evolved._pair.imag.detach())], axis=0)
+    hermiticity_error = float(np.max(np.abs(actual - actual.conj().T)))
+    positivity_error = max(0.0, -float(np.linalg.eigvalsh(actual).min()))
+    passed = completeness_error <= 1e-5 and trace_error <= 1e-5 and hermiticity_error <= 1e-5 and positivity_error <= 1e-5 and transport and math.isfinite(raw_gradient)
+    return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(range(layout.distributed_axes)), "target_qubits": list(parameter.target_qubits), "nonzero_targets": [axis for axis in parameter.target_qubits if axis != 0], "kraus_order": list(range(parameter.environment_dim)), "term_count": len(kraus), "completeness_error": completeness_error, "trace_error": trace_error, "hermiticity_error": hermiticity_error, "positivity_error": positivity_error, "max_raw_parameter_gradient": raw_gradient, "forward_backward_p2p": transport}
 
 
 def _contract_section(backend):
