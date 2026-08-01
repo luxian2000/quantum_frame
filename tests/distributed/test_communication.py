@@ -80,6 +80,69 @@ def test_complex_exchange_uses_one_transport_when_supported(monkeypatch):
     assert calls == [(torch.complex64, 1, 7)]
 
 
+def test_exchange_allocates_receive_without_materializing_noncontiguous_tensor_twice(monkeypatch):
+    class _Operation:
+        def __init__(self, tensor):
+            self.tensor = tensor
+
+    class _Work:
+        def wait(self):
+            return None
+
+    class _FakeDist:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def is_initialized():
+            return True
+
+        @staticmethod
+        def isend():
+            return None
+
+        @staticmethod
+        def irecv():
+            return None
+
+        @staticmethod
+        def P2POp(_operation, tensor, _peer, **_kwargs):
+            return _Operation(tensor)
+
+        @staticmethod
+        def batch_isend_irecv(operations):
+            operations[1].tensor.copy_(operations[0].tensor)
+            return (_Work(), _Work())
+
+    communicator = _Communicator(
+        rank=0,
+        world_size=2,
+        device=torch.device("cpu"),
+        dist_module=_FakeDist(),
+    )
+    original_contiguous = torch.Tensor.contiguous
+    contiguous_calls = []
+
+    def counted_contiguous(tensor, *args, **kwargs):
+        contiguous_calls.append(tensor)
+        return original_contiguous(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "contiguous", counted_contiguous)
+    base = torch.arange(6, dtype=torch.float32, requires_grad=True)
+    payload = base.reshape(2, 3).transpose(0, 1)
+
+    received = communicator._exchange_tensor(payload, peer=1, tag=7)
+    received.sum().backward()
+
+    assert not payload.is_contiguous()
+    assert received.is_contiguous()
+    torch.testing.assert_close(received, payload)
+    torch.testing.assert_close(base.grad, torch.ones_like(base))
+    assert len(contiguous_calls) == 1
+    assert contiguous_calls[0] is payload
+
+
 def test_real_transport_bytes_are_per_rank_endpoint_logical_payload(monkeypatch):
     class _FakeDist:
         @staticmethod

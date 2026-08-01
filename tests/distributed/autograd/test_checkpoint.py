@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -173,25 +175,101 @@ def test_npu_memory_discovery_never_uses_host_memory(monkeypatch):
     assert _available_memory_bytes("npu:0") == (None, "conservative")
 
 
-def test_measurement_boundary_resets_and_reads_each_policy_peak(monkeypatch):
+def test_measurement_boundary_synchronizes_then_isolates_each_policy_peak(monkeypatch):
     backend = _backend(monkeypatch)
     simulator = DistSimulator(backend)
-    calls = []
+    events = []
     peaks = iter((101, 202, 303))
 
-    monkeypatch.setattr("aicir.distributed.simulator._reset_peak_memory_stats", lambda device: calls.append(("reset", str(device))) or "cpu")
-    monkeypatch.setattr("aicir.distributed.simulator._synchronize_device", lambda device: calls.append(("sync", str(device))))
-    monkeypatch.setattr("aicir.distributed.simulator._peak_allocation_bytes", lambda device: next(peaks))
-    circuit = Circuit(n_qubits=1)
-    layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
-    spec = _ShardSpec.build(1, 1, 0, "vector", layout)
+    monkeypatch.setattr(
+        "aicir.distributed.simulator._reset_peak_memory_stats",
+        lambda _device: events.append("reset") or "cpu",
+    )
+    monkeypatch.setattr(
+        "aicir.distributed.simulator._synchronize_device",
+        lambda _device: events.append("sync"),
+    )
+    monkeypatch.setattr(
+        "aicir.distributed.simulator._peak_allocation_bytes",
+        lambda _device: events.append("peak") or next(peaks),
+    )
+
+    def run_workload(*_args, **kwargs):
+        events.append(f"workload:{kwargs['grad_checkpoint']}")
+        return kwargs["grad_checkpoint"], SimpleNamespace()
+
+    monkeypatch.setattr(simulator, "_run_paired_real", run_workload)
     observed = []
     for policy in ("none", "auto", 16):
-        state = DistState.from_pair(_Pair(torch.tensor([[1.0], [0.0]]), torch.zeros((2, 1))), spec=spec, backend=backend)
-        _, metrics = simulator._measure_paired_real(circuit, initial_state=state, layout=layout, grad_checkpoint=policy)
+        state, metrics = simulator._measure_paired_real(
+            object(),
+            initial_state=object(),
+            layout=object(),
+            grad_checkpoint=policy,
+        )
+        assert state == policy
         observed.append(metrics.peak_allocation_bytes)
+
     assert observed == [101, 202, 303]
-    assert [kind for kind, _ in calls] == ["reset", "sync", "sync"] * 3
+    assert events == [
+        "sync", "reset", "workload:none", "sync", "peak",
+        "sync", "reset", "workload:auto", "sync", "peak",
+        "sync", "reset", "workload:16", "sync", "peak",
+    ]
+
+
+def test_measurement_boundary_reports_blocked_without_allocator_support(monkeypatch):
+    backend = _backend(monkeypatch)
+    simulator = DistSimulator(backend)
+    events = []
+
+    monkeypatch.setattr(
+        "aicir.distributed.simulator._reset_peak_memory_stats",
+        lambda _device: events.append("reset") or None,
+    )
+    monkeypatch.setattr(
+        "aicir.distributed.simulator._synchronize_device",
+        lambda _device: events.append("sync"),
+    )
+    monkeypatch.setattr(
+        "aicir.distributed.simulator._peak_allocation_bytes",
+        lambda _device: pytest.fail("blocked allocator must not read a peak"),
+    )
+    monkeypatch.setattr(
+        simulator,
+        "_run_paired_real",
+        lambda *_args, **_kwargs: ("state", SimpleNamespace()),
+    )
+
+    state, metrics = simulator._measure_paired_real(object())
+
+    assert state == "state"
+    assert metrics.peak_allocation_status == "BLOCKED"
+    assert metrics.peak_allocation_bytes is None
+    assert events == ["sync", "reset"]
+
+
+def test_normal_paired_real_execution_never_resets_allocator_peak(monkeypatch):
+    backend = _backend(monkeypatch)
+    simulator = DistSimulator(backend)
+    resets = []
+    monkeypatch.setattr(
+        "aicir.distributed.simulator._reset_peak_memory_stats",
+        lambda _device: resets.append("reset"),
+    )
+    layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
+    spec = _ShardSpec.build(1, 1, 0, "vector", layout)
+    state = DistState.from_pair(
+        _Pair(torch.tensor([[1.0], [0.0]]), torch.zeros((2, 1))),
+        spec=spec,
+        backend=backend,
+    )
+
+    simulator._run_paired_real(
+        Circuit(n_qubits=1), initial_state=state, layout=layout, grad_checkpoint="none"
+    )
+
+    assert resets == []
 
 
 @pytest.mark.parametrize("policy", ("none", "auto", 1, 4, 16))

@@ -86,11 +86,14 @@ class _Communicator:
         # P2P receives require a contiguous destination on Gloo/HCCL.  Keep
         # contiguity at this transport boundary instead of forcing every
         # density-kernel output to materialize a full local copy.
-        receive = torch.empty_like(tensor.contiguous())
+        receive = torch.empty(
+            tuple(tensor.shape), dtype=tensor.dtype, device=tensor.device
+        )
+        send = tensor.contiguous()
         operations = [
             self._dist.P2POp(
                 self._dist.isend,
-                tensor.contiguous(),
+                send,
                 int(peer),
                 group=self.group,
                 tag=int(tag),

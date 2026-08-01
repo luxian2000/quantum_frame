@@ -356,13 +356,15 @@ class DistSimulator:
     def _measure_paired_real(self, *args, **kwargs):
         """Run one private policy behind an explicit per-run peak boundary."""
 
+        # Finish the preceding policy's asynchronous accelerator work before
+        # resetting this policy's allocator peak counter.
+        _synchronize_device(self._backend._device)
         source = _reset_peak_memory_stats(self._backend._device)
         if source is None:
             state, metrics = self._run_paired_real(*args, **kwargs)
             metrics.peak_allocation_bytes = None
             metrics.peak_allocation_status = "BLOCKED"
             return state, metrics
-        _synchronize_device(self._backend._device)
         state, metrics = self._run_paired_real(*args, **kwargs)
         _synchronize_device(self._backend._device)
         metrics.peak_allocation_bytes = _peak_allocation_bytes(self._backend._device)
