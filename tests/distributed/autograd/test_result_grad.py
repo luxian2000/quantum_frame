@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
-from aicir import PauliString
-from aicir.distributed import DistNPUBackend, DistResult, DistState
+from aicir import Circuit, PauliString, hadamard
+from aicir.distributed import (
+    DistNPUBackend,
+    DistResult,
+    DistSimulator,
+    DistState,
+    PureStateParam,
+)
+from aicir.distributed._contracts import AUTOGRAD_ERROR
 from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.autograd._reducers import _PairReducer
+from aicir.distributed.gates import _GatePlanner, _VectorKernel
 from aicir.distributed.layout import _Layout, _ShardSpec
+from aicir.distributed.reducers import _Reducer
 from scripts.npu import distributed_autograd_probe as probe
 
 
@@ -69,6 +79,91 @@ def test_probe_initial_state_sections_cover_private_trainable_contracts(monkeypa
 
     assert statevector["root_owned_initial_state_gradient_finite"]
     assert statevector["sharded_initial_state_gradient_finite"]
+    assert statevector["root_owned_layout_value_error"] <= 1e-6
+    assert statevector["root_owned_layout_gradient_error"] <= 1e-6
+    assert statevector["sharded_layout_value_error"] <= 1e-6
+    assert statevector["sharded_layout_gradient_error"] <= 1e-6
     assert contract["direct_complex_leaf_rejected"]
     assert contract["rank_requires_grad_mismatch_rejected"] is None
     assert contract["public_forward_only_gate_held"]
+
+
+def test_legacy_vector_kernel_rejects_pair_before_complex_boundary(monkeypatch):
+    backend = _backend(monkeypatch)
+    layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
+    spec = _ShardSpec.build(1, 1, 0, "vector", layout)
+    state = DistState.from_pair(
+        _Pair(torch.ones((2, 1)), torch.zeros((2, 1))),
+        spec=spec,
+        backend=backend,
+    )
+    plan = _GatePlanner(backend, layout, 1).plan(hadamard(0), 0)
+
+    def fail_complex(*_args, **_kwargs):
+        raise AssertionError("legacy torch.complex boundary reached")
+
+    monkeypatch.setattr(torch, "complex", fail_complex)
+    with pytest.raises(ValueError, match="paired-real DistState"):
+        _VectorKernel(backend).apply(state, plan)
+
+
+def test_paired_local_data_is_a_detached_cpu_diagnostic(monkeypatch):
+    backend = _backend(monkeypatch)
+    layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
+    spec = _ShardSpec.build(1, 1, 0, "vector", layout)
+    real = torch.ones((2, 1), requires_grad=True)
+    state = DistState.from_pair(
+        _Pair(real, torch.zeros((2, 1), requires_grad=True)),
+        spec=spec,
+        backend=backend,
+    )
+
+    diagnostic = state.local_data
+
+    assert diagnostic.device.type == "cpu"
+    assert diagnostic.is_complex()
+    assert not diagnostic.requires_grad
+
+
+def test_legacy_reducer_rejects_pair_before_complex_boundary(monkeypatch):
+    backend = _backend(monkeypatch)
+    layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
+    spec = _ShardSpec.build(1, 1, 0, "vector", layout)
+    state = DistState.from_pair(
+        _Pair(torch.ones((2, 1)), torch.zeros((2, 1))),
+        spec=spec,
+        backend=backend,
+    )
+
+    def fail_complex(*_args, **_kwargs):
+        raise AssertionError("legacy torch.complex boundary reached")
+
+    monkeypatch.setattr(torch, "complex", fail_complex)
+    with pytest.raises(ValueError, match="paired-real DistState"):
+        _Reducer(backend).expectation(state, PauliString("Z", n_qubits=1))
+
+
+@pytest.mark.parametrize("initial_kind", ("pair", "pure"))
+def test_public_run_rejects_paired_initial_inputs_before_complex_boundary(
+    monkeypatch,
+    initial_kind,
+):
+    backend = _backend(monkeypatch)
+    layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
+    spec = _ShardSpec.build(1, 1, 0, "vector", layout)
+    initial_state = (
+        DistState.from_pair(
+            _Pair(torch.ones((2, 1)), torch.zeros((2, 1))),
+            spec=spec,
+            backend=backend,
+        )
+        if initial_kind == "pair"
+        else PureStateParam(torch.ones(2), torch.zeros(2))
+    )
+
+    def fail_complex(*_args, **_kwargs):
+        raise AssertionError("public complex boundary reached")
+
+    monkeypatch.setattr(torch, "complex", fail_complex)
+    with pytest.raises(ValueError, match=AUTOGRAD_ERROR):
+        DistSimulator(backend).run(Circuit(n_qubits=1), initial_state=initial_state)

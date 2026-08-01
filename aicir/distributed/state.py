@@ -119,11 +119,20 @@ class DistState:
 
     @property
     def local_data(self):
-        """Compatibility complex boundary; kernels must consume ``_pair``."""
+        """Return legacy complex data only for detached CPU diagnostics.
+
+        Native paired-real kernels consume ``_pair`` directly.  In particular,
+        this property never creates a complex NPU tensor.
+        """
 
         pair = getattr(self, "_pair", None)
         if pair is not None:
-            return pair.combine()
+            if self._backend._device.type != "cpu":
+                raise RuntimeError(
+                    "paired-real DistState.local_data 仅支持 CPU 诊断；"
+                    "请使用 native paired-real 内核"
+                )
+            return pair.combine().detach()
         return self._local_data
 
     @property

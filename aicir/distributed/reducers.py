@@ -63,9 +63,17 @@ class _Reducer:
         self._observable_index = 0
 
     def probabilities(self, state: DistState):
+        if getattr(state, "_pair", None) is not None:
+            raise ValueError(
+                "paired-real DistState 只能由 native paired-real _PairReducer 处理"
+            )
         return state.local_probabilities()
 
     def expectation(self, state: DistState, observable):
+        if getattr(state, "_pair", None) is not None:
+            raise ValueError(
+                "paired-real DistState 只能由 native paired-real _PairReducer 处理"
+            )
         if isinstance(observable, Hamiltonian):
             if observable.n_qubits != state.n_qubits:
                 raise ValueError(
@@ -284,6 +292,10 @@ class _Reducer:
         seed=None,
         collapse: bool = False,
     ):
+        if getattr(state, "_pair", None) is not None:
+            raise ValueError(
+                "paired-real DistState 只能由 native paired-real _PairReducer 处理"
+            )
         shots = int(shots)
         if shots <= 0:
             raise ValueError("shots 必须是正整数")

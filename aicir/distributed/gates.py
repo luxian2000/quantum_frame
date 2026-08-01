@@ -383,6 +383,10 @@ class _VectorKernel:
     def apply(self, state: DistState, plan: _GatePlan) -> DistState:
         if state.kind != "vector":
             raise TypeError("_VectorKernel 仅接受 vector DistState")
+        if getattr(state, "_pair", None) is not None:
+            raise ValueError(
+                "paired-real DistState 只能由 native paired-real _PairVectorKernel 处理"
+            )
 
         output = self._apply_source(
             state.local_data,

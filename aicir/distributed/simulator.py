@@ -16,7 +16,11 @@ from ..ir import (
     instruction_params,
     instruction_to_gate_dict,
 )
-from ._contracts import AUTOGRAD_ERROR, contains_requires_grad
+from ._contracts import (
+    AUTOGRAD_ERROR,
+    contains_paired_real,
+    contains_requires_grad,
+)
 from .autograd._collectives import _scatter_root_pair
 from .autograd._pair import _Pair
 from .autograd._parameters import PureStateParam
@@ -121,7 +125,9 @@ class DistSimulator:
         initial_density_matrix,
     ) -> None:
         local_rejected = (
-            contains_requires_grad(initial_state)
+            contains_paired_real(initial_state)
+            or contains_paired_real(initial_density_matrix)
+            or contains_requires_grad(initial_state)
             or contains_requires_grad(initial_density_matrix)
             or any(
                 contains_requires_grad(instruction_params(instruction))

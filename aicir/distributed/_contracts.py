@@ -10,6 +10,27 @@ from ..core.state import State
 AUTOGRAD_ERROR = "DistSimulator 首期仅支持前向模拟，不支持自动微分"
 
 
+def contains_paired_real(value) -> bool:
+    """Return whether a value belongs to the private paired-real engine."""
+
+    from .state import DistState
+    from .autograd._parameters import (
+        DensityParam,
+        PureStateParam,
+        StinespringParam,
+    )
+
+    if isinstance(value, DistState):
+        return getattr(value, "_pair", None) is not None
+    if isinstance(value, (PureStateParam, DensityParam, StinespringParam)):
+        return True
+    if isinstance(value, Mapping):
+        return any(contains_paired_real(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return any(contains_paired_real(item) for item in value)
+    return False
+
+
 def contains_requires_grad(value) -> bool:
     """Return whether a supported nested value contains trainable data."""
 

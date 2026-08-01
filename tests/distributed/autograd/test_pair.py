@@ -68,6 +68,16 @@ def test_pair_combine_rejects_non_cpu_boundary_tensor():
         pair.combine()
 
 
+def test_pair_combine_rejects_any_non_cpu_device_before_complex_creation():
+    device = type("_Device", (), {"type": "npu"})()
+    pair = object.__new__(_Pair)
+    object.__setattr__(pair, "real", type("_Tensor", (), {"device": device})())
+    object.__setattr__(pair, "imag", type("_Tensor", (), {"device": device})())
+
+    with pytest.raises(RuntimeError, match=r"combine\(\) 仅支持 CPU 诊断/参考边界"):
+        pair.combine()
+
+
 def test_pair_rejects_non_float32_or_mismatched_components():
     with pytest.raises(TypeError, match="_Pair.real 必须是 torch.float32"):
         _Pair(torch.ones(2, dtype=torch.float64), torch.ones(2, dtype=torch.float32))

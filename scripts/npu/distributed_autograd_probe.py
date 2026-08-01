@@ -411,6 +411,64 @@ def _statevector_section(backend):
         PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits),
     )
     root_loss.backward()
+    root_materialized = root_state.to_numpy(root=0)
+    root_real_reference = np.arange(1, dimension + 1, dtype=np.float64)
+    root_imag_reference = np.arange(dimension, dtype=np.float64)
+    root_complex_reference = root_real_reference + 1j * root_imag_reference
+    logical_signs = np.concatenate(
+        (np.ones(dimension // 2), -np.ones(dimension // 2))
+    )
+    root_norm_sq = float(np.sum(np.abs(root_complex_reference) ** 2))
+    root_value_reference = float(
+        np.sum(logical_signs * np.abs(root_complex_reference) ** 2)
+        / root_norm_sq
+    )
+    root_real_gradient_reference = (
+        2.0
+        * (logical_signs - root_value_reference)
+        * root_real_reference
+        / root_norm_sq
+    )
+    root_imag_gradient_reference = (
+        2.0
+        * (logical_signs - root_value_reference)
+        * root_imag_reference
+        / root_norm_sq
+    )
+    if backend.rank == 0:
+        root_owned_layout_amplitude_error = float(
+            np.max(
+                np.abs(
+                    root_materialized.reshape(-1)
+                    - root_complex_reference / math.sqrt(root_norm_sq)
+                )
+            )
+        )
+        root_owned_layout_value_error = abs(
+            float(root_loss.detach().cpu()) - root_value_reference
+        )
+        root_owned_layout_gradient_error = max(
+            float(
+                np.max(
+                    np.abs(
+                        root_real.grad.detach().cpu().numpy()
+                        - root_real_gradient_reference
+                    )
+                )
+            ),
+            float(
+                np.max(
+                    np.abs(
+                        root_imag.grad.detach().cpu().numpy()
+                        - root_imag_gradient_reference
+                    )
+                )
+            ),
+        )
+    else:
+        root_owned_layout_amplitude_error = 0.0
+        root_owned_layout_value_error = 0.0
+        root_owned_layout_gradient_error = 0.0
     root_owned_gradient_finite = (
         True
         if backend.rank != 0
@@ -442,11 +500,67 @@ def _statevector_section(backend):
         ),
         initial_density_matrix=None,
     )
-    _PairReducer(backend).expectation(
+    sharded_value = _PairReducer(backend).expectation(
         sharded_state._pair,
         spec,
         PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits),
-    ).backward()
+    )
+    sharded_value.backward()
+    storage_real_reference = np.concatenate(
+        [
+            np.full(spec.local_shape[0], float(rank + 1))
+            for rank in range(backend.world_size)
+        ]
+    )
+    storage_imag_reference = np.concatenate(
+        [
+            np.full(spec.local_shape[0], -float(rank))
+            for rank in range(backend.world_size)
+        ]
+    )
+    storage_reference = storage_real_reference + 1j * storage_imag_reference
+    logical_reference = (
+        storage_reference.reshape([2] * n_qubits)
+        .transpose(layout.logical_to_storage)
+        .reshape(-1)
+    )
+    sharded_value_reference = float(
+        np.sum(logical_signs * np.abs(logical_reference) ** 2)
+    )
+    logical_real_gradient = 2.0 * logical_signs * logical_reference.real
+    logical_imag_gradient = 2.0 * logical_signs * logical_reference.imag
+    storage_real_gradient = (
+        logical_real_gradient.reshape([2] * n_qubits)
+        .transpose(layout.storage_to_logical)
+        .reshape(-1)
+    )
+    storage_imag_gradient = (
+        logical_imag_gradient.reshape([2] * n_qubits)
+        .transpose(layout.storage_to_logical)
+        .reshape(-1)
+    )
+    local_slice = slice(spec.global_start, spec.global_stop)
+    sharded_layout_value_error = abs(
+        float(sharded_value.detach().cpu()) - sharded_value_reference
+    )
+    sharded_layout_gradient_error = max(
+        float(
+            np.max(
+                np.abs(
+                    shard_real.grad.detach().cpu().numpy().reshape(-1)
+                    - storage_real_gradient[local_slice]
+                )
+            )
+        ),
+        float(
+            np.max(
+                np.abs(
+                    shard_imag.grad.detach().cpu().numpy().reshape(-1)
+                    - storage_imag_gradient[local_slice]
+                )
+            )
+        ),
+    )
     sharded_gradient_finite = all(
         gradient is not None and bool(torch.isfinite(gradient).all().detach().cpu())
         for gradient in (shard_real.grad, shard_imag.grad)
@@ -456,6 +570,11 @@ def _statevector_section(backend):
         and root_owned_gradient_finite
         and sharded_gradient_finite
         and maximum <= 1e-4
+        and root_owned_layout_amplitude_error <= 1e-4
+        and root_owned_layout_value_error <= 1e-4
+        and root_owned_layout_gradient_error <= 1e-4
+        and sharded_layout_value_error <= 1e-4
+        and sharded_layout_gradient_error <= 1e-4
     )
     return {
         "status": "PASS" if passed else "FAIL",
@@ -465,6 +584,11 @@ def _statevector_section(backend):
         "root_owned_initial_state_gradient_finite": root_owned_gradient_finite,
         "sharded_initial_state_gradient_finite": sharded_gradient_finite,
         "layout": list(layout.logical_to_storage),
+        "root_owned_layout_amplitude_error": root_owned_layout_amplitude_error,
+        "root_owned_layout_value_error": root_owned_layout_value_error,
+        "root_owned_layout_gradient_error": root_owned_layout_gradient_error,
+        "sharded_layout_value_error": sharded_layout_value_error,
+        "sharded_layout_gradient_error": sharded_layout_gradient_error,
         "max_abs_error": maximum,
     }
 
