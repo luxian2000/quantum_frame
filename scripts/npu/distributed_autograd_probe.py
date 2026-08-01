@@ -710,7 +710,7 @@ def _memory_section(backend):
         for index in range(16):
             circuit.append(ry(theta, index % n_qubits))
         state = DistState.from_pair(_local_initial_pair(backend, spec), spec=spec, backend=backend)
-        evolved, metrics = DistSimulator(backend)._run_paired_real(
+        evolved, metrics = DistSimulator(backend)._measure_paired_real(
             circuit,
             initial_state=state,
             layout=layout,
@@ -726,6 +726,8 @@ def _memory_section(backend):
             "recomputed_gate_count": int(metrics.recomputed_gate_count),
             "chosen_interval": int(metrics.interval),
             "peak_allocation_bytes": metrics.peak_allocation_bytes,
+            "peak_allocation_status": metrics.peak_allocation_status,
+            "memory_source": metrics.memory_source,
             "gradient_error": abs(gradient - reference_gradient),
         }
     passed = all(item["gradient_error"] <= 1e-4 for item in reports.values())

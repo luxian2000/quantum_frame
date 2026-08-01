@@ -11,6 +11,7 @@ from aicir.distributed import DistNPUBackend, DistSimulator
 from aicir.distributed.autograd._checkpoint import (
     _CheckpointPlanner,
     _CheckpointPolicy,
+    _available_memory_bytes,
     _recompute_segment,
 )
 from aicir.distributed.autograd._pair import _Pair
@@ -18,6 +19,7 @@ from aicir.distributed.autograd._reducers import _PairReducer
 from aicir.distributed.gates import _AutogradExecutionContext, _GatePlanner
 from aicir.distributed.layout import _Layout, _ShardSpec
 from aicir.distributed.state import DistState
+from aicir.noise import BitFlipChannel, NoiseModel
 
 
 def _backend(monkeypatch):
@@ -151,3 +153,65 @@ def test_public_run_validates_checkpoint_without_opening_autograd_route(monkeypa
         simulator.run(circuit, grad_checkpoint="bad")
     with pytest.raises(ValueError, match="^DistSimulator 首期仅支持前向模拟，不支持自动微分$"):
         simulator.run(circuit, grad_checkpoint="none")
+
+
+@pytest.mark.parametrize("policy", ("none", "auto", 1, 4, 16))
+def test_public_forward_and_sampling_are_unchanged_for_valid_checkpoint_policies(monkeypatch, policy):
+    backend = _backend(monkeypatch)
+    simulator = DistSimulator(backend)
+    circuit = Circuit(n_qubits=1)
+    circuit.append(ry(0.31, 0))
+    result = simulator.run(circuit, shots=20, seed=7, grad_checkpoint=policy)
+    reference = simulator.run(circuit, shots=20, seed=7, grad_checkpoint="auto")
+    torch.testing.assert_close(result.local_probabilities, reference.local_probabilities)
+    assert result.counts == reference.counts
+
+
+def test_npu_memory_discovery_never_uses_host_memory(monkeypatch):
+    monkeypatch.setattr(torch, "npu", object(), raising=False)
+    monkeypatch.setattr("aicir.distributed.autograd._checkpoint.os.sysconf", lambda *_: 123)
+    assert _available_memory_bytes("npu:0") == (None, "conservative")
+
+
+def test_measurement_boundary_resets_and_reads_each_policy_peak(monkeypatch):
+    backend = _backend(monkeypatch)
+    simulator = DistSimulator(backend)
+    calls = []
+    peaks = iter((101, 202, 303))
+
+    monkeypatch.setattr("aicir.distributed.simulator._reset_peak_memory_stats", lambda device: calls.append(("reset", str(device))) or "cpu")
+    monkeypatch.setattr("aicir.distributed.simulator._synchronize_device", lambda device: calls.append(("sync", str(device))))
+    monkeypatch.setattr("aicir.distributed.simulator._peak_allocation_bytes", lambda device: next(peaks))
+    circuit = Circuit(n_qubits=1)
+    layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
+    spec = _ShardSpec.build(1, 1, 0, "vector", layout)
+    observed = []
+    for policy in ("none", "auto", 16):
+        state = DistState.from_pair(_Pair(torch.tensor([[1.0], [0.0]]), torch.zeros((2, 1))), spec=spec, backend=backend)
+        _, metrics = simulator._measure_paired_real(circuit, initial_state=state, layout=layout, grad_checkpoint=policy)
+        observed.append(metrics.peak_allocation_bytes)
+    assert observed == [101, 202, 303]
+    assert [kind for kind, _ in calls] == ["reset", "sync", "sync"] * 3
+
+
+@pytest.mark.parametrize("policy", ("none", "auto", 1, 4, 16))
+def test_checkpoint_keeps_analytic_noise_value_and_probability_gradient(monkeypatch, policy):
+    backend = _backend(monkeypatch)
+    layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
+    spec = _ShardSpec.build(1, 1, 0, "matrix", layout)
+    probability = torch.tensor(0.23, dtype=torch.float32, requires_grad=True)
+    circuit = Circuit(n_qubits=1)
+    circuit.append(ry(torch.tensor(0.0, dtype=torch.float32), 0))
+    circuit.noise_model = NoiseModel().add_channel(BitFlipChannel(0, probability))
+    state = DistState.from_pair(_Pair(torch.tensor([[0.0, 0.0], [0.0, 1.0]]), torch.zeros((2, 2))), spec=spec, backend=backend)
+    evolved, metrics = DistSimulator(backend)._run_paired_real(circuit, initial_state=state, layout=layout, grad_checkpoint=policy, available_memory_bytes=1 << 30)
+    value = _PairReducer(backend).expectation(evolved._pair, evolved.spec, PauliString("Z", n_qubits=1))
+    value.backward()
+    assert float(value) == pytest.approx(-1.0 + 2.0 * 0.23, abs=1e-6)
+    assert float(probability.grad) == pytest.approx(2.0, abs=1e-6)
+    if policy == "none":
+        assert metrics.recomputed_gate_count == 0
+        assert metrics.saved_state_count == 2
+    else:
+        assert metrics.recomputed_gate_count > 0
+        assert metrics.saved_state_count == 2

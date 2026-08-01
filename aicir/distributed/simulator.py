@@ -28,7 +28,7 @@ from .autograd._checkpoint import (
     _CheckpointMetrics,
     _CheckpointPlanner,
     _CheckpointPolicy,
-    _agree_interval,
+    _agree_checkpoint_selection,
     _available_memory_bytes,
     _recompute_segment,
 )
@@ -64,6 +64,36 @@ def _peak_allocation_bytes(device) -> int | None:
                 return int(peak(device))
     except Exception:
         pass
+    return None
+
+
+def _synchronize_device(device) -> None:
+    """Synchronize only an already-selected accelerator allocator."""
+
+    device = torch.device(device)
+    if device.type == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
+    elif device.type == "npu":
+        synchronize = getattr(getattr(torch, "npu", None), "synchronize", None)
+        if callable(synchronize):
+            synchronize(device)
+
+
+def _reset_peak_memory_stats(device) -> str | None:
+    """Reset allocator peak only at an explicit measurement boundary."""
+
+    device = torch.device(device)
+    try:
+        if device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
+            return "cuda"
+        if device.type == "npu":
+            reset = getattr(getattr(torch, "npu", None), "reset_peak_memory_stats", None)
+            if callable(reset):
+                reset(device)
+                return "npu"
+    except Exception:
+        return None
     return None
 
 
@@ -267,31 +297,35 @@ class DistSimulator:
             planner.plan(instruction, index)
             for index, instruction in enumerate(instructions)
         )
-        available = (
-            _available_memory_bytes(self._backend._device)
-            if available_memory_bytes is None
-            else int(available_memory_bytes)
-        )
+        if available_memory_bytes is None:
+            available, memory_source = _available_memory_bytes(self._backend._device)
+        else:
+            available, memory_source = int(available_memory_bytes), "provided"
         if policy.value == "none":
             interval = 0
         elif policy.value == "auto":
-            interval = _CheckpointPlanner(initial_state.spec, len(plans), available).interval()
+            interval = (
+                1
+                if available is None
+                else _CheckpointPlanner(initial_state.spec, len(plans), available).interval()
+            )
         else:
             interval = int(policy.value)
         if interval:
-            interval = _agree_interval(interval, self._backend.communicator)
+            interval, memory_source = _agree_checkpoint_selection(
+                interval, memory_source, self._backend.communicator
+            )
 
         engine = _PairedReplayEngine(self._backend, instructions, getattr(circuit, "noise_model", None))
         metrics = _CheckpointMetrics(
             policy=policy.value,
             interval=interval,
             saved_state_count=(len(plans) + interval - 1) // interval + 1 if interval else len(plans) + 1,
-            peak_allocation_bytes=_peak_allocation_bytes(self._backend._device),
         )
+        metrics.memory_source = memory_source
         state = initial_state
         if not interval:
             state = _recompute_segment(state, plans, 0, len(plans), engine)
-            metrics.peak_allocation_bytes = _peak_allocation_bytes(self._backend._device)
             return state, metrics
 
         from torch.utils.checkpoint import checkpoint
@@ -317,7 +351,22 @@ class DistSimulator:
 
             real, imag = checkpoint(replay, state._pair.real, state._pair.imag, use_reentrant=False)
             state = DistState.from_pair(_Pair(real, imag), spec=end_spec, backend=self._backend, bit_order=state.bit_order)
+        return state, metrics
+
+    def _measure_paired_real(self, *args, **kwargs):
+        """Run one private policy behind an explicit per-run peak boundary."""
+
+        source = _reset_peak_memory_stats(self._backend._device)
+        if source is None:
+            state, metrics = self._run_paired_real(*args, **kwargs)
+            metrics.peak_allocation_bytes = None
+            metrics.peak_allocation_status = "BLOCKED"
+            return state, metrics
+        _synchronize_device(self._backend._device)
+        state, metrics = self._run_paired_real(*args, **kwargs)
+        _synchronize_device(self._backend._device)
         metrics.peak_allocation_bytes = _peak_allocation_bytes(self._backend._device)
+        metrics.peak_allocation_status = "MEASURED" if metrics.peak_allocation_bytes is not None else "BLOCKED"
         return state, metrics
 
     def _assert_process_agreement(

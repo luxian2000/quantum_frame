@@ -155,12 +155,8 @@ class _PairMatrixKernel:
             state.n_qubits,
         )
         result = _Pair(
-            # The next cross-shard left action uses this pair as a P2P source.
-            # Transposing the right action leaves a non-contiguous view; make
-            # the *real* paired buffers contiguous here so a replayed segment
-            # has the identical transport contract on Gloo/HCCL.
-            right_transposed.real.transpose(0, 1).contiguous(),
-            right_transposed.imag.transpose(0, 1).contiguous(),
+            right_transposed.real.transpose(0, 1),
+            right_transposed.imag.transpose(0, 1),
         )
         return DistState.from_pair(
             result,

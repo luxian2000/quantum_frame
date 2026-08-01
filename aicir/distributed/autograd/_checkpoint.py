@@ -12,6 +12,8 @@ import torch
 
 _POLICY_ERROR = "grad_checkpoint 必须是 'none'、'auto' 或正整数"
 _INTERVAL_MISMATCH_ERROR = "各 rank 的梯度检查点间隔不一致"
+_MEMORY_SOURCE_MISMATCH_ERROR = "各 rank 的梯度检查点内存来源不一致"
+_MEMORY_SOURCE_CODES = {"provided": 0, "host": 1, "cuda": 2, "npu": 3, "conservative": 4}
 
 
 @dataclass(frozen=True)
@@ -29,7 +31,7 @@ class _CheckpointPolicy:
         raise ValueError(_POLICY_ERROR)
 
 
-def _available_memory_bytes(device) -> int:
+def _available_memory_bytes(device) -> tuple[int | None, str]:
     """Return currently available memory without requiring an accelerator runtime.
 
     CPU tests use ``sysconf``.  CUDA/NPU support is deliberately best-effort:
@@ -37,23 +39,30 @@ def _available_memory_bytes(device) -> int:
     allocating on a device that is not present.
     """
 
-    device = torch.device(device)
     try:
-        if device.type == "cuda" and torch.cuda.is_available():
-            free, _ = torch.cuda.mem_get_info(device)
-            return max(1, int(free))
-        if device.type == "npu":
+        device_type = torch.device(device).type
+        resolved_device = torch.device(device)
+    except Exception:
+        device_type = str(device).split(":", 1)[0].lower()
+        resolved_device = device
+    try:
+        if device_type == "cuda" and torch.cuda.is_available():
+            free, _ = torch.cuda.mem_get_info(resolved_device)
+            return max(1, int(free)), "cuda"
+        if device_type == "npu":
             npu = getattr(torch, "npu", None)
             query = getattr(npu, "mem_get_info", None)
             if callable(query):
-                free, _ = query(device)
-                return max(1, int(free))
+                free, _ = query(resolved_device)
+                return max(1, int(free)), "npu"
+            return None, "conservative"
     except Exception:  # runtime capability discovery must never break CPU tests
-        pass
+        if device_type == "npu":
+            return None, "conservative"
     try:
-        return max(1, int(os.sysconf("SC_AVPHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE")))
+        return max(1, int(os.sysconf("SC_AVPHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE"))), "host"
     except (AttributeError, OSError, ValueError):
-        return 1 << 30
+        return None, "conservative"
 
 
 class _CheckpointPlanner:
@@ -101,6 +110,8 @@ class _CheckpointMetrics:
     saved_state_count: int
     recomputed_gate_count: int = 0
     peak_allocation_bytes: int | None = None
+    peak_allocation_status: str = "UNMEASURED"
+    memory_source: str = "unknown"
 
 
 def _recompute_segment(start_state, plans, start: int, stop: int, engine):
@@ -133,12 +144,29 @@ def _agree_interval(interval: int, communicator) -> int:
     return resolved[0]
 
 
+def _agree_checkpoint_selection(interval: int, source: str, communicator) -> tuple[int, str]:
+    """Agree interval and memory source in one float32 control collective."""
+
+    code = _MEMORY_SOURCE_CODES.get(source)
+    if code is None:
+        raise ValueError("checkpoint memory source 无效")
+    control = torch.tensor([float(interval), float(code)], dtype=torch.float32, device=communicator.device)
+    values = communicator.all_gather(control)
+    decoded = [tuple(int(value.detach().cpu()[index].item()) for index in range(2)) for value in values]
+    if any(value[0] != decoded[0][0] for value in decoded[1:]):
+        raise ValueError(_INTERVAL_MISMATCH_ERROR)
+    if any(value[1] != decoded[0][1] for value in decoded[1:]):
+        raise ValueError(_MEMORY_SOURCE_MISMATCH_ERROR)
+    return decoded[0][0], source
+
+
 __all__ = [
     "_CheckpointMetrics",
     "_CheckpointPlanner",
     "_CheckpointPolicy",
     "_POLICY_ERROR",
     "_agree_interval",
+    "_agree_checkpoint_selection",
     "_available_memory_bytes",
     "_recompute_segment",
 ]

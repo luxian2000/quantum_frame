@@ -65,6 +65,21 @@ def _state(backend, layout, *, kind):
     )
 
 
+def _noncontiguous_density_state(backend, layout):
+    state = _state(backend, layout, kind="matrix")
+    # A transposed paired view models the density right-action output.  Replay
+    # must transport it through the existing P2P boundary without a full-state
+    # copy in the density kernel.
+    return DistState.from_pair(
+        _Pair(
+            state._pair.real.transpose(0, 1).contiguous().transpose(0, 1),
+            state._pair.imag.transpose(0, 1).contiguous().transpose(0, 1),
+        ),
+        spec=state.spec,
+        backend=backend,
+    )
+
+
 def _evaluate(simulator, backend, layout, kind, policy):
     theta = torch.tensor(0.31, dtype=torch.float32, requires_grad=True)
     circuit = Circuit(n_qubits=layout.n_qubits)
@@ -73,6 +88,7 @@ def _evaluate(simulator, backend, layout, kind, policy):
     # plan/index sequencing in mixed layouts.
     for index in range(5):
         circuit.append(ry(theta, index % layout.n_qubits))
+    backend.communicator.clear_communication_records()
     evolved, metrics = simulator._run_paired_real(
         circuit,
         initial_state=_state(backend, layout, kind=kind),
@@ -86,6 +102,11 @@ def _evaluate(simulator, backend, layout, kind, policy):
         PauliString("Z" + "I" * (layout.n_qubits - 1), n_qubits=layout.n_qubits),
     )
     value.backward()
+    records = [
+        (record["peer"], record["tag"])
+        for record in backend.communicator.communication_records
+        if record["kind"] == "exchange"
+    ]
     return {
         "value": float(value.detach().cpu()),
         "grad": float(theta.grad.detach().cpu()),
@@ -93,6 +114,8 @@ def _evaluate(simulator, backend, layout, kind, policy):
         "saved": metrics.saved_state_count,
         "recomputed": metrics.recomputed_gate_count,
         "shape": tuple(evolved.local_shape),
+        "records": records,
+        "memory_source": metrics.memory_source,
     }
 
 
@@ -113,6 +136,46 @@ def _worker(rank, world_size, port, output_path):
     torch.distributed.destroy_process_group()
 
 
+def _noncontiguous_worker(rank, world_size, port, output_path):
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), WORLD_SIZE=str(world_size), RANK=str(rank), LOCAL_RANK=str(rank))
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, process_group_backend="gloo")
+    layout = _Layout.explicit((1, 0), n_qubits=2, distributed_axes=1)
+    theta = torch.tensor(0.2, dtype=torch.float32, requires_grad=True)
+    circuit = Circuit(n_qubits=2)
+    circuit.append(ry(theta, 1))
+    circuit.append(ry(theta, 1))
+    circuit.append(ry(theta, 1))
+    evolved, metrics = DistSimulator(backend)._run_paired_real(
+        circuit, initial_state=_noncontiguous_density_state(backend, layout), layout=layout, grad_checkpoint=1,
+    )
+    value = _PairReducer(backend).expectation(evolved._pair, evolved.spec, PauliString("ZI", n_qubits=2))
+    value.backward()
+    if rank == 0:
+        Path(output_path).write_text(json.dumps({"grad": float(theta.grad), "recomputed": metrics.recomputed_gate_count, "contiguous": evolved._pair.real.is_contiguous()}))
+    torch.distributed.destroy_process_group()
+
+
+def _mismatch_worker(rank, world_size, port, output_path):
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), WORLD_SIZE=str(world_size), RANK=str(rank), LOCAL_RANK=str(rank))
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, process_group_backend="gloo")
+    layout = _Layout.explicit((1, 0), n_qubits=2, distributed_axes=1)
+    circuit = Circuit(n_qubits=2)
+    circuit.append(ry(torch.tensor(0.2), 1))
+    backend.communicator.clear_communication_records()
+    try:
+        DistSimulator(backend)._run_paired_real(circuit, initial_state=_state(backend, layout, kind="vector"), layout=layout, grad_checkpoint=1 if rank == 0 else 4)
+    except ValueError as error:
+        message = str(error)
+    else:
+        message = "NO_ERROR"
+    messages = [None] * world_size
+    torch.distributed.all_gather_object(messages, message)
+    torch.distributed.barrier()
+    if rank == 0:
+        Path(output_path).write_text(json.dumps({"messages": messages, "records": backend.communicator.communication_records}), encoding="utf-8")
+    torch.distributed.destroy_process_group()
+
+
 @pytest.mark.parametrize("world_size", (2, 4))
 def test_checkpoint_intervals_agree_and_preserve_vector_density_gradients(world_size, tmp_path):
     output = tmp_path / f"checkpoint-{world_size}.json"
@@ -127,7 +190,32 @@ def test_checkpoint_intervals_agree_and_preserve_vector_density_gradients(world_
         for policy in ("auto", "1", "4", "16"):
             intervals = {rank[kind][policy]["interval"] for rank in ranks}
             assert len(intervals) == 1
+            assert len({rank[kind][policy]["memory_source"] for rank in ranks}) == 1
             actual = ranks[0][kind][policy]
             assert actual["value"] == pytest.approx(reference["value"], abs=1e-6)
             assert actual["grad"] == pytest.approx(reference["grad"], abs=1e-5)
-            assert actual["saved"] >= 1
+            assert actual["saved"] == (6 if policy in {"auto", "1"} else 3 if policy == "4" else 2)
+            assert actual["recomputed"] > 0
+            # Replay repeats the original forward P2P order; it may add those
+            # records, but never changes peers/tags or operation identities.
+            assert {tuple(item) for item in actual["records"]} >= {tuple(item) for item in reference["records"]}
+        assert reference["saved"] == 6
+        assert reference["recomputed"] == 0
+
+
+def test_checkpoint_replays_noncontiguous_density_pair_at_transport_boundary(tmp_path):
+    output = tmp_path / "noncontiguous.json"
+    context = mp.spawn(_noncontiguous_worker, args=(2, _free_port(), str(output)), nprocs=2, join=False)
+    _join(context)
+    result = json.loads(output.read_text(encoding="utf-8"))
+    assert np.isfinite(result["grad"])
+    assert result["recomputed"] == 3
+
+
+def test_checkpoint_interval_disagreement_fails_before_data_p2p_and_recovers(tmp_path):
+    output = tmp_path / "mismatch.json"
+    context = mp.spawn(_mismatch_worker, args=(2, _free_port(), str(output)), nprocs=2, join=False)
+    _join(context)
+    result = json.loads(output.read_text(encoding="utf-8"))
+    assert result["messages"] == ["各 rank 的梯度检查点间隔不一致"] * 2
+    assert not [record for record in result["records"] if record["kind"] == "exchange"]
