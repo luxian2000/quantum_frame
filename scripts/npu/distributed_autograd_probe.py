@@ -316,6 +316,9 @@ def _performance_exchange_case(backend, mode: str, *, warmups=5, runs=30):
         )
         _synchronize_npu(backend)
         forward_ms = (time.perf_counter() - started) * 1000.0
+        # Keep the backward interval independently delimited even though the
+        # preceding forward endpoint is already synchronized.
+        _synchronize_npu(backend)
         started = time.perf_counter()
         exchanged.abs_sq().sum().backward()
         _synchronize_npu(backend)

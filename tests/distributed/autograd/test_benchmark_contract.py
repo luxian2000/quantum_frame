@@ -2,6 +2,8 @@ import json
 
 import pytest
 import scripts.npu.distributed_autograd_benchmark as benchmark
+import scripts.npu.distributed_autograd_probe as probe
+import torch
 
 from scripts.npu.distributed_autograd_benchmark import _validate_benchmark_report
 
@@ -46,3 +48,19 @@ def test_cli_honors_counts_and_writes_report(monkeypatch, tmp_path):
     assert benchmark.main() == 0
     assert observed == {"warmups": 6, "runs": 31}
     assert json.loads(output.read_text()) == _report(warmups=6, runs=31)
+
+
+def test_timing_synchronizes_each_forward_and_backward_boundary(monkeypatch):
+    calls = []
+
+    class Communicator:
+        communication_counters = {"bytes": 0, "p2p_wait_ms": 0.0}
+        work_handle_status = {"all_handles_complete": True}
+        def set_autograd_communication_mode(self, mode): pass
+        def clear_communication_records(self): pass
+
+    backend = type("Backend", (), {"rank": 0, "_device": "cpu", "communicator": Communicator()})()
+    monkeypatch.setattr(probe, "_synchronize_npu", lambda backend: calls.append(1))
+    monkeypatch.setattr(probe, "_exchange_pair", lambda pair, **kwargs: pair)
+    probe._performance_exchange_case(backend, "baseline", warmups=2, runs=3)
+    assert len(calls) == 4 * (2 + 3)
