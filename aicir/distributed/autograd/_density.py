@@ -15,7 +15,7 @@ from ...core.gates import _flat_local_state_indices
 from ..gates import _GatePlan
 from ..layout import _ShardSpec
 from ..state import DistState
-from ._collectives import _exchange_pair
+from ._collectives import _descriptor, _exchange_pair, _safe_int, _synchronize_preflight
 from ._pair import _Pair
 from ._vector import _as_pair_matrix, _pair_block
 
@@ -54,6 +54,50 @@ def _apply_rows(source: _Pair, matrix: _Pair, axes, n_qubits: int) -> _Pair:
     )
 
 
+def _preflight_density_operation(state: DistState, plan: _GatePlan, *, operation_index: int) -> None:
+    """Reject divergent density metadata before any rank enters data P2P."""
+
+    operation = _safe_int(operation_index)
+    try:
+        storage_axes = tuple(int(axis) for axis in plan.storage_axes)
+        valid_plan = (
+            len(storage_axes) <= 7
+            and int(plan.distributed_axes) == state.layout.distributed_axes
+            and int(plan.instruction_index) >= 0
+        )
+    except Exception:  # noqa: BLE001 - collective preflight must be uniform
+        storage_axes, valid_plan = (), False
+    valid_state = (
+        isinstance(state, DistState)
+        and state.kind == "matrix"
+        and isinstance(getattr(state, "_pair", None), _Pair)
+        and operation is not None
+        and operation >= 0
+    )
+    descriptor = _descriptor(
+        valid=valid_state and valid_plan,
+        code=1,
+        values=(
+            operation if operation is not None else 0,
+            state.n_qubits if isinstance(state, DistState) else 0,
+            state.local_shape[0] if isinstance(state, DistState) else 0,
+            state.local_shape[1] if isinstance(state, DistState) else 0,
+            int(plan.instruction_index) if valid_plan else 0,
+            int(plan.distributed_axes) if valid_plan else 0,
+            len(storage_axes),
+            *storage_axes,
+        ),
+        communicator=state.backend.communicator if isinstance(state, DistState) else plan._backend.communicator,
+    )
+    _synchronize_preflight(
+        state.backend.communicator,
+        descriptor,
+        names={1: "density plan"},
+        fields=tuple(range(2, 16)),
+        field_names={field: "density plan" for field in range(2, 16)},
+    )
+
+
 class _PairMatrixKernel:
     """Apply planned density operations entirely on float32 paired buffers."""
 
@@ -78,11 +122,8 @@ class _PairMatrixKernel:
     def apply_left(self, state: DistState, plan: _GatePlan, *, operation_index: int) -> _Pair:
         """Return ``A rho`` in row-sharded paired-real form."""
 
-        if state.kind != "matrix" or getattr(state, "_pair", None) is None:
-            raise TypeError("_PairMatrixKernel 仅接受 paired-real matrix DistState")
+        _preflight_density_operation(state, plan, operation_index=operation_index)
         operation_index = int(operation_index)
-        if operation_index < 0:
-            raise ValueError("operation_index 必须非负")
         matrix = _as_pair_matrix(plan.local_matrix, reference=state._pair.real)
         output = self._apply_left_source(
             state._pair, plan, matrix, source_rank=self._backend.rank

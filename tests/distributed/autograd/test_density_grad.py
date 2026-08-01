@@ -16,6 +16,7 @@ from aicir.distributed.gates import _AutogradExecutionContext, _GatePlanner
 from aicir.distributed.layout import _Layout, _ShardSpec
 from aicir.distributed.state import DistState
 from aicir.ir import Observable
+from scripts.npu.distributed_autograd_probe import _cpu_density_objective
 
 
 def _backend(monkeypatch):
@@ -127,3 +128,12 @@ def test_density_reducers_honor_nonidentity_layout_for_probabilities_pauli_and_d
     assert torch.isfinite(raw_imag.grad).all()
     np.testing.assert_allclose(float(pauli.detach()), float(dense.detach()), atol=1e-5)
     assert abs(float(probabilities.sum().detach()) - 1.0) <= 1e-5
+
+
+def test_probe_density_cpu_oracle_uses_requested_nonzero_storage_axis():
+    layout = _Layout.explicit((1, 0), n_qubits=2, distributed_axes=1)
+    state = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64)
+    state /= np.linalg.norm(state)
+    axis_zero = _cpu_density_objective(state, 0.31, logical_axis=0, layout=layout)
+    axis_one = _cpu_density_objective(state, 0.31, logical_axis=1, layout=layout)
+    assert abs(axis_zero - axis_one) > 1e-3

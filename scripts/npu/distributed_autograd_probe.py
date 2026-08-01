@@ -595,6 +595,29 @@ def _statevector_section(backend):
     }
 
 
+def _cpu_density_objective(state, theta, *, logical_axis, layout):
+    """Independent complex128 ``<Z_0>`` oracle in the layout's storage basis."""
+
+    state = np.asarray(state, dtype=np.complex128).reshape(-1)
+    gate = np.array(
+        [[np.cos(theta / 2), -np.sin(theta / 2)], [np.sin(theta / 2), np.cos(theta / 2)]],
+        dtype=np.complex128,
+    )
+    unitary = np.array([[1.0]], dtype=np.complex128)
+    observable = np.array([[1.0]], dtype=np.complex128)
+    for storage_axis in range(layout.n_qubits):
+        unitary = np.kron(
+            unitary,
+            gate if storage_axis == layout.logical_to_storage[logical_axis] else np.eye(2),
+        )
+        observable = np.kron(
+            observable,
+            np.diag([1.0, -1.0]) if storage_axis == layout.logical_to_storage[0] else np.eye(2),
+        )
+    evolved = unitary @ state
+    return float(np.vdot(evolved, observable @ evolved).real)
+
+
 def _density_section(backend):
     """Validate paired-real density values and gradients without a CPU fallback.
 
@@ -609,9 +632,12 @@ def _density_section(backend):
     n_qubits, dimension = vector_spec.n_qubits, 1 << vector_spec.n_qubits
     raw = np.arange(1, dimension + 1, dtype=np.float64)
     raw /= np.linalg.norm(raw)
-    z = np.kron(np.diag([1.0, -1.0]), np.eye(dimension // 2))
     value_errors, gradient_errors, physical_errors = [], [], []
-    for axis in range(layout.distributed_axes):
+    logical_axes = tuple(
+        logical for logical, storage in enumerate(layout.logical_to_storage)
+        if storage < layout.distributed_axes
+    )
+    for axis in logical_axes:
         theta = torch.tensor(0.31, dtype=torch.float32, device=backend._device, requires_grad=True)
         vector = DistState.from_pair(
             _local_initial_pair(backend, vector_spec), spec=vector_spec, backend=backend
@@ -624,20 +650,11 @@ def _density_section(backend):
             evolved._pair, matrix_spec, PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits)
         )
         value.backward()
-        gate = np.array([[np.cos(0.31 / 2), -np.sin(0.31 / 2)], [np.sin(0.31 / 2), np.cos(0.31 / 2)]], dtype=np.float64)
-        unitary = np.array([[1.0]], dtype=np.float64)
-        for qubit in range(n_qubits):
-            unitary = np.kron(unitary, gate if qubit == axis else np.eye(2))
-        reference = float((unitary @ raw) @ z @ (unitary @ raw))
+        reference = _cpu_density_objective(raw, 0.31, logical_axis=axis, layout=layout)
         value_errors.append(abs(float(value.detach().cpu()) - reference))
         shifted = parameter_shift_gradient(
-            lambda point: float((
-                np.kron(np.array([[np.cos(point[0] / 2), -np.sin(point[0] / 2)], [np.sin(point[0] / 2), np.cos(point[0] / 2)]]), np.eye(dimension // 2))
-                @ raw
-            ) @ z @ (
-                np.kron(np.array([[np.cos(point[0] / 2), -np.sin(point[0] / 2)], [np.sin(point[0] / 2), np.cos(point[0] / 2)]]), np.eye(dimension // 2))
-                @ raw
-            )), np.array([0.31], dtype=np.float64),
+            lambda point: _cpu_density_objective(raw, float(point[0]), logical_axis=axis, layout=layout),
+            np.array([0.31], dtype=np.float64),
         )[0]
         gradient_errors.append(abs(float(theta.grad.detach().cpu()) - float(shifted)))
         local = evolved._pair
@@ -663,7 +680,7 @@ def _density_section(backend):
     factor_error = abs(float(factor_real.grad[0, 0].detach().cpu()) - (_factor_oracle(float(factor_real.detach()[0, 0]) + epsilon) - _factor_oracle(float(factor_real.detach()[0, 0]) - epsilon)) / (2 * epsilon))
     maximum = max((*value_errors, *gradient_errors, *physical_errors, factor_error), default=0.0)
     passed = maximum <= 1e-4
-    return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(range(layout.distributed_axes)), "value_error": max(value_errors, default=0.0), "gradient_error": max(gradient_errors, default=0.0), "trace_error": max(physical_errors, default=0.0), "density_factor_finite_difference_error": factor_error, "max_abs_error": maximum}
+    return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(logical_axes), "storage_axes": [layout.logical_to_storage[axis] for axis in logical_axes], "value_error": max(value_errors, default=0.0), "gradient_error": max(gradient_errors, default=0.0), "trace_error": max(physical_errors, default=0.0), "density_factor_finite_difference_error": factor_error, "max_abs_error": maximum}
 
 
 def _contract_section(backend):

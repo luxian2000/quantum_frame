@@ -189,6 +189,10 @@ class _PairExchangeFn(torch.autograd.Function):
     def backward(ctx, grad_real, grad_imag):
         grad_real = _zero_if_none(grad_real, grad_imag)
         grad_imag = _zero_if_none(grad_imag, grad_real)
+        # Density right actions transpose paired buffers.  Their real VJPs can
+        # therefore be non-contiguous; P2P requires contiguous float32 input.
+        grad_real = grad_real.contiguous()
+        grad_imag = grad_imag.contiguous()
         return (
             ctx.communicator.exchange_real(
                 grad_real,
