@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import torch
 
 from scripts.npu.distributed_autograd_probe import (
-    _performance_exchange_case,
-    _performance_gradient_oracles,
     _strict_backend,
+    run_benchmark_workload,
 )
 
 
@@ -21,6 +21,55 @@ _FIELDS = {
     "gradient_ms_median", "gradient_ms_p95", "peak_memory_bytes", "p2p_bytes", "wait_ms",
     "buffer_reuse_count", "fallback_to_cpu",
 }
+
+_COLLECTIVE_METRIC_NAMES = (
+    "forward_ms_median", "backward_ms_median", "gradient_ms_median",
+    "gradient_ms_p95", "p2p_bytes", "wait_ms", "buffer_reuse_count",
+    "peak_memory_bytes",
+)
+
+
+def _collective_benchmark_metrics(backend, metrics, *, peak_memory_bytes):
+    """Validate every rank and return rank-maximum authoritative metrics.
+
+    The control payload is a fixed-width contiguous float32 tensor.  It keeps
+    the strict paired-real collective contract even though the values are
+    benchmark metadata rather than state amplitudes.
+    """
+
+    state_error = float(metrics.get("state_max_abs_error", float("inf")))
+    gradient_error = float(metrics.get("gradient_max_abs_error", float("inf")))
+    handles_complete = bool(metrics.get("all_handles_complete", False))
+    fallback = bool(metrics.get("fallback_to_cpu", False))
+    local_passed = (
+        state_error <= 1e-6
+        and gradient_error <= 1e-4
+        and handles_complete
+        and not fallback
+    )
+    values = (
+        float(local_passed),
+        state_error,
+        gradient_error,
+        float(handles_complete),
+        float(fallback),
+        *(float(metrics[name]) for name in _COLLECTIVE_METRIC_NAMES[:-1]),
+        float(peak_memory_bytes),
+    )
+    payload = torch.tensor(values, dtype=torch.float32, device=backend._device).contiguous()
+    gathered = (
+        backend.communicator.all_gather_real(payload)
+        if backend.world_size > 1
+        else [payload]
+    )
+    if any(float(candidate[0].detach().cpu()) < 0.5 for candidate in gathered):
+        raise RuntimeError("benchmark runner failed on this or another rank")
+    maxima = torch.stack(tuple(candidate.contiguous() for candidate in gathered)).amax(dim=0)
+    # Fields 1--4 are validity diagnostics.  Measurement fields begin at 5.
+    return {
+        name: float(maxima[5 + index].detach().cpu())
+        for index, name in enumerate(_COLLECTIVE_METRIC_NAMES)
+    }
 
 
 def _validate_benchmark_report(report):
@@ -60,23 +109,22 @@ def _run_benchmark(args) -> dict[str, object]:
     backend = _strict_backend(fallback_to_cpu=False)
     try:
         torch.npu.reset_peak_memory_stats(backend._device)
-        metrics = _performance_exchange_case(
+        metrics = run_benchmark_workload(
             backend,
-            args.communication_mode,
+            communication_mode=args.communication_mode,
+            path=args.path,
+            gradient_method=args.gradient_method,
+            n_qubits=args.n_qubits,
+            depth=args.depth,
+            parameters=args.parameters,
             warmups=args.warmups,
             runs=args.runs,
         )
-        if args.gradient_method != "native":
-            oracle_errors = _performance_gradient_oracles(backend)
-            selected_error = oracle_errors[
-                "native_vs_parameter_shift"
-                if args.gradient_method == "parameter_shift"
-                else "native_vs_finite_difference"
-            ]
-            if selected_error > 1e-4:
-                raise RuntimeError(
-                    f"{args.gradient_method} 与 native paired gradient 不一致: {selected_error}"
-                )
+        collective = _collective_benchmark_metrics(
+            backend,
+            metrics,
+            peak_memory_bytes=int(torch.npu.max_memory_allocated(backend._device)),
+        )
         report = {
             "communication_mode": args.communication_mode,
             "gradient_method": args.gradient_method,
@@ -87,14 +135,14 @@ def _run_benchmark(args) -> dict[str, object]:
             "parameters": args.parameters,
             "warmups": args.warmups,
             "runs": args.runs,
-            "forward_ms_median": metrics["forward_ms_median"],
-            "backward_ms_median": metrics["backward_ms_median"],
-            "gradient_ms_median": metrics["gradient_ms_median"],
-            "gradient_ms_p95": metrics["gradient_ms_p95"],
-            "peak_memory_bytes": int(torch.npu.max_memory_allocated(backend._device)),
-            "p2p_bytes": metrics["p2p_bytes"],
-            "wait_ms": metrics["wait_ms"],
-            "buffer_reuse_count": metrics["buffer_reuse_count"],
+            "forward_ms_median": collective["forward_ms_median"],
+            "backward_ms_median": collective["backward_ms_median"],
+            "gradient_ms_median": collective["gradient_ms_median"],
+            "gradient_ms_p95": collective["gradient_ms_p95"],
+            "peak_memory_bytes": int(collective["peak_memory_bytes"]),
+            "p2p_bytes": int(collective["p2p_bytes"]),
+            "wait_ms": collective["wait_ms"],
+            "buffer_reuse_count": int(collective["buffer_reuse_count"]),
             "fallback_to_cpu": False,
         }
         _validate_benchmark_report(report)
@@ -119,8 +167,11 @@ def main():
     if any(getattr(args, name.replace("-", "_")) <= 0 for name in ("n-qubits", "depth", "parameters", "warmups", "runs")):
         parser.error("n-qubits、depth、parameters、warmups 和 runs 必须为正")
     report = _run_benchmark(args)
-    args.output_json.parent.mkdir(parents=True, exist_ok=True)
-    args.output_json.write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
+    if int(os.environ.get("RANK", "0")) == 0:
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        temporary = args.output_json.with_name(f".{args.output_json.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
+        temporary.replace(args.output_json)
     return 0
 
 

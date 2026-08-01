@@ -284,49 +284,197 @@ def _synchronize_npu(backend) -> None:
     torch.npu.synchronize(backend._device)
 
 
-def _performance_exchange_case(backend, mode: str, *, warmups=5, runs=30):
-    """Measure an actual paired-real forward/backward exchange mode."""
+_BENCHMARK_PATH_METHODS = {
+    "statevector": {"native", "parameter_shift"},
+    # Every path has a native paired-real VJP.  Parameter shift is restricted
+    # to the independent RY gate leaves; FD is the independent oracle for raw
+    # density/Stinespring factors (and the selected analytic noise parameter).
+    "density": {"native", "finite_difference"},
+    "noise": {"native", "finite_difference"},
+    "stinespring": {"native", "finite_difference"},
+}
 
+
+def _validate_benchmark_workload_config(*, path, gradient_method, n_qubits, depth, parameters, world_size):
+    """Reject a configuration unless it has a real paired-real implementation.
+
+    One extra local qubit is required in addition to the shard selector axes.
+    Thus every workload includes a gate/channel on a distributed axis instead
+    of turning a requested multi-rank benchmark into local arithmetic.
+    """
+
+    if path not in _BENCHMARK_PATH_METHODS or gradient_method not in _BENCHMARK_PATH_METHODS[path]:
+        raise ValueError(f"{gradient_method} is not implemented for {path} benchmark workload")
+    if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in (n_qubits, depth, parameters, world_size)):
+        raise ValueError("benchmark n_qubits/depth/parameters/world_size must be positive integers")
+    distributed_axes = int(math.log2(world_size))
+    if (1 << distributed_axes) != world_size:
+        raise ValueError("benchmark world_size must be a power of two")
+    if distributed_axes == 0:
+        raise ValueError("benchmark requires a multi-rank P2P workload")
+    if n_qubits < distributed_axes + 1:
+        raise ValueError("benchmark needs one local qubit plus every distributed shard axis")
+
+
+def _benchmark_layout_and_spec(backend, n_qubits):
+    distributed_axes = int(math.log2(backend.world_size))
+    layout = _Layout.explicit(tuple(range(n_qubits)), n_qubits=n_qubits, distributed_axes=distributed_axes)
+    return layout, _ShardSpec.build(n_qubits, backend.world_size, backend.rank, "vector", layout)
+
+
+def _benchmark_observable(n_qubits):
+    return PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits)
+
+
+def _benchmark_leaves(backend, parameters, *, requires_grad):
+    return tuple(
+        torch.tensor(0.19 + 0.03 * index, dtype=torch.float32, device=backend._device, requires_grad=requires_grad)
+        for index in range(parameters)
+    )
+
+
+def _benchmark_unitary_workload(backend, *, path, values, n_qubits, depth):
+    """Run the genuine vector/density kernels; every depth and leaf is consumed."""
+
+    layout, vector_spec = _benchmark_layout_and_spec(backend, n_qubits)
+    state_pair = _local_initial_pair(backend, vector_spec)
+    context = _AutogradExecutionContext()
+    planner = _GatePlanner(backend, layout, n_qubits, execution_context=context)
+    distributed_axes = layout.distributed_axes
+    if path == "statevector":
+        kernel, state = _PairVectorKernel(backend), state_pair
+        apply = lambda current, plan, index: kernel.apply(current, plan, operation_index=index)
+    else:
+        kernel = _PairMatrixKernel(backend)
+        state = kernel.promote_vector(DistState.from_pair(state_pair, spec=vector_spec, backend=backend))
+        apply = lambda current, plan, index: kernel.apply_unitary(current, plan, operation_index=index)
+    operation_index = 40_000
+    # Fixed depth layers are deliberately non-trainable, so parameter-shift is
+    # valid for each independent RY leaf below rather than for an alias reused
+    # at several circuit locations.
+    for layer in range(depth):
+        axis = layer % distributed_axes
+        plan = planner.plan(ry(0.17 + 0.01 * layer, axis), operation_index)
+        state = apply(state, plan, operation_index)
+        operation_index += 1
+    for parameter_index, value in enumerate(values):
+        axis = parameter_index % distributed_axes
+        plan = planner.plan(ry(value, axis), operation_index)
+        state = apply(state, plan, operation_index)
+        operation_index += 1
+    if path == "statevector":
+        return _PairReducer(backend).expectation(state, vector_spec, _benchmark_observable(n_qubits)), state, vector_spec
+    matrix_spec = _ShardSpec.build(n_qubits, backend.world_size, backend.rank, "matrix", layout)
+    return _PairReducer(backend).expectation(state._pair, matrix_spec, _benchmark_observable(n_qubits)), state._pair, matrix_spec
+
+
+def _benchmark_channel_workload(backend, *, path, values, n_qubits, depth):
+    """Run real built-in or Stinespring channels through the matrix kernel."""
+
+    layout, vector_spec = _benchmark_layout_and_spec(backend, n_qubits)
+    state = DistState.from_pair(_local_initial_pair(backend, vector_spec), spec=vector_spec, backend=backend)
+    kernel = _PairMatrixKernel(backend)
+    distributed_axes = layout.distributed_axes
+    # ``_PairChannelKernel`` reserves a 256-wide subrange per channel and
+    # matrix exchange expands it by world size; stay inside the collective
+    # descriptor's bounded operation-index domain for every accepted config.
+    operation_index = 1_000
+
+    def channel_for(value, axis, *, trainable):
+        if path == "noise":
+            probability = torch.sigmoid(value) if trainable else float(value)
+            return DepolarizingChannel(axis, probability)
+        # Each scalar contributes to a genuine raw Stinespring matrix.  The
+        # private channel helper turns it into an isometry/Kraus collection.
+        raw = torch.stack(tuple(value * (0.05 + 0.01 * item) for item in range(16))).reshape(4, 4)
+        imag = torch.stack(tuple(value * (0.03 - 0.005 * item) for item in range(16))).reshape(4, 4)
+        return StinespringParam(2, 2, 2, raw, imag, target_qubits=(axis,))
+
+    fixed = torch.tensor(0.23, dtype=torch.float32, device=backend._device)
+    for layer in range(depth):
+        state = kernel.apply_channel(state, channel_for(fixed, layer % distributed_axes, trainable=False), instruction_index=operation_index)
+        operation_index += 1
+    for parameter_index, value in enumerate(values):
+        state = kernel.apply_channel(state, channel_for(value, parameter_index % distributed_axes, trainable=True), instruction_index=operation_index)
+        operation_index += 1
+    matrix_spec = _ShardSpec.build(n_qubits, backend.world_size, backend.rank, "matrix", layout)
+    return _PairReducer(backend).expectation(state._pair, matrix_spec, _benchmark_observable(n_qubits)), state._pair, matrix_spec
+
+
+def _benchmark_workload_value(backend, *, path, values, n_qubits, depth):
+    if path in {"statevector", "density"}:
+        return _benchmark_unitary_workload(backend, path=path, values=values, n_qubits=n_qubits, depth=depth)
+    return _benchmark_channel_workload(backend, path=path, values=values, n_qubits=n_qubits, depth=depth)
+
+
+def _timed_benchmark_iteration(backend, forward, gradient):
+    """Time one workload with exactly four device-completion boundaries."""
+
+    _synchronize_npu(backend)
+    started = time.perf_counter()
+    forward_result = forward()
+    _synchronize_npu(backend)
+    forward_ms = (time.perf_counter() - started) * 1000.0
+    _synchronize_npu(backend)
+    started = time.perf_counter()
+    gradient_result = gradient()
+    _synchronize_npu(backend)
+    backward_ms = (time.perf_counter() - started) * 1000.0
+    return forward_result, gradient_result, forward_ms, backward_ms
+
+
+def _benchmark_state_error(backend, actual, reference):
+    local = torch.maximum((actual.real - reference.real).abs().max(), (actual.imag - reference.imag).abs().max())
+    total = _replicated_all_reduce(local.reshape(()), communicator=backend.communicator)
+    return float((total * backend.world_size).detach().cpu())
+
+
+def run_benchmark_workload(backend, *, communication_mode, path, gradient_method, n_qubits, depth, parameters, warmups=5, runs=30):
+    """Measure one shared, real paired-real workload for CLI and probe.
+
+    No field is decorative: depth creates fixed kernel operations, parameters
+    create independent trainable leaves, and n_qubits determines the sharded
+    state shape.  Numerical methods rerun this exact dispatcher.
+    """
+
+    _validate_benchmark_workload_config(path=path, gradient_method=gradient_method, n_qubits=n_qubits, depth=depth, parameters=parameters, world_size=backend.world_size)
+    if communication_mode not in {"baseline", "reuse", "overlap"}:
+        raise ValueError("invalid paired-real communication mode")
+    if warmups <= 0 or runs <= 0:
+        raise ValueError("benchmark warmups and runs must be positive")
     communicator = backend.communicator
-    communicator.set_autograd_communication_mode(mode)
+    communicator.set_autograd_communication_mode(communication_mode)
     if hasattr(communicator, "_autograd_pair_buffer_pool"):
         del communicator._autograd_pair_buffer_pool
 
+    def evaluate(values, *, requires_grad=False):
+        leaves = _benchmark_leaves(backend, parameters, requires_grad=requires_grad) if values is None else tuple(
+            torch.tensor(float(value), dtype=torch.float32, device=backend._device, requires_grad=requires_grad) for value in values
+        )
+        value, state, spec = _benchmark_workload_value(backend, path=path, values=leaves, n_qubits=n_qubits, depth=depth)
+        return value, state, spec, leaves
+
+    point = np.asarray([0.19 + 0.03 * index for index in range(parameters)], dtype=np.float64)
+
+    def numerical_objective(points):
+        return float(evaluate(points)[0].detach().cpu())
+
     def one_iteration():
-        real = torch.tensor(
-            [float(backend.rank + 1)],
-            dtype=torch.float32,
-            device=backend._device,
-            requires_grad=True,
-        )
-        imag = torch.tensor(
-            [-float(backend.rank + 1)],
-            dtype=torch.float32,
-            device=backend._device,
-            requires_grad=True,
-        )
-        _synchronize_npu(backend)
-        started = time.perf_counter()
-        exchanged = _exchange_pair(
-            _Pair(real, imag),
-            communicator=communicator,
-            peer=backend.rank ^ 1,
-            operation_index=101,
-            phase="forward",
-        )
-        _synchronize_npu(backend)
-        forward_ms = (time.perf_counter() - started) * 1000.0
-        # Keep the backward interval independently delimited even though the
-        # preceding forward endpoint is already synchronized.
-        _synchronize_npu(backend)
-        started = time.perf_counter()
-        exchanged.abs_sq().sum().backward()
-        _synchronize_npu(backend)
-        backward_ms = (time.perf_counter() - started) * 1000.0
-        expected = 2.0 * torch.cat((real.detach(), imag.detach()))
-        actual = torch.cat((real.grad, imag.grad))
-        error = float(torch.max(torch.abs(actual - expected)).detach().cpu())
-        return forward_ms, backward_ms, error
+        forward = lambda: evaluate(point, requires_grad=(gradient_method == "native"))
+        captured = {}
+        def gradient():
+            value, _, _, leaves = captured["forward"]
+            if gradient_method == "native":
+                value.backward()
+                return np.asarray([float(leaf.grad.detach().cpu()) for leaf in leaves])
+            if gradient_method == "parameter_shift":
+                return parameter_shift_gradient(numerical_objective, point)
+            return finite_difference_gradient(numerical_objective, point, epsilon=1e-3)
+        def captured_forward():
+            captured["forward"] = forward()
+            return captured["forward"]
+        result, gradient, forward_ms, backward_ms = _timed_benchmark_iteration(backend, captured_forward, gradient)
+        return result, np.asarray(gradient, dtype=np.float64), forward_ms, backward_ms
 
     for _ in range(warmups):
         one_iteration()
@@ -334,74 +482,44 @@ def _performance_exchange_case(backend, mode: str, *, warmups=5, runs=30):
     pool = getattr(communicator, "_autograd_pair_buffer_pool", None)
     if pool is not None:
         pool.reuse_count = 0
-
     samples = [one_iteration() for _ in range(runs)]
-    counters = communicator.communication_counters
+    result, measured_gradient, _, _ = samples[-1]
+    # Snapshot selected-mode transport before the baseline parity replay.  The
+    # replay is deliberately excluded from timings/bytes yet compares the
+    # same global state and gradient graph across communication modes.
+    counters = dict(communicator.communication_counters)
+    reuse_count = int(getattr(pool, "reuse_count", 0))
+    communicator.set_autograd_communication_mode("baseline")
+    native_value, native_state, _, native_leaves = evaluate(point, requires_grad=True)
+    native_value.backward()
+    native_gradient = np.asarray([float(leaf.grad.detach().cpu()) for leaf in native_leaves])
+    reference_value, reference_state, _, _ = evaluate(point)
+    state_error = _benchmark_state_error(backend, result[1], reference_state)
+    gradient_error = float(np.max(np.abs(measured_gradient - native_gradient)))
+    communicator.set_autograd_communication_mode(communication_mode)
     return {
-        "forward_ms_median": float(np.median([sample[0] for sample in samples])),
-        "backward_ms_median": float(np.median([sample[1] for sample in samples])),
-        "gradient_ms_median": float(np.median([sample[0] + sample[1] for sample in samples])),
-        "gradient_ms_p95": float(np.percentile([sample[0] + sample[1] for sample in samples], 95)),
+        "forward_ms_median": float(np.median([sample[2] for sample in samples])),
+        "backward_ms_median": float(np.median([sample[3] for sample in samples])),
+        "gradient_ms_median": float(np.median([sample[2] + sample[3] for sample in samples])),
+        "gradient_ms_p95": float(np.percentile([sample[2] + sample[3] for sample in samples], 95)),
         "p2p_bytes": int(counters["bytes"]),
         "wait_ms": float(counters["p2p_wait_ms"]),
-        "buffer_reuse_count": int(getattr(pool, "reuse_count", 0)),
-        "gradient_max_abs_error": max(sample[2] for sample in samples),
+        "buffer_reuse_count": reuse_count,
+        "state_max_abs_error": state_error,
+        "gradient_max_abs_error": gradient_error,
         "all_handles_complete": bool(communicator.work_handle_status["all_handles_complete"]),
-    }
-
-
-def _performance_gradient_oracles(backend):
-    """Compare native paired gradients against shift and finite difference."""
-
-    axis = 0
-    theta = torch.tensor(0.31, dtype=torch.float32, device=backend._device, requires_grad=True)
-    value, _, _ = _native_pair_value(backend, (theta,), axis)
-    value.backward()
-    native = float(theta.grad.detach().cpu())
-
-    def objective(point):
-        result, _, _ = _native_pair_value(
-            backend,
-            (torch.tensor(float(point[0]), dtype=torch.float32, device=backend._device),),
-            axis,
-        )
-        return float(result.detach().cpu())
-
-    point = np.array([0.31], dtype=np.float64)
-    shifted = float(parameter_shift_gradient(objective, point)[0])
-    finite = float(finite_difference_gradient(objective, point, epsilon=1e-3)[0])
-    return {
-        "native_vs_parameter_shift": abs(native - shifted),
-        "native_vs_finite_difference": abs(native - finite),
+        "state_value": float(reference_value.detach().cpu()),
     }
 
 
 def _performance_section(backend: DistNPUBackend) -> dict[str, object]:
-    """Report measured baseline/reuse/overlap P2P evidence on strict NPU."""
+    """Probe the same shared statevector-native workload used by the CLI."""
 
-    modes = {
-        mode: _performance_exchange_case(backend, mode)
-        for mode in ("baseline", "reuse", "overlap")
-    }
-    oracle_errors = _performance_gradient_oracles(backend)
+    n_qubits = int(math.log2(backend.world_size)) + 1
+    modes = {mode: run_benchmark_workload(backend, communication_mode=mode, path="statevector", gradient_method="native", n_qubits=n_qubits, depth=1, parameters=1) for mode in ("baseline", "reuse", "overlap")}
     backend.communicator.set_autograd_communication_mode("baseline")
-    passed = (
-        all(metrics["gradient_max_abs_error"] <= 1e-4 for metrics in modes.values())
-        and all(metrics["all_handles_complete"] for metrics in modes.values())
-        and all(value <= 1e-4 for value in oracle_errors.values())
-        and modes["baseline"]["buffer_reuse_count"] == 0
-        and modes["reuse"]["buffer_reuse_count"] > 0
-        and modes["overlap"]["buffer_reuse_count"] > 0
-    )
-    return {
-        "status": "PASS" if passed else "FAIL",
-        "passed": passed,
-        "warmups": 5,
-        "runs": 30,
-        "modes": modes,
-        "gradient_oracle_max_abs_error": oracle_errors,
-        "fallback_to_cpu": False,
-    }
+    passed = all(metrics["state_max_abs_error"] <= 1e-6 and metrics["gradient_max_abs_error"] <= 1e-4 and metrics["all_handles_complete"] for metrics in modes.values()) and modes["baseline"]["buffer_reuse_count"] == 0 and modes["reuse"]["buffer_reuse_count"] > 0 and modes["overlap"]["buffer_reuse_count"] > 0
+    return {"status": "PASS" if passed else "FAIL", "passed": passed, "warmups": 5, "runs": 30, "modes": modes, "fallback_to_cpu": False}
 
 
 def _layout_and_spec(backend):
