@@ -8,6 +8,24 @@ from ..core.state import State
 
 
 AUTOGRAD_ERROR = "DistSimulator 首期仅支持前向模拟，不支持自动微分"
+PARAMETER_STRUCTURE_ERROR = "各 rank 的可训练参数结构不一致"
+
+
+def synchronize_autograd_failure(communicator) -> None:
+    """Complete the control plane before raising an all-rank autograd error.
+
+    The helper deliberately accepts the small communicator protocol used by
+    CPU/Gloo tests as well as the production wrapper; it never starts a state
+    or gradient-data collective.
+    """
+
+    barrier = getattr(communicator, "barrier", None)
+    if callable(barrier):
+        barrier()
+        return
+    dist = getattr(communicator, "_dist", None)
+    if getattr(communicator, "world_size", 1) > 1 and dist is not None:
+        dist.barrier(group=getattr(communicator, "group", None))
 
 
 def contains_paired_real(value) -> bool:

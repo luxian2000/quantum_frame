@@ -34,7 +34,7 @@ from .autograd._checkpoint import (
 )
 from .autograd._density import _PairMatrixKernel
 from .autograd._pair import _Pair
-from .autograd._parameters import PureStateParam
+from .autograd._parameters import PureStateParam, _bind_replicated_gradient_bucket
 from .autograd._vector import _PairVectorKernel
 from .backend import DistNPUBackend
 from .density import _MatrixKernel
@@ -285,6 +285,14 @@ class DistSimulator:
         if initial_state.n_qubits != n_qubits or initial_state.layout != resolved_layout:
             raise ValueError("DistState 的 n_qubits/layout 与线路不一致")
 
+        # Public ``run`` remains forward-only until Task 11.  The private
+        # paired-real hook is nevertheless the native integration point: it
+        # preflights the replicated circuit/noise/Stinespring schema and binds
+        # one differentiable float32 gradient bucket without touching caller
+        # instructions or initial-state ownership.
+        circuit = _bind_replicated_gradient_bucket(
+            circuit, communicator=self._backend.communicator
+        )
         instructions = tuple(circuit_instructions(circuit))
         context = _AutogradExecutionContext()
         planner = _GatePlanner(

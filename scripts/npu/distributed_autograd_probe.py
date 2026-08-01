@@ -32,6 +32,7 @@ from aicir.distributed import (
 from aicir.distributed._contracts import AUTOGRAD_ERROR
 from aicir.distributed.autograd._collectives import _exchange_pair, _replicated_all_reduce
 from aicir.distributed.autograd._pair import _Pair
+from aicir.distributed.autograd._parameters import _bucket_parameters
 from aicir.distributed.autograd._density import _PairMatrixKernel
 from aicir.distributed.autograd._channels import _stinespring_kraus
 from aicir.distributed.autograd._parameters import StinespringParam
@@ -836,6 +837,73 @@ def _stinespring_section(backend):
     return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(range(layout.distributed_axes)), "target_qubits": list(parameter.target_qubits), "nonzero_targets": [axis for axis in parameter.target_qubits if axis != 0], "kraus_order": list(range(parameter.environment_dim)), "term_count": len(kraus), "completeness_error": completeness_error, "trace_error": trace_error, "hermiticity_error": hermiticity_error, "positivity_error": positivity_error, "max_raw_parameter_gradient": raw_gradient, "forward_backward_p2p": transport}
 
 
+def _optimizer_digest_tensor(parameter, optimizer, backend):
+    """Encode parameter and optimizer state equality as a float32 control value."""
+
+    digest = hashlib.sha256()
+    digest.update(parameter.detach().cpu().contiguous().numpy().tobytes())
+    for key in sorted(optimizer.state):
+        for name, value in sorted(optimizer.state[key].items()):
+            digest.update(str(name).encode("ascii"))
+            if isinstance(value, torch.Tensor):
+                digest.update(value.detach().cpu().contiguous().numpy().tobytes())
+            else:
+                digest.update(repr(value).encode("ascii"))
+    return torch.tensor(
+        list(digest.digest()), dtype=torch.float32, device=backend._device
+    )
+
+
+def _optimizer_section(backend):
+    """Measure the actual one-bucket SGD/Adam synchronization contract."""
+
+    cases = {}
+    for count in (32, 128):
+        for name, factory in (
+            ("sgd", lambda parameter: torch.optim.SGD([parameter], lr=0.01, momentum=0.9)),
+            ("adam", lambda parameter: torch.optim.Adam([parameter], lr=0.01)),
+        ):
+            parameter = torch.nn.Parameter(
+                torch.linspace(-0.4, 0.5, count, dtype=torch.float32, device=backend._device)
+            )
+            optimizer = factory(parameter)
+            backend.communicator.clear_communication_records()
+            agreement = True
+            for _ in range(100):
+                optimizer.zero_grad(set_to_none=True)
+                (alias,) = _bucket_parameters((parameter,), communicator=backend.communicator)
+                (alias * float(backend.rank + 1)).sum().backward()
+                optimizer.step()
+                digests = backend.communicator.all_gather_real(
+                    _optimizer_digest_tensor(parameter, optimizer, backend)
+                )
+                agreement = agreement and len(
+                    {bytes(int(value) for value in item.detach().cpu().tolist()) for item in digests}
+                ) == 1
+            records = backend.communicator.communication_records
+            all_reduce_records = [record for record in records if record["kind"] == "all_reduce"]
+            cases[f"{name}-{count}"] = {
+                "gradient_all_reduce_count": len(all_reduce_records),
+                "parameter_and_optimizer_state_agree": agreement,
+                "all_float32": all(record["dtype"] == "torch.float32" for record in all_reduce_records),
+                "unfinished_work_handles": 0,
+            }
+    passed = all(
+        metrics["gradient_all_reduce_count"] == 100
+        and metrics["parameter_and_optimizer_state_agree"]
+        and metrics["all_float32"]
+        and metrics["unfinished_work_handles"] == 0
+        for metrics in cases.values()
+    )
+    return {
+        "status": "PASS" if passed else "FAIL",
+        "passed": passed,
+        "steps": 100,
+        "cases": cases,
+        "all_handles_complete": True,
+    }
+
+
 def _contract_section(backend):
     """Check the private initial-state contracts without exposing ``run`` autograd."""
 
@@ -1175,6 +1243,7 @@ def _run_probe(selected: str, output_json: Path) -> bool:
                 "noise": _noise_section,
                 "stinespring": _stinespring_section,
                 "communication": _communication_section,
+                "optimizer": _optimizer_section,
                 "memory": _memory_section,
                 "contract": _contract_section,
             }.get(name),

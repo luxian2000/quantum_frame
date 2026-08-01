@@ -15,7 +15,7 @@ from ..core.gates import (
 )
 from ..gates import canonical_gate_name
 from ..ir import as_instruction, instruction_controls, instruction_name, instruction_n_qubits, instruction_parameter, instruction_qubits, instruction_with_parameter
-from .autograd._parameters import replicated_parameter
+from .autograd._parameters import _BUCKET_ALIAS_ATTRIBUTE, replicated_parameter
 from .autograd._pair import _Pair
 from .state import DistState
 
@@ -109,6 +109,12 @@ class _GatePlanner:
         """Wrap one caller-owned real leaf once in this execution context."""
 
         if not getattr(value, "requires_grad", False):
+            return value
+        # ``_run_paired_real`` binds the complete replicated leaf set through
+        # one GradientBucketFn before planning.  Re-wrapping an alias here
+        # would reintroduce one collective per leaf, so only the legacy direct
+        # planner path retains ``replicated_parameter``.
+        if getattr(value, _BUCKET_ALIAS_ATTRIBUTE, False):
             return value
         if self._execution_context is None:
             raise RuntimeError(
