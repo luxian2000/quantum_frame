@@ -9,6 +9,7 @@ differentiable, and records no live-NPU result until the command is run.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -41,7 +42,13 @@ from aicir.distributed.autograd._vector import _PairVectorKernel
 from aicir.distributed.gates import _AutogradExecutionContext, _GatePlanner
 from aicir.distributed.layout import _Layout, _ShardSpec
 from aicir.qml.deriv import psr4
-from aicir.noise import AmplitudeDampingChannel, BitFlipChannel, DepolarizingChannel, PhaseFlipChannel
+from aicir.noise import (
+    AmplitudeDampingChannel,
+    BitFlipChannel,
+    DepolarizingChannel,
+    NoiseModel,
+    PhaseFlipChannel,
+)
 
 
 SECTIONS = (
@@ -854,6 +861,26 @@ def _optimizer_digest_tensor(parameter, optimizer, backend):
     )
 
 
+def _optimizer_digest_tensors(parameters, optimizer, backend):
+    """Encode a complete replicated optimizer state for control-plane equality."""
+
+    digest = hashlib.sha256()
+    for parameter in parameters:
+        digest.update(parameter.detach().cpu().contiguous().numpy().tobytes())
+    for parameter_id, state in sorted(optimizer.state_dict()["state"].items()):
+        digest.update(str(parameter_id).encode("ascii"))
+        for name, value in sorted(state.items()):
+            digest.update(name.encode("ascii"))
+            digest.update(
+                value.detach().cpu().contiguous().numpy().tobytes()
+                if isinstance(value, torch.Tensor)
+                else repr(value).encode("ascii")
+            )
+    return torch.tensor(
+        list(digest.digest()), dtype=torch.float32, device=backend._device
+    )
+
+
 def _observed_handle_metrics(communicator):
     """Expose actual communicator work-handle state in probe reports."""
 
@@ -861,6 +888,121 @@ def _observed_handle_metrics(communicator):
     return {
         "unfinished_work_handles": int(status["unfinished_work_handles"]),
         "all_handles_complete": bool(status["all_handles_complete"]),
+    }
+
+
+def _integrated_private_path_optimizer_case(backend):
+    """Run the private engine with typed gate, built-in noise and Stinespring.
+
+    This is intentionally a small acceptance subcase rather than a replacement
+    for the required 100-step synthetic 32/128 optimizer matrix below.  It
+    proves that the same bucket binds aliases from every replicated parameter
+    family in one real circuit execution.
+    """
+
+    n_qubits = backend.world_size.bit_length() - 1
+    layout = _Layout.explicit(
+        tuple(reversed(range(n_qubits))),
+        n_qubits=n_qubits,
+        distributed_axes=n_qubits,
+    )
+    spec = _ShardSpec.build(n_qubits, backend.world_size, backend.rank, "vector", layout)
+    theta = torch.nn.Parameter(torch.tensor(0.37, dtype=torch.float32, device=backend._device))
+    damping = torch.nn.Parameter(torch.tensor(0.23, dtype=torch.float32, device=backend._device))
+    missing = torch.nn.Parameter(torch.tensor(0.11, dtype=torch.float32, device=backend._device))
+    raw_real = torch.nn.Parameter(
+        torch.tensor([[0.4, -0.3], [0.2, 0.7]], dtype=torch.float32, device=backend._device)
+    )
+    raw_imag = torch.nn.Parameter(
+        torch.tensor([[0.1, 0.6], [-0.5, 0.2]], dtype=torch.float32, device=backend._device)
+    )
+    stinespring = StinespringParam(2, 2, 1, raw_real, raw_imag, target_qubits=(0,))
+    circuit = Circuit(ry(theta, 0), ry(theta, 0), n_qubits=n_qubits)
+    circuit.noise_model = (
+        NoiseModel()
+        .add_channel(AmplitudeDampingChannel(0, damping))
+        .add_channel(stinespring)
+        # The unmatched rule intentionally verifies missing-gradient zero fill
+        # in the same replicated bucket as the real trainable objects.
+        .add_channel(BitFlipChannel(0, missing), after_gates=("never",))
+    )
+    leaves = (theta, damping, missing, raw_real, raw_imag)
+    optimizer = torch.optim.SGD(leaves, lr=0.005, momentum=0.9)
+    reports = []
+    for _ in range(2):
+        optimizer.zero_grad(set_to_none=True)
+        backend.communicator.clear_communication_records()
+        indices = torch.arange(
+            spec.global_start, spec.global_stop, dtype=torch.long, device=backend._device
+        )
+        local_state = DistState.from_pair(
+            _Pair(
+                (indices == 0).to(torch.float32).reshape(-1, 1),
+                torch.zeros(spec.local_shape, dtype=torch.float32, device=backend._device),
+            ),
+            spec=spec,
+            backend=backend,
+        )
+        evolved, _ = DistSimulator(backend)._run_paired_real(
+            circuit,
+            initial_state=local_state,
+            layout=layout,
+            grad_checkpoint="none",
+        )
+        before_backward = len(backend.communicator.communication_records)
+        value = _PairReducer(backend).expectation(
+            evolved._pair,
+            evolved.spec,
+            PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits),
+        )
+        value.backward()
+        expected_bucket_bytes = sum(parameter.numel() for parameter in leaves) * 4
+        bucket_records = [
+            record
+            for record in backend.communicator.communication_records[before_backward:]
+            if record["kind"] == "all_reduce" and record["bytes"] == expected_bucket_bytes
+        ]
+        local_gradients = tuple(parameter.grad.detach().cpu().tolist() for parameter in leaves)
+        gathered_gradients = [None] * backend.world_size
+        torch.distributed.all_gather_object(gathered_gradients, local_gradients)
+        reports.append(
+            {
+                "gradient_all_reduce_count": len(bucket_records),
+                "gradient_agreement": len({repr(item) for item in gathered_gradients}) == 1,
+                "missing_gradient_zero": bool(torch.equal(missing.grad, torch.zeros_like(missing))),
+                "caller_kraus_cache_empty": circuit.noise_model._kraus_cache == {},
+                **_observed_handle_metrics(backend.communicator),
+            }
+        )
+        optimizer.step()
+    digests = backend.communicator.all_gather_real(
+        _optimizer_digest_tensors(leaves, optimizer, backend)
+    )
+    digest_agreement = len(
+        {bytes(int(value) for value in item.detach().cpu().tolist()) for item in digests}
+    ) == 1
+    passed = (
+        digest_agreement
+        and all(
+            report["gradient_all_reduce_count"] == 1
+            and report["gradient_agreement"]
+            and report["missing_gradient_zero"]
+            and report["caller_kraus_cache_empty"]
+            and report["unfinished_work_handles"] == 0
+            and report["all_handles_complete"]
+            for report in reports
+        )
+    )
+    return {
+        "steps": 2,
+        "gradient_all_reduce_count": [report["gradient_all_reduce_count"] for report in reports],
+        "gradient_agreement": [report["gradient_agreement"] for report in reports],
+        "parameter_and_optimizer_state_agree": digest_agreement,
+        "missing_gradient_zero": [report["missing_gradient_zero"] for report in reports],
+        "caller_kraus_cache_empty": [report["caller_kraus_cache_empty"] for report in reports],
+        "unfinished_work_handles": [report["unfinished_work_handles"] for report in reports],
+        "all_handles_complete": [report["all_handles_complete"] for report in reports],
+        "passed": passed,
     }
 
 
@@ -899,7 +1041,8 @@ def _optimizer_section(backend):
                 "all_float32": all(record["dtype"] == "torch.float32" for record in all_reduce_records),
                 **handles,
             }
-    passed = all(
+    integrated_private_path = _integrated_private_path_optimizer_case(backend)
+    passed = integrated_private_path["passed"] and all(
         metrics["gradient_all_reduce_count"] == 100
         and metrics["parameter_and_optimizer_state_agree"]
         and metrics["all_float32"]
@@ -912,7 +1055,11 @@ def _optimizer_section(backend):
         "passed": passed,
         "steps": 100,
         "cases": cases,
-        "all_handles_complete": all(metrics["all_handles_complete"] for metrics in cases.values()),
+        "integrated_private_path": integrated_private_path,
+        "all_handles_complete": (
+            all(metrics["all_handles_complete"] for metrics in cases.values())
+            and all(integrated_private_path["all_handles_complete"])
+        ),
     }
 
 

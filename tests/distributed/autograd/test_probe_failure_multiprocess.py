@@ -1,4 +1,5 @@
 import json
+import inspect
 import os
 import socket
 import time
@@ -81,6 +82,13 @@ def test_environment_section_is_invoked_with_its_backend(monkeypatch):
         "index_select",
         "abs_sq",
     }
+
+
+def test_optimizer_probe_includes_the_real_private_circuit_noise_stinespring_case():
+    """The hardware report must not describe only synthetic scalar buckets."""
+
+    source = inspect.getsource(probe._optimizer_section)
+    assert "integrated_private_path" in source
 
 
 def test_communication_section_reports_only_real_completed_p2p_payloads():
