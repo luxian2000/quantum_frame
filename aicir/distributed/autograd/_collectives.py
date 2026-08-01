@@ -7,6 +7,7 @@ The forward-only distributed simulator deliberately does not import this file.
 from __future__ import annotations
 
 import torch
+import weakref
 
 from ._pair import _Pair
 
@@ -16,6 +17,92 @@ _MAX_DESCRIPTOR_DIMENSIONS = 7
 _MAX_DESCRIPTOR_INTEGER = 2**24 - 1
 _DESCRIPTOR_WIDTH = 16
 _DESCRIPTOR_VALUE_START = 2
+
+
+class _AsyncPairExchange:
+    """Paired-real receive whose value is unavailable until both works finish."""
+
+    def __init__(self, pair: _Pair, real_work, imag_work):
+        self._pair = pair
+        self._real_work = real_work
+        self._imag_work = imag_work
+
+    def wait(self) -> _Pair:
+        try:
+            self._real_work.wait()
+        finally:
+            # A failed real component must not leave the imag component live.
+            self._imag_work.wait()
+        return self._pair
+
+
+class _PairBufferPool:
+    """Reusable paired-real buffers keyed by transport identity.
+
+    Pending buffers remain unavailable until both component work handles
+    report completion, preventing an in-flight receive from being overwritten.
+    """
+
+    def __init__(self):
+        self._available = {}
+        self._pending = []
+        self._checked_out = {}
+        self.reuse_count = 0
+
+    @staticmethod
+    def _key(shape, dtype, device, peer, phase):
+        return (tuple(shape), dtype, torch.device(device), int(peer), str(phase))
+
+    def _reap(self):
+        pending = []
+        for key, pair, real_work, imag_work in self._pending:
+            if bool(real_work.is_completed()) and bool(imag_work.is_completed()):
+                self._available.setdefault(key, []).append(pair)
+            else:
+                pending.append((key, pair, real_work, imag_work))
+        self._pending = pending
+
+    def acquire(self, shape, dtype, device, peer, phase) -> _Pair:
+        if dtype != torch.float32:
+            raise TypeError("paired buffer 必须使用 torch.float32")
+        self._reap()
+        key = self._key(shape, dtype, device, peer, phase)
+        available = self._available.get(key, [])
+        if available:
+            self.reuse_count += 1
+            pair = available.pop()
+            self._checked_out[id(pair)] = key
+            return pair
+        real = torch.empty(tuple(shape), dtype=dtype, device=device)
+        pair = _Pair(real, torch.empty_like(real))
+        self._checked_out[id(pair)] = key
+        return pair
+
+    def release(self, pair: _Pair, *, real_work=None, imag_work=None) -> None:
+        key = self._checked_out.pop(id(pair), None)
+        if key is None:
+            return
+        if real_work is not None or imag_work is not None:
+            if real_work is None or imag_work is None:
+                raise ValueError("paired buffer release 必须同时提供 real/imag work")
+            self._pending.append((key, pair, real_work, imag_work))
+        else:
+            self._available.setdefault(key, []).append(pair)
+
+    def discard(self, pair_id: int) -> None:
+        """Forget an output that was dropped without an autograd backward."""
+
+        self._checked_out.pop(int(pair_id), None)
+
+
+def _pair_buffer_pool_for(communicator) -> _PairBufferPool:
+    """Return the communicator-owned pool without altering public routing."""
+
+    pool = getattr(communicator, "_autograd_pair_buffer_pool", None)
+    if pool is None:
+        pool = _PairBufferPool()
+        communicator._autograd_pair_buffer_pool = pool
+    return pool
 
 
 def _is_forward_phase(value) -> bool:
@@ -211,6 +298,115 @@ class _PairExchangeFn(torch.autograd.Function):
         )
 
 
+class _LaunchedPairExchangeFn(torch.autograd.Function):
+    """Attach a paired-real VJP after a kernel overlaps the receive launch."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        source_real,
+        source_imag,
+        received_real,
+        received_imag,
+        communicator,
+        peer,
+        operation_index,
+        pool,
+        buffer,
+    ):
+        ctx.communicator = communicator
+        ctx.peer = int(peer)
+        ctx.operation_index = int(operation_index)
+        ctx.pool = pool
+        ctx.buffer = buffer
+        return received_real, received_imag
+
+    @staticmethod
+    def backward(ctx, grad_real, grad_imag):
+        # The completed receive is no longer needed once its VJP is known.
+        ctx.pool.release(ctx.buffer)
+        grad_real = _zero_if_none(grad_real, grad_imag).contiguous()
+        grad_imag = _zero_if_none(grad_imag, grad_real).contiguous()
+        return (
+            ctx.communicator.exchange_real(
+                grad_real,
+                peer=ctx.peer,
+                tag=_tag(ctx.operation_index, phase="backward", direction=0, component=0),
+            ),
+            ctx.communicator.exchange_real(
+                grad_imag,
+                peer=ctx.peer,
+                tag=_tag(ctx.operation_index, phase="backward", direction=0, component=1),
+            ),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+class _LaunchedPairExchange:
+    """Own an in-flight paired receive until a cross-shard kernel consumes it."""
+
+    def __init__(
+        self,
+        source: _Pair,
+        buffer: _Pair,
+        exchange: _AsyncPairExchange,
+        *,
+        communicator,
+        peer,
+        operation_index,
+        pool: _PairBufferPool,
+    ):
+        self._source = source
+        self._buffer = buffer
+        self._exchange = exchange
+        self._communicator = communicator
+        self._peer = int(peer)
+        self._operation_index = int(operation_index)
+        self._pool = pool
+        self._waited = False
+
+    def wait(self) -> _Pair:
+        if self._waited:
+            raise RuntimeError("in-flight paired receive 只能 wait 一次")
+        self._waited = True
+        try:
+            received = self._exchange.wait()
+        except Exception:
+            # Both work groups have been drained by _AsyncPairExchange.wait.
+            self._pool.release(self._buffer)
+            raise
+        if received is not self._buffer:
+            self._pool.release(self._buffer)
+            raise RuntimeError("paired P2P receive 未写入所申请的缓冲区")
+        if not (self._source.real.requires_grad or self._source.imag.requires_grad):
+            # Forward-only results may outlive this primitive indefinitely;
+            # detach them from the reusable destination before returning it.
+            result = _Pair(received.real.clone(), received.imag.clone())
+            self._pool.release(received)
+            return result
+        result_real, result_imag = _LaunchedPairExchangeFn.apply(
+            self._source.real,
+            self._source.imag,
+            received.real,
+            received.imag,
+            self._communicator,
+            self._peer,
+            self._operation_index,
+            self._pool,
+            received,
+        )
+        # If callers intentionally drop a differentiable result without
+        # calling backward, do not leave an unbounded checked-out entry.
+        weakref.finalize(result_real, self._pool.discard, id(received))
+        return _Pair(result_real, result_imag)
+
+
 class _ReplicatedAllReduceFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, tensor, communicator):
@@ -265,8 +461,8 @@ class _RootScatterPairFn(torch.autograd.Function):
         return torch.stack(real_parts), torch.stack(imag_parts), None, None, None
 
 
-def _exchange_pair(pair, *, communicator, peer, operation_index, phase) -> _Pair:
-    """Exchange one paired-real value with custom real-valued backward P2P."""
+def _validate_pair_exchange(pair, *, communicator, peer, operation_index, phase):
+    """Run the fixed-shape all-rank preflight for one P2P exchange."""
 
     parsed_peer = _safe_int(peer)
     parsed_operation = _safe_int(operation_index)
@@ -328,15 +524,114 @@ def _exchange_pair(pair, *, communicator, peer, operation_index, phase) -> _Pair
         candidate_peer = int(candidate[2].item())
         if int(descriptors[candidate_peer][2].item()) != rank:
             raise ValueError("分布式 autograd collective 参数不一致: peer")
-    real, imag = _PairExchangeFn.apply(
-        pair.real,
-        pair.imag,
-        communicator,
-        parsed_peer,
-        parsed_operation,
+    return parsed_peer, parsed_operation
+
+
+def _launch_validated_pair_exchange(
+    pair,
+    *,
+    communicator,
+    peer,
+    operation_index,
+) -> _LaunchedPairExchange:
+    """Launch a reusable paired receive after collective preflight succeeds."""
+
+    pool = _pair_buffer_pool_for(communicator)
+    buffer = pool.acquire(
+        pair.real.shape,
+        torch.float32,
+        pair.real.device,
+        peer,
         _FORWARD_PHASE,
     )
-    return _Pair(real, imag)
+    real_work = imag_work = None
+    try:
+        received_real, real_work = communicator.exchange_real_async(
+            pair.real,
+            peer=peer,
+            tag=_tag(operation_index, phase=_FORWARD_PHASE, direction=0, component=0),
+            receive=buffer.real,
+        )
+        received_imag, imag_work = communicator.exchange_real_async(
+            pair.imag,
+            peer=peer,
+            tag=_tag(operation_index, phase=_FORWARD_PHASE, direction=0, component=1),
+            receive=buffer.imag,
+        )
+    except Exception:
+        if real_work is not None:
+            try:
+                real_work.wait()
+            finally:
+                pool.release(buffer)
+        else:
+            pool.release(buffer)
+        raise
+    if received_real is not buffer.real or received_imag is not buffer.imag:
+        # This is a communicator contract violation; drain before reuse.
+        _AsyncPairExchange(buffer, real_work, imag_work).wait()
+        pool.release(buffer)
+        raise RuntimeError("paired P2P receive 未写入所申请的缓冲区")
+    return _LaunchedPairExchange(
+        pair,
+        buffer,
+        _AsyncPairExchange(buffer, real_work, imag_work),
+        communicator=communicator,
+        peer=peer,
+        operation_index=operation_index,
+        pool=pool,
+    )
+
+
+def _launch_pair_exchange(pair, *, communicator, peer, operation_index, phase):
+    """Start an overlap-mode exchange without exposing its destination yet."""
+
+    parsed_peer, parsed_operation = _validate_pair_exchange(
+        pair,
+        communicator=communicator,
+        peer=peer,
+        operation_index=operation_index,
+        phase=phase,
+    )
+    if getattr(communicator, "autograd_communication_mode", "baseline") != "overlap":
+        raise RuntimeError("_launch_pair_exchange 仅适用于 overlap 通信模式")
+    return _launch_validated_pair_exchange(
+        pair,
+        communicator=communicator,
+        peer=parsed_peer,
+        operation_index=parsed_operation,
+    )
+
+
+def _exchange_pair(pair, *, communicator, peer, operation_index, phase) -> _Pair:
+    """Exchange one paired-real value with a real-valued backward P2P VJP."""
+
+    parsed_peer, parsed_operation = _validate_pair_exchange(
+        pair,
+        communicator=communicator,
+        peer=peer,
+        operation_index=operation_index,
+        phase=phase,
+    )
+    mode = getattr(communicator, "autograd_communication_mode", "baseline")
+    if mode == "baseline":
+        real, imag = _PairExchangeFn.apply(
+            pair.real,
+            pair.imag,
+            communicator,
+            parsed_peer,
+            parsed_operation,
+            _FORWARD_PHASE,
+        )
+        return _Pair(real, imag)
+    if mode in {"reuse", "overlap"}:
+        return _launch_validated_pair_exchange(
+            pair,
+            communicator=communicator,
+            peer=parsed_peer,
+            operation_index=parsed_operation,
+        ).wait()
+    raise ValueError("通信模式必须是 baseline、reuse 或 overlap")
 
 
 def _replicated_all_reduce(tensor, *, communicator) -> torch.Tensor:

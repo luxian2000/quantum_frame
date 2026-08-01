@@ -15,7 +15,13 @@ from ...core.gates import _flat_local_state_indices
 from ..gates import _GatePlan
 from ..layout import _ShardSpec
 from ..state import DistState
-from ._collectives import _descriptor, _exchange_pair, _safe_int, _synchronize_preflight
+from ._collectives import (
+    _descriptor,
+    _exchange_pair,
+    _launch_pair_exchange,
+    _safe_int,
+    _synchronize_preflight,
+)
 from ._pair import _Pair
 from ._vector import _as_pair_matrix, _pair_block
 
@@ -125,20 +131,34 @@ class _PairMatrixKernel:
         _preflight_density_operation(state, plan, operation_index=operation_index)
         operation_index = int(operation_index)
         matrix = _as_pair_matrix(plan.local_matrix, reference=state._pair.real)
-        output = self._apply_left_source(
-            state._pair, plan, matrix, source_rank=self._backend.rank
-        )
+        output = None
         for offset, mask in enumerate(plan.partner_masks, start=1):
             peer = plan.partner_for(rank=self._backend.rank, mask=mask)
-            incoming = _exchange_pair(
-                state._pair,
-                communicator=self._backend.communicator,
-                peer=peer,
-                operation_index=operation_index * self._backend.world_size + offset,
-                phase="forward",
-            )
+            exchange_kwargs = {
+                "communicator": self._backend.communicator,
+                "peer": peer,
+                "operation_index": operation_index * self._backend.world_size + offset,
+                "phase": "forward",
+            }
+            if self._backend.communicator.autograd_communication_mode == "overlap":
+                launched = _launch_pair_exchange(state._pair, **exchange_kwargs)
+                if output is None:
+                    output = self._apply_left_source(
+                        state._pair, plan, matrix, source_rank=self._backend.rank
+                    )
+                incoming = launched.wait()
+            else:
+                if output is None:
+                    output = self._apply_left_source(
+                        state._pair, plan, matrix, source_rank=self._backend.rank
+                    )
+                incoming = _exchange_pair(state._pair, **exchange_kwargs)
             output = output.add(
                 self._apply_left_source(incoming, plan, matrix, source_rank=peer)
+            )
+        if output is None:
+            output = self._apply_left_source(
+                state._pair, plan, matrix, source_rank=self._backend.rank
             )
         return output
 

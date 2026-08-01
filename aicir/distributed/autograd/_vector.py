@@ -12,7 +12,7 @@ import torch
 
 from ...core.gates import _flat_local_state_indices
 from ..gates import _GatePlan, _matrix_block
-from ._collectives import _exchange_pair
+from ._collectives import _exchange_pair, _launch_pair_exchange
 from ._pair import _Pair
 
 
@@ -126,21 +126,30 @@ class _PairVectorKernel:
         if operation_index < 0:
             raise ValueError("operation_index 必须非负")
         matrix = _as_pair_matrix(plan.local_matrix, reference=state_pair.real)
-        output = self._apply_source(
-            state_pair,
-            plan,
-            matrix,
-            source_rank=self._backend.rank,
-        )
+        output = None
         for offset, mask in enumerate(plan.partner_masks, start=1):
             peer = plan.partner_for(rank=self._backend.rank, mask=mask)
-            incoming = _exchange_pair(
-                state_pair,
-                communicator=self._backend.communicator,
-                peer=peer,
-                operation_index=operation_index * self._backend.world_size + offset,
-                phase="forward",
-            )
+            exchange_kwargs = {
+                "communicator": self._backend.communicator,
+                "peer": peer,
+                "operation_index": operation_index * self._backend.world_size + offset,
+                "phase": "forward",
+            }
+            if self._backend.communicator.autograd_communication_mode == "overlap":
+                # Launch paired P2P before the local matrix product, then
+                # wait only when the remote contribution is required.
+                launched = _launch_pair_exchange(state_pair, **exchange_kwargs)
+                if output is None:
+                    output = self._apply_source(
+                        state_pair, plan, matrix, source_rank=self._backend.rank
+                    )
+                incoming = launched.wait()
+            else:
+                if output is None:
+                    output = self._apply_source(
+                        state_pair, plan, matrix, source_rank=self._backend.rank
+                    )
+                incoming = _exchange_pair(state_pair, **exchange_kwargs)
             output = output.add(
                 self._apply_source(
                     incoming,
@@ -148,5 +157,9 @@ class _PairVectorKernel:
                     matrix,
                     source_rank=peer,
                 )
+            )
+        if output is None:
+            output = self._apply_source(
+                state_pair, plan, matrix, source_rank=self._backend.rank
             )
         return output
