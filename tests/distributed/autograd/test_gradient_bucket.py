@@ -8,6 +8,7 @@ import torch
 from aicir import Circuit
 from aicir.core.circuit import ry
 from aicir.distributed.autograd._pair import _Pair
+from aicir.distributed.communication import _Communicator
 from aicir.distributed.autograd._parameters import (
     _bind_trainable_aliases,
     _bucket_parameters,
@@ -18,6 +19,7 @@ from aicir.distributed.autograd._parameters import (
 )
 from aicir.ir import instruction_parameter
 from aicir.noise import NoiseModel
+from scripts.npu.distributed_autograd_probe import _observed_handle_metrics
 
 
 class _RecordingCommunicator:
@@ -28,6 +30,7 @@ class _RecordingCommunicator:
     def __init__(self, world_size=2, gathered=None):
         self.world_size = world_size
         self.calls = []
+        self.gathers = []
         self._gathered = gathered
         self.barriers = 0
 
@@ -36,12 +39,21 @@ class _RecordingCommunicator:
         return value * self.world_size
 
     def all_gather_real(self, value):
+        self.gathers.append(value.detach().clone())
         if self._gathered is not None:
             return self._gathered(value)
         return [value.clone() for _ in range(self.world_size)]
 
     def barrier(self):
         self.barriers += 1
+
+
+class _FakeWork:
+    def __init__(self, completed):
+        self.completed = completed
+
+    def is_completed(self):
+        return self.completed
 
 
 @pytest.mark.parametrize("count", (32, 128))
@@ -107,6 +119,60 @@ def test_parameter_structure_mismatch_is_synchronized_before_data_collectives(ki
         _preflight_parameter_structure(local_entries, communicator=communicator)
     assert communicator.barriers == 1
     assert communicator.calls == []
+
+
+def test_empty_trainable_bucket_still_preflights_detached_candidate_without_data_allreduce():
+    communicator = _RecordingCommunicator()
+    detached = torch.zeros(2, dtype=torch.float32)
+
+    aliases = _bucket_parameters((("theta", detached, "real"),), communicator=communicator)
+
+    assert aliases == ()
+    assert len(communicator.gathers) == 1
+    assert communicator.calls == []
+
+
+def test_detached_candidate_requires_grad_mismatch_is_synchronized_before_empty_return():
+    local = torch.zeros(2, dtype=torch.float32)
+    remote = torch.zeros(2, dtype=torch.float32, requires_grad=True)
+    remote_digest = _parameter_structure_digest((("theta", remote, "real"),))
+    communicator = _RecordingCommunicator(gathered=lambda current: [current, remote_digest])
+
+    with pytest.raises(ValueError, match="^各 rank 的可训练参数结构不一致$"):
+        _bucket_parameters((("theta", local, "real"),), communicator=communicator)
+
+    assert len(communicator.gathers) == 1
+    assert communicator.barriers == 1
+    assert communicator.calls == []
+
+
+def test_work_handle_status_observes_an_unfinished_handle_instead_of_hardcoding_success():
+    communicator = _Communicator(rank=0, world_size=1, device="cpu")
+    work = _FakeWork(completed=False)
+    communicator.register_work_handle(work)
+
+    assert communicator.work_handle_status == {
+        "outstanding_work_handles": 1,
+        "unfinished_work_handles": 1,
+        "all_handles_complete": False,
+    }
+
+    work.completed = True
+    assert communicator.work_handle_status == {
+        "outstanding_work_handles": 1,
+        "unfinished_work_handles": 0,
+        "all_handles_complete": True,
+    }
+
+
+def test_probe_handle_metrics_report_the_communicator_observation():
+    communicator = _Communicator(rank=0, world_size=1, device="cpu")
+    communicator.register_work_handle(_FakeWork(completed=False))
+
+    assert _observed_handle_metrics(communicator) == {
+        "unfinished_work_handles": 1,
+        "all_handles_complete": False,
+    }
 
 
 def test_alias_binding_rebuilds_typed_circuit_without_mutating_caller():

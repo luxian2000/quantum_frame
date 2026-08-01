@@ -854,6 +854,16 @@ def _optimizer_digest_tensor(parameter, optimizer, backend):
     )
 
 
+def _observed_handle_metrics(communicator):
+    """Expose actual communicator work-handle state in probe reports."""
+
+    status = communicator.work_handle_status
+    return {
+        "unfinished_work_handles": int(status["unfinished_work_handles"]),
+        "all_handles_complete": bool(status["all_handles_complete"]),
+    }
+
+
 def _optimizer_section(backend):
     """Measure the actual one-bucket SGD/Adam synchronization contract."""
 
@@ -882,17 +892,19 @@ def _optimizer_section(backend):
                 ) == 1
             records = backend.communicator.communication_records
             all_reduce_records = [record for record in records if record["kind"] == "all_reduce"]
+            handles = _observed_handle_metrics(backend.communicator)
             cases[f"{name}-{count}"] = {
                 "gradient_all_reduce_count": len(all_reduce_records),
                 "parameter_and_optimizer_state_agree": agreement,
                 "all_float32": all(record["dtype"] == "torch.float32" for record in all_reduce_records),
-                "unfinished_work_handles": 0,
+                **handles,
             }
     passed = all(
         metrics["gradient_all_reduce_count"] == 100
         and metrics["parameter_and_optimizer_state_agree"]
         and metrics["all_float32"]
         and metrics["unfinished_work_handles"] == 0
+        and metrics["all_handles_complete"]
         for metrics in cases.values()
     )
     return {
@@ -900,7 +912,7 @@ def _optimizer_section(backend):
         "passed": passed,
         "steps": 100,
         "cases": cases,
-        "all_handles_complete": True,
+        "all_handles_complete": all(metrics["all_handles_complete"] for metrics in cases.values()),
     }
 
 

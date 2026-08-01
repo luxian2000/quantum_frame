@@ -142,10 +142,14 @@ def _bucket_parameters(parameters, *, communicator) -> tuple[torch.Tensor, ...]:
     data and creates exactly one custom autograd node for the complete list.
     """
 
-    entries = _normalize_parameter_entries(parameters)
+    candidates = _normalize_parameter_entries(parameters)
+    # Every rank enters this preflight, including ranks with no candidate or
+    # only detached candidates.  Otherwise rank-local filtering could let one
+    # rank enter a gradient collective while another returns early.
+    _preflight_parameter_structure(candidates, communicator=communicator)
+    entries = tuple(entry for entry in candidates if entry.value.requires_grad)
     if not entries:
         return ()
-    _preflight_parameter_structure(entries, communicator=communicator)
     aliases = _GradientBucketFn.apply(communicator, *(entry.value for entry in entries))
     if isinstance(aliases, torch.Tensor):
         aliases = (aliases,)
@@ -207,11 +211,10 @@ def _bind_trainable_aliases(circuit, mapping) -> Any:
 
 
 def _walk_replicated_parameters(value, *, name: str, component="real"):
-    """Yield trainable circuit/noise leaves, never initial-state ownership."""
+    """Yield replicated circuit/noise candidate leaves, never initial state."""
 
     if isinstance(value, torch.Tensor):
-        if value.requires_grad:
-            yield _ParameterEntry(name, value, component)
+        yield _ParameterEntry(name, value, component)
         return
     if isinstance(value, _Pair):
         yield from _walk_replicated_parameters(value.real, name=f"{name}.real", component="real")
@@ -237,7 +240,7 @@ def _walk_replicated_parameters(value, *, name: str, component="real"):
 
 
 def _replicated_parameter_entries(circuit) -> tuple[_ParameterEntry, ...]:
-    """Collect first-use ordered circuit/noise/Stinespring leaves exactly once."""
+    """Collect first-use ordered circuit/noise/Stinespring candidates once."""
 
     from ...ir import circuit_instructions, instruction_parameter
 
@@ -261,10 +264,11 @@ def _replicated_parameter_entries(circuit) -> tuple[_ParameterEntry, ...]:
 def _bind_replicated_gradient_bucket(circuit, *, communicator):
     """Preflight and bind the private native-engine replicated bucket."""
 
-    entries = _replicated_parameter_entries(circuit)
-    if not entries:
+    candidates = _replicated_parameter_entries(circuit)
+    aliases = _bucket_parameters(candidates, communicator=communicator)
+    if not aliases:
         return circuit
-    aliases = _bucket_parameters(entries, communicator=communicator)
+    entries = tuple(entry for entry in candidates if entry.value.requires_grad)
     return _bind_trainable_aliases(
         circuit, {id(entry.value): alias for entry, alias in zip(entries, aliases)}
     )

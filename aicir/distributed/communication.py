@@ -27,6 +27,7 @@ class _Communicator:
         self.supports_complex = bool(supports_complex)
         self._dist = torch.distributed if dist_module is None else dist_module
         self._communication_records = []
+        self._work_handles = []
 
     @property
     def communication_records(self):
@@ -54,6 +55,38 @@ class _Communicator:
 
     def clear_communication_records(self) -> None:
         self._communication_records.clear()
+
+    def register_work_handle(self, work) -> None:
+        """Register an asynchronous transport handle until its owner releases it.
+
+        Real gradient buckets use synchronous all-reduce and therefore leave
+        this list empty.  P2P paths register every returned work object before
+        waiting, which keeps probe evidence tied to actual communicator state
+        rather than a fabricated completed-handle flag.
+        """
+
+        self._work_handles.append(work)
+
+    def _release_work_handle(self, work) -> None:
+        try:
+            self._work_handles.remove(work)
+        except ValueError:
+            pass
+
+    @property
+    def work_handle_status(self):
+        """Observed outstanding and incomplete asynchronous work handles."""
+
+        unfinished = 0
+        for work in self._work_handles:
+            completed = getattr(work, "is_completed", None)
+            if not callable(completed) or not bool(completed()):
+                unfinished += 1
+        return {
+            "outstanding_work_handles": len(self._work_handles),
+            "unfinished_work_handles": unfinished,
+            "all_handles_complete": unfinished == 0,
+        }
 
     @staticmethod
     def _require_real_float32(tensor) -> None:
@@ -107,7 +140,11 @@ class _Communicator:
             ),
         ]
         for work in self._dist.batch_isend_irecv(operations):
-            work.wait()
+            self.register_work_handle(work)
+            try:
+                work.wait()
+            finally:
+                self._release_work_handle(work)
         return receive
 
     def exchange(self, tensor, *, peer: int, tag: int):
