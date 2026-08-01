@@ -199,6 +199,12 @@ class _MatrixKernel:
         *,
         instruction_index: int,
     ) -> DistState:
+        if getattr(state, "_pair", None) is not None:
+            from .autograd._density import _PairMatrixKernel
+
+            return _PairMatrixKernel(self._backend).apply_channel(
+                state, channel, instruction_index=instruction_index
+            )
         state = self.promote_vector(state)
         planner = _GatePlanner(
             self._backend,

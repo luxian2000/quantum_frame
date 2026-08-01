@@ -165,6 +165,15 @@ class _PairMatrixKernel:
             bit_order=state.bit_order,
         )
 
+    def apply_channel(self, state: DistState, channel, *, instruction_index: int) -> DistState:
+        """Apply an analytic Kraus channel in paired-real row-sharded form."""
+
+        from ._channels import _PairChannelKernel
+
+        return _PairChannelKernel(self._backend).apply_channel(
+            state, channel, instruction_index=instruction_index
+        )
+
     def promote_vector(self, state: DistState) -> DistState:
         """Promote a paired-real vector to a row-sharded ``|psi><psi|`` matrix."""
 

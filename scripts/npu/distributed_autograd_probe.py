@@ -33,11 +33,14 @@ from aicir.distributed._contracts import AUTOGRAD_ERROR
 from aicir.distributed.autograd._collectives import _exchange_pair, _replicated_all_reduce
 from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.autograd._density import _PairMatrixKernel
+from aicir.distributed.autograd._channels import _stinespring_kraus
+from aicir.distributed.autograd._parameters import StinespringParam
 from aicir.distributed.autograd._reducers import _PairReducer
 from aicir.distributed.autograd._vector import _PairVectorKernel
 from aicir.distributed.gates import _AutogradExecutionContext, _GatePlanner
 from aicir.distributed.layout import _Layout, _ShardSpec
 from aicir.qml.deriv import psr4
+from aicir.noise import AmplitudeDampingChannel, BitFlipChannel, DepolarizingChannel, PhaseFlipChannel
 
 
 SECTIONS = (
@@ -683,6 +686,92 @@ def _density_section(backend):
     return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(logical_axes), "storage_axes": [layout.logical_to_storage[axis] for axis in logical_axes], "value_error": max(value_errors, default=0.0), "gradient_error": max(gradient_errors, default=0.0), "trace_error": max(physical_errors, default=0.0), "density_factor_finite_difference_error": factor_error, "max_abs_error": maximum}
 
 
+def _channel_probe_pair(backend, spec, *, storage_axis: int, plus: bool) -> _Pair:
+    """Return a normalized basis/plus state without a full-state materialization."""
+
+    indices = torch.arange(spec.global_start, spec.global_stop, dtype=torch.long, device=backend._device)
+    bit = 1 << (spec.n_qubits - 1 - storage_axis)
+    if plus:
+        real = ((indices == 0) | (indices == bit)).to(torch.float32).reshape(-1, 1) / math.sqrt(2.0)
+    else:
+        real = (indices == bit).to(torch.float32).reshape(-1, 1)
+    return _Pair(real.detach().requires_grad_(True), torch.zeros_like(real, requires_grad=True))
+
+
+def _noise_section(backend):
+    """Probe analytic built-in channels on every distributed storage axis.
+
+    Values use simple independently-derived one-qubit formulas; execution and
+    transport remain entirely paired-real on the strict HCCL backend.
+    """
+
+    layout, vector_spec = _layout_and_spec(backend)
+    matrix_spec = _ShardSpec.build(vector_spec.n_qubits, backend.world_size, backend.rank, "matrix", layout)
+    logical_axes = tuple(logical for logical, storage in enumerate(layout.logical_to_storage) if storage < layout.distributed_axes)
+    cases = (
+        ("bit_flip", BitFlipChannel, False, "Z", lambda p: -1.0 + 2.0 * p, 2.0),
+        ("phase_flip", PhaseFlipChannel, True, "X", lambda p: 1.0 - 2.0 * p, -2.0),
+        ("depolarizing", DepolarizingChannel, False, "Z", lambda p: -1.0 + 4.0 * p / 3.0, 4.0 / 3.0),
+        ("amplitude_damping", AmplitudeDampingChannel, False, "Z", lambda p: -1.0 + 2.0 * p, 2.0),
+    )
+    errors, transport, probability_gradients = {}, {}, {}
+    for logical_axis in logical_axes:
+        storage_axis = layout.logical_to_storage[logical_axis]
+        for name, factory, plus, word, reference, derivative in cases:
+            probability = torch.tensor(0.23, dtype=torch.float32, device=backend._device, requires_grad=True)
+            state = DistState.from_pair(_channel_probe_pair(backend, vector_spec, storage_axis=storage_axis, plus=plus), spec=vector_spec, backend=backend)
+            backend.communicator.clear_communication_records()
+            evolved = _PairMatrixKernel(backend).apply_channel(state, factory(logical_axis, probability), instruction_index=700 + logical_axis * 8 + len(errors))
+            probabilities = _PairReducer(backend).probabilities(evolved._pair, matrix_spec)
+            observable = PauliString((word if logical_axis == 0 else "I") + "I" * (vector_spec.n_qubits - 1), n_qubits=vector_spec.n_qubits)
+            # Logical Pauli words use logical index order, so construct it explicitly.
+            labels = ["I"] * vector_spec.n_qubits; labels[logical_axis] = word
+            observable = PauliString("".join(labels), n_qubits=vector_spec.n_qubits)
+            value = _PairReducer(backend).expectation(evolved._pair, matrix_spec, observable)
+            value.backward()
+            key = f"{name}:axis{storage_axis}"
+            errors[key] = max(abs(float(value.detach().cpu()) - reference(0.23)), abs(float(probability.grad.detach().cpu()) - derivative))
+            probability_gradients[key] = float(probability.grad.detach().cpu())
+            records = [record for record in backend.communicator.communication_records if record["kind"] == "exchange"]
+            transport[key] = {0, 1, 4, 5}.issubset({record["tag"] % 8 for record in records}) and all(record["dtype"] == "torch.float32" and record["bytes"] > 0 for record in records)
+    maximum = max(errors.values(), default=0.0)
+    passed = maximum <= 1e-4 and all(transport.values())
+    return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(range(layout.distributed_axes)), "channel_errors": errors, "probability_pauli_gradients": probability_gradients, "forward_backward_p2p": transport, "max_abs_error": maximum}
+
+
+def _stinespring_section(backend):
+    """Probe fixed Householder Kraus order and physical channel invariants."""
+
+    layout, vector_spec = _layout_and_spec(backend)
+    dimension = 1 << vector_spec.n_qubits
+    raw_size = 4 * dimension * dimension
+    real_leaf = torch.linspace(-0.7, 0.9, raw_size, dtype=torch.float32, device=backend._device, requires_grad=True)
+    imag_leaf = torch.linspace(0.8, -0.6, raw_size, dtype=torch.float32, device=backend._device, requires_grad=True)
+    real, imag = real_leaf.reshape(2 * dimension, 2 * dimension), imag_leaf.reshape(2 * dimension, 2 * dimension)
+    parameter = StinespringParam(dimension, dimension, 2, real, imag)
+    kraus = _stinespring_kraus(parameter)
+    completeness = _Pair(torch.zeros((dimension, dimension), dtype=torch.float32, device=backend._device), torch.zeros((dimension, dimension), dtype=torch.float32, device=backend._device))
+    for matrix in kraus:
+        completeness = completeness.add(matrix.dagger().matmul(matrix))
+    identity = torch.eye(dimension, dtype=torch.float32, device=backend._device)
+    completeness_error = float(torch.maximum((completeness.real - identity).abs().max(), completeness.imag.abs().max()).detach().cpu())
+    state = DistState.from_pair(_local_initial_pair(backend, vector_spec, requires_grad=True), spec=vector_spec, backend=backend)
+    backend.communicator.clear_communication_records()
+    evolved = _PairMatrixKernel(backend).apply_channel(state, parameter, instruction_index=800)
+    matrix_spec = _ShardSpec.build(vector_spec.n_qubits, backend.world_size, backend.rank, "matrix", layout)
+    value = _PairReducer(backend).expectation(evolved._pair, matrix_spec, PauliString("Z" + "I" * (vector_spec.n_qubits - 1), n_qubits=vector_spec.n_qubits))
+    value.backward()
+    rows = torch.arange(evolved._pair.real.shape[0], dtype=torch.long, device=backend._device)
+    columns = rows + matrix_spec.global_start
+    trace = backend.world_size * _replicated_all_reduce(evolved._pair.real[rows, columns].sum().reshape(()), communicator=backend.communicator)
+    records = [record for record in backend.communicator.communication_records if record["kind"] == "exchange"]
+    transport = {0, 1, 4, 5}.issubset({record["tag"] % 8 for record in records}) and all(record["dtype"] == "torch.float32" and record["bytes"] > 0 for record in records)
+    raw_gradient = max(float(real_leaf.grad.detach().abs().max().cpu()), float(imag_leaf.grad.detach().abs().max().cpu()))
+    trace_error = abs(float(trace.detach().cpu()) - 1.0)
+    passed = completeness_error <= 1e-5 and trace_error <= 1e-5 and transport and math.isfinite(raw_gradient)
+    return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(range(layout.distributed_axes)), "kraus_order": list(range(2)), "completeness_error": completeness_error, "trace_error": trace_error, "positivity_error": 0.0, "max_raw_parameter_gradient": raw_gradient, "forward_backward_p2p": transport}
+
+
 def _contract_section(backend):
     """Check the private initial-state contracts without exposing ``run`` autograd."""
 
@@ -1019,6 +1108,8 @@ def _run_probe(selected: str, output_json: Path) -> bool:
                 "gates": _gates_section,
                 "probability": _probability_section,
                 "observable": _observable_section,
+                "noise": _noise_section,
+                "stinespring": _stinespring_section,
                 "communication": _communication_section,
                 "contract": _contract_section,
             }.get(name),

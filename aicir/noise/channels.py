@@ -27,6 +27,19 @@ def _validate_probability(value: float, name: str) -> None:
         raise ValueError(f"{name} must be in [0, 1]")
 
 
+def differentiable_probability(value, name: str):
+    """Validate a probability without coercing a Torch autograd scalar leaf.
+
+    The ordinary noise API still accepts Python floats.  The private paired-real
+    distributed channel kernel uses this helper to retain a trainable scalar's
+    graph while keeping the same range contract.
+    """
+
+    checked = float(value.detach().cpu()) if hasattr(value, "detach") else float(value)
+    _validate_probability(checked, name)
+    return value
+
+
 def _validate_target_qubits(target_qubits: Sequence[int], n_qubits: int) -> tuple[int, ...]:
     targets = tuple(int(q) for q in target_qubits)
     if not targets:
