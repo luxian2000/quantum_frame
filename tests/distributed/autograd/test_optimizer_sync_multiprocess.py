@@ -18,6 +18,7 @@ from aicir.core.circuit import ry
 from aicir.distributed import DistNPUBackend, DistSimulator, DistState, PureStateParam
 from aicir.distributed._contracts import PARAMETER_STRUCTURE_ERROR
 from aicir.distributed.autograd._pair import _Pair
+from aicir.distributed.autograd._collectives import _replicated_all_reduce
 from aicir.distributed.autograd._parameters import (
     _bind_replicated_gradient_bucket,
     _bucket_parameters,
@@ -69,6 +70,18 @@ def _digest(parameter, optimizer):
     return hashlib.sha256(payload).hexdigest()
 
 
+def _digest_tensor(digest: str, *, device="cpu"):
+    return torch.tensor(
+        list(bytes.fromhex(digest)), dtype=torch.float32, device=device
+    ).contiguous()
+
+
+def _all_ranks_equal_real(backend, payload):
+    payload = payload.detach().to(dtype=torch.float32).reshape(-1).contiguous()
+    gathered = backend.communicator.all_gather_real(payload)
+    return all(torch.equal(item, gathered[0]) for item in gathered[1:])
+
+
 def _worker(rank, world_size, port, output_path):
     os.environ.update(
         MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), WORLD_SIZE=str(world_size),
@@ -92,46 +105,173 @@ def _worker(rank, world_size, port, output_path):
                     # makes the optimizer see the exact global gradient.
                     (alias * float(rank + 1)).sum().backward()
                     optimizer.step()
-                    digests = [None] * world_size
-                    torch.distributed.all_gather_object(digests, _digest(parameter, optimizer))
-                    assert len(set(digests)) == 1
+                    assert _all_ranks_equal_real(
+                        backend,
+                        _digest_tensor(_digest(parameter, optimizer)),
+                    )
                 records = backend.communicator.communication_records[before:]
                 results[f"{optimizer_name}-{count}"] = {
                     "all_reduce_count": sum(record["kind"] == "all_reduce" for record in records),
                     "all_float32": all(record["dtype"] == "torch.float32" for record in records),
                     "digest": _digest(parameter, optimizer),
                 }
-        # Initial-state leaves deliberately bypass the replicated bucket.
-        # Root-owned optimizer state exists only on rank 0; shard-local leaves
-        # have independent optimizer state but are globally normalized after
-        # every step through their explicit paired-real forward.
-        root_real = torch.nn.Parameter(torch.tensor([1.0, 0.5], dtype=torch.float32)) if rank == 0 else None
-        root_imag = torch.nn.Parameter(torch.tensor([0.0, 0.25], dtype=torch.float32)) if rank == 0 else None
+        # Initial-state leaves deliberately bypass the replicated bucket, but
+        # must still execute their real distributed ownership paths.  Root
+        # leaves use the normalize -> paired scatter -> paired reducer graph;
+        # shard leaves retain separate optimizers and are normalized only at
+        # the probability/reducer boundary.
+        n_qubits = world_size.bit_length() - 1
+        layout = _Layout.explicit(
+            tuple(reversed(range(n_qubits))),
+            n_qubits=n_qubits,
+            distributed_axes=n_qubits,
+        )
+        spec = _ShardSpec.build(n_qubits, world_size, rank, "vector", layout)
+        simulator = DistSimulator(backend)
+        local_weights = torch.arange(
+            spec.global_start + 1,
+            spec.global_stop + 1,
+            dtype=torch.float32,
+        )
+        dimension = 1 << n_qubits
+        root_real = (
+            torch.nn.Parameter(torch.linspace(0.3, 1.1, dimension, dtype=torch.float32))
+            if rank == 0 else None
+        )
+        root_imag = (
+            torch.nn.Parameter(torch.linspace(-0.4, 0.5, dimension, dtype=torch.float32))
+            if rank == 0 else None
+        )
         root_optimizer = torch.optim.Adam([root_real, root_imag], lr=0.01) if rank == 0 else None
-        sharded_real = torch.nn.Parameter(torch.tensor([float(rank + 1)], dtype=torch.float32))
-        sharded_imag = torch.nn.Parameter(torch.tensor([float(rank)], dtype=torch.float32))
+        sharded_real = torch.nn.Parameter(
+            torch.linspace(float(rank + 1), float(rank + 1.5), spec.local_shape[0], dtype=torch.float32)
+        )
+        sharded_imag = torch.nn.Parameter(
+            torch.linspace(-float(rank + 0.5), -float(rank), spec.local_shape[0], dtype=torch.float32)
+        )
         sharded_optimizer = torch.optim.SGD([sharded_real, sharded_imag], lr=0.01, momentum=0.9)
-        sharded_normalized = True
+        root_probability_sum_is_one = True
+        root_state_norm_is_one = True
+        root_gradients_nonzero = True
+        sharded_probability_sum_is_one = True
+        sharded_probabilities_finite = True
+        sharded_gradients_nonzero = True
         for _ in range(100):
-            if rank == 0:
+            if root_optimizer is not None:
                 root_optimizer.zero_grad(set_to_none=True)
-                root_pair = PureStateParam(root_real, root_imag).normalized_pair()
-                root_pair.abs_sq().sum().backward()
-                root_optimizer.step()
-            sharded_optimizer.zero_grad(set_to_none=True)
-            (sharded_real.square() + sharded_imag.square()).sum().backward()
-            sharded_optimizer.step()
-            total = backend.communicator.all_reduce_sum(
-                (sharded_real.square() + sharded_imag.square()).sum().reshape(())
+            root_state = simulator._prepare_initial_state(
+                n_qubits=n_qubits,
+                layout=layout,
+                initial_state=PureStateParam(root_real, root_imag) if rank == 0 else None,
+                initial_density_matrix=None,
             )
-            local_probability = (sharded_real.square() + sharded_imag.square()).sum() / total
-            sharded_normalized = sharded_normalized and bool(torch.isfinite(local_probability))
-        ownership = [None] * world_size
-        torch.distributed.all_gather_object(ownership, {
-            "root_has_state": bool(root_optimizer is not None and root_optimizer.state),
-            "sharded_has_state": bool(sharded_optimizer.state),
-            "sharded_normalized": sharded_normalized,
-        })
+            root_probabilities = _PairReducer(backend).probabilities(root_state._pair, spec)
+            root_mean = _replicated_all_reduce(
+                (root_probabilities * local_weights).sum().reshape(()),
+                communicator=backend.communicator,
+            )
+            root_loss = (
+                float(world_size) * root_mean.detach() + root_mean - root_mean.detach()
+            )
+            root_loss.backward()
+            if rank == 0:
+                root_gradients_nonzero = root_gradients_nonzero and all(
+                    leaf.grad is not None and bool(leaf.grad.detach().abs().max() > 0)
+                    for leaf in (root_real, root_imag)
+                )
+                root_optimizer.step()
+            reconstructed_root = simulator._prepare_initial_state(
+                n_qubits=n_qubits,
+                layout=layout,
+                initial_state=PureStateParam(root_real, root_imag) if rank == 0 else None,
+                initial_density_matrix=None,
+            )
+            reconstructed_probabilities = _PairReducer(backend).probabilities(
+                reconstructed_root._pair, spec
+            )
+            root_global_probability = backend.communicator.all_reduce_sum_real(
+                reconstructed_probabilities.detach().sum().reshape(())
+            )
+            root_global_norm = backend.communicator.all_reduce_sum_real(
+                reconstructed_root._pair.abs_sq().detach().sum().reshape(())
+            )
+            root_probability_sum_is_one = root_probability_sum_is_one and bool(
+                torch.isclose(root_global_probability, torch.ones_like(root_global_probability), atol=1e-5)
+            )
+            root_state_norm_is_one = root_state_norm_is_one and bool(
+                torch.isclose(torch.sqrt(root_global_norm), torch.ones_like(root_global_norm), atol=1e-5)
+            )
+            sharded_optimizer.zero_grad(set_to_none=True)
+            sharded_state = DistState.from_pair(
+                _Pair(sharded_real.reshape(spec.local_shape), sharded_imag.reshape(spec.local_shape)),
+                spec=spec,
+                backend=backend,
+            )
+            sharded_probabilities = _PairReducer(backend).probabilities(
+                sharded_state._pair, spec
+            )
+            sharded_mean = _replicated_all_reduce(
+                (sharded_probabilities * local_weights).sum().reshape(()),
+                communicator=backend.communicator,
+            )
+            sharded_loss = (
+                float(world_size) * sharded_mean.detach()
+                + sharded_mean
+                - sharded_mean.detach()
+            )
+            sharded_loss.backward()
+            sharded_gradients_nonzero = sharded_gradients_nonzero and all(
+                leaf.grad is not None and bool(leaf.grad.detach().abs().max() > 0)
+                for leaf in (sharded_real, sharded_imag)
+            )
+            sharded_optimizer.step()
+            reconstructed_sharded = DistState.from_pair(
+                _Pair(sharded_real.reshape(spec.local_shape), sharded_imag.reshape(spec.local_shape)),
+                spec=spec,
+                backend=backend,
+            )
+            reconstructed_sharded_probabilities = _PairReducer(backend).probabilities(
+                reconstructed_sharded._pair, spec
+            )
+            sharded_global_probability = backend.communicator.all_reduce_sum_real(
+                reconstructed_sharded_probabilities.detach().sum().reshape(())
+            )
+            sharded_probability_sum_is_one = sharded_probability_sum_is_one and bool(
+                torch.isclose(sharded_global_probability, torch.ones_like(sharded_global_probability), atol=1e-5)
+            )
+            sharded_probabilities_finite = sharded_probabilities_finite and bool(
+                torch.isfinite(reconstructed_sharded_probabilities).all()
+            )
+        ownership_payload = torch.tensor(
+            [
+                float(root_optimizer is not None and bool(root_optimizer.state)),
+                float(sharded_optimizer.state != {}),
+                float(rank != 0 and root_real is None and root_imag is None and root_optimizer is None),
+                float(root_gradients_nonzero if rank == 0 else True),
+                float(root_probability_sum_is_one),
+                float(root_state_norm_is_one),
+                float(sharded_gradients_nonzero),
+                float(sharded_probability_sum_is_one),
+                float(sharded_probabilities_finite),
+            ],
+            dtype=torch.float32,
+        )
+        ownership_rows = backend.communicator.all_gather_real(ownership_payload.contiguous())
+        ownership = [
+            {
+                "root_has_state": bool(row[0]),
+                "sharded_has_state": bool(row[1]),
+                "root_nonowner_has_no_leaf_or_state": bool(row[2]),
+                "root_gradients_nonzero": bool(row[3]),
+                "root_global_probability_sum_is_one": bool(row[4]),
+                "root_state_norm_is_one": bool(row[5]),
+                "sharded_gradients_nonzero": bool(row[6]),
+                "sharded_global_probability_sum_is_one": bool(row[7]),
+                "sharded_probabilities_finite": bool(row[8]),
+                "sharded_normalized": bool(row[7] and row[8]),
+            }
+            for row in ownership_rows
+        ]
         if rank == 0:
             Path(output_path).write_text(json.dumps({"results": results, "ownership": ownership}), encoding="utf-8")
         torch.distributed.barrier()
@@ -148,6 +288,13 @@ def test_replicated_sgd_and_adam_agree_for_100_steps_on_two_and_four_ranks(tmp_p
     assert result["ownership"][0]["root_has_state"]
     assert all(not item["root_has_state"] for item in result["ownership"][1:])
     assert all(item["sharded_has_state"] and item["sharded_normalized"] for item in result["ownership"])
+    assert result["ownership"][0]["root_gradients_nonzero"]
+    assert all(item["root_nonowner_has_no_leaf_or_state"] for item in result["ownership"][1:])
+    assert all(item["root_global_probability_sum_is_one"] for item in result["ownership"])
+    assert all(item["root_state_norm_is_one"] for item in result["ownership"])
+    assert all(item["sharded_gradients_nonzero"] for item in result["ownership"])
+    assert all(item["sharded_global_probability_sum_is_one"] for item in result["ownership"])
+    assert all(item["sharded_probabilities_finite"] for item in result["ownership"])
     assert set(result["results"]) == {"sgd-32", "sgd-128", "adam-32", "adam-128"}
     for metrics in result["results"].values():
         assert metrics["all_reduce_count"] == 100
@@ -171,16 +318,28 @@ def _schema_mismatch_worker(rank, world_size, port, output_path):
         else:
             message = "NO_ERROR"
         records = backend.communicator.communication_records
-        observed = [None] * world_size
-        torch.distributed.all_gather_object(
-            observed,
-            {
-                "message": message,
-                "gradient_all_reduces": sum(record["kind"] == "all_reduce" for record in records),
-            },
+        observed = backend.communicator.all_gather_real(
+            torch.tensor(
+                [
+                    float(message == PARAMETER_STRUCTURE_ERROR),
+                    float(sum(record["kind"] == "all_reduce" for record in records)),
+                ],
+                dtype=torch.float32,
+            )
         )
         if rank == 0:
-            Path(output_path).write_text(json.dumps(observed), encoding="utf-8")
+            Path(output_path).write_text(
+                json.dumps(
+                    [
+                        {
+                            "message": PARAMETER_STRUCTURE_ERROR if int(item[0]) else message,
+                            "gradient_all_reduces": int(item[1]),
+                        }
+                        for item in observed
+                    ]
+                ),
+                encoding="utf-8",
+            )
     finally:
         torch.distributed.destroy_process_group()
 
@@ -328,15 +487,15 @@ def _integrated_private_path_worker(rank, world_size, port, output_path):
                     and aliases.noise_model.rules[1].channel.real is not raw_real
                     and aliases.noise_model.rules[1].channel.imag is not raw_imag
                 )
-                gradients = tuple(leaf.grad.detach().cpu().tolist() for leaf in leaves)
-                gathered_gradients = [None] * world_size
-                torch.distributed.all_gather_object(gathered_gradients, gradients)
+                gradients = torch.cat(
+                    [leaf.grad.detach().reshape(-1) for leaf in leaves]
+                ).contiguous()
                 step_reports.append(
                     {
                         "bucket_all_reduce_count": len(bucket_records),
                         "aliases_bound": aliases_bound,
                         "aliases_planned": aliases_planned,
-                        "gradient_agreement": len({repr(item) for item in gathered_gradients}) == 1,
+                        "gradient_agreement": _all_ranks_equal_real(backend, gradients),
                         "nonzero_gradients": [
                             bool(leaf.grad is not None and leaf.grad.detach().abs().max() > 0)
                             for leaf in (theta, damping, raw_real, raw_imag)
@@ -353,11 +512,13 @@ def _integrated_private_path_worker(rank, world_size, port, output_path):
             simulator_module._bind_replicated_gradient_bucket = original_bind
             _GatePlanner.plan = original_plan
 
-        digests = [None] * world_size
-        torch.distributed.all_gather_object(digests, _integrated_digest(leaves, optimizer))
+        digest_agreement = _all_ranks_equal_real(
+            backend,
+            _digest_tensor(_integrated_digest(leaves, optimizer)),
+        )
         if rank == 0:
             Path(output_path).write_text(
-                json.dumps({"steps": step_reports, "digest_agreement": len(set(digests)) == 1}),
+                json.dumps({"steps": step_reports, "digest_agreement": digest_agreement}),
                 encoding="utf-8",
             )
         torch.distributed.barrier()
@@ -435,3 +596,87 @@ def test_optimizer_probe_integrated_private_path_reports_real_bucket_metrics(tmp
     assert result["caller_kraus_cache_empty"] == [True, True]
     assert result["unfinished_work_handles"] == [0, 0]
     assert result["all_handles_complete"] == [True, True]
+
+
+class _NeverCompleteWork:
+    def is_completed(self):
+        return False
+
+
+def _strict_optimizer_probe_worker(
+    rank,
+    world_size,
+    port,
+    output_path,
+    forbid_object_collective,
+    inject_unfinished_handle,
+):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), WORLD_SIZE=str(world_size),
+        RANK=str(rank), LOCAL_RANK=str(rank),
+    )
+    backend = DistNPUBackend.from_env(fallback_to_cpu=True, process_group_backend="gloo")
+    original_all_gather_object = torch.distributed.all_gather_object
+    try:
+        if forbid_object_collective:
+            def forbidden(*_args, **_kwargs):
+                raise AssertionError("strict optimizer path must not use all_gather_object")
+
+            torch.distributed.all_gather_object = forbidden
+        if inject_unfinished_handle:
+            backend.communicator.register_work_handle(_NeverCompleteWork())
+        result = autograd_probe._optimizer_section(backend)
+        records = backend.communicator.communication_records
+        if rank == 0:
+            Path(output_path).write_text(
+                json.dumps(
+                    {
+                        "result": result,
+                        "all_gather_dtypes": [
+                            record["dtype"] for record in records if record["kind"] == "all_gather"
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        torch.distributed.barrier()
+    finally:
+        torch.distributed.all_gather_object = original_all_gather_object
+        torch.distributed.destroy_process_group()
+
+
+def _run_strict_optimizer_probe(tmp_path, *, forbid_object_collective, inject_unfinished_handle):
+    output = tmp_path / "strict-optimizer-probe.json"
+    context = mp.spawn(
+        _strict_optimizer_probe_worker,
+        args=(2, _free_port(), str(output), forbid_object_collective, inject_unfinished_handle),
+        nprocs=2,
+        join=False,
+    )
+    _join(context, timeout=120)
+    return json.loads(output.read_text(encoding="utf-8"))
+
+
+def test_strict_optimizer_probe_never_uses_object_collectives_and_gathers_float32(tmp_path):
+    result = _run_strict_optimizer_probe(
+        tmp_path,
+        forbid_object_collective=True,
+        inject_unfinished_handle=False,
+    )
+
+    assert result["result"]["passed"]
+    assert result["result"]["all_handles_complete"]
+    assert result["all_gather_dtypes"]
+    assert set(result["all_gather_dtypes"]) == {"torch.float32"}
+
+
+def test_strict_optimizer_probe_observes_an_injected_unfinished_handle(tmp_path):
+    result = _run_strict_optimizer_probe(
+        tmp_path,
+        forbid_object_collective=False,
+        inject_unfinished_handle=True,
+    )
+
+    assert not result["result"]["passed"]
+    assert not result["result"]["all_handles_complete"]
+    assert result["result"]["cases"]["sgd-32"]["unfinished_work_handles"] > 0

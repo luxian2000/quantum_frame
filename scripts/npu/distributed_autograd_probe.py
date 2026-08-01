@@ -891,6 +891,16 @@ def _observed_handle_metrics(communicator):
     }
 
 
+def _all_ranks_equal_real(payload: torch.Tensor, backend) -> bool:
+    """Compare a contiguous fixed-shape float32 payload on every rank."""
+
+    if payload.dtype != torch.float32 or torch.is_complex(payload):
+        raise TypeError("optimizer agreement payload 必须是实数 torch.float32")
+    payload = payload.detach().reshape(-1).contiguous()
+    gathered = backend.communicator.all_gather_real(payload)
+    return all(torch.equal(item, gathered[0]) for item in gathered[1:])
+
+
 def _integrated_private_path_optimizer_case(backend):
     """Run the private engine with typed gate, built-in noise and Stinespring.
 
@@ -962,25 +972,22 @@ def _integrated_private_path_optimizer_case(backend):
             for record in backend.communicator.communication_records[before_backward:]
             if record["kind"] == "all_reduce" and record["bytes"] == expected_bucket_bytes
         ]
-        local_gradients = tuple(parameter.grad.detach().cpu().tolist() for parameter in leaves)
-        gathered_gradients = [None] * backend.world_size
-        torch.distributed.all_gather_object(gathered_gradients, local_gradients)
+        local_gradients = torch.cat(
+            [parameter.grad.detach().reshape(-1) for parameter in leaves]
+        ).contiguous()
         reports.append(
             {
                 "gradient_all_reduce_count": len(bucket_records),
-                "gradient_agreement": len({repr(item) for item in gathered_gradients}) == 1,
+                "gradient_agreement": _all_ranks_equal_real(local_gradients, backend),
                 "missing_gradient_zero": bool(torch.equal(missing.grad, torch.zeros_like(missing))),
                 "caller_kraus_cache_empty": circuit.noise_model._kraus_cache == {},
                 **_observed_handle_metrics(backend.communicator),
             }
         )
         optimizer.step()
-    digests = backend.communicator.all_gather_real(
-        _optimizer_digest_tensors(leaves, optimizer, backend)
+    digest_agreement = _all_ranks_equal_real(
+        _optimizer_digest_tensors(leaves, optimizer, backend), backend
     )
-    digest_agreement = len(
-        {bytes(int(value) for value in item.detach().cpu().tolist()) for item in digests}
-    ) == 1
     passed = (
         digest_agreement
         and all(
@@ -1026,12 +1033,9 @@ def _optimizer_section(backend):
                 (alias,) = _bucket_parameters((parameter,), communicator=backend.communicator)
                 (alias * float(backend.rank + 1)).sum().backward()
                 optimizer.step()
-                digests = backend.communicator.all_gather_real(
-                    _optimizer_digest_tensor(parameter, optimizer, backend)
+                agreement = agreement and _all_ranks_equal_real(
+                    _optimizer_digest_tensor(parameter, optimizer, backend), backend
                 )
-                agreement = agreement and len(
-                    {bytes(int(value) for value in item.detach().cpu().tolist()) for item in digests}
-                ) == 1
             records = backend.communicator.communication_records
             all_reduce_records = [record for record in records if record["kind"] == "all_reduce"]
             handles = _observed_handle_metrics(backend.communicator)
