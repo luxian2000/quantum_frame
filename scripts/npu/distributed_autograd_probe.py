@@ -686,6 +686,52 @@ def _density_section(backend):
     return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(logical_axes), "storage_axes": [layout.logical_to_storage[axis] for axis in logical_axes], "value_error": max(value_errors, default=0.0), "gradient_error": max(gradient_errors, default=0.0), "trace_error": max(physical_errors, default=0.0), "density_factor_finite_difference_error": factor_error, "max_abs_error": maximum}
 
 
+def _memory_section(backend):
+    """Record measured checkpoint accounting through the private native hook.
+
+    This is a preliminary measurement section, not a public-autograd claim:
+    it deliberately calls ``_run_paired_real`` while ``DistSimulator.run``
+    keeps its forward-only release gate closed.
+    """
+
+    n_qubits = backend.world_size.bit_length()
+    layout = _Layout.explicit(
+        tuple(reversed(range(n_qubits))),
+        n_qubits=n_qubits,
+        distributed_axes=n_qubits - 1,
+    )
+    spec = _ShardSpec.build(n_qubits, backend.world_size, backend.rank, "vector", layout)
+    observable = PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits)
+    reports = {}
+    reference_gradient = None
+    for policy in ("none", "auto", 16):
+        theta = torch.tensor(0.31, dtype=torch.float32, device=backend._device, requires_grad=True)
+        circuit = Circuit(n_qubits=n_qubits)
+        for index in range(16):
+            circuit.append(ry(theta, index % n_qubits))
+        state = DistState.from_pair(_local_initial_pair(backend, spec), spec=spec, backend=backend)
+        evolved, metrics = DistSimulator(backend)._run_paired_real(
+            circuit,
+            initial_state=state,
+            layout=layout,
+            grad_checkpoint=policy,
+        )
+        value = _PairReducer(backend).expectation(evolved._pair, evolved.spec, observable)
+        value.backward()
+        gradient = float(theta.grad.detach().cpu())
+        if reference_gradient is None:
+            reference_gradient = gradient
+        reports[str(policy)] = {
+            "saved_state_count": int(metrics.saved_state_count),
+            "recomputed_gate_count": int(metrics.recomputed_gate_count),
+            "chosen_interval": int(metrics.interval),
+            "peak_allocation_bytes": metrics.peak_allocation_bytes,
+            "gradient_error": abs(gradient - reference_gradient),
+        }
+    passed = all(item["gradient_error"] <= 1e-4 for item in reports.values())
+    return {"status": "PASS" if passed else "FAIL", "passed": passed, "policies": reports}
+
+
 def _channel_probe_pair(backend, spec, *, storage_axis: int, plus: bool) -> _Pair:
     """Return a normalized basis/plus state without a full-state materialization."""
 
@@ -1127,6 +1173,7 @@ def _run_probe(selected: str, output_json: Path) -> bool:
                 "noise": _noise_section,
                 "stinespring": _stinespring_section,
                 "communication": _communication_section,
+                "memory": _memory_section,
                 "contract": _contract_section,
             }.get(name),
         )

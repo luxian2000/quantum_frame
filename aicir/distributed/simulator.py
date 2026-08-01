@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import hashlib
 import math
+from typing import Literal
 
 import numpy as np
 import torch
@@ -22,11 +23,22 @@ from ._contracts import (
     contains_requires_grad,
 )
 from .autograd._collectives import _scatter_root_pair
+from .autograd._channels import _selected_noise_rules
+from .autograd._checkpoint import (
+    _CheckpointMetrics,
+    _CheckpointPlanner,
+    _CheckpointPolicy,
+    _agree_interval,
+    _available_memory_bytes,
+    _recompute_segment,
+)
+from .autograd._density import _PairMatrixKernel
 from .autograd._pair import _Pair
 from .autograd._parameters import PureStateParam
+from .autograd._vector import _PairVectorKernel
 from .backend import DistNPUBackend
 from .density import _MatrixKernel
-from .gates import _GatePlanner, _VectorKernel
+from .gates import _AutogradExecutionContext, _GatePlanner, _VectorKernel
 from .layout import _Layout, _ShardSpec
 from .reducers import _Reducer
 from .result import DistResult
@@ -37,6 +49,79 @@ _ROOT_STATE_ERROR_MAX_BYTES = 4096
 _ROOT_STATE_ERROR_TRUNCATION_SUFFIX = b"... <truncated>"
 _ROOT_STATE_ERROR_PROTOCOL_MESSAGE = "rank 0 初态准备失败同步协议无效"
 _DIST_STATE_ERROR_PROTOCOL_MESSAGE = "DistState 本地校验同步协议无效"
+
+
+def _peak_allocation_bytes(device) -> int | None:
+    """Read an already-maintained allocator peak when the runtime exposes it."""
+
+    device = torch.device(device)
+    try:
+        if device.type == "cuda" and torch.cuda.is_available():
+            return int(torch.cuda.max_memory_allocated(device))
+        if device.type == "npu":
+            peak = getattr(getattr(torch, "npu", None), "max_memory_allocated", None)
+            if callable(peak):
+                return int(peak(device))
+    except Exception:
+        pass
+    return None
+
+
+class _PairedReplayEngine:
+    """Apply existing plans without rebuilding their communication metadata."""
+
+    def __init__(self, backend, instructions, noise_model):
+        self._backend = backend
+        self._instructions = tuple(instructions)
+        self._noise_model = noise_model
+        self._vector = _PairVectorKernel(backend)
+        self._matrix = _PairMatrixKernel(backend)
+
+    def _channels(self, operation_index: int):
+        if self._noise_model is None:
+            return ()
+        return _selected_noise_rules(
+            self._noise_model,
+            self._instructions[operation_index],
+        )
+
+    def spec_after(self, spec, start: int, stop: int):
+        if spec.kind == "matrix" or not any(self._channels(index) for index in range(start, stop)):
+            return spec
+        return _ShardSpec.build(
+            spec.n_qubits,
+            spec.world_size,
+            spec.rank,
+            "matrix",
+            spec.layout,
+        )
+
+    def apply(self, state, plan, *, operation_index: int):
+        if state.kind == "vector":
+            pair = self._vector.apply(
+                state._pair,
+                plan,
+                operation_index=operation_index,
+            )
+            state = DistState.from_pair(
+                pair,
+                spec=state.spec,
+                backend=self._backend,
+                bit_order=state.bit_order,
+            )
+        else:
+            state = self._matrix.apply_unitary(
+                state,
+                plan,
+                operation_index=operation_index,
+            )
+        for rule_index, channel in enumerate(self._channels(operation_index)):
+            state = self._matrix.apply_channel(
+                state,
+                channel,
+                instruction_index=(operation_index + 1) * 1000 + rule_index,
+            )
+        return state
 
 
 class DistSimulator:
@@ -142,6 +227,98 @@ class DistSimulator:
         rejected = self._backend.communicator.all_reduce_sum(flag)
         if int(rejected.detach().cpu().item()) > 0:
             raise ValueError(AUTOGRAD_ERROR)
+
+    def _run_paired_real(
+        self,
+        circuit,
+        *,
+        initial_state: DistState,
+        layout=None,
+        grad_checkpoint="auto",
+        available_memory_bytes: int | None = None,
+    ):
+        """Private paired-real execution hook used before the public release gate.
+
+        This intentionally accepts an already-prepared :class:`DistState` and
+        is not reached from :meth:`run`.  It is the narrow integration point
+        for native-kernel tests and the NPU probe while public trainable routing
+        remains disabled through Task 11/release qualification.
+        """
+
+        policy = _CheckpointPolicy.parse(grad_checkpoint)
+        if not isinstance(initial_state, DistState) or initial_state._pair is None:
+            raise TypeError("_run_paired_real 需要 paired-real DistState 初态")
+        n_qubits = int(circuit.n_qubits)
+        resolved_layout = self._resolve_layout(circuit, n_qubits, layout)
+        if initial_state.backend is not self._backend:
+            raise ValueError("DistState 必须属于当前 DistSimulator.backend")
+        if initial_state.n_qubits != n_qubits or initial_state.layout != resolved_layout:
+            raise ValueError("DistState 的 n_qubits/layout 与线路不一致")
+
+        instructions = tuple(circuit_instructions(circuit))
+        context = _AutogradExecutionContext()
+        planner = _GatePlanner(
+            self._backend,
+            resolved_layout,
+            n_qubits,
+            execution_context=context,
+        )
+        plans = tuple(
+            planner.plan(instruction, index)
+            for index, instruction in enumerate(instructions)
+        )
+        available = (
+            _available_memory_bytes(self._backend._device)
+            if available_memory_bytes is None
+            else int(available_memory_bytes)
+        )
+        if policy.value == "none":
+            interval = 0
+        elif policy.value == "auto":
+            interval = _CheckpointPlanner(initial_state.spec, len(plans), available).interval()
+        else:
+            interval = int(policy.value)
+        if interval:
+            interval = _agree_interval(interval, self._backend.communicator)
+
+        engine = _PairedReplayEngine(self._backend, instructions, getattr(circuit, "noise_model", None))
+        metrics = _CheckpointMetrics(
+            policy=policy.value,
+            interval=interval,
+            saved_state_count=(len(plans) + interval - 1) // interval + 1 if interval else len(plans) + 1,
+            peak_allocation_bytes=_peak_allocation_bytes(self._backend._device),
+        )
+        state = initial_state
+        if not interval:
+            state = _recompute_segment(state, plans, 0, len(plans), engine)
+            metrics.peak_allocation_bytes = _peak_allocation_bytes(self._backend._device)
+            return state, metrics
+
+        from torch.utils.checkpoint import checkpoint
+
+        for start in range(0, len(plans), interval):
+            stop = min(len(plans), start + interval)
+            start_spec = state.spec
+            end_spec = engine.spec_after(state.spec, start, stop)
+            calls = [0]
+
+            def replay(real, imag, *, _start=start, _stop=stop, _spec=start_spec):
+                calls[0] += 1
+                if calls[0] > 1:
+                    metrics.recomputed_gate_count += _stop - _start
+                replayed = _recompute_segment(
+                    DistState.from_pair(_Pair(real, imag), spec=_spec, backend=self._backend),
+                    plans,
+                    _start,
+                    _stop,
+                    engine,
+                )
+                return replayed._pair.real, replayed._pair.imag
+
+            real, imag = checkpoint(replay, state._pair.real, state._pair.imag, use_reentrant=False)
+            state = DistState.from_pair(_Pair(real, imag), spec=end_spec, backend=self._backend, bit_order=state.bit_order)
+        metrics.peak_allocation_bytes = _peak_allocation_bytes(self._backend._device)
+        return state, metrics
 
     def _assert_process_agreement(
         self,
@@ -725,9 +902,14 @@ class DistSimulator:
         layout=None,
         return_state: bool = True,
         return_probabilities: bool = True,
+        grad_checkpoint: Literal["none", "auto"] | int = "auto",
     ) -> DistResult:
         """Run one circuit cooperatively on all ranks."""
 
+        # The policy is intentionally validated before the forward-only gate
+        # so callers get one stable contract now.  It has no public execution
+        # effect until Task 11 opens native routing after the release evidence.
+        _CheckpointPolicy.parse(grad_checkpoint)
         self._assert_forward_only(
             circuit,
             initial_state,
