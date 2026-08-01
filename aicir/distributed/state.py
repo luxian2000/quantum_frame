@@ -182,8 +182,11 @@ class DistState:
     def local_probabilities(self):
         if self._pair is not None:
             if self.kind != "vector":
-                raise NotImplementedError(
-                    "paired-real density-matrix probabilities 由后续 native autograd 任务提供"
+                from .autograd._reducers import _PairReducer
+
+                return _PairReducer(self._backend).probabilities(
+                    self._pair,
+                    self._spec,
                 )
             from .autograd._reducers import _PairReducer
 

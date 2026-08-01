@@ -8,7 +8,9 @@ from ...core.operators import Hamiltonian, PauliString
 from ...ir import Observable
 from ..gates import _GatePlanner
 from ..reducers import _as_pauli, _pauli_local_matrix
+from ..state import DistState
 from ._collectives import _replicated_all_reduce
+from ._density import _PairMatrixKernel
 from ._pair import _Pair
 from ._vector import _PairVectorKernel
 
@@ -21,8 +23,16 @@ class _PairReducer:
         self._observable_index = 0
 
     def probabilities(self, state_pair: _Pair, spec) -> torch.Tensor:
-        del spec
-        probabilities = state_pair.abs_sq().reshape(-1)
+        if getattr(spec, "kind", "vector") == "matrix":
+            rows = torch.arange(
+                state_pair.real.shape[0], dtype=torch.long, device=state_pair.real.device
+            )
+            columns = rows + spec.global_start
+            # Keep the diagonal read on the real paired buffer.  In particular,
+            # never perform advanced indexing on a complex density tensor.
+            probabilities = state_pair.real[rows, columns]
+        else:
+            probabilities = state_pair.abs_sq().reshape(-1)
         mean_total = _replicated_all_reduce(
             probabilities.sum().reshape(()),
             communicator=self._backend.communicator,
@@ -71,15 +81,26 @@ class _PairReducer:
         )
         operation_index = 10000 + self._observable_index
         self._observable_index += 1
-        transformed = _PairVectorKernel(self._backend).apply(
-            state_pair,
-            plan,
-            operation_index=operation_index,
-        )
-        local = (
-            state_pair.real.reshape(-1) * transformed.real.reshape(-1)
-            + state_pair.imag.reshape(-1) * transformed.imag.reshape(-1)
-        ).sum()
+        if spec.kind == "matrix":
+            state = DistState.from_pair(state_pair, spec=spec, backend=self._backend)
+            transformed = _PairMatrixKernel(self._backend).apply_left(
+                state, plan, operation_index=operation_index
+            )
+            rows = torch.arange(
+                state_pair.real.shape[0], dtype=torch.long, device=state_pair.real.device
+            )
+            columns = rows + spec.global_start
+            local = transformed.real[rows, columns].sum()
+        else:
+            transformed = _PairVectorKernel(self._backend).apply(
+                state_pair,
+                plan,
+                operation_index=operation_index,
+            )
+            local = (
+                state_pair.real.reshape(-1) * transformed.real.reshape(-1)
+                + state_pair.imag.reshape(-1) * transformed.imag.reshape(-1)
+            ).sum()
         # The collective returns a replicated mean.  Its forward value must be
         # promoted to the physical global sum, while its backward seed must
         # stay one: every rank calls ``backward`` on the same replicated loss.

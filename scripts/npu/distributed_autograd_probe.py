@@ -25,12 +25,14 @@ from aicir.distributed import (
     DistNPUBackend,
     DistSimulator,
     DistState,
+    DensityParam,
     PureStateParam,
     parameter_shift_gradient,
 )
 from aicir.distributed._contracts import AUTOGRAD_ERROR
-from aicir.distributed.autograd._collectives import _exchange_pair
+from aicir.distributed.autograd._collectives import _exchange_pair, _replicated_all_reduce
 from aicir.distributed.autograd._pair import _Pair
+from aicir.distributed.autograd._density import _PairMatrixKernel
 from aicir.distributed.autograd._reducers import _PairReducer
 from aicir.distributed.autograd._vector import _PairVectorKernel
 from aicir.distributed.gates import _AutogradExecutionContext, _GatePlanner
@@ -593,6 +595,77 @@ def _statevector_section(backend):
     }
 
 
+def _density_section(backend):
+    """Validate paired-real density values and gradients without a CPU fallback.
+
+    CPU float64 and parameter shift are correctness oracles only; the native
+    execution below remains entirely in paired float32 buffers on HCCL.
+    """
+
+    layout, vector_spec = _layout_and_spec(backend)
+    matrix_spec = _ShardSpec.build(
+        vector_spec.n_qubits, backend.world_size, backend.rank, "matrix", layout
+    )
+    n_qubits, dimension = vector_spec.n_qubits, 1 << vector_spec.n_qubits
+    raw = np.arange(1, dimension + 1, dtype=np.float64)
+    raw /= np.linalg.norm(raw)
+    z = np.kron(np.diag([1.0, -1.0]), np.eye(dimension // 2))
+    value_errors, gradient_errors, physical_errors = [], [], []
+    for axis in range(layout.distributed_axes):
+        theta = torch.tensor(0.31, dtype=torch.float32, device=backend._device, requires_grad=True)
+        vector = DistState.from_pair(
+            _local_initial_pair(backend, vector_spec), spec=vector_spec, backend=backend
+        )
+        kernel = _PairMatrixKernel(backend)
+        density = kernel.promote_vector(vector)
+        plan = _GatePlanner(backend, layout, n_qubits, execution_context=_AutogradExecutionContext()).plan(ry(theta, axis), axis)
+        evolved = kernel.apply_unitary(density, plan, operation_index=axis)
+        value = _PairReducer(backend).expectation(
+            evolved._pair, matrix_spec, PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits)
+        )
+        value.backward()
+        gate = np.array([[np.cos(0.31 / 2), -np.sin(0.31 / 2)], [np.sin(0.31 / 2), np.cos(0.31 / 2)]], dtype=np.float64)
+        unitary = np.array([[1.0]], dtype=np.float64)
+        for qubit in range(n_qubits):
+            unitary = np.kron(unitary, gate if qubit == axis else np.eye(2))
+        reference = float((unitary @ raw) @ z @ (unitary @ raw))
+        value_errors.append(abs(float(value.detach().cpu()) - reference))
+        shifted = parameter_shift_gradient(
+            lambda point: float((
+                np.kron(np.array([[np.cos(point[0] / 2), -np.sin(point[0] / 2)], [np.sin(point[0] / 2), np.cos(point[0] / 2)]]), np.eye(dimension // 2))
+                @ raw
+            ) @ z @ (
+                np.kron(np.array([[np.cos(point[0] / 2), -np.sin(point[0] / 2)], [np.sin(point[0] / 2), np.cos(point[0] / 2)]]), np.eye(dimension // 2))
+                @ raw
+            )), np.array([0.31], dtype=np.float64),
+        )[0]
+        gradient_errors.append(abs(float(theta.grad.detach().cpu()) - float(shifted)))
+        local = evolved._pair
+        rows = torch.arange(local.real.shape[0], dtype=torch.long, device=backend._device)
+        columns = rows + matrix_spec.global_start
+        trace = float(backend.world_size) * _replicated_all_reduce(local.real[rows, columns].sum().reshape(()), communicator=backend.communicator)
+        physical_errors.append(abs(float(trace.detach().cpu()) - 1.0))
+
+    # A direct DensityParam factor remains a paired-real finite-difference
+    # check.  It is intentionally local here: root/sharded ownership wiring is
+    # covered by the initial-state contract and no density is gathered.
+    factor_real = torch.tensor([[1.0, -0.2], [0.3, 0.5]], dtype=torch.float32, device=backend._device, requires_grad=True)
+    factor_imag = torch.tensor([[0.1, 0.4], [-0.2, 0.6]], dtype=torch.float32, device=backend._device, requires_grad=True)
+    factor = DensityParam(factor_real, factor_imag).density_pair()
+    factor_value = factor.real[0, 0] - factor.real[1, 1]
+    factor_value.backward()
+    epsilon = 1e-4
+    def _factor_oracle(entry):
+        real = factor_real.detach().cpu().numpy().astype(np.float64).copy(); real[0, 0] = entry
+        imag = factor_imag.detach().cpu().numpy().astype(np.float64); value = real + 1j * imag
+        rho = value @ value.conj().T; rho /= np.trace(rho)
+        return float((rho[0, 0] - rho[1, 1]).real)
+    factor_error = abs(float(factor_real.grad[0, 0].detach().cpu()) - (_factor_oracle(float(factor_real.detach()[0, 0]) + epsilon) - _factor_oracle(float(factor_real.detach()[0, 0]) - epsilon)) / (2 * epsilon))
+    maximum = max((*value_errors, *gradient_errors, *physical_errors, factor_error), default=0.0)
+    passed = maximum <= 1e-4
+    return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(range(layout.distributed_axes)), "value_error": max(value_errors, default=0.0), "gradient_error": max(gradient_errors, default=0.0), "trace_error": max(physical_errors, default=0.0), "density_factor_finite_difference_error": factor_error, "max_abs_error": maximum}
+
+
 def _contract_section(backend):
     """Check the private initial-state contracts without exposing ``run`` autograd."""
 
@@ -925,6 +998,7 @@ def _run_probe(selected: str, output_json: Path) -> bool:
             runner={
                 "environment": _environment_section,
                 "statevector": _statevector_section,
+                "density": _density_section,
                 "gates": _gates_section,
                 "probability": _probability_section,
                 "observable": _observable_section,

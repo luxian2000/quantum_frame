@@ -125,11 +125,23 @@ class _MatrixKernel:
     def apply_left(self, state: DistState, plan):
         if state.kind != "matrix":
             raise TypeError("_MatrixKernel 仅接受 matrix DistState")
+        if getattr(state, "_pair", None) is not None:
+            from .autograd._density import _PairMatrixKernel
+
+            return _PairMatrixKernel(self._backend).apply_left(
+                state, plan, operation_index=plan.instruction_index
+            )
         return self._apply_left(state, plan)
 
     def apply_unitary(self, state: DistState, plan) -> DistState:
         if state.kind != "matrix":
             raise TypeError("_MatrixKernel 仅接受 matrix DistState")
+        if getattr(state, "_pair", None) is not None:
+            from .autograd._density import _PairMatrixKernel
+
+            return _PairMatrixKernel(self._backend).apply_unitary(
+                state, plan, operation_index=plan.instruction_index
+            )
         left = self._apply_left(state, plan)
         columns_first = _contiguous(
             self._backend.transpose(left, (1, 0))
@@ -155,6 +167,10 @@ class _MatrixKernel:
     def promote_vector(self, state: DistState) -> DistState:
         if state.kind != "vector":
             return state
+        if getattr(state, "_pair", None) is not None:
+            from .autograd._density import _PairMatrixKernel
+
+            return _PairMatrixKernel(self._backend).promote_vector(state)
         shards = self._backend.communicator.all_gather(state.local_data)
         full = torch.cat(shards, dim=0)
         local_rows = state.local_data
