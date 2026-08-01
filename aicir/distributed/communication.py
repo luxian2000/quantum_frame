@@ -3,8 +3,44 @@
 from __future__ import annotations
 
 from collections import Counter
+import time
 
 import torch
+
+
+class _P2PWorkGroup:
+    """One logical P2P operation backed by its send and receive works."""
+
+    def __init__(self, communicator, works, *, on_complete=None):
+        self._communicator = communicator
+        self._works = tuple(works)
+        self._on_complete = on_complete
+        self._released = False
+
+    def is_completed(self) -> bool:
+        return all(bool(work.is_completed()) for work in self._works)
+
+    def wait(self) -> None:
+        started = time.perf_counter()
+        first_error = None
+        try:
+            for work in self._works:
+                try:
+                    work.wait()
+                except Exception as error:  # noqa: BLE001 - drain paired work first
+                    if first_error is None:
+                        first_error = error
+        finally:
+            if not self._released:
+                for work in self._works:
+                    self._communicator._release_work_handle(work)
+                self._released = True
+                self._communicator._p2p_wait_seconds += time.perf_counter() - started
+        if first_error is not None:
+            raise first_error
+        if self._on_complete is not None:
+            callback, self._on_complete = self._on_complete, None
+            callback()
 
 
 class _Communicator:
@@ -28,6 +64,19 @@ class _Communicator:
         self._dist = torch.distributed if dist_module is None else dist_module
         self._communication_records = []
         self._work_handles = []
+        self._p2p_wait_seconds = 0.0
+        # The public forward-only simulator does not consult this setting.
+        # Native-autograd callers opt in through the private primitive only.
+        self._autograd_communication_mode = "baseline"
+
+    @property
+    def autograd_communication_mode(self) -> str:
+        return self._autograd_communication_mode
+
+    def set_autograd_communication_mode(self, mode: str) -> None:
+        if mode not in {"baseline", "reuse", "overlap"}:
+            raise ValueError("通信模式必须是 baseline、reuse 或 overlap")
+        self._autograd_communication_mode = mode
 
     @property
     def communication_records(self):
@@ -51,10 +100,12 @@ class _Communicator:
             "peer": dict(Counter(record["peer"] for record in records)),
             "tag": dict(Counter(record["tag"] for record in records)),
             "bytes": sum(record["bytes"] for record in records),
+            "p2p_wait_ms": self._p2p_wait_seconds * 1000.0,
         }
 
     def clear_communication_records(self) -> None:
         self._communication_records.clear()
+        self._p2p_wait_seconds = 0.0
 
     def register_work_handle(self, work) -> None:
         """Register an asynchronous transport handle until its owner releases it.
@@ -114,14 +165,23 @@ class _Communicator:
                 "world_size > 1 时必须先初始化 torch.distributed process group"
             )
 
-    def _exchange_tensor(self, tensor, peer: int, tag: int):
+    def _exchange_tensor_async(self, tensor, peer: int, tag: int, *, receive=None):
         self._require_process_group()
         # P2P receives require a contiguous destination on Gloo/HCCL.  Keep
         # contiguity at this transport boundary instead of forcing every
         # density-kernel output to materialize a full local copy.
-        receive = torch.empty(
-            tuple(tensor.shape), dtype=tensor.dtype, device=tensor.device
-        )
+        if receive is None:
+            receive = torch.empty(
+                tuple(tensor.shape), dtype=tensor.dtype, device=tensor.device
+            )
+        elif (
+            not isinstance(receive, torch.Tensor)
+            or receive.dtype != tensor.dtype
+            or receive.device != tensor.device
+            or tuple(receive.shape) != tuple(tensor.shape)
+            or not receive.is_contiguous()
+        ):
+            raise ValueError("P2P receive buffer 必须与发送张量同 shape、dtype、device 且连续")
         send = tensor.contiguous()
         operations = [
             self._dist.P2POp(
@@ -139,12 +199,14 @@ class _Communicator:
                 tag=int(tag),
             ),
         ]
-        for work in self._dist.batch_isend_irecv(operations):
+        works = self._dist.batch_isend_irecv(operations)
+        for work in works:
             self.register_work_handle(work)
-            try:
-                work.wait()
-            finally:
-                self._release_work_handle(work)
+        return receive, _P2PWorkGroup(self, works)
+
+    def _exchange_tensor(self, tensor, peer: int, tag: int):
+        receive, work = self._exchange_tensor_async(tensor, peer, tag)
+        work.wait()
         return receive
 
     def exchange(self, tensor, *, peer: int, tag: int):
@@ -184,6 +246,37 @@ class _Communicator:
             copies=2,
         )
         return result
+
+    def exchange_real_async(self, tensor, *, peer: int, tag: int, receive=None):
+        """Launch a real float32 P2P exchange into an optional reusable buffer.
+
+        The returned work owns both underlying send and receive handles.  Its
+        ``wait`` method releases them only after both have completed, which is
+        essential when a paired-real buffer is eligible for reuse.
+        """
+
+        self._require_real_float32(tensor)
+        peer = int(peer)
+        if not 0 <= peer < self.world_size or peer == self.rank:
+            raise ValueError(
+                f"peer={peer} 必须是有效且非本 rank 的通信对端"
+            )
+        if receive is not None:
+            self._require_real_float32(receive)
+        result, work = self._exchange_tensor_async(
+            tensor,
+            peer,
+            int(tag),
+            receive=receive,
+        )
+        work._on_complete = lambda: self._record_real_transport(
+            tensor,
+            kind="exchange",
+            peer=peer,
+            tag=tag,
+            copies=2,
+        )
+        return result, work
 
     def all_reduce_sum(self, tensor):
         if self.world_size == 1:

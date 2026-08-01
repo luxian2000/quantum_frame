@@ -15,6 +15,7 @@ import math
 import os
 from pathlib import Path
 import sys
+import time
 
 import torch
 import numpy as np
@@ -28,6 +29,7 @@ from aicir.distributed import (
     DistState,
     DensityParam,
     PureStateParam,
+    finite_difference_gradient,
     parameter_shift_gradient,
 )
 from aicir.distributed._contracts import AUTOGRAD_ERROR
@@ -273,6 +275,129 @@ def _communication_section(backend: DistNPUBackend) -> dict[str, object]:
         "backward_tags": backward_tags,
         "transport_bytes": sum(record["bytes"] for record in records),
         "all_handles_complete": True,
+    }
+
+
+def _synchronize_npu(backend) -> None:
+    """Make one timing interval device-complete without a CPU fallback."""
+
+    torch.npu.synchronize(backend._device)
+
+
+def _performance_exchange_case(backend, mode: str, *, warmups=5, runs=10):
+    """Measure an actual paired-real forward/backward exchange mode."""
+
+    communicator = backend.communicator
+    communicator.set_autograd_communication_mode(mode)
+    if hasattr(communicator, "_autograd_pair_buffer_pool"):
+        del communicator._autograd_pair_buffer_pool
+
+    def one_iteration():
+        real = torch.tensor(
+            [float(backend.rank + 1)],
+            dtype=torch.float32,
+            device=backend._device,
+            requires_grad=True,
+        )
+        imag = torch.tensor(
+            [-float(backend.rank + 1)],
+            dtype=torch.float32,
+            device=backend._device,
+            requires_grad=True,
+        )
+        _synchronize_npu(backend)
+        started = time.perf_counter()
+        exchanged = _exchange_pair(
+            _Pair(real, imag),
+            communicator=communicator,
+            peer=backend.rank ^ 1,
+            operation_index=101,
+            phase="forward",
+        )
+        _synchronize_npu(backend)
+        forward_ms = (time.perf_counter() - started) * 1000.0
+        started = time.perf_counter()
+        exchanged.abs_sq().sum().backward()
+        _synchronize_npu(backend)
+        backward_ms = (time.perf_counter() - started) * 1000.0
+        expected = 2.0 * torch.cat((real.detach(), imag.detach()))
+        actual = torch.cat((real.grad, imag.grad))
+        error = float(torch.max(torch.abs(actual - expected)).detach().cpu())
+        return forward_ms, backward_ms, error
+
+    for _ in range(warmups):
+        one_iteration()
+    communicator.clear_communication_records()
+    pool = getattr(communicator, "_autograd_pair_buffer_pool", None)
+    if pool is not None:
+        pool.reuse_count = 0
+
+    samples = [one_iteration() for _ in range(runs)]
+    counters = communicator.communication_counters
+    return {
+        "forward_ms_median": float(np.median([sample[0] for sample in samples])),
+        "backward_ms_median": float(np.median([sample[1] for sample in samples])),
+        "gradient_ms_median": float(np.median([sample[0] + sample[1] for sample in samples])),
+        "gradient_ms_p95": float(np.percentile([sample[0] + sample[1] for sample in samples], 95)),
+        "p2p_bytes": int(counters["bytes"]),
+        "wait_ms": float(counters["p2p_wait_ms"]),
+        "buffer_reuse_count": int(getattr(pool, "reuse_count", 0)),
+        "gradient_max_abs_error": max(sample[2] for sample in samples),
+        "all_handles_complete": bool(communicator.work_handle_status["all_handles_complete"]),
+    }
+
+
+def _performance_gradient_oracles(backend):
+    """Compare native paired gradients against shift and finite difference."""
+
+    axis = 0
+    theta = torch.tensor(0.31, dtype=torch.float32, device=backend._device, requires_grad=True)
+    value, _, _ = _native_pair_value(backend, (theta,), axis)
+    value.backward()
+    native = float(theta.grad.detach().cpu())
+
+    def objective(point):
+        result, _, _ = _native_pair_value(
+            backend,
+            (torch.tensor(float(point[0]), dtype=torch.float32, device=backend._device),),
+            axis,
+        )
+        return float(result.detach().cpu())
+
+    point = np.array([0.31], dtype=np.float64)
+    shifted = float(parameter_shift_gradient(objective, point)[0])
+    finite = float(finite_difference_gradient(objective, point, epsilon=1e-3)[0])
+    return {
+        "native_vs_parameter_shift": abs(native - shifted),
+        "native_vs_finite_difference": abs(native - finite),
+    }
+
+
+def _performance_section(backend: DistNPUBackend) -> dict[str, object]:
+    """Report measured baseline/reuse/overlap P2P evidence on strict NPU."""
+
+    modes = {
+        mode: _performance_exchange_case(backend, mode)
+        for mode in ("baseline", "reuse", "overlap")
+    }
+    oracle_errors = _performance_gradient_oracles(backend)
+    backend.communicator.set_autograd_communication_mode("baseline")
+    passed = (
+        all(metrics["gradient_max_abs_error"] <= 1e-4 for metrics in modes.values())
+        and all(metrics["all_handles_complete"] for metrics in modes.values())
+        and all(value <= 1e-4 for value in oracle_errors.values())
+        and modes["baseline"]["buffer_reuse_count"] == 0
+        and modes["reuse"]["buffer_reuse_count"] > 0
+        and modes["overlap"]["buffer_reuse_count"] > 0
+    )
+    return {
+        "status": "PASS" if passed else "FAIL",
+        "passed": passed,
+        "warmups": 5,
+        "runs": 10,
+        "modes": modes,
+        "gradient_oracle_max_abs_error": oracle_errors,
+        "fallback_to_cpu": False,
     }
 
 
@@ -1407,6 +1532,7 @@ def _run_probe(selected: str, output_json: Path) -> bool:
                 "stinespring": _stinespring_section,
                 "communication": _communication_section,
                 "optimizer": _optimizer_section,
+                "performance": _performance_section,
                 "memory": _memory_section,
                 "contract": _contract_section,
             }.get(name),

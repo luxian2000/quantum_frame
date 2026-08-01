@@ -18,6 +18,85 @@ _DESCRIPTOR_WIDTH = 16
 _DESCRIPTOR_VALUE_START = 2
 
 
+class _AsyncPairExchange:
+    """Paired-real receive whose value is unavailable until both works finish."""
+
+    def __init__(self, pair: _Pair, real_work, imag_work):
+        self._pair = pair
+        self._real_work = real_work
+        self._imag_work = imag_work
+
+    def wait(self) -> _Pair:
+        try:
+            self._real_work.wait()
+        finally:
+            # A failed real component must not leave the imag component live.
+            self._imag_work.wait()
+        return self._pair
+
+
+class _PairBufferPool:
+    """Reusable paired-real buffers keyed by transport identity.
+
+    Pending buffers remain unavailable until both component work handles
+    report completion, preventing an in-flight receive from being overwritten.
+    """
+
+    def __init__(self):
+        self._available = {}
+        self._pending = []
+        self._checked_out = {}
+        self.reuse_count = 0
+
+    @staticmethod
+    def _key(shape, dtype, device, peer, phase):
+        return (tuple(shape), dtype, torch.device(device), int(peer), str(phase))
+
+    def _reap(self):
+        pending = []
+        for key, pair, real_work, imag_work in self._pending:
+            if bool(real_work.is_completed()) and bool(imag_work.is_completed()):
+                self._available.setdefault(key, []).append(pair)
+            else:
+                pending.append((key, pair, real_work, imag_work))
+        self._pending = pending
+
+    def acquire(self, shape, dtype, device, peer, phase) -> _Pair:
+        if dtype != torch.float32:
+            raise TypeError("paired buffer 必须使用 torch.float32")
+        self._reap()
+        key = self._key(shape, dtype, device, peer, phase)
+        available = self._available.get(key, [])
+        if available:
+            self.reuse_count += 1
+            pair = available.pop()
+            self._checked_out[id(pair)] = key
+            return pair
+        real = torch.empty(tuple(shape), dtype=dtype, device=device)
+        pair = _Pair(real, torch.empty_like(real))
+        self._checked_out[id(pair)] = key
+        return pair
+
+    def release(self, pair: _Pair, *, real_work=None, imag_work=None) -> None:
+        key = self._checked_out.pop(id(pair))
+        if real_work is not None or imag_work is not None:
+            if real_work is None or imag_work is None:
+                raise ValueError("paired buffer release 必须同时提供 real/imag work")
+            self._pending.append((key, pair, real_work, imag_work))
+        else:
+            self._available.setdefault(key, []).append(pair)
+
+
+def _pair_buffer_pool_for(communicator) -> _PairBufferPool:
+    """Return the communicator-owned pool without altering public routing."""
+
+    pool = getattr(communicator, "_autograd_pair_buffer_pool", None)
+    if pool is None:
+        pool = _PairBufferPool()
+        communicator._autograd_pair_buffer_pool = pool
+    return pool
+
+
 def _is_forward_phase(value) -> bool:
     """Reject non-string phase controls without invoking user equality hooks."""
 
@@ -172,21 +251,62 @@ class _PairExchangeFn(torch.autograd.Function):
         ctx.communicator = communicator
         ctx.peer = int(peer)
         ctx.operation_index = int(operation_index)
-        return (
-            communicator.exchange_real(
-                real,
-                peer=peer,
-                tag=_tag(operation_index, phase=_FORWARD_PHASE, direction=0, component=0),
-            ),
-            communicator.exchange_real(
-                imag,
-                peer=peer,
-                tag=_tag(operation_index, phase=_FORWARD_PHASE, direction=0, component=1),
-            ),
+        mode = getattr(communicator, "autograd_communication_mode", "baseline")
+        if mode == "baseline":
+            return (
+                communicator.exchange_real(
+                    real,
+                    peer=peer,
+                    tag=_tag(operation_index, phase=_FORWARD_PHASE, direction=0, component=0),
+                ),
+                communicator.exchange_real(
+                    imag,
+                    peer=peer,
+                    tag=_tag(operation_index, phase=_FORWARD_PHASE, direction=0, component=1),
+                ),
+            )
+        if mode not in {"reuse", "overlap"}:
+            raise ValueError("通信模式必须是 baseline、reuse 或 overlap")
+
+        # ``overlap`` launches both independent real components before the
+        # caller performs its next local paired-real kernel.  The custom
+        # autograd boundary waits before exposing either receive, so no
+        # consumer can observe an in-flight HCCL destination.
+        pool = _pair_buffer_pool_for(communicator)
+        buffer = pool.acquire(
+            real.shape,
+            torch.float32,
+            real.device,
+            peer,
+            _FORWARD_PHASE,
         )
+        received_real, real_work = communicator.exchange_real_async(
+            real,
+            peer=peer,
+            tag=_tag(operation_index, phase=_FORWARD_PHASE, direction=0, component=0),
+            receive=buffer.real,
+        )
+        received_imag, imag_work = communicator.exchange_real_async(
+            imag,
+            peer=peer,
+            tag=_tag(operation_index, phase=_FORWARD_PHASE, direction=0, component=1),
+            receive=buffer.imag,
+        )
+        received = _AsyncPairExchange(
+            buffer, real_work, imag_work
+        ).wait()
+        if received.real is not received_real or received.imag is not received_imag:
+            raise RuntimeError("paired P2P receive 未写入所申请的缓冲区")
+        ctx.forward_pool = pool
+        ctx.forward_buffer = received
+        return received.real, received.imag
 
     @staticmethod
     def backward(ctx, grad_real, grad_imag):
+        if hasattr(ctx, "forward_pool"):
+            # The forward values have already produced their VJP inputs, so
+            # returning this completed pair is safe before the next launch.
+            ctx.forward_pool.release(ctx.forward_buffer)
         grad_real = _zero_if_none(grad_real, grad_imag)
         grad_imag = _zero_if_none(grad_imag, grad_real)
         # Density right actions transpose paired buffers.  Their real VJPs can
