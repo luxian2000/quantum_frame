@@ -55,7 +55,31 @@ def _safe_probability(value) -> float | None:
     return value if math.isfinite(value) and 0.0 <= value <= 1.0 else None
 
 
-def _channel_metadata(channel, *, n_qubits: int) -> tuple[bool, int, tuple[object, ...]]:
+def _stinespring_pair_is_valid(real, imag, *, expected_shape, expected_device) -> bool:
+    """Validate raw paired-real leaves with real-only, bounded finiteness checks."""
+
+    try:
+        if not isinstance(real, torch.Tensor) or not isinstance(imag, torch.Tensor):
+            return False
+        if (
+            real.dtype != torch.float32
+            or imag.dtype != torch.float32
+            or torch.is_complex(real)
+            or torch.is_complex(imag)
+            or tuple(real.shape) != tuple(imag.shape)
+            or tuple(real.shape) != tuple(expected_shape)
+            or real.device != imag.device
+            or (expected_device is not None and real.device != torch.device(expected_device))
+        ):
+            return False
+        # This is a real float32 reduction; only one bounded scalar crosses the
+        # host boundary and it occurs before any data-plane P2P.
+        return bool(torch.isfinite(real).all().detach().cpu()) and bool(torch.isfinite(imag).all().detach().cpu())
+    except Exception:  # noqa: BLE001 - meta/hostile tensors become one collective failure
+        return False
+
+
+def _channel_metadata(channel, *, n_qubits: int, expected_device=None) -> tuple[bool, int, tuple[object, ...]]:
     """Return only primitive metadata; no channel planning happens here."""
 
     try:
@@ -82,8 +106,12 @@ def _channel_metadata(channel, *, n_qubits: int) -> tuple[bool, int, tuple[objec
                 channel.input_dim == channel.output_dim
                 and (1 << qubits) == channel.input_dim
                 and channel.environment_dim > 0
-                and tuple(channel.real.shape) == (dimension, dimension)
-                and tuple(channel.imag.shape) == (dimension, dimension)
+                and _stinespring_pair_is_valid(
+                    channel.real,
+                    channel.imag,
+                    expected_shape=(dimension, dimension),
+                    expected_device=expected_device,
+                )
                 and len(channel.target_qubits) == qubits
                 and len(set(channel.target_qubits)) == qubits
                 and all(isinstance(axis, Integral) and not isinstance(axis, bool) and 0 <= int(axis) < n_qubits for axis in channel.target_qubits)
@@ -111,7 +139,11 @@ def _preflight_channel(channel, *, n_qubits: int, communicator) -> bool:
 
     try:
         valid_n_qubits = isinstance(n_qubits, Integral) and not isinstance(n_qubits, bool) and int(n_qubits) > 0
-        valid, code, metadata = _channel_metadata(channel, n_qubits=int(n_qubits) if valid_n_qubits else 0)
+        valid, code, metadata = _channel_metadata(
+            channel,
+            n_qubits=int(n_qubits) if valid_n_qubits else 0,
+            expected_device=None if communicator is None else communicator.device,
+        )
     except Exception:  # noqa: BLE001 - hostile n_qubits is a collective error
         valid_n_qubits, valid, code, metadata = False, False, 1, ()
     valid = bool(valid_n_qubits and valid)

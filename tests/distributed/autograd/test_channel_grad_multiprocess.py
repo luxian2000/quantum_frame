@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import socket
@@ -17,6 +18,7 @@ from aicir.distributed import DistNPUBackend
 from aicir.distributed.autograd._density import _PairMatrixKernel
 from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.autograd._parameters import StinespringParam
+from aicir.distributed.autograd._channels import _stinespring_kraus
 from aicir.distributed.autograd._reducers import _PairReducer
 from aicir.distributed.layout import _Layout, _ShardSpec
 from aicir.distributed.state import DistState
@@ -128,6 +130,20 @@ def _channel_failure_worker(rank, world_size, port, output_path, case):
             object.__setattr__(channel, "real", torch.ones((2, 2), dtype=torch.float32))
         if case == "invalid_dimension" and rank == 0:
             object.__setattr__(channel, "input_dim", 3)
+        if case == "float64" and rank == 0:
+            object.__setattr__(channel, "real", torch.ones((4, 4), dtype=torch.float64))
+        if case == "complex" and rank == 0:
+            object.__setattr__(channel, "real", torch.ones((4, 4), dtype=torch.complex64))
+        if case == "device_mismatch" and rank == 0:
+            object.__setattr__(channel, "imag", torch.empty((4, 4), dtype=torch.float32, device="meta"))
+        if case == "nan" and rank == 0:
+            object.__setattr__(channel, "real", torch.full((4, 4), float("nan"), dtype=torch.float32))
+        if case == "inf" and rank == 0:
+            object.__setattr__(channel, "imag", torch.full((4, 4), float("inf"), dtype=torch.float32))
+        if case == "non_tensor" and rank == 0:
+            object.__setattr__(channel, "real", "hostile")
+        if case == "pair_shape_mismatch" and rank == 0:
+            object.__setattr__(channel, "imag", torch.ones((2, 8), dtype=torch.float32))
     backend.communicator.clear_communication_records()
     try:
         _PairMatrixKernel(backend).apply_channel(state, channel, instruction_index=123)
@@ -143,7 +159,7 @@ def _channel_failure_worker(rank, world_size, port, output_path, case):
     torch.distributed.destroy_process_group()
 
 
-@pytest.mark.parametrize("case", ("invalid_probability", "invalid_target", "invalid_shape", "invalid_dimension", "divergent_probability", "divergent_target"))
+@pytest.mark.parametrize("case", ("invalid_probability", "invalid_target", "invalid_shape", "invalid_dimension", "float64", "complex", "device_mismatch", "nan", "inf", "non_tensor", "pair_shape_mismatch", "divergent_probability", "divergent_target"))
 def test_channel_preflight_synchronizes_invalid_or_divergent_metadata_before_p2p(case, tmp_path):
     output = tmp_path / f"channel-preflight-{case}.json"
     mp.spawn(_channel_failure_worker, args=(2, _free_port(), str(output), case), nprocs=2, join=True)
@@ -274,13 +290,29 @@ def _stinespring_reference_worker(rank, world_size, port, output_path):
     base_real = np.array([[0.2, -0.4, 0.1, 0.3], [0.5, 0.7, -0.2, 0.6], [-0.1, 0.2, 0.8, -0.3], [0.4, -0.5, 0.9, 0.1]], dtype=np.float64)
     base_imag = np.array([[0.1, 0.3, -0.6, 0.2], [-0.7, 0.4, 0.5, -0.1], [0.6, -0.2, 0.3, 0.8], [0.2, 0.1, -0.4, 0.7]], dtype=np.float64)
     axes = tuple(logical for logical, storage in enumerate(layout.logical_to_storage) if storage < distributed_axes)
-    errors, physical, transport = [], [], []
+    errors, physical, transport, completeness_errors, fingerprint_agreement = [], [], [], [], []
     for logical_axis in axes:
         raw_real = torch.tensor(base_real, dtype=torch.float32, requires_grad=True)
         raw_imag = torch.tensor(base_imag, dtype=torch.float32, requires_grad=True)
+        parameter = StinespringParam(2, 2, 2, raw_real, raw_imag, target_qubits=(logical_axis,))
+        kraus = _stinespring_kraus(parameter)
+        completeness_real = torch.zeros((2, 2), dtype=torch.float32)
+        completeness_imag = torch.zeros((2, 2), dtype=torch.float32)
+        fingerprint_bytes = bytearray()
+        for block_index, matrix in enumerate(kraus):
+            product = matrix.dagger().matmul(matrix)
+            completeness_real += product.real.detach()
+            completeness_imag += product.imag.detach()
+            fingerprint_bytes.extend(block_index.to_bytes(2, byteorder="big"))
+            fingerprint_bytes.extend(matrix.real.detach().cpu().numpy().tobytes())
+            fingerprint_bytes.extend(matrix.imag.detach().cpu().numpy().tobytes())
+        completeness_error = max(float((completeness_real - torch.eye(2)).abs().max()), float(completeness_imag.abs().max()))
+        fingerprint = int.from_bytes(hashlib.sha256(bytes(fingerprint_bytes)).digest()[:3], byteorder="big")
+        gathered_completeness = backend.communicator.all_gather_real(torch.tensor([completeness_error], dtype=torch.float32))
+        gathered_fingerprints = backend.communicator.all_gather_real(torch.tensor([fingerprint], dtype=torch.float32))
         state = DistState.from_pair(_Pair(torch.tensor(local.real, dtype=torch.float32, requires_grad=True), torch.tensor(local.imag, dtype=torch.float32, requires_grad=True)), spec=vector_spec, backend=backend)
         backend.communicator.clear_communication_records()
-        evolved = _PairMatrixKernel(backend).apply_channel(state, StinespringParam(2, 2, 2, raw_real, raw_imag, target_qubits=(logical_axis,)), instruction_index=900 + logical_axis)
+        evolved = _PairMatrixKernel(backend).apply_channel(state, parameter, instruction_index=900 + logical_axis)
         labels = ["I"] * n_qubits; labels[logical_axis] = "Z"
         value = _PairReducer(backend).expectation(evolved._pair, matrix_spec, PauliString("".join(labels), n_qubits=n_qubits))
         value.backward()
@@ -295,8 +327,11 @@ def _stinespring_reference_worker(rank, world_size, port, output_path):
         physical.extend((float(np.max(np.abs(actual - actual.conj().T))), max(0.0, -float(np.linalg.eigvalsh(actual).min())), abs(float(np.trace(actual).real) - 1.0)))
         records = [record for record in backend.communicator.communication_records if record["kind"] == "exchange"]
         transport.append({0, 1, 4, 5}.issubset({record["tag"] % 8 for record in records}) and all(record["dtype"] == "torch.float32" and record["bytes"] > 0 for record in records))
+        completeness_errors.extend(float(item.detach()) for item in gathered_completeness)
+        fingerprints = [int(item.detach()) for item in gathered_fingerprints]
+        fingerprint_agreement.append(len(set(fingerprints)) == 1 and len(kraus) == 2)
     if rank == 0:
-        Path(output_path).write_text(json.dumps({"axes": sorted(layout.logical_to_storage[axis] for axis in axes), "max_error": max(errors), "physical_error": max(physical), "transport": all(transport)}))
+        Path(output_path).write_text(json.dumps({"axes": sorted(layout.logical_to_storage[axis] for axis in axes), "max_error": max(errors), "physical_error": max(physical), "completeness_error": max(completeness_errors), "fingerprint_agreement": all(fingerprint_agreement), "transport": all(transport)}))
     torch.distributed.destroy_process_group()
 
 
@@ -308,4 +343,6 @@ def test_stinespring_nonzero_targets_match_float64_raw_gradients_on_every_distri
     assert result["axes"] == list(range(int(np.log2(world_size))))
     assert result["max_error"] <= 1e-4
     assert result["physical_error"] <= 1e-5
+    assert result["completeness_error"] <= 1e-5
+    assert result["fingerprint_agreement"]
     assert result["transport"]
