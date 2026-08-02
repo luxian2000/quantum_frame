@@ -930,7 +930,9 @@ class DistSimulator:
             unsupported = next(
                 (
                     name
-                    for name, observable in observables.items()
+                    for name, observable in sorted(
+                        observables.items(), key=lambda item: str(item[0])
+                    )
                     if not isinstance(observable, (Hamiltonian, PauliString, Observable))
                 ),
                 None,

@@ -590,3 +590,90 @@ def test_trainable_capability_failures_happen_before_planning_or_transport(
     result = json.loads(output.read_text(encoding="utf-8"))
     assert result["payload"] == expected
     assert result["records"] == [[0, 0, 0], [0, 0, 0]]
+
+
+def _two_rank_reversed_unsupported_observables_worker(
+    rank, world_size, port, output_path
+):
+    """Capability rejection must not depend on each rank's mapping insertion order."""
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        WORLD_SIZE=str(world_size),
+        RANK=str(rank),
+        LOCAL_RANK=str(rank),
+    )
+    backend = DistNPUBackend.from_env(
+        fallback_to_cpu=True, process_group_backend="gloo"
+    )
+    original_plan = _GatePlanner.plan
+    original_scatter = backend.communicator.scatter_from_root
+    original_real_scatter = backend.communicator.scatter_from_root_real
+    evidence = {"plans": 0, "scatters": 0}
+
+    def record_plan(self, gate, instruction_index):
+        evidence["plans"] += 1
+        return original_plan(self, gate, instruction_index)
+
+    def record_scatter(*args, **kwargs):
+        evidence["scatters"] += 1
+        return original_scatter(*args, **kwargs)
+
+    def record_real_scatter(*args, **kwargs):
+        evidence["scatters"] += 1
+        return original_real_scatter(*args, **kwargs)
+
+    _GatePlanner.plan = record_plan
+    backend.communicator.scatter_from_root = record_scatter
+    backend.communicator.scatter_from_root_real = record_real_scatter
+    try:
+        theta = torch.tensor(0.31, dtype=torch.float32, requires_grad=True)
+        entries = [("second", object()), ("first", object())]
+        observables = dict(entries if rank == 0 else reversed(entries))
+        try:
+            DistSimulator(backend).run(
+                Circuit(ry(theta, 0), n_qubits=2), observables=observables
+            )
+        except Exception as error:  # noqa: BLE001 - exact public contract
+            payload = f"{type(error).__name__}:{error}"
+        else:
+            payload = "NO_ERROR"
+        snapshots = [None for _ in range(world_size)]
+        torch.distributed.all_gather_object(
+            snapshots,
+            {
+                "payload": payload,
+                "digest": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+                "plans": evidence["plans"],
+                "scatters": evidence["scatters"],
+                "records": len(backend.communicator.communication_records),
+            },
+        )
+        if rank == 0:
+            Path(output_path).write_text(json.dumps(snapshots), encoding="utf-8")
+    finally:
+        _GatePlanner.plan = original_plan
+        backend.communicator.scatter_from_root = original_scatter
+        backend.communicator.scatter_from_root_real = original_real_scatter
+        torch.distributed.destroy_process_group()
+
+
+def test_unsupported_observable_rejection_is_rank_deterministic_before_transport(tmp_path):
+    output = tmp_path / "reversed-unsupported-observables.json"
+    mp.spawn(
+        _two_rank_reversed_unsupported_observables_worker,
+        args=(2, _free_port(), str(output)),
+        nprocs=2,
+        join=True,
+    )
+    result = json.loads(output.read_text(encoding="utf-8"))
+
+    assert [item["payload"] for item in result] == [
+        "TypeError:自动微分模式不支持 observable 'first'"
+    ] * 2
+    assert len({item["digest"] for item in result}) == 1
+    assert all(
+        item["plans"] == item["scatters"] == item["records"] == 0
+        for item in result
+    )
