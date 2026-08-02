@@ -22,6 +22,7 @@ from aicir.distributed import (
     PureStateParam,
 )
 from aicir.distributed.autograd._pair import _Pair
+from aicir.distributed.gates import _GatePlanner
 from aicir.distributed.layout import _Layout, _ShardSpec
 from aicir.noise import DepolarizingChannel, NoiseModel
 
@@ -459,3 +460,133 @@ def test_one_rank_invalid_preflight_is_exact_and_collective_safe(
     )
     result = json.loads(output.read_text(encoding="utf-8"))
     assert result == {"payload": expected, "unique": 1}
+
+
+def _two_rank_capability_before_planning_worker(
+    rank, world_size, port, output_path, case
+):
+    """Record all data-plane entry points before the expected rejection."""
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        WORLD_SIZE=str(world_size),
+        RANK=str(rank),
+        LOCAL_RANK=str(rank),
+    )
+    backend = DistNPUBackend.from_env(
+        fallback_to_cpu=True, process_group_backend="gloo"
+    )
+    original_plan = _GatePlanner.plan
+    original_scatter = backend.communicator.scatter_from_root
+    original_real_scatter = backend.communicator.scatter_from_root_real
+    evidence = {"plans": 0, "scatters": 0}
+
+    def record_plan(self, gate, instruction_index):
+        evidence["plans"] += 1
+        return original_plan(self, gate, instruction_index)
+
+    def record_scatter(*args, **kwargs):
+        evidence["scatters"] += 1
+        return original_scatter(*args, **kwargs)
+
+    def record_real_scatter(*args, **kwargs):
+        evidence["scatters"] += 1
+        return original_real_scatter(*args, **kwargs)
+
+    _GatePlanner.plan = record_plan
+    backend.communicator.scatter_from_root = record_scatter
+    backend.communicator.scatter_from_root_real = record_real_scatter
+    try:
+        theta = torch.tensor(0.31, dtype=torch.float32, requires_grad=True)
+        circuit = Circuit(ry(theta, 0), n_qubits=2)
+        kwargs = {}
+        if case == "frozen_complex_initial_state":
+            kwargs["initial_state"] = (
+                torch.tensor(
+                    [1.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j],
+                    dtype=torch.complex64,
+                )
+                if rank == 0
+                else None
+            )
+        elif case == "unsupported_gate":
+            circuit = Circuit(
+                {"type": "unsupported", "target_qubit": 0, "parameter": theta},
+                n_qubits=2,
+            )
+        elif case == "unsupported_channel":
+            circuit.noise_model = NoiseModel().add_channel(
+                object(), after_gates=("ry",)
+            )
+        elif case == "unsupported_observable":
+            kwargs["observables"] = {"bad": object()}
+        else:
+            raise AssertionError(f"unknown preflight case: {case}")
+
+        try:
+            DistSimulator(backend).run(circuit, **kwargs)
+        except Exception as error:  # noqa: BLE001 - exact public contract
+            payload = f"{type(error).__name__}:{error}"
+        else:
+            payload = "NO_ERROR"
+        snapshot = torch.tensor(
+            [evidence["plans"], evidence["scatters"], len(backend.communicator.communication_records)],
+            dtype=torch.int64,
+            device=backend._device,
+        )
+        gathered = [torch.empty_like(snapshot) for _ in range(world_size)]
+        torch.distributed.all_gather(gathered, snapshot)
+        if rank == 0:
+            Path(output_path).write_text(
+                json.dumps(
+                    {
+                        "payload": payload,
+                        "records": [item.detach().cpu().tolist() for item in gathered],
+                    }
+                ),
+                encoding="utf-8",
+            )
+    finally:
+        _GatePlanner.plan = original_plan
+        backend.communicator.scatter_from_root = original_scatter
+        backend.communicator.scatter_from_root_real = original_real_scatter
+        torch.distributed.destroy_process_group()
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    (
+        (
+            "frozen_complex_initial_state",
+            "TypeError:自动微分模式的初态必须是 PureStateParam、DensityParam 或 paired-real DistState",
+        ),
+        (
+            "unsupported_gate",
+            "ValueError:指令 'unsupported' 没有可用于分布式执行的局部门矩阵",
+        ),
+        (
+            "unsupported_channel",
+            "TypeError:自动微分模式不支持噪声通道 object",
+        ),
+        (
+            "unsupported_observable",
+            "TypeError:自动微分模式不支持 observable 'bad'",
+        ),
+    ),
+)
+def test_trainable_capability_failures_happen_before_planning_or_transport(
+    tmp_path, case, expected
+):
+    """Invalid native requests must never enter planner or state transport."""
+
+    output = tmp_path / f"{case}.json"
+    mp.spawn(
+        _two_rank_capability_before_planning_worker,
+        args=(2, _free_port(), str(output), case),
+        nprocs=2,
+        join=True,
+    )
+    result = json.loads(output.read_text(encoding="utf-8"))
+    assert result["payload"] == expected
+    assert result["records"] == [[0, 0, 0], [0, 0, 0]]

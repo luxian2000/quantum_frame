@@ -12,8 +12,11 @@ from typing import Literal
 import numpy as np
 import torch
 
+from ..core.gates import _gate_local_matrix
 from ..core.state import State
+from ..gates import canonical_gate_name
 from ..ir import (
+    as_instruction,
     circuit_instructions,
     instruction_name,
     instruction_params,
@@ -51,7 +54,12 @@ from .autograd._reducers import _PairReducer
 from .autograd._vector import _PairVectorKernel
 from .backend import DistNPUBackend
 from .density import _MatrixKernel
-from .gates import _AutogradExecutionContext, _GatePlanner, _VectorKernel
+from .gates import (
+    _AutogradExecutionContext,
+    _GatePlanner,
+    _VectorKernel,
+    _trainable_pair_matrix,
+)
 from .layout import _Layout, _ShardSpec
 from .reducers import _Reducer
 from .result import DistResult
@@ -889,7 +897,7 @@ class DistSimulator:
         shots,
         collapse,
     ) -> None:
-        """Reject unsupported gradient requests before state transport."""
+        """Reject unsupported gradient requests before planning or transport."""
 
         if collapse:
             raise ValueError(AUTOGRAD_COLLAPSE_ERROR)
@@ -911,6 +919,10 @@ class DistSimulator:
             and root_value.requires_grad
         ):
             self._raise_root_initial_error(None)
+        self._preflight_autograd_initial_state_type(
+            initial_state=initial_state,
+            initial_density_matrix=initial_density_matrix,
+        )
         if observables is not None:
             from ..core.operators import Hamiltonian, PauliString
             from ..ir import Observable
@@ -950,6 +962,70 @@ class DistSimulator:
                         "自动微分模式不支持噪声通道 "
                         f"{type(rule.channel).__name__}"
                     )
+        self._preflight_autograd_gates(circuit)
+
+    def _preflight_autograd_initial_state_type(
+        self,
+        *,
+        initial_state,
+        initial_density_matrix,
+    ) -> None:
+        """Validate the paired-real initial representation before preparation.
+
+        Ownership and shape are already agreed collectively by
+        :meth:`_collective_initial_schema_preflight`.  This route-only check
+        prevents a frozen complex root state from entering legacy scatter
+        merely because a circuit gate is trainable.
+        """
+
+        modes = self._initial_modes(initial_state, initial_density_matrix)
+        if all(mode == 0 for mode in modes):
+            return
+        error = None
+        try:
+            if modes[0] in {1, 2} and all(mode == 0 for mode in modes[1:]):
+                if self._backend.rank == 0:
+                    value = (
+                        initial_state if modes[0] == 1 else initial_density_matrix
+                    )
+                    expected = PureStateParam if modes[0] == 1 else DensityParam
+                    if not isinstance(value, expected):
+                        raise TypeError(
+                            "自动微分模式的初态必须是 PureStateParam、DensityParam "
+                            "或 paired-real DistState"
+                        )
+            elif all(mode == 3 for mode in modes) or all(
+                mode == 4 for mode in modes
+            ):
+                value = initial_state if modes[0] == 3 else initial_density_matrix
+                if getattr(value, "_pair", None) is None:
+                    raise TypeError(
+                        "自动微分模式的初态必须是 PureStateParam、DensityParam "
+                        "或 paired-real DistState"
+                    )
+        except Exception as caught:  # noqa: BLE001 - synchronized exact error
+            error = caught
+        self._collective_preflight_error(error)
+
+    def _preflight_autograd_gates(self, circuit) -> None:
+        """Reject gates without a distributed matrix without instantiating a planner."""
+
+        for instruction in circuit_instructions(circuit):
+            instruction = as_instruction(instruction)
+            gate_type = canonical_gate_name(instruction_name(instruction))
+            if gate_type == "unitary" or _trainable_pair_matrix(
+                instruction, gate_type
+            ) is not None:
+                continue
+            local, logical_axes, _cache_key = _gate_local_matrix(
+                instruction,
+                gate_type,
+                self._backend,
+            )
+            if local is None or logical_axes is None:
+                raise ValueError(
+                    f"指令 {gate_type!r} 没有可用于分布式执行的局部门矩阵"
+                )
 
     def _assert_forward_only(
         self,
@@ -1786,7 +1862,16 @@ class DistSimulator:
             initial_state,
             initial_density_matrix,
         )
-        if not autograd:
+        if autograd:
+            self._preflight_autograd_capabilities(
+                circuit=circuit,
+                initial_state=initial_state,
+                initial_density_matrix=initial_density_matrix,
+                observables=observables,
+                shots=shots,
+                collapse=collapse,
+            )
+        else:
             self._assert_forward_only(
                 circuit,
                 initial_state,
@@ -1822,14 +1907,6 @@ class DistSimulator:
         )
 
         if autograd:
-            self._preflight_autograd_capabilities(
-                circuit=circuit,
-                initial_state=initial_state,
-                initial_density_matrix=initial_density_matrix,
-                observables=observables,
-                shots=shots,
-                collapse=collapse,
-            )
             # The deterministic parameter schema has to agree before a
             # root-owned paired state could enter scatter transport.  The
             # execution hook binds the aliases later, after this control-only
