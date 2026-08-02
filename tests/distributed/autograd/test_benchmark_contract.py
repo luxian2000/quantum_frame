@@ -95,7 +95,6 @@ def test_shared_workload_dispatch_accepts_only_honest_path_method_pairs(path, me
     (
         ("density", "parameter_shift", 3),
         ("stinespring", "parameter_shift", 3),
-        ("statevector", "finite_difference", 3),
         ("statevector", "native", 1),
     ),
 )
@@ -109,6 +108,118 @@ def test_shared_workload_dispatch_rejects_unimplemented_or_non_sharded_combinati
             parameters=2,
             world_size=4,
         )
+
+
+@pytest.mark.parametrize(
+    ("path", "method", "expected_family"),
+    (
+        ("statevector", "parameter_shift", "gate_angle"),
+        ("statevector", "finite_difference", "raw_state"),
+        ("density", "finite_difference", "density_factor"),
+        ("noise", "finite_difference", "channel_logit"),
+        ("stinespring", "finite_difference", "stinespring_factor"),
+    ),
+)
+def test_benchmark_parameter_family_prevents_oracle_relabelling(path, method, expected_family):
+    assert probe._resolve_benchmark_parameter_family(path, method) == expected_family
+
+
+def test_raw_state_finite_difference_is_a_valid_distinct_statevector_workload():
+    probe._validate_benchmark_workload_config(
+        path="statevector",
+        gradient_method="finite_difference",
+        parameter_family="raw_state",
+        n_qubits=3,
+        depth=1,
+        parameters=1,
+        world_size=4,
+    )
+    with pytest.raises(ValueError, match="raw_state"):
+        probe._validate_benchmark_workload_config(
+            path="statevector",
+            gradient_method="finite_difference",
+            parameter_family="gate_angle",
+            n_qubits=3,
+            depth=1,
+            parameters=1,
+            world_size=4,
+        )
+
+
+def test_density_factor_workload_materializes_full_factor_only_on_root(monkeypatch):
+    layout = probe._Layout.explicit((0, 1), n_qubits=2, distributed_axes=1)
+    captures = []
+
+    def scatter(pair, **kwargs):
+        captures.append(pair)
+        return probe._Pair(pair.real[0], pair.imag[0]) if pair is not None else probe._Pair(
+            torch.zeros(kwargs["local_shape"], dtype=torch.float32),
+            torch.zeros(kwargs["local_shape"], dtype=torch.float32),
+        )
+
+    monkeypatch.setattr(probe, "_scatter_root_pair", scatter)
+    for rank in (0, 1):
+        backend = type("Backend", (), {
+            "rank": rank,
+            "world_size": 2,
+            "_device": torch.device("cpu"),
+            "communicator": object(),
+        })()
+        vector_spec = probe._ShardSpec.build(2, 2, rank, "vector", layout)
+        state = probe._benchmark_density_factor_state(
+            backend,
+            vector_spec,
+            (torch.tensor(0.19, dtype=torch.float32, requires_grad=rank == 0),),
+        )
+        assert state.local_shape == (2, 4)
+    assert captures[0] is not None
+    assert captures[0].real.shape == (2, 2, 4)
+    assert captures[1] is None
+
+
+def test_performance_records_every_native_oracle_pair_and_communication_mode(monkeypatch):
+    calls = []
+    backend = type("Backend", (), {
+        "world_size": 2,
+        "communicator": type("C", (), {"set_autograd_communication_mode": lambda self, mode: None})(),
+    })()
+
+    def run(_backend, **kwargs):
+        calls.append(kwargs)
+        return {
+            "parameter_family": probe._resolve_benchmark_parameter_family(
+                kwargs["path"], kwargs["gradient_method"], kwargs.get("parameter_family"),
+            ),
+            "state_max_abs_error": 0.0,
+            "gradient_max_abs_error": 0.0,
+            "p2p_bytes": 8,
+            "wait_ms": 0.0,
+            "buffer_reuse_count": 0 if kwargs["communication_mode"] == "baseline" else 1,
+            "all_handles_complete": True,
+            "fallback_to_cpu": False,
+        }
+
+    monkeypatch.setattr(probe, "run_benchmark_workload", run)
+    performance = probe._performance_section(backend)
+    expected_pairs = {
+        ("statevector", "gate_angle", "native"),
+        ("statevector", "gate_angle", "parameter_shift"),
+        ("statevector", "raw_state", "native"),
+        ("statevector", "raw_state", "finite_difference"),
+        ("density", "density_factor", "native"),
+        ("density", "density_factor", "finite_difference"),
+        ("noise", "channel_logit", "native"),
+        ("noise", "channel_logit", "finite_difference"),
+        ("stinespring", "stinespring_factor", "native"),
+        ("stinespring", "stinespring_factor", "finite_difference"),
+    }
+    assert {
+        (item["path"], item["parameter_family"], item["gradient_method"])
+        for item in calls
+    } == expected_pairs
+    assert {item["communication_mode"] for item in calls} == {"baseline", "reuse", "overlap"}
+    assert len(calls) == 3 * len(expected_pairs)
+    assert performance["passed"] is True
 
 
 def test_shared_workload_rejects_a_single_rank_non_p2p_benchmark():
@@ -276,19 +387,22 @@ def _shared_workload_worker(rank, world_size, port, output):
         # W2 and W4 execute every real path and every supported numerical
         # method, not merely the statevector schedule.  n_qubits grows with
         # the shard selector axes so each case includes cross-shard P2P.
-        for path, gradient_method in (
-            ("statevector", "parameter_shift"),
-            ("density", "native"),
-            ("density", "finite_difference"),
-            ("noise", "native"),
-            ("noise", "finite_difference"),
-            ("stinespring", "native"),
-            ("stinespring", "finite_difference"),
+        for path, parameter_family, gradient_method in (
+            ("statevector", "gate_angle", "parameter_shift"),
+            ("statevector", "raw_state", "native"),
+            ("statevector", "raw_state", "finite_difference"),
+            ("density", "density_factor", "native"),
+            ("density", "density_factor", "finite_difference"),
+            ("noise", "channel_logit", "native"),
+            ("noise", "channel_logit", "finite_difference"),
+            ("stinespring", "stinespring_factor", "native"),
+            ("stinespring", "stinespring_factor", "finite_difference"),
         ):
             oracle = probe.run_benchmark_workload(
                 backend,
                 communication_mode="baseline",
                 path=path,
+                parameter_family=parameter_family,
                 gradient_method=gradient_method,
                 n_qubits=int(world_size.bit_length()),
                 depth=1,
@@ -297,9 +411,10 @@ def _shared_workload_worker(rank, world_size, port, output):
                 runs=1,
             )
             assert oracle["state_max_abs_error"] <= 1e-6
-            assert oracle["gradient_max_abs_error"] <= 1e-4
+            assert oracle["gradient_max_abs_error"] <= 1e-4, (path, gradient_method, oracle)
             assert oracle["p2p_bytes"] > 0
             assert oracle["all_handles_complete"]
+            assert oracle["parameter_family"] == parameter_family
         if rank == 0:
             Path(output).write_text(json.dumps(metrics), encoding="utf-8")
     finally:

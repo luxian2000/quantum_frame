@@ -33,7 +33,7 @@ from aicir.distributed import (
     parameter_shift_gradient,
 )
 from aicir.distributed._contracts import AUTOGRAD_ERROR
-from aicir.distributed.autograd._collectives import _exchange_pair, _replicated_all_reduce
+from aicir.distributed.autograd._collectives import _exchange_pair, _replicated_all_reduce, _scatter_root_pair
 from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.autograd._parameters import _bucket_parameters
 from aicir.distributed.autograd._density import _PairMatrixKernel
@@ -285,17 +285,49 @@ def _synchronize_npu(backend) -> None:
 
 
 _BENCHMARK_PATH_METHODS = {
-    "statevector": {"native", "parameter_shift"},
-    # Every path has a native paired-real VJP.  Parameter shift is restricted
-    # to the independent RY gate leaves; FD is the independent oracle for raw
-    # density/Stinespring factors (and the selected analytic noise parameter).
+    # Statevector has two deliberately distinct workloads: independent RY
+    # gate angles for shift-rule checks, and paired-real raw amplitudes for
+    # native/finite-difference checks.
+    "statevector": {"native", "parameter_shift", "finite_difference"},
+    # Every path has a native paired-real VJP.  FD is the independent oracle
+    # for raw density/Stinespring factors and the explicitly named channel
+    # logit used by the noise workload.
     "density": {"native", "finite_difference"},
     "noise": {"native", "finite_difference"},
     "stinespring": {"native", "finite_difference"},
 }
 
 
-def _validate_benchmark_workload_config(*, path, gradient_method, n_qubits, depth, parameters, world_size):
+_BENCHMARK_PARAMETER_FAMILIES = {
+    ("statevector", "native"): {"gate_angle", "raw_state"},
+    ("statevector", "parameter_shift"): {"gate_angle"},
+    ("statevector", "finite_difference"): {"raw_state"},
+    ("density", "native"): {"density_factor"},
+    ("density", "finite_difference"): {"density_factor"},
+    ("noise", "native"): {"channel_logit"},
+    ("noise", "finite_difference"): {"channel_logit"},
+    ("stinespring", "native"): {"stinespring_factor"},
+    ("stinespring", "finite_difference"): {"stinespring_factor"},
+}
+
+
+def _resolve_benchmark_parameter_family(path, gradient_method, parameter_family=None) -> str:
+    """Resolve the physical leaf family without silently relabelling an oracle."""
+
+    allowed = _BENCHMARK_PARAMETER_FAMILIES.get((path, gradient_method))
+    if allowed is None:
+        raise ValueError(f"{gradient_method} is not implemented for {path} benchmark workload")
+    if parameter_family is None:
+        # Keep the existing statevector/native CLI behavior as a gate-angle
+        # workload.  Raw state native is selected explicitly by the probe.
+        return "gate_angle" if (path, gradient_method) == ("statevector", "native") else next(iter(allowed))
+    if parameter_family not in allowed:
+        names = ", ".join(sorted(allowed))
+        raise ValueError(f"{path}/{gradient_method} requires parameter_family in {{{names}}}")
+    return str(parameter_family)
+
+
+def _validate_benchmark_workload_config(*, path, gradient_method, n_qubits, depth, parameters, world_size, parameter_family=None):
     """Reject a configuration unless it has a real paired-real implementation.
 
     One extra local qubit is required in addition to the shard selector axes.
@@ -305,6 +337,7 @@ def _validate_benchmark_workload_config(*, path, gradient_method, n_qubits, dept
 
     if path not in _BENCHMARK_PATH_METHODS or gradient_method not in _BENCHMARK_PATH_METHODS[path]:
         raise ValueError(f"{gradient_method} is not implemented for {path} benchmark workload")
+    family = _resolve_benchmark_parameter_family(path, gradient_method, parameter_family)
     if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in (n_qubits, depth, parameters, world_size)):
         raise ValueError("benchmark n_qubits/depth/parameters/world_size must be positive integers")
     distributed_axes = int(math.log2(world_size))
@@ -314,6 +347,7 @@ def _validate_benchmark_workload_config(*, path, gradient_method, n_qubits, dept
         raise ValueError("benchmark requires a multi-rank P2P workload")
     if n_qubits < distributed_axes + 1:
         raise ValueError("benchmark needs one local qubit plus every distributed shard axis")
+    return family
 
 
 def _benchmark_layout_and_spec(backend, n_qubits):
@@ -333,11 +367,64 @@ def _benchmark_leaves(backend, parameters, *, requires_grad):
     )
 
 
-def _benchmark_unitary_workload(backend, *, path, values, n_qubits, depth):
+def _benchmark_raw_state_pair(backend, spec, values) -> _Pair:
+    """Build one globally normalized raw paired-real state from local factors."""
+
+    indices = torch.arange(spec.global_start, spec.global_stop, dtype=torch.float32, device=backend._device).reshape(-1, 1)
+    real = 0.31 + 0.07 * (indices + 1.0)
+    imag = -0.13 + 0.05 * (indices + 1.0)
+    for index, value in enumerate(values):
+        frequency = float(index + 1)
+        real = real + value * torch.sin(frequency * (indices + 1.0))
+        imag = imag + value * torch.cos(frequency * (indices + 1.0))
+    # PureStateParam is the public raw-amplitude container.  Its local
+    # normalization is intentionally not used here: a distributed initial
+    # state must have one global paired-real norm across all shards.
+    raw = PureStateParam(real, imag)._raw_pair()
+    local_norm_sq = raw.abs_sq().sum()
+    global_norm_sq = _replicated_all_reduce(local_norm_sq.reshape(()), communicator=backend.communicator) * backend.world_size
+    return raw.div_real(torch.sqrt(global_norm_sq))
+
+
+def _benchmark_density_factor_state(backend, vector_spec, values) -> DistState:
+    """Scatter one root-owned trace-one DensityParam factorization by row."""
+
+    dimension = 1 << vector_spec.n_qubits
+    matrix_spec = _ShardSpec.build(vector_spec.n_qubits, backend.world_size, backend.rank, "matrix", vector_spec.layout)
+    root_pair = None
+    if backend.rank == 0:
+        entries = torch.arange(dimension * dimension, dtype=torch.float32, device=backend._device).reshape(dimension, dimension)
+        real = 0.08 + entries / float(dimension * dimension + 3)
+        imag = -0.04 + (entries.remainder(dimension) / float(dimension + 5))
+        for index, value in enumerate(values):
+            real = real + value * torch.sin((index + 1.0) * (entries + 1.0))
+            imag = imag + value * torch.cos((index + 1.0) * (entries + 1.0))
+        density = DensityParam(real, imag).density_pair()
+        root_pair = _Pair(
+            density.real.reshape((backend.world_size,) + matrix_spec.local_shape),
+            density.imag.reshape((backend.world_size,) + matrix_spec.local_shape),
+        )
+    return DistState.from_pair(
+        _scatter_root_pair(
+            root_pair,
+            communicator=backend.communicator,
+            root=0,
+            local_shape=matrix_spec.local_shape,
+        ),
+        spec=matrix_spec,
+        backend=backend,
+    )
+
+
+def _benchmark_unitary_workload(backend, *, path, parameter_family, values, n_qubits, depth):
     """Run the genuine vector/density kernels; every depth and leaf is consumed."""
 
     layout, vector_spec = _benchmark_layout_and_spec(backend, n_qubits)
-    state_pair = _local_initial_pair(backend, vector_spec)
+    state_pair = (
+        _benchmark_raw_state_pair(backend, vector_spec, values)
+        if parameter_family == "raw_state"
+        else _local_initial_pair(backend, vector_spec)
+    )
     context = _AutogradExecutionContext()
     planner = _GatePlanner(backend, layout, n_qubits, execution_context=context)
     distributed_axes = layout.distributed_axes
@@ -346,7 +433,7 @@ def _benchmark_unitary_workload(backend, *, path, values, n_qubits, depth):
         apply = lambda current, plan, index: kernel.apply(current, plan, operation_index=index)
     else:
         kernel = _PairMatrixKernel(backend)
-        state = kernel.promote_vector(DistState.from_pair(state_pair, spec=vector_spec, backend=backend))
+        state = _benchmark_density_factor_state(backend, vector_spec, values)
         apply = lambda current, plan, index: kernel.apply_unitary(current, plan, operation_index=index)
     operation_index = 40_000
     # Fixed depth layers are deliberately non-trainable, so parameter-shift is
@@ -357,11 +444,12 @@ def _benchmark_unitary_workload(backend, *, path, values, n_qubits, depth):
         plan = planner.plan(ry(0.17 + 0.01 * layer, axis), operation_index)
         state = apply(state, plan, operation_index)
         operation_index += 1
-    for parameter_index, value in enumerate(values):
-        axis = parameter_index % distributed_axes
-        plan = planner.plan(ry(value, axis), operation_index)
-        state = apply(state, plan, operation_index)
-        operation_index += 1
+    if parameter_family == "gate_angle":
+        for parameter_index, value in enumerate(values):
+            axis = parameter_index % distributed_axes
+            plan = planner.plan(ry(value, axis), operation_index)
+            state = apply(state, plan, operation_index)
+            operation_index += 1
     if path == "statevector":
         return _PairReducer(backend).expectation(state, vector_spec, _benchmark_observable(n_qubits)), state, vector_spec
     matrix_spec = _ShardSpec.build(n_qubits, backend.world_size, backend.rank, "matrix", layout)
@@ -380,30 +468,35 @@ def _benchmark_channel_workload(backend, *, path, values, n_qubits, depth):
     # descriptor's bounded operation-index domain for every accepted config.
     operation_index = 1_000
 
-    def channel_for(value, axis, *, trainable):
+    def channel_for(value, axis, *, trainable, parameter_index=0):
         if path == "noise":
             probability = torch.sigmoid(value) if trainable else float(value)
             return DepolarizingChannel(axis, probability)
-        # Each scalar contributes to a genuine raw Stinespring matrix.  The
-        # private channel helper turns it into an isometry/Kraus collection.
-        raw = torch.stack(tuple(value * (0.05 + 0.01 * item) for item in range(16))).reshape(4, 4)
-        imag = torch.stack(tuple(value * (0.03 - 0.005 * item) for item in range(16))).reshape(4, 4)
+        # Each leaf perturbs one entry of a non-collinear raw Stinespring
+        # factor.  A global scale would be cancelled by Householder
+        # normalization and therefore is not a genuine FD workload.
+        entries = torch.arange(16, dtype=torch.float32, device=backend._device).reshape(4, 4)
+        raw = 0.11 + 0.03 * entries
+        imag = -0.07 + 0.02 * entries
+        selected = (entries == float(parameter_index % 16)).to(dtype=torch.float32)
+        raw = raw + value * selected
+        imag = imag + 0.37 * value * selected
         return StinespringParam(2, 2, 2, raw, imag, target_qubits=(axis,))
 
     fixed = torch.tensor(0.23, dtype=torch.float32, device=backend._device)
     for layer in range(depth):
-        state = kernel.apply_channel(state, channel_for(fixed, layer % distributed_axes, trainable=False), instruction_index=operation_index)
+        state = kernel.apply_channel(state, channel_for(fixed, layer % distributed_axes, trainable=False, parameter_index=layer), instruction_index=operation_index)
         operation_index += 1
     for parameter_index, value in enumerate(values):
-        state = kernel.apply_channel(state, channel_for(value, parameter_index % distributed_axes, trainable=True), instruction_index=operation_index)
+        state = kernel.apply_channel(state, channel_for(value, parameter_index % distributed_axes, trainable=True, parameter_index=parameter_index), instruction_index=operation_index)
         operation_index += 1
     matrix_spec = _ShardSpec.build(n_qubits, backend.world_size, backend.rank, "matrix", layout)
     return _PairReducer(backend).expectation(state._pair, matrix_spec, _benchmark_observable(n_qubits)), state._pair, matrix_spec
 
 
-def _benchmark_workload_value(backend, *, path, values, n_qubits, depth):
+def _benchmark_workload_value(backend, *, path, parameter_family, values, n_qubits, depth):
     if path in {"statevector", "density"}:
-        return _benchmark_unitary_workload(backend, path=path, values=values, n_qubits=n_qubits, depth=depth)
+        return _benchmark_unitary_workload(backend, path=path, parameter_family=parameter_family, values=values, n_qubits=n_qubits, depth=depth)
     return _benchmark_channel_workload(backend, path=path, values=values, n_qubits=n_qubits, depth=depth)
 
 
@@ -429,7 +522,7 @@ def _benchmark_state_error(backend, actual, reference):
     return float((total * backend.world_size).detach().cpu())
 
 
-def run_benchmark_workload(backend, *, communication_mode, path, gradient_method, n_qubits, depth, parameters, warmups=5, runs=30):
+def run_benchmark_workload(backend, *, communication_mode, path, gradient_method, n_qubits, depth, parameters, warmups=5, runs=30, parameter_family=None):
     """Measure one shared, real paired-real workload for CLI and probe.
 
     No field is decorative: depth creates fixed kernel operations, parameters
@@ -437,7 +530,7 @@ def run_benchmark_workload(backend, *, communication_mode, path, gradient_method
     state shape.  Numerical methods rerun this exact dispatcher.
     """
 
-    _validate_benchmark_workload_config(path=path, gradient_method=gradient_method, n_qubits=n_qubits, depth=depth, parameters=parameters, world_size=backend.world_size)
+    parameter_family = _validate_benchmark_workload_config(path=path, gradient_method=gradient_method, parameter_family=parameter_family, n_qubits=n_qubits, depth=depth, parameters=parameters, world_size=backend.world_size)
     if communication_mode not in {"baseline", "reuse", "overlap"}:
         raise ValueError("invalid paired-real communication mode")
     if warmups <= 0 or runs <= 0:
@@ -448,10 +541,20 @@ def run_benchmark_workload(backend, *, communication_mode, path, gradient_method
         del communicator._autograd_pair_buffer_pool
 
     def evaluate(values, *, requires_grad=False):
-        leaves = _benchmark_leaves(backend, parameters, requires_grad=requires_grad) if values is None else tuple(
-            torch.tensor(float(value), dtype=torch.float32, device=backend._device, requires_grad=requires_grad) for value in values
+        leaf_requires_grad = requires_grad and (parameter_family != "density_factor" or backend.rank == 0)
+        leaves = _benchmark_leaves(backend, parameters, requires_grad=leaf_requires_grad) if values is None else tuple(
+            torch.tensor(float(value), dtype=torch.float32, device=backend._device, requires_grad=leaf_requires_grad) for value in values
         )
-        value, state, spec = _benchmark_workload_value(backend, path=path, values=leaves, n_qubits=n_qubits, depth=depth)
+        # The globally normalized raw state needs its sharded physical
+        # contributions summed.  DensityParam uses a root-owned scatter whose
+        # VJP gathers directly to root; channel and gate VJPs already cross
+        # shard contributions and must not be bucketed again.
+        workload_values = (
+            _bucket_parameters(leaves, communicator=backend.communicator)
+            if requires_grad and parameter_family == "raw_state"
+            else leaves
+        )
+        value, state, spec = _benchmark_workload_value(backend, path=path, parameter_family=parameter_family, values=workload_values, n_qubits=n_qubits, depth=depth)
         return value, state, spec, leaves
 
     point = np.asarray([0.19 + 0.03 * index for index in range(parameters)], dtype=np.float64)
@@ -466,7 +569,10 @@ def run_benchmark_workload(backend, *, communication_mode, path, gradient_method
             value, _, _, leaves = captured["forward"]
             if gradient_method == "native":
                 value.backward()
-                return np.asarray([float(leaf.grad.detach().cpu()) for leaf in leaves])
+                return np.asarray([
+                    float(leaf.grad.detach().cpu()) if leaf.grad is not None else 0.0
+                    for leaf in leaves
+                ])
             if gradient_method == "parameter_shift":
                 return parameter_shift_gradient(numerical_objective, point)
             return finite_difference_gradient(numerical_objective, point, epsilon=1e-3)
@@ -492,12 +598,27 @@ def run_benchmark_workload(backend, *, communication_mode, path, gradient_method
     communicator.set_autograd_communication_mode("baseline")
     native_value, native_state, _, native_leaves = evaluate(point, requires_grad=True)
     native_value.backward()
-    native_gradient = np.asarray([float(leaf.grad.detach().cpu()) for leaf in native_leaves])
+    native_gradient = np.asarray([
+        float(leaf.grad.detach().cpu()) if leaf.grad is not None else 0.0
+        for leaf in native_leaves
+    ])
     reference_value, reference_state, _, _ = evaluate(point)
     state_error = _benchmark_state_error(backend, result[1], reference_state)
-    gradient_error = float(np.max(np.abs(measured_gradient - native_gradient)))
+    local_gradient_error = float(np.max(np.abs(measured_gradient - native_gradient)))
+    if parameter_family == "density_factor":
+        # DensityParam leaves are root-owned by construction.  The root
+        # gradient is the sole physical parameter VJP; other ranks consume the
+        # scattered state but intentionally own no duplicate leaf.
+        local_gradient_error = local_gradient_error if backend.rank == 0 else 0.0
+        gradient_error = float((_replicated_all_reduce(
+            torch.tensor(local_gradient_error, dtype=torch.float32, device=backend._device),
+            communicator=backend.communicator,
+        ) * backend.world_size).detach().cpu())
+    else:
+        gradient_error = local_gradient_error
     communicator.set_autograd_communication_mode(communication_mode)
     return {
+        "parameter_family": parameter_family,
         "forward_ms_median": float(np.median([sample[2] for sample in samples])),
         "backward_ms_median": float(np.median([sample[3] for sample in samples])),
         "gradient_ms_median": float(np.median([sample[2] + sample[3] for sample in samples])),
@@ -508,18 +629,65 @@ def run_benchmark_workload(backend, *, communication_mode, path, gradient_method
         "state_max_abs_error": state_error,
         "gradient_max_abs_error": gradient_error,
         "all_handles_complete": bool(communicator.work_handle_status["all_handles_complete"]),
+        "fallback_to_cpu": False,
         "state_value": float(reference_value.detach().cpu()),
     }
 
 
 def _performance_section(backend: DistNPUBackend) -> dict[str, object]:
-    """Probe the same shared statevector-native workload used by the CLI."""
+    """Measure every native-oracle pair under baseline, reuse, and overlap."""
 
     n_qubits = int(math.log2(backend.world_size)) + 1
-    modes = {mode: run_benchmark_workload(backend, communication_mode=mode, path="statevector", gradient_method="native", n_qubits=n_qubits, depth=1, parameters=1) for mode in ("baseline", "reuse", "overlap")}
+    workloads = (
+        ("statevector", "gate_angle", "native"),
+        ("statevector", "gate_angle", "parameter_shift"),
+        ("statevector", "raw_state", "native"),
+        ("statevector", "raw_state", "finite_difference"),
+        ("density", "density_factor", "native"),
+        ("density", "density_factor", "finite_difference"),
+        ("noise", "channel_logit", "native"),
+        ("noise", "channel_logit", "finite_difference"),
+        ("stinespring", "stinespring_factor", "native"),
+        ("stinespring", "stinespring_factor", "finite_difference"),
+    )
+    records = []
+    for path, parameter_family, gradient_method in workloads:
+        modes = {
+            mode: run_benchmark_workload(
+                backend,
+                communication_mode=mode,
+                path=path,
+                parameter_family=parameter_family,
+                gradient_method=gradient_method,
+                n_qubits=n_qubits,
+                depth=1,
+                parameters=1,
+            )
+            for mode in ("baseline", "reuse", "overlap")
+        }
+        records.append({
+            "path": path,
+            "parameter_family": parameter_family,
+            "gradient_method": gradient_method,
+            "modes": modes,
+        })
     backend.communicator.set_autograd_communication_mode("baseline")
-    passed = all(metrics["state_max_abs_error"] <= 1e-6 and metrics["gradient_max_abs_error"] <= 1e-4 and metrics["all_handles_complete"] for metrics in modes.values()) and modes["baseline"]["buffer_reuse_count"] == 0 and modes["reuse"]["buffer_reuse_count"] > 0 and modes["overlap"]["buffer_reuse_count"] > 0
-    return {"status": "PASS" if passed else "FAIL", "passed": passed, "warmups": 5, "runs": 30, "modes": modes, "fallback_to_cpu": False}
+    passed = all(
+        metrics["parameter_family"] == record["parameter_family"]
+        and metrics["state_max_abs_error"] <= 1e-6
+        and metrics["gradient_max_abs_error"] <= 1e-4
+        and metrics["p2p_bytes"] > 0
+        and metrics["all_handles_complete"]
+        and not metrics.get("fallback_to_cpu", False)
+        for record in records
+        for metrics in record["modes"].values()
+    ) and all(
+        record["modes"]["baseline"]["buffer_reuse_count"] == 0
+        and record["modes"]["reuse"]["buffer_reuse_count"] > 0
+        and record["modes"]["overlap"]["buffer_reuse_count"] > 0
+        for record in records
+    )
+    return {"status": "PASS" if passed else "FAIL", "passed": passed, "warmups": 5, "runs": 30, "workloads": records, "fallback_to_cpu": False}
 
 
 def _layout_and_spec(backend):

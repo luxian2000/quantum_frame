@@ -11,6 +11,7 @@ import torch
 
 from scripts.npu.distributed_autograd_probe import (
     _strict_backend,
+    _resolve_benchmark_parameter_family,
     run_benchmark_workload,
 )
 
@@ -96,10 +97,7 @@ def _validate_benchmark_report(report):
 def _validate_workload(path: str, gradient_method: str) -> None:
     """Reject combinations that the current strict native workload lacks."""
 
-    if gradient_method == "parameter_shift" and path != "statevector":
-        raise ValueError("parameter_shift 仅适用于 statevector workload")
-    if gradient_method == "finite_difference" and path == "statevector":
-        raise ValueError("statevector workload 使用 parameter_shift 或 native")
+    _resolve_benchmark_parameter_family(path, gradient_method)
 
 
 def _run_benchmark(args) -> dict[str, object]:
