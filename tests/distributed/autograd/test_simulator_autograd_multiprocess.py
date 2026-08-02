@@ -8,14 +8,22 @@ import os
 from pathlib import Path
 import socket
 
+import numpy as np
 import pytest
 import torch
 import torch.multiprocessing as mp
 
-from aicir import Circuit, PauliString, ry
-from aicir.distributed import DistNPUBackend, DistSimulator, DistState, PureStateParam
+from aicir import Circuit, Observable, PauliString, ry
+from aicir.distributed import (
+    DensityParam,
+    DistNPUBackend,
+    DistSimulator,
+    DistState,
+    PureStateParam,
+)
 from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.layout import _Layout, _ShardSpec
+from aicir.noise import DepolarizingChannel, NoiseModel
 
 
 def _free_port():
@@ -71,6 +79,59 @@ def test_trainable_gate_routes_to_paired_real_engine(monkeypatch):
     result.expectations["z"].backward()
     assert theta.grad is not None
     assert abs(float(theta.grad)) > 1e-5
+
+
+def test_trainable_noise_leaf_routes_and_receives_runtime_gradient(monkeypatch):
+    simulator = _simulator(monkeypatch)
+    probability = torch.tensor(0.23, dtype=torch.float32, requires_grad=True)
+    circuit = Circuit(ry(0.41, 0), n_qubits=1)
+    circuit.noise_model = NoiseModel().add_channel(
+        DepolarizingChannel(0, probability),
+        after_gates=("ry",),
+    )
+
+    result = simulator.run(
+        circuit,
+        observables={"z": PauliString("Z", n_qubits=1)},
+        grad_checkpoint="none",
+    )
+    result.expectations["z"].backward()
+
+    assert result.is_differentiable
+    assert probability.grad is not None
+    assert torch.isfinite(probability.grad)
+    assert abs(float(probability.grad)) > 1e-5
+
+
+@pytest.mark.parametrize("kind", ("root", "sharded"))
+def test_frozen_paired_inputs_keep_prior_exact_rejection(monkeypatch, kind):
+    simulator = _simulator(monkeypatch)
+    if kind == "root":
+        initial_state = PureStateParam(
+            torch.tensor([1.0, 0.25], dtype=torch.float32),
+            torch.tensor([0.0, -0.5], dtype=torch.float32),
+        )
+    else:
+        layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
+        spec = _ShardSpec.build(1, 1, 0, "vector", layout)
+        initial_state = DistState.from_pair(
+            _Pair(
+                torch.tensor([[1.0], [0.25]], dtype=torch.float32),
+                torch.tensor([[0.0], [-0.5]], dtype=torch.float32),
+            ),
+            spec=spec,
+            backend=simulator.backend,
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="^DistSimulator 首期仅支持前向模拟，不支持自动微分$",
+    ):
+        simulator.run(
+            Circuit(ry(0.31, 0), n_qubits=1),
+            initial_state=initial_state,
+            observables={"z": PauliString("Z", n_qubits=1)},
+        )
 
 
 @pytest.mark.parametrize("kind", ("root", "sharded"))
@@ -219,3 +280,182 @@ def test_one_rank_trainable_mismatch_fails_before_state_transport(tmp_path):
     result = json.loads(output.read_text(encoding="utf-8"))
     assert result["payload"] == "ValueError:各 rank 的自动微分路由不一致"
     assert len({tuple(digest) for digest in result["digests"]}) == 1
+
+
+def _two_rank_density_worker(rank, world_size, port, output_path):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        WORLD_SIZE=str(world_size),
+        RANK=str(rank),
+        LOCAL_RANK=str(rank),
+    )
+    backend = DistNPUBackend.from_env(
+        fallback_to_cpu=True, process_group_backend="gloo"
+    )
+    try:
+        real = (
+            torch.tensor(
+                [[1.0, 0.2, -0.1, 0.3], [0.1, 0.7, 0.2, -0.2],
+                 [0.4, -0.3, 0.8, 0.1], [0.2, 0.1, -0.4, 0.9]],
+                dtype=torch.float32,
+                requires_grad=True,
+            )
+            if rank == 0
+            else None
+        )
+        imag = (
+            torch.tensor(
+                [[0.0, 0.1, 0.2, -0.1], [-0.2, 0.0, 0.1, 0.3],
+                 [0.1, -0.2, 0.0, 0.1], [0.3, 0.1, -0.1, 0.0]],
+                dtype=torch.float32,
+                requires_grad=True,
+            )
+            if rank == 0
+            else None
+        )
+        result = DistSimulator(backend).run(
+            Circuit(ry(0.27, 0), n_qubits=2),
+            initial_density_matrix=(
+                DensityParam(real, imag) if rank == 0 else None
+            ),
+            observables={"z": PauliString("ZI", n_qubits=2)},
+            grad_checkpoint="none",
+        )
+        result.expectations["z"].backward()
+        records = backend.communicator.all_gather_real(
+            torch.tensor(
+                [
+                    float(result.is_differentiable),
+                    float(
+                        rank != 0
+                        or (
+                            real.grad is not None
+                            and imag.grad is not None
+                            and torch.isfinite(real.grad).all()
+                            and torch.isfinite(imag.grad).all()
+                            and real.grad.abs().max() > 1e-6
+                        )
+                    ),
+                ],
+                dtype=torch.float32,
+                device=backend._device,
+            )
+        )
+        if rank == 0:
+            Path(output_path).write_text(
+                json.dumps([item.detach().cpu().tolist() for item in records]),
+                encoding="utf-8",
+            )
+    finally:
+        torch.distributed.destroy_process_group()
+
+
+def test_two_rank_root_density_param_keeps_owner_gradient(tmp_path):
+    output = tmp_path / "density.json"
+    mp.spawn(
+        _two_rank_density_worker,
+        args=(2, _free_port(), str(output)),
+        nprocs=2,
+        join=True,
+    )
+    records = json.loads(output.read_text(encoding="utf-8"))
+    assert all(record[0] == 1.0 for record in records)
+    assert all(record[1] == 1.0 for record in records)
+
+
+def _two_rank_preflight_worker(rank, world_size, port, output_path, case):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        WORLD_SIZE=str(world_size),
+        RANK=str(rank),
+        LOCAL_RANK=str(rank),
+    )
+    backend = DistNPUBackend.from_env(
+        fallback_to_cpu=True, process_group_backend="gloo"
+    )
+    try:
+        theta = torch.tensor(0.31, dtype=torch.float32, requires_grad=True)
+        circuit = Circuit(ry(theta, 0), n_qubits=2)
+        kwargs = {"observables": {"z": PauliString("ZI", n_qubits=2)}}
+        if case == "checkpoint":
+            kwargs["grad_checkpoint"] = "invalid" if rank == 0 else "auto"
+        elif case == "observable":
+            matrix = np.eye(2, dtype=np.complex64)
+            if rank == 1:
+                matrix[0, 1] = matrix[1, 0] = 0.25
+            kwargs["observables"] = {
+                "z": Observable.matrix(
+                    matrix,
+                    metadata={"qubits": (0,)},
+                )
+            }
+        elif case == "noise":
+            circuit.noise_model = NoiseModel().add_channel(
+                DepolarizingChannel(
+                    0,
+                    torch.tensor(
+                        0.2 if rank == 0 else 0.3,
+                        dtype=torch.float32,
+                        requires_grad=True,
+                    ),
+                ),
+                after_gates=("ry",),
+            )
+        try:
+            DistSimulator(backend).run(circuit, **kwargs)
+        except Exception as error:  # noqa: BLE001 - exact public contract
+            payload = f"{type(error).__name__}:{error}"
+        else:
+            payload = "NO_ERROR"
+        digest = hashlib.sha256(payload.encode("utf-8")).digest()
+        gathered = backend.communicator.all_gather_real(
+            torch.tensor(
+                [float(value) for value in digest],
+                dtype=torch.float32,
+                device=backend._device,
+            )
+        )
+        if rank == 0:
+            Path(output_path).write_text(
+                json.dumps(
+                    {
+                        "payload": payload,
+                        "unique": len(
+                            {
+                                tuple(int(value) for value in item.detach().cpu())
+                                for item in gathered
+                            }
+                        ),
+                    }
+                ),
+                encoding="utf-8",
+            )
+    finally:
+        torch.distributed.destroy_process_group()
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    (
+        (
+            "checkpoint",
+            "ValueError:grad_checkpoint 必须是 'none'、'auto' 或正整数",
+        ),
+        ("observable", "ValueError:各 rank 的 observable schema 不一致"),
+        ("noise", "ValueError:各 rank 的线路、噪声模型或参数内容不一致"),
+    ),
+)
+def test_one_rank_invalid_preflight_is_exact_and_collective_safe(
+    tmp_path, case, expected
+):
+    output = tmp_path / f"{case}.json"
+    mp.spawn(
+        _two_rank_preflight_worker,
+        args=(2, _free_port(), str(output), case),
+        nprocs=2,
+        join=True,
+    )
+    result = json.loads(output.read_text(encoding="utf-8"))
+    assert result == {"payload": expected, "unique": 1}

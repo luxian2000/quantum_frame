@@ -1499,7 +1499,7 @@ def _optimizer_section(backend):
 
 
 def _contract_section(backend):
-    """Check public routing and synchronized native-autograd error contracts."""
+    """Run the exact public native-autograd contract matrix on every rank."""
 
     n_qubits = backend.world_size.bit_length()
     layout = _Layout.explicit(
@@ -1511,69 +1511,6 @@ def _contract_section(backend):
         n_qubits, backend.world_size, backend.rank, "vector", layout
     )
     simulator = DistSimulator(backend)
-    direct_complex_message = (
-        "原生 distributed autograd 不接受 requires_grad complex initial_state；"
-        "请使用 PureStateParam(real, imag)"
-    )
-    try:
-        simulator._prepare_initial_state(
-            n_qubits=n_qubits,
-            layout=layout,
-            initial_state=(
-                torch.zeros(
-                    1 << n_qubits,
-                    dtype=torch.complex64,
-                    device=backend._device,
-                    requires_grad=True,
-                )
-                if backend.rank == 0
-                else None
-            ),
-            initial_density_matrix=None,
-        )
-    except ValueError as error:
-        direct_complex_leaf_rejected = str(error) == direct_complex_message
-    else:
-        direct_complex_leaf_rejected = False
-    if backend.world_size > 1:
-        torch.distributed.barrier()
-
-    if backend.world_size == 1:
-        rank_requires_grad_mismatch_rejected = None
-    else:
-        mismatch = DistState.from_pair(
-            _Pair(
-                torch.ones(
-                    spec.local_shape,
-                    dtype=torch.float32,
-                    device=backend._device,
-                    requires_grad=backend.rank == 0,
-                ),
-                torch.zeros(
-                    spec.local_shape,
-                    dtype=torch.float32,
-                    device=backend._device,
-                    requires_grad=backend.rank == 0,
-                ),
-            ),
-            spec=spec,
-            backend=backend,
-        )
-        try:
-            simulator._prepare_initial_state(
-                n_qubits=n_qubits,
-                layout=layout,
-                initial_state=mismatch,
-                initial_density_matrix=None,
-            )
-        except ValueError as error:
-            rank_requires_grad_mismatch_rejected = (
-                str(error) == "DistState paired-real requires_grad 在各 rank 间不一致"
-            )
-        else:
-            rank_requires_grad_mismatch_rejected = False
-        torch.distributed.barrier()
-
     public_routing_enabled = False
     try:
         theta = torch.tensor(
@@ -1595,62 +1532,310 @@ def _contract_section(backend):
     except Exception:  # noqa: BLE001 - report the contract as a failed invariant
         public_routing_enabled = False
 
-    errors, error_contracts = {}, {}
-    for name, kwargs, expected in (
-        ("sample", {"shots": 1}, "自动微分模式不支持 sample 或 counts"),
-        ("collapse", {"shots": 1, "collapse": True}, "自动微分模式不支持 collapse"),
-        ("checkpoint", {"grad_checkpoint": "invalid"}, "grad_checkpoint 必须是 'none'、'auto' 或正整数"),
-    ):
-        try:
-            simulator.run(
-                Circuit(ry(torch.tensor(0.1, dtype=torch.float32, device=backend._device, requires_grad=True), 0), n_qubits=n_qubits),
-                **kwargs,
+    def trainable_circuit(parameter=None):
+        parameter = (
+            torch.tensor(
+                0.1,
+                dtype=torch.float32,
+                device=backend._device,
+                requires_grad=True,
             )
-        except ValueError as error:
-            errors[name] = type(error).__name__ == "ValueError" and str(error) == expected
-            error_contracts[name] = {
-                "type": type(error).__name__, "message": str(error), "expected": expected,
-            }
-        else:
-            errors[name] = False
-            error_contracts[name] = {
-                "type": "NO_ERROR", "message": "NO_ERROR", "expected": expected,
-            }
+            if parameter is None
+            else parameter
+        )
+        return Circuit(ry(parameter, 0), n_qubits=n_qubits)
 
-    for name, call, expected in (
+    def run_kwargs(**kwargs):
+        return lambda: simulator.run(trainable_circuit(), **kwargs)
+
+    def direct_complex():
+        return simulator.run(
+            Circuit(n_qubits=n_qubits),
+            initial_state=(
+                torch.zeros(
+                    1 << n_qubits,
+                    dtype=torch.complex64,
+                    device=backend._device,
+                    requires_grad=True,
+                )
+                if backend.rank == 0
+                else None
+            ),
+        )
+
+    def parameter_schema():
+        parameter = torch.full(
+            () if backend.rank == 0 else (1,),
+            0.1,
+            dtype=torch.float32,
+            device=backend._device,
+            requires_grad=True,
+        )
+        return simulator.run(trainable_circuit(parameter))
+
+    def ownership():
+        owner = 1 if backend.world_size > 1 else 0
+        raw = (
+            PureStateParam(
+                torch.ones(
+                    1 << n_qubits,
+                    dtype=torch.float32,
+                    device=backend._device,
+                    requires_grad=True,
+                ),
+                torch.zeros(
+                    1 << n_qubits,
+                    dtype=torch.float32,
+                    device=backend._device,
+                    requires_grad=True,
+                ),
+            )
+            if backend.rank == owner
+            else None
+        )
+        return simulator.run(trainable_circuit(), initial_state=raw)
+
+    def paired_state_mismatch(*, dtype=False):
+        pair = _Pair(
+            torch.ones(
+                spec.local_shape,
+                dtype=torch.float32,
+                device=backend._device,
+                requires_grad=True,
+            ),
+            torch.zeros(
+                spec.local_shape,
+                dtype=torch.float32,
+                device=backend._device,
+                requires_grad=True,
+            ),
+        )
+        state = DistState.from_pair(pair, spec=spec, backend=backend)
+        if backend.rank == 0:
+            object.__setattr__(
+                state._pair,
+                "real",
+                torch.ones(
+                    (spec.local_shape[0] + 1, *spec.local_shape[1:])
+                    if not dtype
+                    else spec.local_shape,
+                    dtype=torch.float64 if dtype else torch.float32,
+                    device=backend._device,
+                ),
+            )
+        return simulator.run(trainable_circuit(), initial_state=state)
+
+    def unsupported_gate():
+        parameter = torch.tensor(
+            0.1,
+            dtype=torch.float32,
+            device=backend._device,
+            requires_grad=True,
+        )
+        return simulator.run(
+            Circuit(
+                {
+                    "type": "unsupported",
+                    "target_qubit": 0,
+                    "parameter": parameter,
+                },
+                n_qubits=n_qubits,
+            )
+        )
+
+    def unsupported_channel():
+        circuit = trainable_circuit()
+        circuit.noise_model = NoiseModel().add_channel(
+            object(), after_gates=("ry",)
+        )
+        return simulator.run(circuit)
+
+    def rank_route_mismatch():
+        parameter = torch.tensor(
+            0.1,
+            dtype=torch.float32,
+            device=backend._device,
+            requires_grad=backend.rank == 0,
+        )
+        return simulator.run(trainable_circuit(parameter))
+
+    def tag_mismatch_injection():
+        real = torch.tensor(
+            [float(backend.rank + 1)],
+            dtype=torch.float32,
+            device=backend._device,
+            requires_grad=True,
+        )
+        imag = torch.tensor(
+            [-float(backend.rank + 1)],
+            dtype=torch.float32,
+            device=backend._device,
+            requires_grad=True,
+        )
+        backend.communicator.clear_communication_records()
+        exchanged = _exchange_pair(
+            _Pair(real, imag),
+            communicator=backend.communicator,
+            peer=backend.rank ^ 1,
+            operation_index=990,
+            phase="forward",
+        )
+        exchanged.abs_sq().sum().backward()
+        tags = [
+            int(record["tag"])
+            for record in backend.communicator.communication_records
+            if record["kind"] == "exchange"
+        ]
+        forward = tuple(tag for tag in tags if tag % 8 < 4)
+        backward = tuple(tag for tag in tags if tag % 8 >= 4)
+        if not forward or not backward:
+            raise RuntimeError(
+                "tag mismatch injection 要求真实 forward/backward P2P"
+            )
+        _validate_tag_phases(forward, (forward[0], *backward))
+
+    cases = (
+        ("sample", run_kwargs(shots=1), ValueError, "自动微分模式不支持 sample 或 counts"),
+        ("counts", run_kwargs(shots=2), ValueError, "自动微分模式不支持 sample 或 counts"),
+        ("collapse", run_kwargs(shots=1, collapse=True), ValueError, "自动微分模式不支持 collapse"),
+        (
+            "direct_complex",
+            direct_complex,
+            ValueError,
+            "原生 distributed autograd 不接受 requires_grad complex initial_state；请使用 PureStateParam(real, imag)",
+        ),
+        ("parameter_schema", parameter_schema, ValueError, "各 rank 的可训练参数结构不一致"),
+        (
+            "ownership",
+            ownership,
+            ValueError,
+            "初态必须由所有 rank 提供匹配的 DistState，或仅由 rank 0 提供完整 statevector/density matrix",
+        ),
+        (
+            "shape",
+            lambda: paired_state_mismatch(dtype=False),
+            ValueError,
+            f"pair shape={(spec.local_shape[0] + 1, *spec.local_shape[1:])} 与 local_shape={spec.local_shape} 不一致",
+        ),
+        (
+            "dtype",
+            lambda: paired_state_mismatch(dtype=True),
+            ValueError,
+            "DistState paired-real 初态必须是当前 backend 的实数 torch.float32",
+        ),
+        (
+            "unsupported_gate",
+            unsupported_gate,
+            ValueError,
+            "指令 'unsupported' 没有可用于分布式执行的局部门矩阵",
+        ),
+        (
+            "unsupported_channel",
+            unsupported_channel,
+            TypeError,
+            "自动微分模式不支持噪声通道 object",
+        ),
+        (
+            "unsupported_observable",
+            run_kwargs(observables={"bad": object()}),
+            TypeError,
+            "自动微分模式不支持 observable 'bad'",
+        ),
         (
             "non_hccl_strict",
             lambda: _require_hccl_backend("gloo"),
+            ValueError,
             "严格 distributed autograd 探针要求 HCCL process group",
         ),
         (
             "cpu_fallback",
             lambda: _strict_backend(fallback_to_cpu=True),
+            ValueError,
             "严格 distributed autograd 探针不允许 fallback_to_cpu=True",
         ),
         (
-            "unsupported_channel",
-            lambda: _require_supported_channel(object()),
-            "自动微分模式不支持噪声通道 object",
+            "checkpoint",
+            run_kwargs(grad_checkpoint="invalid"),
+            ValueError,
+            "grad_checkpoint 必须是 'none'、'auto' 或正整数",
         ),
         (
             "tag_mismatch_injection",
-            lambda: _validate_tag_phases((17,), (17,)),
+            tag_mismatch_injection,
+            ValueError,
             "forward/backward P2P tag 不匹配",
         ),
-    ):
+        (
+            "rank_route_mismatch",
+            rank_route_mismatch,
+            ValueError,
+            "各 rank 的自动微分路由不一致",
+        ),
+    )
+
+    errors, error_contracts = {}, {}
+    case_digests = {}
+    rank_only_cases = {
+        "parameter_schema",
+        "ownership",
+        "rank_route_mismatch",
+    }
+    for name, call, expected_type, expected in cases:
+        if backend.world_size == 1 and name in rank_only_cases:
+            errors[name] = True
+            error_contracts[name] = {
+                "type": "SKIPPED",
+                "message": "requires world_size > 1",
+                "expected_type": expected_type.__name__,
+                "expected_message": expected,
+            }
+            case_digests[name] = {
+                "sha256": None,
+                "unique_digest_count": 1,
+            }
+            continue
         try:
             call()
-        except ValueError as error:
-            errors[name] = type(error).__name__ == "ValueError" and str(error) == expected
-            error_contracts[name] = {
-                "type": type(error).__name__, "message": str(error), "expected": expected,
+        except Exception as error:  # noqa: BLE001 - exact public contract
+            actual = {
+                "type": type(error).__name__,
+                "message": str(error),
             }
         else:
-            errors[name] = False
-            error_contracts[name] = {
-                "type": "NO_ERROR", "message": "NO_ERROR", "expected": expected,
-            }
+            actual = {"type": "NO_ERROR", "message": "NO_ERROR"}
+        errors[name] = actual == {
+            "type": expected_type.__name__,
+            "message": expected,
+        }
+        error_contracts[name] = {
+            **actual,
+            "expected_type": expected_type.__name__,
+            "expected_message": expected,
+        }
+        case_digest = hashlib.sha256(
+            json.dumps(
+                actual, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).digest()
+        gathered = backend.communicator.all_gather_real(
+            torch.tensor(
+                [float(byte) for byte in case_digest],
+                dtype=torch.float32,
+                device=backend._device,
+            )
+        )
+        unique = {
+            bytes(
+                int(value)
+                for value in item.detach().cpu().reshape(-1).tolist()
+            )
+            for item in gathered
+        }
+        case_digests[name] = {
+            "sha256": case_digest.hex(),
+            "unique_digest_count": len(unique),
+        }
+        errors[name] = errors[name] and len(unique) == 1
 
     # A complete per-rank digest makes exact type/message agreement auditable
     # without object collectives or any state/gradient transport.
@@ -1673,22 +1858,21 @@ def _contract_section(backend):
 
     return {
         "status": "PASS"
-        if direct_complex_leaf_rejected
-        and rank_requires_grad_mismatch_rejected is not False
-        and public_routing_enabled
+        if public_routing_enabled
         and all(errors.values())
         and exact_error_digest
         else "FAIL",
-        "passed": direct_complex_leaf_rejected
-        and rank_requires_grad_mismatch_rejected is not False
-        and public_routing_enabled
+        "passed": public_routing_enabled
         and all(errors.values())
         and exact_error_digest,
-        "direct_complex_leaf_rejected": direct_complex_leaf_rejected,
-        "rank_requires_grad_mismatch_rejected": rank_requires_grad_mismatch_rejected,
+        "direct_complex_leaf_rejected": errors["direct_complex"],
+        "rank_requires_grad_mismatch_rejected": (
+            None if backend.world_size == 1 else errors["rank_route_mismatch"]
+        ),
         "public_routing_enabled": public_routing_enabled,
         "exact_errors": errors,
         "error_contracts": error_contracts,
+        "case_digests": case_digests,
         "error_digest": digest,
         "one_unique_error_digest": exact_error_digest,
     }
@@ -1820,14 +2004,17 @@ def _encode_failure_payload(backend, error: Exception | None) -> torch.Tensor:
         payload[5:type_end] = type_bytes
         payload[type_end : type_end + len(message_bytes)] = message_bytes
     return torch.tensor(
-        list(payload),
-        dtype=torch.uint8,
+        [float(byte) for byte in payload],
+        dtype=torch.float32,
         device=backend._device,
     )
 
 
 def _decode_failure_payload(payload: torch.Tensor) -> dict[str, str] | None:
-    raw = bytes(payload.detach().cpu().tolist())
+    raw = bytes(
+        int(value)
+        for value in payload.detach().cpu().reshape(-1).tolist()
+    )
     if raw[0] == 0:
         return None
     type_length = int.from_bytes(raw[1:3], byteorder="big")
@@ -1843,7 +2030,7 @@ def _decode_failure_payload(payload: torch.Tensor) -> dict[str, str] | None:
 def _synchronize_section_failure(backend, error: Exception | None):
     """Return the canonical first-rank failure after every rank receives it."""
 
-    gathered = backend.communicator.all_gather(
+    gathered = backend.communicator.all_gather_real(
         _encode_failure_payload(backend, error)
     )
     failures = [
@@ -1882,11 +2069,11 @@ def _run_section_collectively(
         }
 
     local_failed = torch.tensor(
-        [int(not result["passed"])],
-        dtype=torch.long,
+        [float(not result["passed"])],
+        dtype=torch.float32,
         device=backend._device,
     )
-    failed_ranks = backend.communicator.all_reduce_sum(local_failed)
+    failed_ranks = backend.communicator.all_reduce_sum_real(local_failed)
     failed_rank_count = int(failed_ranks[0].detach().cpu())
     if failed_rank_count not in {0, backend.world_size}:
         return {

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 import hashlib
+import json
 import math
 from typing import Literal
 
@@ -39,6 +41,7 @@ from .autograd._checkpoint import (
 from .autograd._density import _PairMatrixKernel
 from .autograd._pair import _Pair
 from .autograd._parameters import (
+    DensityParam,
     PureStateParam,
     _bind_replicated_gradient_bucket,
     _preflight_parameter_structure,
@@ -59,6 +62,106 @@ _ROOT_STATE_ERROR_MAX_BYTES = 4096
 _ROOT_STATE_ERROR_TRUNCATION_SUFFIX = b"... <truncated>"
 _ROOT_STATE_ERROR_PROTOCOL_MESSAGE = "rank 0 初态准备失败同步协议无效"
 _DIST_STATE_ERROR_PROTOCOL_MESSAGE = "DistState 本地校验同步协议无效"
+_COLLECTIVE_PREFLIGHT_MAX_BYTES = 4096
+_CHECKPOINT_MISMATCH_ERROR = "各 rank 的 grad_checkpoint 不一致"
+_CIRCUIT_SCHEMA_MISMATCH_ERROR = "各 rank 的线路、噪声模型或参数内容不一致"
+_OBSERVABLE_SCHEMA_MISMATCH_ERROR = "各 rank 的 observable schema 不一致"
+
+
+def _contract_tensor(value: torch.Tensor, *, include_content: bool):
+    if not include_content:
+        return {"kind": "tensor"}
+    descriptor = {
+        "kind": "tensor",
+        "shape": tuple(int(axis) for axis in value.shape),
+        "dtype": str(value.dtype),
+    }
+    descriptor["requires_grad"] = bool(value.requires_grad)
+    array = value.detach().cpu().contiguous().numpy()
+    descriptor["content"] = hashlib.sha256(array.tobytes()).hexdigest()
+    return descriptor
+
+
+def _contract_value(value, *, include_tensor_content: bool = True):
+    """Return bounded deterministic metadata without transporting user data."""
+
+    if isinstance(value, torch.Tensor):
+        return _contract_tensor(value, include_content=include_tensor_content)
+    if isinstance(value, np.ndarray):
+        descriptor = {
+            "kind": "ndarray",
+            "shape": tuple(int(axis) for axis in value.shape),
+            "dtype": str(value.dtype),
+        }
+        if include_tensor_content:
+            descriptor["content"] = hashlib.sha256(
+                np.ascontiguousarray(value).tobytes()
+            ).hexdigest()
+        return descriptor
+    if isinstance(value, DistState):
+        pair = getattr(value, "_pair", None)
+        tensor = pair.real if pair is not None else value.local_data
+        return {
+            "kind": "DistState",
+            "state_kind": value.kind,
+            "n_qubits": int(value.n_qubits),
+            "local_shape": tuple(int(axis) for axis in value.local_shape),
+            "dtype": str(tensor.dtype),
+            "paired": pair is not None,
+            "requires_grad": contains_requires_grad(value),
+        }
+    if isinstance(value, Mapping):
+        return {
+            str(key): _contract_value(
+                item, include_tensor_content=include_tensor_content
+            )
+            for key, item in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, (tuple, list)):
+        return [
+            _contract_value(item, include_tensor_content=include_tensor_content)
+            for item in value
+        ]
+    if isinstance(value, (set, frozenset)):
+        encoded = [
+            _contract_value(item, include_tensor_content=include_tensor_content)
+            for item in value
+        ]
+        return sorted(
+            encoded,
+            key=lambda item: json.dumps(
+                item, sort_keys=True, ensure_ascii=True, default=str
+            ),
+        )
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            "kind": f"{type(value).__module__}.{type(value).__qualname__}",
+            "fields": {
+                field.name: _contract_value(
+                    getattr(value, field.name),
+                    include_tensor_content=include_tensor_content,
+                )
+                for field in fields(value)
+                if not field.name.startswith("_")
+            },
+        }
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, complex):
+        return {"kind": "complex", "real": value.real, "imag": value.imag}
+    return {
+        "kind": f"{type(value).__module__}.{type(value).__qualname__}"
+    }
+
+
+def _contract_digest(value) -> bytes:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).digest()
 
 
 def _peak_allocation_bytes(device) -> int | None:
@@ -182,6 +285,418 @@ class DistSimulator:
     def backend(self) -> DistNPUBackend:
         return self._backend
 
+    def _collective_preflight_error(self, error: Exception | None) -> None:
+        """Raise the first-rank parsing error identically on every rank.
+
+        Only fixed-width or bounded float32 control tensors cross the process
+        group.  This runs before any state, checkpoint, or P2P data transport.
+        """
+
+        encoded = b""
+        if error is not None:
+            try:
+                payload = {
+                    "type": type(error).__name__,
+                    "message": str(error),
+                }
+                encoded = json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            except Exception:  # noqa: BLE001 - hostile exception formatting
+                encoded = (
+                    b'{"type":"RuntimeError",'
+                    b'"message":"distributed collective preflight failed"}'
+                )
+            encoded = encoded[:_COLLECTIVE_PREFLIGHT_MAX_BYTES]
+        flags = self._backend.communicator.all_gather(
+            torch.tensor(
+                [float(bool(encoded))],
+                dtype=torch.float32,
+                device=self._backend._device,
+            )
+        )
+        source = next(
+            (
+                rank
+                for rank, item in enumerate(flags)
+                if int(item.detach().cpu().reshape(-1)[0].item()) != 0
+            ),
+            None,
+        )
+        if source is None:
+            return
+        size = self._backend.communicator.broadcast(
+            torch.tensor(
+                [float(len(encoded))],
+                dtype=torch.float32,
+                device=self._backend._device,
+            ),
+            root=source,
+        )
+        message_size = int(size.detach().cpu().reshape(-1)[0].item())
+        if not 0 < message_size <= _COLLECTIVE_PREFLIGHT_MAX_BYTES:
+            raise RuntimeError("distributed collective preflight protocol invalid")
+        data = (
+            torch.tensor(
+                [float(byte) for byte in encoded],
+                dtype=torch.float32,
+                device=self._backend._device,
+            )
+            if self._backend.rank == source
+            else torch.empty(
+                message_size,
+                dtype=torch.float32,
+                device=self._backend._device,
+            )
+        )
+        data = self._backend.communicator.broadcast(data, root=source)
+        payload = json.loads(
+            bytes(
+                int(value)
+                for value in data.detach().cpu().reshape(-1).tolist()
+            ).decode("utf-8", errors="replace")
+        )
+        error_type = {
+            "TypeError": TypeError,
+            "ValueError": ValueError,
+            "RuntimeError": RuntimeError,
+        }.get(str(payload.get("type")), RuntimeError)
+        raise error_type(str(payload.get("message", "")))
+
+    def _collective_digest_agreement(
+        self,
+        value,
+        *,
+        mismatch_message: str,
+        local_error: Exception | None = None,
+    ) -> bytes:
+        self._collective_preflight_error(local_error)
+        digest = _contract_digest(value)
+        gathered = self._backend.communicator.all_gather(
+            torch.tensor(
+                [float(byte) for byte in digest],
+                dtype=torch.float32,
+                device=self._backend._device,
+            )
+        )
+        values = {
+            bytes(
+                int(byte)
+                for byte in item.detach().cpu().reshape(-1).tolist()
+            )
+            for item in gathered
+        }
+        if len(values) != 1:
+            raise ValueError(mismatch_message)
+        return digest
+
+    def _collective_checkpoint_policy(self, raw):
+        policy = None
+        error = None
+        try:
+            policy = _CheckpointPolicy.parse(raw)
+        except Exception as caught:  # noqa: BLE001 - synchronized exact error
+            error = caught
+        self._collective_preflight_error(error)
+        self._collective_digest_agreement(
+            {"policy": policy.value},
+            mismatch_message=_CHECKPOINT_MISMATCH_ERROR,
+        )
+        return policy
+
+    def _collective_input_schema_preflight(
+        self,
+        circuit,
+        *,
+        observables,
+        shots,
+        measure_qubits,
+        collapse,
+        seed,
+        layout,
+        return_state,
+        return_probabilities,
+    ) -> None:
+        """Agree complete non-state inputs before route detection or planning."""
+
+        circuit_payload = None
+        error = None
+        try:
+            instructions = tuple(circuit_instructions(circuit))
+            circuit_payload = {
+                "n_qubits": int(getattr(circuit, "n_qubits", 0)),
+                "instructions": [
+                    _contract_value(
+                        instruction_to_gate_dict(instruction),
+                        include_tensor_content=False,
+                    )
+                    for instruction in instructions
+                ],
+                "noise_model": _contract_value(
+                    getattr(circuit, "noise_model", None),
+                    include_tensor_content=False,
+                ),
+                "options": _contract_value(
+                    {
+                        "shots": shots,
+                        "measure_qubits": measure_qubits,
+                        "collapse": collapse,
+                        "seed": seed,
+                        "layout": layout,
+                        "return_state": return_state,
+                        "return_probabilities": return_probabilities,
+                    },
+                    include_tensor_content=True,
+                ),
+            }
+        except Exception as caught:  # noqa: BLE001 - collective parse boundary
+            error = caught
+        self._collective_digest_agreement(
+            circuit_payload,
+            mismatch_message=_CIRCUIT_SCHEMA_MISMATCH_ERROR,
+            local_error=error,
+        )
+
+        observable_payload = None
+        error = None
+        try:
+            observable_payload = self._observable_contract_payload(
+                observables,
+                n_qubits=int(getattr(circuit, "n_qubits", 0)),
+            )
+        except Exception as caught:  # noqa: BLE001 - collective parse boundary
+            error = caught
+        self._collective_digest_agreement(
+            observable_payload,
+            mismatch_message=_OBSERVABLE_SCHEMA_MISMATCH_ERROR,
+            local_error=error,
+        )
+
+        parameter_entries = None
+        error = None
+        try:
+            parameter_entries = _replicated_parameter_entries(circuit)
+        except Exception as caught:  # noqa: BLE001 - collective parse boundary
+            error = caught
+        self._collective_preflight_error(error)
+        parameter_schema = [
+            {
+                "name": entry.name,
+                "component": entry.component,
+                "shape": tuple(int(axis) for axis in entry.value.shape),
+                "dtype": str(entry.value.dtype),
+            }
+            for entry in parameter_entries
+        ]
+        self._collective_digest_agreement(
+            parameter_schema,
+            mismatch_message="各 rank 的可训练参数结构不一致",
+        )
+        parameter_content = [
+            {
+                "name": entry.name,
+                "component": entry.component,
+                "content": _contract_tensor(
+                    entry.value,
+                    include_content=True,
+                )["content"],
+            }
+            for entry in parameter_entries
+        ]
+        self._collective_digest_agreement(
+            parameter_content,
+            mismatch_message=_CIRCUIT_SCHEMA_MISMATCH_ERROR,
+        )
+
+    def _observable_contract_payload(self, observables, *, n_qubits: int):
+        if observables is None:
+            return None
+        if not isinstance(observables, Mapping):
+            raise TypeError("observables 必须是名称到 observable 的映射")
+        from ..core.operators import Hamiltonian, PauliString
+        from ..ir import Observable
+
+        payload = {}
+        for name, observable in sorted(
+            observables.items(), key=lambda item: str(item[0])
+        ):
+            if isinstance(observable, Observable) and observable.kind == "matrix":
+                axes = tuple(
+                    int(qubit)
+                    for qubit in observable.metadata.get("qubits", ())
+                )
+                if not axes:
+                    raise TypeError(
+                        "分布式稠密 observable 必须在 metadata['qubits'] "
+                        "中显式给出逻辑目标比特"
+                    )
+                if (
+                    len(set(axes)) != len(axes)
+                    or any(axis < 0 or axis >= n_qubits for axis in axes)
+                ):
+                    raise ValueError("稠密 observable 的逻辑目标比特无效")
+                value = observable.value
+                shape = tuple(int(axis) for axis in getattr(value, "shape", ()))
+                expected = 1 << len(axes)
+                if shape != (expected, expected):
+                    raise ValueError(
+                        "稠密 observable 的矩阵维度与 metadata['qubits'] 不一致"
+                    )
+                dtype = np.asarray(
+                    value.detach().cpu().numpy()
+                    if isinstance(value, torch.Tensor)
+                    else value
+                ).dtype
+                if dtype.kind not in {"f", "c"}:
+                    raise TypeError("稠密 observable 必须是实数或复数浮点矩阵")
+            elif not isinstance(
+                observable,
+                (Hamiltonian, PauliString, Observable),
+            ):
+                payload[str(name)] = _contract_value(observable)
+                continue
+            if isinstance(observable, Observable):
+                value = (
+                    _contract_value(
+                        observable.value,
+                        include_tensor_content=True,
+                    )
+                    if observable.kind == "matrix"
+                    else {
+                        "repr": repr(observable.value),
+                        "n_qubits": observable.n_qubits,
+                    }
+                )
+                payload[str(name)] = {
+                    "kind": observable.kind,
+                    "value": value,
+                    "n_qubits": observable.n_qubits,
+                    "name": observable.name,
+                    "metadata": _contract_value(observable.metadata),
+                }
+            else:
+                payload[str(name)] = {
+                    "kind": type(observable).__name__,
+                    "repr": repr(observable),
+                    "n_qubits": int(observable.n_qubits),
+                }
+        return payload
+
+    def _collective_initial_schema_preflight(
+        self,
+        circuit,
+        *,
+        layout,
+        initial_state,
+        initial_density_matrix,
+    ) -> _Layout:
+        """Validate ownership/type/shape before gate or channel planning."""
+
+        resolved_layout = None
+        n_qubits = None
+        error = None
+        try:
+            n_qubits = int(getattr(circuit, "n_qubits", 0))
+            if n_qubits <= 0:
+                raise ValueError(
+                    "分布式模拟要求 circuit.n_qubits 是正整数"
+                )
+            if n_qubits < int(math.log2(self._backend.world_size)):
+                raise ValueError("n_qubits 不能小于 log2(world_size)")
+            resolved_layout = self._resolve_layout(
+                circuit,
+                n_qubits,
+                layout,
+            )
+        except Exception as caught:  # noqa: BLE001 - synchronized parse error
+            error = caught
+        self._collective_preflight_error(error)
+        modes = self._initial_modes(initial_state, initial_density_matrix)
+        if all(mode == 0 for mode in modes):
+            return resolved_layout
+        if all(mode == 3 for mode in modes) or all(
+            mode == 4 for mode in modes
+        ):
+            expected_kind = "vector" if modes[0] == 3 else "matrix"
+            value = (
+                initial_state
+                if expected_kind == "vector"
+                else initial_density_matrix
+            )
+            self._validate_dist_state(
+                value,
+                n_qubits=n_qubits,
+                layout=resolved_layout,
+                expected_kind=expected_kind,
+            )
+            return resolved_layout
+        if modes[0] in {1, 2} and all(mode == 0 for mode in modes[1:]):
+            kind = "vector" if modes[0] == 1 else "matrix"
+            value = (
+                initial_state
+                if kind == "vector"
+                else initial_density_matrix
+            )
+            root_error = None
+            if self._backend.rank == 0:
+                try:
+                    if isinstance(value, PureStateParam):
+                        pair = value._raw_pair()
+                        expected = 1 << n_qubits
+                        if pair.real.numel() != expected:
+                            raise ValueError(
+                                f"initial_state 必须包含 {expected} 个振幅"
+                            )
+                    elif isinstance(value, DensityParam):
+                        pair = value._raw_pair()
+                        expected = (1 << n_qubits, 1 << n_qubits)
+                        if tuple(pair.real.shape) != expected:
+                            raise ValueError(
+                                "initial_density_matrix 形状必须是 "
+                                f"{expected}"
+                            )
+                    else:
+                        if isinstance(value, State):
+                            candidate = value.to_numpy()
+                        elif isinstance(value, (torch.Tensor, np.ndarray)):
+                            candidate = value
+                        else:
+                            # Arbitrary array-like conversion retains the
+                            # established bounded root-preparation protocol.
+                            candidate = None
+                        if candidate is not None:
+                            shape = tuple(
+                                int(axis)
+                                for axis in candidate.shape
+                            )
+                            expected = (
+                                (1 << n_qubits,)
+                                if kind == "vector"
+                                else (1 << n_qubits, 1 << n_qubits)
+                            )
+                            if kind == "vector":
+                                size = int(np.prod(shape))
+                                if size != expected[0]:
+                                    raise ValueError(
+                                        "initial_state 必须包含 "
+                                        f"{expected[0]} 个振幅"
+                                    )
+                            elif shape != expected:
+                                raise ValueError(
+                                    "initial_density_matrix 形状必须是 "
+                                    f"{expected}"
+                                )
+                except Exception as caught:  # noqa: BLE001 - root exact error
+                    root_error = caught
+            self._collective_preflight_error(root_error)
+            return resolved_layout
+        raise ValueError(
+            "初态必须由所有 rank 提供匹配的 DistState，或仅由 rank 0 "
+            "提供完整 statevector/density matrix"
+        )
+
     def _resolve_layout(self, circuit, n_qubits: int, layout) -> _Layout:
         distributed_axes = int(math.log2(self._backend.world_size))
         if layout is None:
@@ -267,24 +782,19 @@ class DistSimulator:
         the paired-real collective subset.
         """
 
-        gate_trainable = any(
-            contains_requires_grad(instruction_params(instruction))
-            for instruction in circuit_instructions(circuit)
-        )
-        gate_pair = any(
-            contains_paired_real(instruction_params(instruction))
-            for instruction in circuit_instructions(circuit)
+        replicated_trainable = any(
+            entry.value.requires_grad
+            for entry in _replicated_parameter_entries(circuit)
         )
         local_initial = initial_state if initial_state is not None else initial_density_matrix
         local_initial_trainable = contains_requires_grad(local_initial)
-        local_initial_pair = contains_paired_real(local_initial)
         root_owned = not isinstance(local_initial, DistState)
         # The rank-zero value is authoritative only for the existing root
         # ownership mode.  A DistState has one local shard on every rank.
         local = torch.tensor(
             [
-                float(gate_trainable or gate_pair),
-                float(local_initial_trainable or local_initial_pair),
+                float(replicated_trainable),
+                float(local_initial_trainable),
                 float(root_owned and local_initial is not None),
             ],
             dtype=torch.float32,
@@ -295,8 +805,8 @@ class DistSimulator:
             tuple(int(item.detach().cpu().reshape(-1)[index].item()) for index in range(3))
             for item in values
         ]
-        gate_values = {item[0] for item in decoded}
-        if len(gate_values) != 1:
+        replicated_values = {item[0] for item in decoded}
+        if len(replicated_values) != 1:
             raise ValueError(AUTOGRAD_ROUTE_MISMATCH_ERROR)
         root_modes = {item[2] for item in decoded}
         if root_modes == {0}:
@@ -311,7 +821,7 @@ class DistSimulator:
             # _prepare_initial_state; it must not become a rank-divergent
             # routing decision first.
             initial_route = any(item[1] for item in decoded)
-        return bool(next(iter(gate_values)) or initial_route)
+        return bool(next(iter(replicated_values)) or initial_route)
 
     def _paired_zero_state(self, *, n_qubits: int, layout: _Layout) -> DistState:
         """Create |0...0> directly as paired float32 shards."""
@@ -340,7 +850,22 @@ class DistSimulator:
     ) -> DistState:
         """Prepare an autograd-safe initial state without complex transport."""
 
-        if initial_state is None and initial_density_matrix is None:
+        empty_flags = self._backend.communicator.all_gather(
+            torch.tensor(
+                [
+                    float(
+                        initial_state is None
+                        and initial_density_matrix is None
+                    )
+                ],
+                dtype=torch.float32,
+                device=self._backend._device,
+            )
+        )
+        if all(
+            int(item.detach().cpu().reshape(-1)[0].item()) == 1
+            for item in empty_flags
+        ):
             return self._paired_zero_state(n_qubits=n_qubits, layout=layout)
         state = self._prepare_initial_state(
             n_qubits=n_qubits,
@@ -460,12 +985,11 @@ class DistSimulator:
         grad_checkpoint="auto",
         available_memory_bytes: int | None = None,
     ):
-        """Private paired-real execution hook used before the public release gate.
+        """Execute an already-prepared paired-real :class:`DistState`.
 
-        This intentionally accepts an already-prepared :class:`DistState` and
-        is not reached from :meth:`run`.  It is the narrow integration point
-        for native-kernel tests and the NPU probe while public trainable routing
-        remains disabled through Task 11/release qualification.
+        Public :meth:`run` reaches this hook only after collective schema,
+        capability, ownership, and route preflight.  Native-kernel tests and
+        the strict probe may also call it directly with a validated state.
         """
 
         policy = _CheckpointPolicy.parse(grad_checkpoint)
@@ -478,11 +1002,8 @@ class DistSimulator:
         if initial_state.n_qubits != n_qubits or initial_state.layout != resolved_layout:
             raise ValueError("DistState 的 n_qubits/layout 与线路不一致")
 
-        # Public ``run`` remains forward-only until Task 11.  The private
-        # paired-real hook is nevertheless the native integration point: it
-        # preflights the replicated circuit/noise/Stinespring schema and binds
-        # one differentiable float32 gradient bucket without touching caller
-        # instructions or initial-state ownership.
+        # Bind one differentiable float32 gradient bucket without touching
+        # caller instructions or initial-state ownership.
         circuit = _bind_replicated_gradient_bucket(
             circuit, communicator=self._backend.communicator
         )
@@ -1062,6 +1583,70 @@ class DistSimulator:
             backend=self._backend,
         )
 
+    def _scatter_root_density(
+        self,
+        value: DensityParam | None,
+        *,
+        n_qubits: int,
+        layout: _Layout,
+    ) -> DistState:
+        """Build and scatter a root-owned paired-real density with a root VJP."""
+
+        spec = _ShardSpec.build(
+            n_qubits,
+            self._backend.world_size,
+            self._backend.rank,
+            "matrix",
+            layout,
+        )
+        pair = None
+        error = None
+        if self._backend.rank == 0:
+            try:
+                if not isinstance(value, DensityParam):
+                    raise TypeError(
+                        "initial_density_matrix 必须是 DensityParam"
+                    )
+                density = value.density_pair()
+                if density.real.device != self._backend._device:
+                    raise ValueError(
+                        "DensityParam 必须位于当前 backend device"
+                    )
+                if tuple(density.real.shape) != spec.global_shape:
+                    raise ValueError(
+                        "initial_density_matrix 形状必须是 "
+                        f"{spec.global_shape}"
+                    )
+                permutation = layout.storage_to_logical + tuple(
+                    n_qubits + logical
+                    for logical in layout.storage_to_logical
+                )
+                pair = _Pair(
+                    density.real.reshape([2] * (2 * n_qubits))
+                    .permute(permutation)
+                    .reshape(
+                        (self._backend.world_size,) + spec.local_shape
+                    ),
+                    density.imag.reshape([2] * (2 * n_qubits))
+                    .permute(permutation)
+                    .reshape(
+                        (self._backend.world_size,) + spec.local_shape
+                    ),
+                )
+            except Exception as caught:  # noqa: BLE001 - synchronize root error
+                error = str(caught)
+        self._raise_root_initial_error(error)
+        return DistState.from_pair(
+            _scatter_root_pair(
+                pair,
+                communicator=self._backend.communicator,
+                root=0,
+                local_shape=spec.local_shape,
+            ),
+            spec=spec,
+            backend=self._backend,
+        )
+
     def _prepare_initial_state(
         self,
         *,
@@ -1129,6 +1714,26 @@ class DistSimulator:
                         n_qubits=n_qubits,
                         layout=layout,
                     )
+            else:
+                root_is_density = self._backend.communicator.broadcast(
+                    torch.tensor(
+                        [
+                            int(
+                                self._backend.rank == 0
+                                and isinstance(value, DensityParam)
+                            )
+                        ],
+                        dtype=torch.long,
+                        device=self._backend._device,
+                    ),
+                    root=0,
+                )
+                if int(root_is_density.detach().cpu().item()):
+                    return self._scatter_root_density(
+                        value,
+                        n_qubits=n_qubits,
+                        layout=layout,
+                    )
             return self._scatter_root_state(
                 value,
                 n_qubits=n_qubits,
@@ -1158,11 +1763,38 @@ class DistSimulator:
     ) -> DistResult:
         """Run one circuit cooperatively on all ranks."""
 
-        _CheckpointPolicy.parse(grad_checkpoint)
+        self._collective_checkpoint_policy(grad_checkpoint)
+        self._collective_input_schema_preflight(
+            circuit,
+            observables=observables,
+            shots=shots,
+            measure_qubits=measure_qubits,
+            collapse=collapse,
+            seed=seed,
+            layout=layout,
+            return_state=return_state,
+            return_probabilities=return_probabilities,
+        )
+        resolved_input_layout = self._collective_initial_schema_preflight(
+            circuit,
+            layout=layout,
+            initial_state=initial_state,
+            initial_density_matrix=initial_density_matrix,
+        )
         autograd = self._collective_autograd_route(
             circuit,
             initial_state,
             initial_density_matrix,
+        )
+        if not autograd:
+            self._assert_forward_only(
+                circuit,
+                initial_state,
+                initial_density_matrix,
+            )
+        _preflight_parameter_structure(
+            _replicated_parameter_entries(circuit),
+            communicator=self._backend.communicator,
         )
         (
             n_qubits,
@@ -1175,7 +1807,7 @@ class DistSimulator:
             shots=shots,
             collapse=collapse,
             observables=observables,
-            layout=layout,
+            layout=resolved_input_layout,
             autograd=autograd,
         )
         measure_qubits = tuple(int(qubit) for qubit in measure_qubits)
@@ -1202,10 +1834,6 @@ class DistSimulator:
             # root-owned paired state could enter scatter transport.  The
             # execution hook binds the aliases later, after this control-only
             # preflight has made an all-rank failure safe.
-            _preflight_parameter_structure(
-                _replicated_parameter_entries(circuit),
-                communicator=self._backend.communicator,
-            )
             state = self._prepare_paired_initial_state(
                 n_qubits=n_qubits,
                 layout=resolved_layout,

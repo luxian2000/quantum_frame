@@ -70,6 +70,27 @@ def test_paired_result_scalars_keep_graph_and_materializers_detach(monkeypatch):
     np.testing.assert_allclose(materialized_probabilities, probabilities.detach().numpy())
 
 
+def test_frozen_paired_representation_does_not_claim_differentiability(monkeypatch):
+    backend = _backend(monkeypatch)
+    layout = _Layout.explicit((0,), n_qubits=1, distributed_axes=0)
+    spec = _ShardSpec.build(1, 1, 0, "vector", layout)
+    state = DistState.from_pair(
+        _Pair(torch.ones((2, 1)), torch.zeros((2, 1))),
+        spec=spec,
+        backend=backend,
+    )
+    result = DistResult(
+        state=state,
+        local_probabilities=state.local_probabilities(),
+        expectations={},
+        counts=None,
+        rank=0,
+        world_size=1,
+    )
+
+    assert not result.is_differentiable
+
+
 def test_probe_initial_state_sections_cover_private_trainable_contracts(monkeypatch):
     backend = _backend(monkeypatch)
 
@@ -143,7 +164,7 @@ def test_legacy_reducer_rejects_pair_before_complex_boundary(monkeypatch):
 
 
 @pytest.mark.parametrize("initial_kind", ("pair", "pure"))
-def test_public_run_routes_paired_initial_inputs_without_complex_boundary(
+def test_public_run_keeps_frozen_paired_initial_rejection_without_complex_boundary(
     monkeypatch,
     initial_kind,
 ):
@@ -164,5 +185,11 @@ def test_public_run_routes_paired_initial_inputs_without_complex_boundary(
         raise AssertionError("public complex boundary reached")
 
     monkeypatch.setattr(torch, "complex", fail_complex)
-    result = DistSimulator(backend).run(Circuit(n_qubits=1), initial_state=initial_state)
-    assert result.state._pair is not None
+    with pytest.raises(
+        ValueError,
+        match="^DistSimulator 首期仅支持前向模拟，不支持自动微分$",
+    ):
+        DistSimulator(backend).run(
+            Circuit(n_qubits=1),
+            initial_state=initial_state,
+        )

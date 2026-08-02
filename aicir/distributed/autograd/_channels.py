@@ -1,7 +1,8 @@
 """Paired-real differentiable density-matrix channels.
 
-The public distributed runner remains forward-only until its release gate is
-opened.  This private module never creates a complex execution tensor.
+The public distributed runner reaches these kernels only after collective
+native-autograd capability preflight.  This module never creates a complex
+execution tensor.
 """
 
 from __future__ import annotations

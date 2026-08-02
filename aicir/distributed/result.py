@@ -54,8 +54,26 @@ class DistResult:
         ``expectations`` while this property is true.
         """
 
+        if isinstance(self.local_probabilities, torch.Tensor) and (
+            self.local_probabilities.requires_grad
+            or self.local_probabilities.grad_fn is not None
+        ):
+            return True
+        if any(
+            isinstance(value, torch.Tensor)
+            and (value.requires_grad or value.grad_fn is not None)
+            for value in self.expectations.values()
+        ):
+            return True
         state = self.state if self.state is not None else self._probability_state
-        return bool(state is not None and getattr(state, "_pair", None) is not None)
+        pair = None if state is None else getattr(state, "_pair", None)
+        return bool(
+            pair is not None
+            and any(
+                tensor.requires_grad or tensor.grad_fn is not None
+                for tensor in (pair.real, pair.imag)
+            )
+        )
 
     def gather_probabilities(self, *, root: int = 0):
         if self.local_probabilities is None:
