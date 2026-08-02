@@ -1181,9 +1181,25 @@ def _density_section(backend):
 def _memory_growth_percent(measurements) -> float:
     """Return non-negative growth from at least two same-policy measurements."""
 
-    values = [float(value) for value in measurements]
-    if len(values) < 2 or any(not math.isfinite(value) or value < 0 for value in values):
+    if len(measurements) < 2:
         raise ValueError("memory growth requires at least two finite non-negative measurements")
+    values = []
+    for value in measurements:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                "memory growth requires at least two finite non-negative measurements"
+            )
+        try:
+            number = float(value)
+        except OverflowError as error:
+            raise ValueError(
+                "memory growth requires at least two finite non-negative measurements"
+            ) from error
+        if not math.isfinite(number) or number < 0:
+            raise ValueError(
+                "memory growth requires at least two finite non-negative measurements"
+            )
+        values.append(number)
     baseline = values[0]
     growth = max(0.0, (values[-1] - baseline) / max(baseline, 1.0) * 100.0)
     if not math.isfinite(growth):

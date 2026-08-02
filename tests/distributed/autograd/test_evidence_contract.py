@@ -48,7 +48,9 @@ def _performance_workloads() -> list[dict]:
                     mode: {
                         "gradient_ms_median": median,
                         "rank_disagreement": 5e-7,
+                        "unfinished_work_handles": 0,
                         "all_handles_complete": True,
+                        "fallback_to_cpu": False,
                     }
                     for mode in MODES
                 },
@@ -66,6 +68,20 @@ def _passing_probe_sections() -> dict:
     sections["density"]["gradient_max_abs_error"] = 5e-5
     sections["communication"].update(
         rank_disagreement=5e-7,
+        unfinished_work_handles=0,
+        all_handles_complete=True,
+    )
+    sections["optimizer"].update(
+        cases={
+            "sgd-32": {
+                "unfinished_work_handles": 0,
+                "all_handles_complete": True,
+            }
+        },
+        integrated_private_path={
+            "unfinished_work_handles": [0, 0],
+            "all_handles_complete": [True, True],
+        },
         all_handles_complete=True,
     )
     sections["memory"].update(
@@ -211,6 +227,64 @@ def test_actual_probe_contract_and_writer_validate(tmp_path: Path) -> None:
     raw = path.read_bytes()
     assert raw.endswith(b"\n")
     assert raw.count(b'"raw_sha256":') == 1
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_actual_producer_report_rejects_nested_performance_fallback(
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    report = _report(2)
+    report["sections"]["performance"]["metrics"]["workloads"][0]["modes"][
+        mode
+    ]["fallback_to_cpu"] = True
+    path = _write_report(tmp_path / "world2.json", report)
+
+    result = _validate(path)
+
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["valid"] is False
+    assert "fallback_to_cpu" in "\n".join(payload["failed_conditions"])
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize(
+    ("section", "nested_key", "value"),
+    [
+        ("communication", None, 1),
+        ("optimizer", "cases", 1),
+        ("optimizer", "integrated_private_path", [0, 1]),
+        ("performance", "mode", 1),
+    ],
+)
+def test_actual_producer_report_rejects_any_nested_unfinished_work(
+    tmp_path: Path,
+    section: str,
+    nested_key: str | None,
+    value,
+) -> None:
+    report = _report(2)
+    metrics = report["sections"][section]["metrics"]
+    if nested_key is None:
+        metrics["unfinished_work_handles"] = value
+    elif nested_key == "cases":
+        metrics["cases"]["sgd-32"]["unfinished_work_handles"] = value
+    elif nested_key == "integrated_private_path":
+        metrics["integrated_private_path"]["unfinished_work_handles"] = value
+    else:
+        metrics["workloads"][0]["modes"]["baseline"][
+            "unfinished_work_handles"
+        ] = value
+    path = _write_report(tmp_path / "world2.json", report)
+
+    result = _validate(path)
+
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["valid"] is False
+    assert "unfinished_work_handles" in "\n".join(payload["failed_conditions"])
+    assert result.stderr == ""
 
 
 def test_exact_byte_digest_rejects_reformat_even_when_object_is_unchanged(
@@ -480,6 +554,24 @@ def test_source_and_run_provenance_is_strict(
     assert expected in result.stdout
 
 
+@pytest.mark.parametrize("world_size", [None, [], True, "2", 2.0])
+def test_validate_run_rejects_abnormal_world_size_without_crashing(
+    tmp_path: Path,
+    world_size,
+) -> None:
+    report = _report(2)
+    report["world_size"] = world_size
+    path = _write_report(tmp_path / "world2.json", report)
+
+    result = _validate(path)
+
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["valid"] is False
+    assert "world_size" in "\n".join(payload["failed_conditions"])
+    assert result.stderr == ""
+
+
 def test_aggregate_accepts_unique_independent_2_4_8_runs(tmp_path: Path) -> None:
     result, output, _ = _aggregate(
         tmp_path, [_report(2), _report(4), _report(8)]
@@ -489,6 +581,40 @@ def test_aggregate_accepts_unique_independent_2_4_8_runs(tmp_path: Path) -> None
     manifest = json.loads(output.read_text(encoding="utf-8"))
     assert manifest["release_gate"] == "PASS"
     assert manifest["commit"] == COMMIT
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda report: report.__setitem__("world_size", []),
+        lambda report: report.__setitem__("sections", []),
+        lambda report: report["sections"]["memory"]["metrics"]["policies"][
+            "auto"
+        ].__setitem__("peak_allocation_bytes", [100, 10**400]),
+        lambda report: report["sections"]["performance"]["metrics"]["workloads"][
+            0
+        ]["modes"]["baseline"].__setitem__("fallback_to_cpu", True),
+    ],
+)
+def test_aggregate_atomically_writes_blocked_for_any_invalid_report(
+    tmp_path: Path,
+    mutator,
+) -> None:
+    reports = [_report(2), _report(4), _report(8)]
+    reports[0]["untrusted_manifest_field"] = "must-not-be-copied"
+    mutator(reports[0])
+    output = tmp_path / "manifest.json"
+    output.write_text('{"release_gate":"STALE"}\n', encoding="utf-8")
+
+    result, output, _ = _aggregate(tmp_path, reports, output=output)
+
+    assert result.returncode != 0
+    manifest = json.loads(output.read_text(encoding="utf-8"))
+    assert manifest["release_gate"] == "BLOCKED"
+    assert "must-not-be-copied" not in json.dumps(manifest)
+    assert any(entry.get("valid") is False for entry in manifest["reports"])
+    assert not list(tmp_path.glob(f".{output.name}.*.tmp"))
+    assert result.stderr == ""
 
 
 @pytest.mark.parametrize(
@@ -505,8 +631,9 @@ def test_aggregate_accepts_unique_independent_2_4_8_runs(tmp_path: Path) -> None
             "duplicate started_at",
         ),
         (
-            lambda reports: reports[1].__setitem__(
-                "finished_at", reports[0]["finished_at"]
+            lambda reports: reports[1].update(
+                started_at="2026-08-02T00:00:02.500000Z",
+                finished_at=reports[0]["finished_at"],
             ),
             "duplicate finished_at",
         ),
@@ -735,3 +862,38 @@ def test_out_of_float_range_json_integer_is_blocked_without_validator_crash(
     assert result.returncode != 0
     assert "out of finite numeric range" in result.stdout
     assert result.stderr == ""
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [10**400, float("inf"), True, None],
+)
+def test_memory_peak_samples_fail_closed_without_validator_crash(
+    tmp_path: Path,
+    sample,
+) -> None:
+    report = _report(2)
+    report["sections"]["memory"]["metrics"]["policies"]["auto"][
+        "peak_allocation_bytes"
+    ] = [100, sample]
+    path = tmp_path / "world2.json"
+    path.write_bytes(
+        _exact_bytes_with_digest(
+            report,
+            allow_nan=isinstance(sample, float) and not math.isfinite(sample),
+        )
+    )
+
+    result = _validate(path)
+
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["valid"] is False
+    assert "memory" in "\n".join(payload["failed_conditions"]).lower()
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("sample", [10**400, float("inf"), True, None])
+def test_producer_memory_growth_rejects_invalid_numeric_samples(sample) -> None:
+    with pytest.raises(ValueError, match="finite non-negative"):
+        probe._memory_growth_percent([100, sample])

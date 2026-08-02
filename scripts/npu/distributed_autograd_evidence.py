@@ -110,6 +110,61 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _is_world_size(value: Any) -> bool:
+    return type(value) is int and value in WORLD_SIZES
+
+
+def _zero_unfinished_handles(value: Any) -> bool:
+    if type(value) is int:
+        return value == 0
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(type(item) is int and item == 0 for item in value)
+    )
+
+
+def _complete_handles(value: Any) -> bool:
+    if value is True:
+        return True
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(item is True for item in value)
+    )
+
+
+def _validate_nested_runtime_guards(
+    report: dict[str, Any], failures: list[str]
+) -> None:
+    """Fail closed on every producer-emitted nested runtime guard."""
+
+    def visit(value: Any, path: str) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                child = f"{path}.{key}" if path else str(key)
+                if key == "fallback_to_cpu" and item is not False:
+                    failures.append(f"{child} must be false")
+                elif (
+                    key == "unfinished_work_handles"
+                    and not _zero_unfinished_handles(item)
+                ):
+                    failures.append(
+                        f"{child} must contain only exact integer zero values"
+                    )
+                elif (
+                    key == "all_handles_complete"
+                    and not _complete_handles(item)
+                ):
+                    failures.append(f"{child} must contain only true values")
+                visit(item, child)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                visit(item, f"{path}[{index}]")
+
+    visit(report.get("sections"), "sections")
+
+
 def _validate_exact_byte_digest(
     raw: bytes, report: dict[str, Any], failures: list[str]
 ) -> None:
@@ -241,15 +296,15 @@ def _validate_common_contract(
     if not _is_commit(report.get("commit")):
         failures.append("commit must be a full lowercase 40-character SHA")
     world_size = report.get("world_size")
-    if world_size not in WORLD_SIZES:
-        failures.append("world_size must be one of 2, 4, or 8")
+    if not _is_world_size(world_size):
+        failures.append("world_size must be an exact integer 2, 4, or 8")
     _validate_command(report.get("command"), world_size, failures)
     if type(report.get("exit_code")) is not int or report.get("exit_code") != 0:
         failures.append("exit_code must be 0")
     devices = report.get("rank_devices")
     if (
         not isinstance(devices, list)
-        or not isinstance(world_size, int)
+        or not _is_world_size(world_size)
         or devices != [f"npu:{rank}" for rank in range(world_size)]
     ):
         failures.append("rank_devices must exactly map every rank to npu:LOCAL_RANK")
@@ -350,11 +405,23 @@ def _performance_median(
     return _number(modes[mode].get("gradient_ms_median"))
 
 
+def _section_metrics(
+    report: dict[str, Any], section_name: str
+) -> dict[str, Any] | None:
+    sections = report.get("sections")
+    if not isinstance(sections, dict):
+        return None
+    section = sections.get(section_name)
+    if not isinstance(section, dict):
+        return None
+    metrics = section.get("metrics")
+    return metrics if isinstance(metrics, dict) else None
+
+
 def _validate_performance(
     report: dict[str, Any], failures: list[str]
 ) -> None:
-    performance = report.get("sections", {}).get("performance", {})
-    metrics = performance.get("metrics") if isinstance(performance, dict) else None
+    metrics = _section_metrics(report, "performance")
     workloads = metrics.get("workloads") if isinstance(metrics, dict) else None
     if not isinstance(workloads, list):
         failures.append("performance evidence lacks workloads")
@@ -463,8 +530,7 @@ def _validate_performance(
 def _validate_stability(
     report: dict[str, Any], failures: list[str]
 ) -> None:
-    memory = report.get("sections", {}).get("memory", {})
-    metrics = memory.get("metrics") if isinstance(memory, dict) else None
+    metrics = _section_metrics(report, "memory")
     if not isinstance(metrics, dict):
         failures.append("stability evidence lacks memory metrics")
         return
@@ -489,16 +555,15 @@ def _validate_stability(
             continue
         samples = policy.get("peak_allocation_bytes")
         policy_repeated = policy.get("repeated_measurements")
+        numeric_samples = (
+            [_number(value) for value in samples]
+            if isinstance(samples, list)
+            else []
+        )
         if (
             not isinstance(samples, list)
             or len(samples) < 2
-            or any(
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(float(value))
-                or value < 0
-                for value in samples
-            )
+            or any(value is None or value < 0 for value in numeric_samples)
         ):
             failures.append(
                 f"{path}.peak_allocation_bytes needs at least two finite "
@@ -517,8 +582,8 @@ def _validate_stability(
             )
         measured_growth = max(
             0.0,
-            (float(samples[-1]) - float(samples[0]))
-            / max(float(samples[0]), 1.0)
+            (numeric_samples[-1] - numeric_samples[0])
+            / max(numeric_samples[0], 1.0)
             * 100.0,
         )
         claimed_growth = _number(policy.get("memory_growth_percent"))
@@ -580,6 +645,7 @@ def validate_report(
         _validate_exact_byte_digest(raw_bytes, report, failures)
     _validate_finite_numbers(report, failures)
     _validate_common_contract(report, failures)
+    _validate_nested_runtime_guards(report, failures)
     _validate_correctness(report, failures)
     _validate_performance(report, failures)
     _validate_stability(report, failures)
@@ -610,69 +676,74 @@ def _read_report(path: Path) -> tuple[dict[str, Any] | None, list[str]]:
         )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
         return None, [f"{path}: cannot read strict JSON: {error}"]
-    failures = [
-        f"{path}: {failure}"
-        for failure in validate_report(value, raw_bytes=raw)
-    ]
+    try:
+        failures = [
+            f"{path}: {failure}"
+            for failure in validate_report(value, raw_bytes=raw)
+        ]
+    except Exception as error:  # noqa: BLE001 - untrusted report boundary
+        failures = [
+            f"{path}: malformed report could not be validated: "
+            f"{type(error).__name__}: {error}"
+        ]
     return value if isinstance(value, dict) else None, failures
 
 
 def aggregate(paths: Iterable[Path]) -> dict[str, Any]:
     """Build a deterministic manifest; any absence or violation blocks release."""
 
-    reports: list[tuple[Path, dict[str, Any]]] = []
+    valid_reports: list[tuple[Path, dict[str, Any]]] = []
+    manifest_entries: list[tuple[int, int, str, dict[str, Any]]] = []
     failures: list[str] = []
     by_world_size: dict[int, Path] = {}
     for path in paths:
         report, report_failures = _read_report(path)
         failures.extend(report_failures)
-        if report is None:
+        if report is None or report_failures:
+            manifest_entries.append(
+                (1, 0, str(path), {"path": str(path), "valid": False})
+            )
             continue
-        world_size = report.get("world_size")
-        if isinstance(world_size, int) and not isinstance(world_size, bool):
-            if world_size in by_world_size:
-                failures.append(f"duplicate world size: {world_size}")
-            else:
-                by_world_size[world_size] = path
-        reports.append((path, report))
+        world_size = report["world_size"]
+        if world_size in by_world_size:
+            failures.append(f"duplicate world size: {world_size}")
+        else:
+            by_world_size[world_size] = path
+        valid_reports.append((path, report))
+        manifest_entries.append(
+            (
+                0,
+                world_size,
+                str(path),
+                {
+                    "world_size": world_size,
+                    "path": str(path),
+                    "raw_sha256": report["raw_sha256"],
+                    "run_id": report["run_id"],
+                    "started_at": report["started_at"],
+                    "finished_at": report["finished_at"],
+                },
+            )
+        )
     missing = sorted(WORLD_SIZES - set(by_world_size))
     extra = sorted(set(by_world_size) - WORLD_SIZES)
     if missing:
         failures.append(f"missing world sizes: {missing}")
     if extra:
         failures.append(f"unexpected world sizes: {extra}")
-    commits = {
-        report.get("commit")
-        for _, report in reports
-        if _is_commit(report.get("commit"))
-    }
+    commits = {report["commit"] for _, report in valid_reports}
     if len(commits) != 1:
         failures.append("commit mismatch across 2/4/8 reports")
     commit = next(iter(commits)) if len(commits) == 1 else None
     for field in ("run_id", "started_at", "finished_at"):
-        values = [
-            report.get(field)
-            for _, report in reports
-            if isinstance(report.get(field), str)
-        ]
+        values = [report[field] for _, report in valid_reports]
         duplicates = sorted(
             value for value, count in Counter(values).items() if count > 1
         )
         if duplicates:
             failures.append(f"duplicate {field} across independent runs: {duplicates}")
     manifest_reports = [
-        {
-            "world_size": report.get("world_size"),
-            "path": str(path),
-            "raw_sha256": report.get("raw_sha256"),
-            "run_id": report.get("run_id"),
-            "started_at": report.get("started_at"),
-            "finished_at": report.get("finished_at"),
-        }
-        for path, report in sorted(
-            reports,
-            key=lambda item: (item[1].get("world_size", 0), str(item[0])),
-        )
+        summary for _, _, _, summary in sorted(manifest_entries)
     ]
     return {
         "commit": commit,
