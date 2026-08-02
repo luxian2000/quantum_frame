@@ -9,10 +9,16 @@
 - **Distributed native-autograd evidence gate tooling.** Added
   `scripts/npu/distributed_autograd_evidence.py` and its contract tests.  It
   accepts only independently completed 2/4/8-NPU HCCL reports from one full
-  commit, rejects CPU fallback, incomplete sections/handles, digest mismatch,
-  correctness/performance/stability failures, and writes `release_gate` as
-  `BLOCKED` whenever a required world size is absent.  It does not execute NPU
-  workloads or manufacture evidence.
+  clean commit with canonical commands and unique run provenance.  The probe
+  emits an exact-byte, zero-placeholder SHA-256; the validator rejects
+  non-finite numerics, any deviation from the exact ten native/oracle workload
+  records and their three communication modes, missing measured
+  rank-disagreement, or memory growth not reproducible from repeated finite
+  allocator samples.  Report and manifest writes are same-directory atomic,
+  and aggregation rejects input/output collisions.  CPU fallback, incomplete
+  sections/handles, correctness/performance/stability failures, or a missing
+  world size produce `BLOCKED`, never `SKIPPED`.  The tooling does not execute
+  remote jobs on its own or manufacture evidence.
 
 ### Documentation
 

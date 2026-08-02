@@ -192,6 +192,10 @@ def test_performance_records_every_native_oracle_pair_and_communication_mode(mon
             ),
             "state_max_abs_error": 0.0,
             "gradient_max_abs_error": 0.0,
+            "gradient_ms_median": (
+                1.0 if kwargs["gradient_method"] == "native" else 2.0
+            ),
+            "rank_disagreement": 0.0,
             "p2p_bytes": 8,
             "wait_ms": 0.0,
             "buffer_reuse_count": 0 if kwargs["communication_mode"] == "baseline" else 1,

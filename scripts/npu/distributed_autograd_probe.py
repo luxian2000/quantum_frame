@@ -9,14 +9,18 @@ differentiable, and records no live-NPU result until the command is run.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
+import tempfile
 import time
+import uuid
 
 import torch
 import numpy as np
@@ -72,6 +76,7 @@ SECTIONS = (
 _FAILURE_TYPE_BYTES = 128
 _FAILURE_MESSAGE_BYTES = 512
 _FAILURE_PAYLOAD_BYTES = 5 + _FAILURE_TYPE_BYTES + _FAILURE_MESSAGE_BYTES
+_RAW_SHA256_PLACEHOLDER = "0" * 64
 
 
 def _require_hccl_backend(name: str) -> None:
@@ -299,6 +304,42 @@ def _synchronize_npu(backend) -> None:
     """Make one timing interval device-complete without a CPU fallback."""
 
     torch.npu.synchronize(backend._device)
+
+
+def _rank_disagreement_float32(values, backend) -> float:
+    """Measure the maximum all-rank disagreement through fixed float32 payloads."""
+
+    payload = torch.as_tensor(
+        values,
+        dtype=torch.float32,
+        device=backend._device,
+    ).reshape(-1).contiguous()
+    gathered = backend.communicator.all_gather_real(payload)
+    expected_world_size = int(getattr(backend, "world_size", len(gathered)))
+    if len(gathered) != expected_world_size:
+        raise RuntimeError("rank disagreement exchange did not return every rank")
+    reference = gathered[0].detach().to(dtype=torch.float32).reshape(-1)
+    if any(
+        item.dtype != torch.float32
+        or tuple(item.shape) != tuple(reference.shape)
+        for item in gathered
+    ):
+        raise RuntimeError("rank disagreement exchange requires fixed float32 payloads")
+    disagreement = max(
+        (
+            float(
+                (item.detach().reshape(-1) - reference)
+                .abs()
+                .max()
+                .cpu()
+            )
+            for item in gathered[1:]
+        ),
+        default=0.0,
+    )
+    if not math.isfinite(disagreement):
+        raise RuntimeError("rank disagreement measurement must be finite")
+    return disagreement
 
 
 _BENCHMARK_PATH_METHODS = {
@@ -634,6 +675,8 @@ def run_benchmark_workload(backend, *, communication_mode, path, gradient_method
     else:
         gradient_error = local_gradient_error
     communicator.set_autograd_communication_mode(communication_mode)
+    state_value = float(reference_value.detach().cpu())
+    rank_disagreement = _rank_disagreement_float32([state_value], backend)
     return {
         "parameter_family": parameter_family,
         "forward_ms_median": float(np.median([sample[2] for sample in samples])),
@@ -647,7 +690,8 @@ def run_benchmark_workload(backend, *, communication_mode, path, gradient_method
         "gradient_max_abs_error": gradient_error,
         "all_handles_complete": bool(communicator.work_handle_status["all_handles_complete"]),
         "fallback_to_cpu": False,
-        "state_value": float(reference_value.detach().cpu()),
+        "state_value": state_value,
+        "rank_disagreement": rank_disagreement,
     }
 
 
@@ -691,8 +735,12 @@ def _performance_section(backend: DistNPUBackend) -> dict[str, object]:
     backend.communicator.set_autograd_communication_mode("baseline")
     passed = all(
         metrics["parameter_family"] == record["parameter_family"]
-        and metrics["state_max_abs_error"] <= 1e-6
-        and metrics["gradient_max_abs_error"] <= 1e-4
+        and 0.0 <= metrics["state_max_abs_error"] <= 1e-6
+        and 0.0 <= metrics["gradient_max_abs_error"] <= 1e-4
+        and math.isfinite(metrics["gradient_ms_median"])
+        and metrics["gradient_ms_median"] > 0.0
+        and math.isfinite(metrics["rank_disagreement"])
+        and 0.0 <= metrics["rank_disagreement"] <= 1e-6
         and metrics["p2p_bytes"] > 0
         and metrics["all_handles_complete"]
         and not metrics.get("fallback_to_cpu", False)
@@ -703,6 +751,11 @@ def _performance_section(backend: DistNPUBackend) -> dict[str, object]:
         and record["modes"]["reuse"]["buffer_reuse_count"] > 0
         and record["modes"]["overlap"]["buffer_reuse_count"] > 0
         for record in records
+    ) and all(
+        native["modes"][mode]["gradient_ms_median"]
+        < oracle["modes"][mode]["gradient_ms_median"]
+        for native, oracle in zip(records[::2], records[1::2])
+        for mode in ("baseline", "reuse", "overlap")
     )
     return {"status": "PASS" if passed else "FAIL", "passed": passed, "warmups": 5, "runs": 30, "workloads": records, "fallback_to_cpu": False}
 
@@ -1125,6 +1178,19 @@ def _density_section(backend):
     return {"status": "PASS" if passed else "FAIL", "passed": passed, "distributed_axes": list(logical_axes), "storage_axes": [layout.logical_to_storage[axis] for axis in logical_axes], "value_error": max(value_errors, default=0.0), "gradient_error": max(gradient_errors, default=0.0), "trace_error": max(physical_errors, default=0.0), "density_factor_finite_difference_error": factor_error, "max_abs_error": maximum}
 
 
+def _memory_growth_percent(measurements) -> float:
+    """Return non-negative growth from at least two same-policy measurements."""
+
+    values = [float(value) for value in measurements]
+    if len(values) < 2 or any(not math.isfinite(value) or value < 0 for value in values):
+        raise ValueError("memory growth requires at least two finite non-negative measurements")
+    baseline = values[0]
+    growth = max(0.0, (values[-1] - baseline) / max(baseline, 1.0) * 100.0)
+    if not math.isfinite(growth):
+        raise ValueError("memory growth measurement must be finite")
+    return growth
+
+
 def _memory_section(backend):
     """Record measured checkpoint accounting through the private native hook.
 
@@ -1144,33 +1210,91 @@ def _memory_section(backend):
     reports = {}
     reference_gradient = None
     for policy in ("none", "auto", 16):
-        theta = torch.tensor(0.31, dtype=torch.float32, device=backend._device, requires_grad=True)
-        circuit = Circuit(n_qubits=n_qubits)
-        for index in range(16):
-            circuit.append(ry(theta, index % n_qubits))
-        state = DistState.from_pair(_local_initial_pair(backend, spec), spec=spec, backend=backend)
-        evolved, metrics = DistSimulator(backend)._measure_paired_real(
-            circuit,
-            initial_state=state,
-            layout=layout,
-            grad_checkpoint=policy,
-        )
-        value = _PairReducer(backend).expectation(evolved._pair, evolved.spec, observable)
-        value.backward()
-        gradient = float(theta.grad.detach().cpu())
-        if reference_gradient is None:
-            reference_gradient = gradient
+        measurements = []
+        gradients = []
+        policy_metrics = []
+        for _ in range(2):
+            theta = torch.tensor(0.31, dtype=torch.float32, device=backend._device, requires_grad=True)
+            circuit = Circuit(n_qubits=n_qubits)
+            for index in range(16):
+                circuit.append(ry(theta, index % n_qubits))
+            state = DistState.from_pair(_local_initial_pair(backend, spec), spec=spec, backend=backend)
+            evolved, metrics = DistSimulator(backend)._measure_paired_real(
+                circuit,
+                initial_state=state,
+                layout=layout,
+                grad_checkpoint=policy,
+            )
+            value = _PairReducer(backend).expectation(evolved._pair, evolved.spec, observable)
+            value.backward()
+            gradient = float(theta.grad.detach().cpu())
+            if reference_gradient is None:
+                reference_gradient = gradient
+            gradients.append(gradient)
+            policy_metrics.append(metrics)
+            measurements.append(
+                None
+                if metrics.peak_allocation_bytes is None
+                else int(metrics.peak_allocation_bytes)
+            )
+        try:
+            growth = _memory_growth_percent(measurements)
+            measurement_failure = None
+        except (TypeError, ValueError):
+            growth = None
+            measurement_failure = (
+                "allocator peak measurement unavailable or non-finite"
+            )
         reports[str(policy)] = {
-            "saved_state_count": int(metrics.saved_state_count),
-            "recomputed_gate_count": int(metrics.recomputed_gate_count),
-            "chosen_interval": int(metrics.interval),
-            "peak_allocation_bytes": metrics.peak_allocation_bytes,
-            "peak_allocation_status": metrics.peak_allocation_status,
-            "memory_source": metrics.memory_source,
-            "gradient_error": abs(gradient - reference_gradient),
+            "saved_state_count": [int(item.saved_state_count) for item in policy_metrics],
+            "recomputed_gate_count": [int(item.recomputed_gate_count) for item in policy_metrics],
+            "chosen_interval": [int(item.interval) for item in policy_metrics],
+            "peak_allocation_bytes": measurements,
+            "peak_allocation_status": [item.peak_allocation_status for item in policy_metrics],
+            "memory_source": [item.memory_source for item in policy_metrics],
+            "gradient_error": max(abs(gradient - reference_gradient) for gradient in gradients),
+            "memory_growth_percent": growth,
+            "repeated_measurements": len(measurements),
+            "measurement_failure": measurement_failure,
         }
-    passed = all(item["gradient_error"] <= 1e-4 for item in reports.values())
-    return {"status": "PASS" if passed else "FAIL", "passed": passed, "policies": reports}
+    measured_growth = [
+        item["memory_growth_percent"]
+        for item in reports.values()
+        if item["memory_growth_percent"] is not None
+    ]
+    maximum_growth = (
+        max(measured_growth)
+        if len(measured_growth) == len(reports)
+        else None
+    )
+    passed = all(
+        item["gradient_error"] <= 1e-4
+        and item["repeated_measurements"] >= 2
+        and item["memory_growth_percent"] is not None
+        and math.isfinite(item["memory_growth_percent"])
+        and item["memory_growth_percent"] <= 1.0
+        for item in reports.values()
+    )
+    failed_invariants = []
+    if any(item["measurement_failure"] is not None for item in reports.values()):
+        failed_invariants.append("memory allocator measurements unavailable")
+    if any(item["gradient_error"] > 1e-4 for item in reports.values()):
+        failed_invariants.append("checkpoint gradients disagree")
+    if any(
+        item["memory_growth_percent"] is not None
+        and item["memory_growth_percent"] > 1.0
+        for item in reports.values()
+    ):
+        failed_invariants.append("memory growth exceeds 1%")
+    return {
+        "status": "PASS" if passed else "FAIL",
+        "passed": passed,
+        "policies": reports,
+        "repeated_policy": "each",
+        "repeated_measurements": 2,
+        "memory_growth_percent": maximum_growth,
+        "failed_invariants": failed_invariants,
+    }
 
 
 def _channel_probe_pair(backend, spec, *, storage_axis: int, plus: bool) -> _Pair:
@@ -2117,7 +2241,98 @@ def _git_commit() -> str:
     return commit
 
 
-def _report_contract(*, commit: str, world_size: int, sections) -> dict[str, object]:
+def _require_clean_git_source() -> str:
+    """Return HEAD only when tracked, staged, and untracked source is clean."""
+
+    commit = _git_commit()
+    completed = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=normal"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if completed.stdout:
+        raise RuntimeError(
+            "release evidence refuses a dirty source tree; commit or remove all changes first"
+        )
+    return commit
+
+
+def _probe_command(
+    world_size: int,
+    output_json: Path,
+    *,
+    section: str,
+) -> str:
+    return shlex.join(
+        (
+            "torchrun",
+            f"--nproc-per-node={int(world_size)}",
+            "scripts/npu/distributed_autograd_probe.py",
+            "--section",
+            section,
+            "--output-json",
+            str(output_json),
+        )
+    )
+
+
+def _canonical_probe_command(world_size: int, output_json: Path) -> str:
+    """Reconstruct the frozen release command in one deterministic form."""
+
+    return _probe_command(world_size, output_json, section="all")
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _rank_devices(backend) -> list[str]:
+    """Collect rank/local-rank bindings without object collectives."""
+
+    local = torch.tensor(
+        [float(backend.rank), float(backend.local_rank)],
+        dtype=torch.float32,
+        device=backend._device,
+    )
+    gathered = backend.communicator.all_gather_real(local)
+    if len(gathered) != backend.world_size:
+        raise RuntimeError("device provenance did not include every rank")
+    devices = []
+    for expected_rank, payload in enumerate(gathered):
+        values = payload.detach().cpu().reshape(-1).tolist()
+        if (
+            payload.dtype != torch.float32
+            or len(values) != 2
+            or int(values[0]) != expected_rank
+            or values[0] != float(int(values[0]))
+            or values[1] != float(int(values[1]))
+            or int(values[1]) != expected_rank
+        ):
+            raise RuntimeError("rank device provenance is malformed")
+        devices.append(f"npu:{int(values[1])}")
+    return devices
+
+
+def _report_contract(
+    *,
+    commit: str,
+    command: str,
+    exit_code: int,
+    world_size: int,
+    rank_devices,
+    torch_version: str,
+    torch_npu_version: str,
+    cann_version: str,
+    run_id: str,
+    started_at: str,
+    finished_at: str,
+    source_clean: bool,
+    sections,
+) -> dict[str, object]:
     """Normalize every completed probe section into the release JSON schema."""
 
     normalized = {}
@@ -2144,13 +2359,76 @@ def _report_contract(*, commit: str, world_size: int, sections) -> dict[str, obj
     )
     return {
         "commit": str(commit),
+        "command": str(command),
+        "exit_code": int(exit_code),
         "world_size": int(world_size),
+        "rank_devices": list(rank_devices),
+        "torch_version": str(torch_version),
+        "torch_npu_version": str(torch_npu_version),
+        "cann_version": str(cann_version),
         "backend": "hccl",
         "fallback_to_cpu": False,
+        "run_id": str(run_id),
+        "started_at": str(started_at),
+        "finished_at": str(finished_at),
+        "source_clean": bool(source_clean),
         "passed": passed,
         "failed_invariants": failed_invariants,
         "sections": normalized,
+        "raw_sha256": _RAW_SHA256_PLACEHOLDER,
     }
+
+
+def _report_bytes(report: dict[str, object]) -> bytes:
+    """Serialize and bind the digest to the exact producer bytes."""
+
+    value = dict(report)
+    value["raw_sha256"] = _RAW_SHA256_PLACEHOLDER
+    raw = (
+        json.dumps(
+            value,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    marker = (
+        b'"raw_sha256":"' + _RAW_SHA256_PLACEHOLDER.encode("ascii") + b'"'
+    )
+    if raw.count(marker) != 1:
+        raise ValueError("report must contain exactly one raw_sha256 field")
+    digest = hashlib.sha256(raw).hexdigest().encode("ascii")
+    return raw.replace(
+        marker,
+        b'"raw_sha256":"' + digest + b'"',
+        1,
+    )
+
+
+def _write_report(path: Path, report: dict[str, object]) -> None:
+    """Atomically write one exact-byte rank-0 evidence report."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw = _report_bytes(report)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(raw)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
 
 
 def _selected_sections(selected: str) -> tuple[str, ...]:
@@ -2158,6 +2436,9 @@ def _selected_sections(selected: str) -> tuple[str, ...]:
 
 
 def _run_probe(selected: str, output_json: Path) -> bool:
+    started_at = _utc_timestamp()
+    commit = _require_clean_git_source()
+    run_id = str(uuid.uuid4())
     backend = _strict_backend(fallback_to_cpu=False)
     sections = {
         name: _run_section_collectively(
@@ -2174,15 +2455,32 @@ def _run_probe(selected: str, output_json: Path) -> bool:
     )
     passed_ranks = backend.communicator.all_reduce_sum(local_passed)
     passed = int(passed_ranks[0].detach().cpu()) == backend.world_size
+    rank_devices = _rank_devices(backend)
+    finished_at = _utc_timestamp()
 
     if backend.rank == 0:
         report = _report_contract(
-            commit=_git_commit(), world_size=backend.world_size, sections=sections
+            commit=commit,
+            command=_probe_command(
+                backend.world_size,
+                output_json,
+                section=selected,
+            ),
+            exit_code=0 if passed else 1,
+            world_size=backend.world_size,
+            rank_devices=rank_devices,
+            torch_version=str(torch.__version__),
+            torch_npu_version=str(_torch_npu_version() or "unknown"),
+            cann_version=_cann_identity(),
+            run_id=run_id,
+            started_at=started_at,
+            finished_at=finished_at,
+            source_clean=True,
+            sections=sections,
         )
         if bool(report["passed"]) != passed:
             raise RuntimeError("distributed autograd 探针 rank 间通过状态不一致")
-        output_json.parent.mkdir(parents=True, exist_ok=True)
-        output_json.write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
+        _write_report(output_json, report)
     return passed
 
 

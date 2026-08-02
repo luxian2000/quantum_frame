@@ -69,23 +69,45 @@ circuit cutting, quantum networking, and **multi-node** native autograd.
 
 On an actual single-node Ascend environment (after loading that environment's
 CANN setup), run each command independently from the exact commit to be
-released:
+released.  The probe refuses tracked, staged, **or untracked** files, so put
+the reports in an existing directory outside the checkout (replace the
+example path with an absolute path on the target host):
 
 ```bash
-PYTHONPATH=.:${PYTHONPATH:-} torchrun --nproc-per-node=2 scripts/npu/distributed_autograd_probe.py --section all --output-json world2.json
-PYTHONPATH=.:${PYTHONPATH:-} torchrun --nproc-per-node=4 scripts/npu/distributed_autograd_probe.py --section all --output-json world4.json
-PYTHONPATH=.:${PYTHONPATH:-} torchrun --nproc-per-node=8 scripts/npu/distributed_autograd_probe.py --section all --output-json world8.json
-PYTHONPATH=. python scripts/npu/distributed_autograd_evidence.py aggregate world2.json world4.json world8.json --output manifest.json
+EVIDENCE_DIR=/absolute/path/outside/quantum_frame
+PYTHONPATH=.:${PYTHONPATH:-} torchrun --nproc-per-node=2 scripts/npu/distributed_autograd_probe.py --section all --output-json "${EVIDENCE_DIR}/world2.json"
+PYTHONPATH=.:${PYTHONPATH:-} torchrun --nproc-per-node=4 scripts/npu/distributed_autograd_probe.py --section all --output-json "${EVIDENCE_DIR}/world4.json"
+PYTHONPATH=.:${PYTHONPATH:-} torchrun --nproc-per-node=8 scripts/npu/distributed_autograd_probe.py --section all --output-json "${EVIDENCE_DIR}/world8.json"
+PYTHONPATH=. python scripts/npu/distributed_autograd_evidence.py aggregate "${EVIDENCE_DIR}/world2.json" "${EVIDENCE_DIR}/world4.json" "${EVIDENCE_DIR}/world8.json" --output "${EVIDENCE_DIR}/manifest.json"
 ```
 
 Archive only the unedited rank-0 reports and generated manifest under
 `docs/evidence/distributed-autograd/<full-commit-sha>/`.  Before archiving,
 `validate-run` must accept each report.  The evidence validator requires the
-same full commit SHA, HCCL, no CPU fallback, all 13 PASS sections, completed
-work handles, correctness error bounds, native-vs-oracle performance evidence,
-memory growth at most 1%, and a canonical raw-report SHA-256.  Missing 8-NPU evidence is `BLOCKED`, never `SKIPPED`; only then can manifest
-`release_gate="PASS"`.  **No 2/4/8 measured evidence is
-currently archived; the release gate remains `BLOCKED`.**
+same clean full commit SHA, a canonical full-probe command, a unique UUIDv4
+and UTC interval per run, exact rank-to-`npu:LOCAL_RANK` bindings, HCCL, no
+CPU fallback, all 13 PASS sections, and completed work handles.  Every numeric
+metric must be finite.
+
+Performance evidence is an exact ten-record multiset: five native/oracle
+pairs, each measured in `baseline`, `reuse`, and `overlap` mode.  Every native
+median must be strictly below its applicable parameter-shift or central
+finite-difference median, and every mode records an actual fixed-float32
+all-rank disagreement at most `1e-6`.  Memory evidence repeats each of
+`none`, `auto`, and interval `16`; the validator recomputes each growth value
+from the finite allocator samples and requires the maximum to be at most 1%.
+An unavailable allocator measurement is an explicit failed invariant and
+blocks the report—it is never encoded as NaN.
+
+The producer hashes the exact compact JSON bytes after replacing the one
+`raw_sha256` value with 64 zero bytes, then atomically replaces the report
+from a temporary file in the same directory.  Reformatting or changing one
+byte invalidates the digest.  Aggregation likewise writes atomically and
+rejects an output path that resolves to an input report.  Missing 8-NPU
+evidence is blocked: Missing 8-NPU evidence is `BLOCKED`, never `SKIPPED`;
+only a complete manifest can contain
+`release_gate="PASS"`.  **No 2/4/8 measured evidence is currently archived;
+the release gate remains `BLOCKED`.**
 
 ## 目录
 

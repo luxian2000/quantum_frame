@@ -87,12 +87,21 @@ def test_probe_report_has_release_gate_top_level_contract():
     probe = _probe_module()
     report = probe._report_contract(
         commit="a" * 40,
+        command=probe._canonical_probe_command(2, Path("world2.json")),
+        exit_code=0,
         world_size=2,
+        rank_devices=["npu:0", "npu:1"],
+        torch_version="2.6.0",
+        torch_npu_version="2.6.0",
+        cann_version="unknown",
+        run_id="00000000-0000-4000-8000-000000000002",
+        started_at="2026-08-02T00:00:02.000000Z",
+        finished_at="2026-08-02T00:00:03.000000Z",
+        source_clean=True,
         sections={
             name: {
                 "status": "PASS",
                 "passed": True,
-                "metrics": {},
                 "failed_invariants": [],
             }
             for name in probe.SECTIONS
@@ -101,12 +110,27 @@ def test_probe_report_has_release_gate_top_level_contract():
 
     assert report == {
         "commit": "a" * 40,
+        "command": (
+            "torchrun --nproc-per-node=2 "
+            "scripts/npu/distributed_autograd_probe.py "
+            "--section all --output-json world2.json"
+        ),
+        "exit_code": 0,
         "world_size": 2,
+        "rank_devices": ["npu:0", "npu:1"],
+        "torch_version": "2.6.0",
+        "torch_npu_version": "2.6.0",
+        "cann_version": "unknown",
         "backend": "hccl",
         "fallback_to_cpu": False,
+        "run_id": "00000000-0000-4000-8000-000000000002",
+        "started_at": "2026-08-02T00:00:02.000000Z",
+        "finished_at": "2026-08-02T00:00:03.000000Z",
+        "source_clean": True,
         "passed": True,
         "failed_invariants": [],
         "sections": report["sections"],
+        "raw_sha256": "0" * 64,
     }
     assert all(
         set(section) >= {"status", "passed", "metrics", "failed_invariants"}
