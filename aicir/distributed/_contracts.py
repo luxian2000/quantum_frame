@@ -9,6 +9,13 @@ from ..core.state import State
 
 AUTOGRAD_ERROR = "DistSimulator 首期仅支持前向模拟，不支持自动微分"
 PARAMETER_STRUCTURE_ERROR = "各 rank 的可训练参数结构不一致"
+AUTOGRAD_ROUTE_MISMATCH_ERROR = "各 rank 的自动微分路由不一致"
+AUTOGRAD_SAMPLING_ERROR = "自动微分模式不支持 sample 或 counts"
+AUTOGRAD_COLLAPSE_ERROR = "自动微分模式不支持 collapse"
+AUTOGRAD_DIRECT_COMPLEX_STATE_ERROR = (
+    "原生 distributed autograd 不接受 requires_grad complex initial_state；"
+    "请使用 PureStateParam(real, imag)"
+)
 
 
 def synchronize_autograd_failure(communicator) -> None:

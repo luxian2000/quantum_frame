@@ -16,7 +16,6 @@ import torch.multiprocessing as mp
 
 from aicir import Circuit, PauliString
 from aicir.distributed import DistNPUBackend, DistSimulator, DistState, PureStateParam
-from aicir.distributed._contracts import AUTOGRAD_ERROR
 from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.autograd._reducers import _PairReducer
 from aicir.distributed.layout import _Layout, _ShardSpec
@@ -214,6 +213,6 @@ def test_paired_initial_states_keep_owner_gradients_and_recover_from_errors(
         [
             "DistState paired-real requires_grad 在各 rank 间不一致",
             "原生 distributed autograd 不接受 requires_grad complex initial_state；请使用 PureStateParam(real, imag)",
-            AUTOGRAD_ERROR,
+            "自动微分模式不支持 collapse",
         ],
     ] * world_size

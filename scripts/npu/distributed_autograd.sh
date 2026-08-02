@@ -3,10 +3,10 @@ set -eu
 
 NPROC=2
 SECTION=all
-OUTPUT_JSON=
+OUTPUT_JSON=distributed-autograd-report.json
 
 usage() {
-    echo "usage: $0 --nproc-per-node {2|4|8} --section SECTION --output-json PATH" >&2
+    echo "usage: $0 [--nproc-per-node {2|4|8}] [--section SECTION] [--output-json PATH]" >&2
     exit 2
 }
 
@@ -31,6 +31,14 @@ while [ "$#" -gt 0 ]; do
             echo "--devices is not supported; torchrun LOCAL_RANK selects npu:LOCAL_RANK" >&2
             exit 2
             ;;
+        --strict-npu)
+            # This driver is always strict: the Python probe rejects CPU
+            # fallback and non-HCCL process groups before any workload.
+            shift
+            ;;
+        --help|-h)
+            usage
+            ;;
         *)
             usage
             ;;
@@ -44,8 +52,6 @@ case "$NPROC" in
         exit 2
         ;;
 esac
-
-[ -n "$OUTPUT_JSON" ] || usage
 
 PYTHONPATH=.:${PYTHONPATH:-} torchrun \
     --nproc-per-node="${NPROC}" \

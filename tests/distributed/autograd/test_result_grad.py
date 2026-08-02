@@ -14,7 +14,6 @@ from aicir.distributed import (
     DistState,
     PureStateParam,
 )
-from aicir.distributed._contracts import AUTOGRAD_ERROR
 from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.autograd._reducers import _PairReducer
 from aicir.distributed.gates import _GatePlanner, _VectorKernel
@@ -85,7 +84,7 @@ def test_probe_initial_state_sections_cover_private_trainable_contracts(monkeypa
     assert statevector["sharded_layout_gradient_error"] <= 1e-6
     assert contract["direct_complex_leaf_rejected"]
     assert contract["rank_requires_grad_mismatch_rejected"] is None
-    assert contract["public_forward_only_gate_held"]
+    assert contract["public_routing_enabled"]
 
 
 def test_legacy_vector_kernel_rejects_pair_before_complex_boundary(monkeypatch):
@@ -144,7 +143,7 @@ def test_legacy_reducer_rejects_pair_before_complex_boundary(monkeypatch):
 
 
 @pytest.mark.parametrize("initial_kind", ("pair", "pure"))
-def test_public_run_rejects_paired_initial_inputs_before_complex_boundary(
+def test_public_run_routes_paired_initial_inputs_without_complex_boundary(
     monkeypatch,
     initial_kind,
 ):
@@ -165,5 +164,5 @@ def test_public_run_rejects_paired_initial_inputs_before_complex_boundary(
         raise AssertionError("public complex boundary reached")
 
     monkeypatch.setattr(torch, "complex", fail_complex)
-    with pytest.raises(ValueError, match=AUTOGRAD_ERROR):
-        DistSimulator(backend).run(Circuit(n_qubits=1), initial_state=initial_state)
+    result = DistSimulator(backend).run(Circuit(n_qubits=1), initial_state=initial_state)
+    assert result.state._pair is not None

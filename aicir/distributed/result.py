@@ -45,6 +45,18 @@ class DistResult:
     def is_root(self) -> bool:
         return int(self.rank) == 0
 
+    @property
+    def is_differentiable(self) -> bool:
+        """Whether this result retains a paired-real native autograd graph.
+
+        ``gather_probabilities`` and state materialization remain explicit
+        detach boundaries; losses must use ``local_probabilities`` or
+        ``expectations`` while this property is true.
+        """
+
+        state = self.state if self.state is not None else self._probability_state
+        return bool(state is not None and getattr(state, "_pair", None) is not None)
+
     def gather_probabilities(self, *, root: int = 0):
         if self.local_probabilities is None:
             return None

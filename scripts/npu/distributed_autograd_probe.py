@@ -14,6 +14,7 @@ import json
 import math
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 
@@ -32,7 +33,6 @@ from aicir.distributed import (
     finite_difference_gradient,
     parameter_shift_gradient,
 )
-from aicir.distributed._contracts import AUTOGRAD_ERROR
 from aicir.distributed.autograd._collectives import _exchange_pair, _replicated_all_reduce, _scatter_root_pair
 from aicir.distributed.autograd._pair import _Pair
 from aicir.distributed.autograd._parameters import _bucket_parameters
@@ -69,24 +69,42 @@ SECTIONS = (
     "contract",
 )
 
-BLOCKED_BY_TASK = {
-    "statevector": 2,
-    "density": 3,
-    "gates": 4,
-    "probability": 5,
-    "observable": 6,
-    "noise": 7,
-    "stinespring": 8,
-    "communication": 9,
-    "optimizer": 10,
-    "performance": 11,
-    "memory": 11,
-    "contract": 11,
-}
-
 _FAILURE_TYPE_BYTES = 128
 _FAILURE_MESSAGE_BYTES = 512
 _FAILURE_PAYLOAD_BYTES = 5 + _FAILURE_TYPE_BYTES + _FAILURE_MESSAGE_BYTES
+
+
+def _require_hccl_backend(name: str) -> None:
+    """Keep the strict launch backend as an independently testable contract."""
+
+    if str(name).lower() != "hccl":
+        raise ValueError("严格 distributed autograd 探针要求 HCCL process group")
+
+
+def _require_supported_channel(channel) -> None:
+    """Reject a non-native channel before it can enter paired-real replay."""
+
+    supported = (
+        AmplitudeDampingChannel,
+        BitFlipChannel,
+        DepolarizingChannel,
+        PhaseFlipChannel,
+        StinespringParam,
+    )
+    if not isinstance(channel, supported):
+        raise ValueError(
+            "自动微分模式不支持噪声通道 "
+            f"{type(channel).__name__}"
+        )
+
+
+def _validate_tag_phases(forward_tags, backward_tags) -> None:
+    """Reject injected forward/backward P2P tag overlap deterministically."""
+
+    if set(int(tag) for tag in forward_tags).intersection(
+        int(tag) for tag in backward_tags
+    ):
+        raise ValueError("forward/backward P2P tag 不匹配")
 
 
 def _strict_backend(*, fallback_to_cpu: bool = False) -> DistNPUBackend:
@@ -112,21 +130,15 @@ def _strict_backend(*, fallback_to_cpu: bool = False) -> DistNPUBackend:
         fallback_to_cpu=False,
         process_group_backend="hccl",
     )
-    if torch.distributed.get_backend() != "hccl":
-        raise RuntimeError("严格 distributed autograd 探针要求 HCCL process group")
+    try:
+        _require_hccl_backend(torch.distributed.get_backend())
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
     if backend._device.type != "npu" or backend._device.index != local_rank:
         raise RuntimeError(
             f"LOCAL_RANK={local_rank} 必须绑定 npu:{local_rank}，实际为 {backend._device}"
         )
     return backend
-
-
-def _blocked_section(name: str) -> dict[str, object]:
-    return {
-        "status": "BLOCKED",
-        "passed": False,
-        "blocked_by_task": BLOCKED_BY_TASK[name],
-    }
 
 
 def _torch_npu_version() -> str | None:
@@ -253,13 +265,18 @@ def _communication_section(backend: DistNPUBackend) -> dict[str, object]:
     expected_per_phase = 2 * len(axes)
     forward_p2p = len(forward_tags)
     backward_p2p = len(backward_tags)
+    try:
+        _validate_tag_phases(forward_tags, backward_tags)
+        tags_valid = True
+    except ValueError:
+        tags_valid = False
     passed = (
         local_gate_p2p_delta == 0
         and forward_p2p == expected_per_phase
         and backward_p2p == expected_per_phase
         and payload_dtypes == ["torch.float32"]
         and all(peer is not None and peer != backend.rank and 0 <= peer < backend.world_size for peer in peers)
-        and set(forward_tags).isdisjoint(backward_tags)
+        and tags_valid
         and all(record["bytes"] > 0 for record in records)
     )
     return {
@@ -1482,7 +1499,7 @@ def _optimizer_section(backend):
 
 
 def _contract_section(backend):
-    """Check the private initial-state contracts without exposing ``run`` autograd."""
+    """Check public routing and synchronized native-autograd error contracts."""
 
     n_qubits = backend.world_size.bit_length()
     layout = _Layout.explicit(
@@ -1557,43 +1574,123 @@ def _contract_section(backend):
             rank_requires_grad_mismatch_rejected = False
         torch.distributed.barrier()
 
-    public_gate_held = False
+    public_routing_enabled = False
     try:
-        simulator.run(
-            Circuit(n_qubits=n_qubits),
-            initial_state=(
-                PureStateParam(
-                    torch.ones(
-                        1 << n_qubits,
-                        dtype=torch.float32,
-                        device=backend._device,
-                        requires_grad=True,
-                    ),
-                    torch.zeros(
-                        1 << n_qubits,
-                        dtype=torch.float32,
-                        device=backend._device,
-                        requires_grad=True,
-                    ),
-                )
-                if backend.rank == 0
-                else None
-            ),
+        theta = torch.tensor(
+            0.31,
+            dtype=torch.float32,
+            device=backend._device,
+            requires_grad=True,
         )
-    except ValueError as error:
-        public_gate_held = str(error) == AUTOGRAD_ERROR
+        result = simulator.run(
+            Circuit(ry(theta, 0), n_qubits=n_qubits),
+            observables={"z": PauliString("Z" + "I" * (n_qubits - 1), n_qubits=n_qubits)},
+        )
+        result.expectations["z"].backward()
+        public_routing_enabled = (
+            result.state is not None
+            and result.state._pair is not None
+            and theta.grad is not None
+        )
+    except Exception:  # noqa: BLE001 - report the contract as a failed invariant
+        public_routing_enabled = False
+
+    errors, error_contracts = {}, {}
+    for name, kwargs, expected in (
+        ("sample", {"shots": 1}, "自动微分模式不支持 sample 或 counts"),
+        ("collapse", {"shots": 1, "collapse": True}, "自动微分模式不支持 collapse"),
+        ("checkpoint", {"grad_checkpoint": "invalid"}, "grad_checkpoint 必须是 'none'、'auto' 或正整数"),
+    ):
+        try:
+            simulator.run(
+                Circuit(ry(torch.tensor(0.1, dtype=torch.float32, device=backend._device, requires_grad=True), 0), n_qubits=n_qubits),
+                **kwargs,
+            )
+        except ValueError as error:
+            errors[name] = type(error).__name__ == "ValueError" and str(error) == expected
+            error_contracts[name] = {
+                "type": type(error).__name__, "message": str(error), "expected": expected,
+            }
+        else:
+            errors[name] = False
+            error_contracts[name] = {
+                "type": "NO_ERROR", "message": "NO_ERROR", "expected": expected,
+            }
+
+    for name, call, expected in (
+        (
+            "non_hccl_strict",
+            lambda: _require_hccl_backend("gloo"),
+            "严格 distributed autograd 探针要求 HCCL process group",
+        ),
+        (
+            "cpu_fallback",
+            lambda: _strict_backend(fallback_to_cpu=True),
+            "严格 distributed autograd 探针不允许 fallback_to_cpu=True",
+        ),
+        (
+            "unsupported_channel",
+            lambda: _require_supported_channel(object()),
+            "自动微分模式不支持噪声通道 object",
+        ),
+        (
+            "tag_mismatch_injection",
+            lambda: _validate_tag_phases((17,), (17,)),
+            "forward/backward P2P tag 不匹配",
+        ),
+    ):
+        try:
+            call()
+        except ValueError as error:
+            errors[name] = type(error).__name__ == "ValueError" and str(error) == expected
+            error_contracts[name] = {
+                "type": type(error).__name__, "message": str(error), "expected": expected,
+            }
+        else:
+            errors[name] = False
+            error_contracts[name] = {
+                "type": "NO_ERROR", "message": "NO_ERROR", "expected": expected,
+            }
+
+    # A complete per-rank digest makes exact type/message agreement auditable
+    # without object collectives or any state/gradient transport.
+    digest_payload = json.dumps(
+        error_contracts, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    digest = hashlib.sha256(digest_payload).hexdigest()
+    digest_tensor = torch.tensor(
+        [float(byte) for byte in bytes.fromhex(digest)],
+        dtype=torch.float32,
+        device=backend._device,
+    )
+    digest_values = backend.communicator.all_gather_real(digest_tensor)
+    exact_error_digest = len(
+        {
+            tuple(int(value) for value in item.detach().cpu().tolist())
+            for item in digest_values
+        }
+    ) == 1
+
     return {
         "status": "PASS"
         if direct_complex_leaf_rejected
         and rank_requires_grad_mismatch_rejected is not False
-        and public_gate_held
+        and public_routing_enabled
+        and all(errors.values())
+        and exact_error_digest
         else "FAIL",
         "passed": direct_complex_leaf_rejected
         and rank_requires_grad_mismatch_rejected is not False
-        and public_gate_held,
+        and public_routing_enabled
+        and all(errors.values())
+        and exact_error_digest,
         "direct_complex_leaf_rejected": direct_complex_leaf_rejected,
         "rank_requires_grad_mismatch_rejected": rank_requires_grad_mismatch_rejected,
-        "public_forward_only_gate_held": public_gate_held,
+        "public_routing_enabled": public_routing_enabled,
+        "exact_errors": errors,
+        "error_contracts": error_contracts,
+        "error_digest": digest,
+        "one_unique_error_digest": exact_error_digest,
     }
 
 
@@ -1800,6 +1897,75 @@ def _run_section_collectively(
     return result
 
 
+SECTION_RUNNERS = {
+    "environment": _environment_section,
+    "statevector": _statevector_section,
+    "density": _density_section,
+    "gates": _gates_section,
+    "probability": _probability_section,
+    "observable": _observable_section,
+    "noise": _noise_section,
+    "stinespring": _stinespring_section,
+    "communication": _communication_section,
+    "optimizer": _optimizer_section,
+    "performance": _performance_section,
+    "memory": _memory_section,
+    "contract": _contract_section,
+}
+
+
+def _git_commit() -> str:
+    """Return the exact tested source revision for a hardware evidence file."""
+
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    commit = completed.stdout.strip()
+    if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
+        raise RuntimeError("distributed autograd 探针无法确定完整 git commit")
+    return commit
+
+
+def _report_contract(*, commit: str, world_size: int, sections) -> dict[str, object]:
+    """Normalize every completed probe section into the release JSON schema."""
+
+    normalized = {}
+    failed_invariants = []
+    for name, section in sections.items():
+        passed = bool(section.get("passed", False))
+        metrics = {
+            key: value
+            for key, value in section.items()
+            if key not in {"status", "passed", "failed_invariants"}
+        }
+        section_failures = list(section.get("failed_invariants", ()))
+        if not passed and not section_failures:
+            section_failures.append(name)
+        normalized[name] = {
+            "status": "PASS" if passed else "FAIL",
+            "passed": passed,
+            "metrics": metrics,
+            "failed_invariants": section_failures,
+        }
+        failed_invariants.extend(section_failures)
+    passed = not failed_invariants and all(
+        section["passed"] for section in normalized.values()
+    )
+    return {
+        "commit": str(commit),
+        "world_size": int(world_size),
+        "backend": "hccl",
+        "fallback_to_cpu": False,
+        "passed": passed,
+        "failed_invariants": failed_invariants,
+        "sections": normalized,
+    }
+
+
 def _selected_sections(selected: str) -> tuple[str, ...]:
     return SECTIONS if selected == "all" else (selected,)
 
@@ -1810,21 +1976,7 @@ def _run_probe(selected: str, output_json: Path) -> bool:
         name: _run_section_collectively(
             backend,
             name,
-            runner={
-                "environment": _environment_section,
-                "statevector": _statevector_section,
-                "density": _density_section,
-                "gates": _gates_section,
-                "probability": _probability_section,
-                "observable": _observable_section,
-                "noise": _noise_section,
-                "stinespring": _stinespring_section,
-                "communication": _communication_section,
-                "optimizer": _optimizer_section,
-                "performance": _performance_section,
-                "memory": _memory_section,
-                "contract": _contract_section,
-            }.get(name),
+            runner=SECTION_RUNNERS[name],
         )
         for name in _selected_sections(selected)
     }
@@ -1837,16 +1989,11 @@ def _run_probe(selected: str, output_json: Path) -> bool:
     passed = int(passed_ranks[0].detach().cpu()) == backend.world_size
 
     if backend.rank == 0:
-        report = {
-            "passed": passed,
-            "world_size": backend.world_size,
-            "fallback_to_cpu": False,
-            "process_group_backend": "hccl",
-            "sections": sections,
-            "failed_sections": [
-                name for name, section in sections.items() if not section["passed"]
-            ],
-        }
+        report = _report_contract(
+            commit=_git_commit(), world_size=backend.world_size, sections=sections
+        )
+        if bool(report["passed"]) != passed:
+            raise RuntimeError("distributed autograd 探针 rank 间通过状态不一致")
         output_json.parent.mkdir(parents=True, exist_ok=True)
         output_json.write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
     return passed

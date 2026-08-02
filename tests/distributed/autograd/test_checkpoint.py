@@ -145,7 +145,7 @@ def test_paired_real_checkpoint_modes_match_output_and_gradient(monkeypatch, pol
     assert checkpoint.saved_state_count >= 1
 
 
-def test_public_run_validates_checkpoint_without_opening_autograd_route(monkeypatch):
+def test_public_run_validates_checkpoint_and_opens_autograd_route(monkeypatch):
     backend = _backend(monkeypatch)
     simulator = DistSimulator(backend)
     circuit = Circuit(n_qubits=1)
@@ -153,8 +153,8 @@ def test_public_run_validates_checkpoint_without_opening_autograd_route(monkeypa
 
     with pytest.raises(ValueError, match="^grad_checkpoint 必须是 'none'、'auto' 或正整数$"):
         simulator.run(circuit, grad_checkpoint="bad")
-    with pytest.raises(ValueError, match="^DistSimulator 首期仅支持前向模拟，不支持自动微分$"):
-        simulator.run(circuit, grad_checkpoint="none")
+    result = simulator.run(circuit, grad_checkpoint="none")
+    assert result.state._pair is not None
 
 
 @pytest.mark.parametrize("policy", ("none", "auto", 1, 4, 16))
@@ -244,7 +244,7 @@ def test_measurement_boundary_reports_blocked_without_allocator_support(monkeypa
     state, metrics = simulator._measure_paired_real(object())
 
     assert state == "state"
-    assert metrics.peak_allocation_status == "BLOCKED"
+    assert metrics.peak_allocation_status == "UNAVAILABLE"
     assert metrics.peak_allocation_bytes is None
     assert events == ["sync", "reset"]
 

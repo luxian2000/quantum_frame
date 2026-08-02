@@ -19,6 +19,10 @@ from ..ir import (
 )
 from ._contracts import (
     AUTOGRAD_ERROR,
+    AUTOGRAD_COLLAPSE_ERROR,
+    AUTOGRAD_DIRECT_COMPLEX_STATE_ERROR,
+    AUTOGRAD_ROUTE_MISMATCH_ERROR,
+    AUTOGRAD_SAMPLING_ERROR,
     contains_paired_real,
     contains_requires_grad,
 )
@@ -34,7 +38,13 @@ from .autograd._checkpoint import (
 )
 from .autograd._density import _PairMatrixKernel
 from .autograd._pair import _Pair
-from .autograd._parameters import PureStateParam, _bind_replicated_gradient_bucket
+from .autograd._parameters import (
+    PureStateParam,
+    _bind_replicated_gradient_bucket,
+    _preflight_parameter_structure,
+    _replicated_parameter_entries,
+)
+from .autograd._reducers import _PairReducer
 from .autograd._vector import _PairVectorKernel
 from .backend import DistNPUBackend
 from .density import _MatrixKernel
@@ -193,7 +203,16 @@ class DistSimulator:
             distributed_axes=distributed_axes,
         )
 
-    def _preflight(self, circuit, *, shots, collapse, observables, layout):
+    def _preflight(
+        self,
+        circuit,
+        *,
+        shots,
+        collapse,
+        observables,
+        layout,
+        autograd: bool = False,
+    ):
         n_qubits = int(getattr(circuit, "n_qubits", 0))
         if n_qubits <= 0:
             raise ValueError("分布式模拟要求 circuit.n_qubits 是正整数")
@@ -226,12 +245,186 @@ class DistSimulator:
             self._backend,
             resolved_layout,
             n_qubits,
+            execution_context=_AutogradExecutionContext() if autograd else None,
         )
         plans = tuple(
             planner.plan(instruction, index)
             for index, instruction in enumerate(instructions)
         )
         return n_qubits, instructions, plans, resolved_layout, shots
+
+    def _collective_autograd_route(
+        self,
+        circuit,
+        initial_state,
+        initial_density_matrix,
+    ) -> bool:
+        """Choose the native path before any state-data collective.
+
+        Root-owned initial parameters intentionally exist only on rank zero;
+        sharded states and replicated circuit/noise parameters must agree on
+        every rank.  The compact float control payload keeps the decision in
+        the paired-real collective subset.
+        """
+
+        gate_trainable = any(
+            contains_requires_grad(instruction_params(instruction))
+            for instruction in circuit_instructions(circuit)
+        )
+        gate_pair = any(
+            contains_paired_real(instruction_params(instruction))
+            for instruction in circuit_instructions(circuit)
+        )
+        local_initial = initial_state if initial_state is not None else initial_density_matrix
+        local_initial_trainable = contains_requires_grad(local_initial)
+        local_initial_pair = contains_paired_real(local_initial)
+        root_owned = not isinstance(local_initial, DistState)
+        # The rank-zero value is authoritative only for the existing root
+        # ownership mode.  A DistState has one local shard on every rank.
+        local = torch.tensor(
+            [
+                float(gate_trainable or gate_pair),
+                float(local_initial_trainable or local_initial_pair),
+                float(root_owned and local_initial is not None),
+            ],
+            dtype=torch.float32,
+            device=self._backend._device,
+        )
+        values = self._backend.communicator.all_gather(local)
+        decoded = [
+            tuple(int(item.detach().cpu().reshape(-1)[index].item()) for index in range(3))
+            for item in values
+        ]
+        gate_values = {item[0] for item in decoded}
+        if len(gate_values) != 1:
+            raise ValueError(AUTOGRAD_ROUTE_MISMATCH_ERROR)
+        root_modes = {item[2] for item in decoded}
+        if root_modes == {0}:
+            initial_values = {item[1] for item in decoded}
+            if len(initial_values) != 1:
+                raise ValueError(AUTOGRAD_ROUTE_MISMATCH_ERROR)
+            initial_route = bool(next(iter(initial_values)))
+        elif decoded[0][2] == 1 and all(item[2] == 0 for item in decoded[1:]):
+            initial_route = bool(decoded[0][1])
+        else:
+            # Ownership itself will receive the established exact error from
+            # _prepare_initial_state; it must not become a rank-divergent
+            # routing decision first.
+            initial_route = any(item[1] for item in decoded)
+        return bool(next(iter(gate_values)) or initial_route)
+
+    def _paired_zero_state(self, *, n_qubits: int, layout: _Layout) -> DistState:
+        """Create |0...0> directly as paired float32 shards."""
+
+        spec = _ShardSpec.build(
+            n_qubits,
+            self._backend.world_size,
+            self._backend.rank,
+            "vector",
+            layout,
+        )
+        real = torch.zeros(spec.local_shape, dtype=torch.float32, device=self._backend._device)
+        if self._backend.rank == 0:
+            real[0, 0] = 1.0
+        return DistState.from_pair(
+            _Pair(real, torch.zeros_like(real)), spec=spec, backend=self._backend
+        )
+
+    def _prepare_paired_initial_state(
+        self,
+        *,
+        n_qubits: int,
+        layout: _Layout,
+        initial_state,
+        initial_density_matrix,
+    ) -> DistState:
+        """Prepare an autograd-safe initial state without complex transport."""
+
+        if initial_state is None and initial_density_matrix is None:
+            return self._paired_zero_state(n_qubits=n_qubits, layout=layout)
+        state = self._prepare_initial_state(
+            n_qubits=n_qubits,
+            layout=layout,
+            initial_state=initial_state,
+            initial_density_matrix=initial_density_matrix,
+        )
+        if state._pair is not None:
+            return state
+        raise TypeError(
+            "自动微分模式的初态必须是 PureStateParam、DensityParam 或 paired-real DistState"
+        )
+
+    def _preflight_autograd_capabilities(
+        self,
+        *,
+        circuit,
+        initial_state,
+        initial_density_matrix,
+        observables,
+        shots,
+        collapse,
+    ) -> None:
+        """Reject unsupported gradient requests before state transport."""
+
+        if collapse:
+            raise ValueError(AUTOGRAD_COLLAPSE_ERROR)
+        if shots is not None:
+            raise ValueError(AUTOGRAD_SAMPLING_ERROR)
+        root_value = initial_state if initial_state is not None else initial_density_matrix
+        if (
+            self._backend.rank == 0
+            and isinstance(root_value, torch.Tensor)
+            and torch.is_complex(root_value)
+            and root_value.requires_grad
+        ):
+            self._raise_root_initial_error(AUTOGRAD_DIRECT_COMPLEX_STATE_ERROR)
+        # Keep the root protocol collective even when the root has no error.
+        if not (
+            self._backend.rank == 0
+            and isinstance(root_value, torch.Tensor)
+            and torch.is_complex(root_value)
+            and root_value.requires_grad
+        ):
+            self._raise_root_initial_error(None)
+        if observables is not None:
+            from ..core.operators import Hamiltonian, PauliString
+            from ..ir import Observable
+
+            unsupported = next(
+                (
+                    name
+                    for name, observable in observables.items()
+                    if not isinstance(observable, (Hamiltonian, PauliString, Observable))
+                ),
+                None,
+            )
+            if unsupported is not None:
+                raise TypeError(
+                    f"自动微分模式不支持 observable {unsupported!r}"
+                )
+        noise_model = getattr(circuit, "noise_model", None)
+        if noise_model is not None:
+            from ..noise import (
+                AmplitudeDampingChannel,
+                BitFlipChannel,
+                DepolarizingChannel,
+                PhaseFlipChannel,
+            )
+            from .autograd._parameters import StinespringParam
+
+            supported = (
+                AmplitudeDampingChannel,
+                BitFlipChannel,
+                DepolarizingChannel,
+                PhaseFlipChannel,
+                StinespringParam,
+            )
+            for rule in noise_model.rules:
+                if not isinstance(rule.channel, supported):
+                    raise TypeError(
+                        "自动微分模式不支持噪声通道 "
+                        f"{type(rule.channel).__name__}"
+                    )
 
     def _assert_forward_only(
         self,
@@ -371,12 +564,12 @@ class DistSimulator:
         if source is None:
             state, metrics = self._run_paired_real(*args, **kwargs)
             metrics.peak_allocation_bytes = None
-            metrics.peak_allocation_status = "BLOCKED"
+            metrics.peak_allocation_status = "UNAVAILABLE"
             return state, metrics
         state, metrics = self._run_paired_real(*args, **kwargs)
         _synchronize_device(self._backend._device)
         metrics.peak_allocation_bytes = _peak_allocation_bytes(self._backend._device)
-        metrics.peak_allocation_status = "MEASURED" if metrics.peak_allocation_bytes is not None else "BLOCKED"
+        metrics.peak_allocation_status = "MEASURED" if metrics.peak_allocation_bytes is not None else "UNAVAILABLE"
         return state, metrics
 
     def _assert_process_agreement(
@@ -965,11 +1158,8 @@ class DistSimulator:
     ) -> DistResult:
         """Run one circuit cooperatively on all ranks."""
 
-        # The policy is intentionally validated before the forward-only gate
-        # so callers get one stable contract now.  It has no public execution
-        # effect until Task 11 opens native routing after the release evidence.
         _CheckpointPolicy.parse(grad_checkpoint)
-        self._assert_forward_only(
+        autograd = self._collective_autograd_route(
             circuit,
             initial_state,
             initial_density_matrix,
@@ -986,6 +1176,7 @@ class DistSimulator:
             collapse=collapse,
             observables=observables,
             layout=layout,
+            autograd=autograd,
         )
         measure_qubits = tuple(int(qubit) for qubit in measure_qubits)
         self._assert_process_agreement(
@@ -997,6 +1188,57 @@ class DistSimulator:
             return_state=return_state,
             return_probabilities=return_probabilities,
         )
+
+        if autograd:
+            self._preflight_autograd_capabilities(
+                circuit=circuit,
+                initial_state=initial_state,
+                initial_density_matrix=initial_density_matrix,
+                observables=observables,
+                shots=shots,
+                collapse=collapse,
+            )
+            # The deterministic parameter schema has to agree before a
+            # root-owned paired state could enter scatter transport.  The
+            # execution hook binds the aliases later, after this control-only
+            # preflight has made an all-rank failure safe.
+            _preflight_parameter_structure(
+                _replicated_parameter_entries(circuit),
+                communicator=self._backend.communicator,
+            )
+            state = self._prepare_paired_initial_state(
+                n_qubits=n_qubits,
+                layout=resolved_layout,
+                initial_state=initial_state,
+                initial_density_matrix=initial_density_matrix,
+            )
+            state, _metrics = self._run_paired_real(
+                circuit,
+                initial_state=state,
+                layout=resolved_layout,
+                grad_checkpoint=grad_checkpoint,
+            )
+            reducer = _PairReducer(self._backend)
+            expectations = {
+                str(name): reducer.expectation(state._pair, state.spec, observable)
+                for name, observable in (observables or {}).items()
+            }
+            local_probabilities = (
+                reducer.probabilities(state._pair, state.spec)
+                if return_probabilities
+                else None
+            )
+            return DistResult(
+                state=state if return_state else None,
+                local_probabilities=local_probabilities,
+                expectations=expectations,
+                counts=None,
+                rank=self._backend.rank,
+                world_size=self._backend.world_size,
+                _probability_state=(
+                    state if return_probabilities and not return_state else None
+                ),
+            )
 
         with torch.no_grad():
             state = self._prepare_initial_state(
