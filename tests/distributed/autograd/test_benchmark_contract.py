@@ -257,6 +257,31 @@ def test_cli_delegates_all_workload_fields_to_shared_runner(monkeypatch):
     assert report["forward_ms_median"] == 1.0
 
 
+def test_run_benchmark_accepts_raw_state_finite_difference_report(monkeypatch):
+    backend = type("Backend", (), {
+        "rank": 0, "world_size": 1, "_device": "cpu",
+        "communicator": type("C", (), {"set_autograd_communication_mode": lambda self, mode: None})(),
+    })()
+    monkeypatch.setattr(benchmark, "_strict_backend", lambda **_: backend)
+    monkeypatch.setattr(
+        benchmark.torch,
+        "npu",
+        type("Npu", (), {"reset_peak_memory_stats": lambda *args: None, "max_memory_allocated": lambda *args: 17})(),
+        raising=False,
+    )
+    monkeypatch.setattr(benchmark.torch.distributed, "is_initialized", lambda: False)
+    monkeypatch.setattr(benchmark, "run_benchmark_workload", lambda *_args, **_kwargs: _runner_metrics())
+    args = type("Args", (), {
+        "communication_mode": "baseline", "gradient_method": "finite_difference", "path": "statevector",
+        "n_qubits": 2, "depth": 1, "parameters": 1, "warmups": 1, "runs": 1,
+    })()
+
+    report = benchmark._run_benchmark(args)
+
+    assert report["path"] == "statevector"
+    assert report["gradient_method"] == "finite_difference"
+
+
 def _runner_metrics(**overrides):
     result = {
         "forward_ms_median": 1.0, "backward_ms_median": 2.0,

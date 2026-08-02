@@ -84,8 +84,6 @@ def _validate_benchmark_report(report):
         raise ValueError("path 无效")
     if report["gradient_method"] == "parameter_shift" and report["path"] != "statevector":
         raise ValueError("parameter_shift 仅适用于 shift-rule statevector workload")
-    if report["gradient_method"] == "finite_difference" and report["path"] == "statevector":
-        raise ValueError("statevector shift-rule workload 不使用 finite_difference")
     if any(report[name] <= 0 for name in ("world_size", "n_qubits", "depth", "parameters", "warmups", "runs")):
         raise ValueError("benchmark 计数必须为正")
     if any(report[name] < 0 for name in ("forward_ms_median", "backward_ms_median", "gradient_ms_median", "gradient_ms_p95", "wait_ms", "peak_memory_bytes", "p2p_bytes", "buffer_reuse_count")):
