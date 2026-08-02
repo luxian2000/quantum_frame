@@ -2,6 +2,27 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-08-02
+
+### Added
+
+- **Distributed native-autograd evidence gate tooling.** Added
+  `scripts/npu/distributed_autograd_evidence.py` and its contract tests.  It
+  accepts only independently completed 2/4/8-NPU HCCL reports from one full
+  commit, rejects CPU fallback, incomplete sections/handles, digest mismatch,
+  correctness/performance/stability failures, and writes `release_gate` as
+  `BLOCKED` whenever a required world size is absent.  It does not execute NPU
+  workloads or manufacture evidence.
+
+### Documentation
+
+- **Trainable `DistSimulator.run()` and evidence workflow.** Documented the
+  paired-real `PureStateParam`, `DensityParam`, and `StinespringParam` inputs,
+  differentiable outputs, checkpoint policies, explicit exclusions, and the
+  exact remote 2/4/8 commands.  Measured native-autograd evidence for 2/4/8
+  Ascend NPU runs is still pending, so this release gate is currently
+  `BLOCKED`; no performance, stability, or NPU-scale claim is made.
+
 ## 2026-07-29
 
 ### Added
