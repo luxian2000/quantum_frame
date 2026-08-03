@@ -444,7 +444,7 @@ def _benchmark_raw_state_pair(backend, spec, values) -> _Pair:
     return raw.div_real(torch.sqrt(global_norm_sq))
 
 
-def _benchmark_density_factor_state(backend, vector_spec, values) -> DistState:
+def _benchmark_density_factor_state(backend, vector_spec, values, *, requires_grad) -> DistState:
     """Scatter one root-owned trace-one DensityParam factorization by row."""
 
     dimension = 1 << vector_spec.n_qubits
@@ -468,13 +468,16 @@ def _benchmark_density_factor_state(backend, vector_spec, values) -> DistState:
             communicator=backend.communicator,
             root=0,
             local_shape=matrix_spec.local_shape,
+            # 非 root rank 的 values 恒不需要梯度（DensityParam 是 root 独占的），
+            # 因此这个集合一致的判断只能由调用方透传，不能就地推断。
+            root_requires_grad=bool(requires_grad),
         ),
         spec=matrix_spec,
         backend=backend,
     )
 
 
-def _benchmark_unitary_workload(backend, *, path, parameter_family, values, n_qubits, depth):
+def _benchmark_unitary_workload(backend, *, path, parameter_family, values, n_qubits, depth, requires_grad):
     """Run the genuine vector/density kernels; every depth and leaf is consumed."""
 
     layout, vector_spec = _benchmark_layout_and_spec(backend, n_qubits)
@@ -491,7 +494,7 @@ def _benchmark_unitary_workload(backend, *, path, parameter_family, values, n_qu
         apply = lambda current, plan, index: kernel.apply(current, plan, operation_index=index)
     else:
         kernel = _PairMatrixKernel(backend)
-        state = _benchmark_density_factor_state(backend, vector_spec, values)
+        state = _benchmark_density_factor_state(backend, vector_spec, values, requires_grad=requires_grad)
         apply = lambda current, plan, index: kernel.apply_unitary(current, plan, operation_index=index)
     operation_index = 40_000
     # Fixed depth layers are deliberately non-trainable, so parameter-shift is
@@ -552,9 +555,9 @@ def _benchmark_channel_workload(backend, *, path, values, n_qubits, depth):
     return _PairReducer(backend).expectation(state._pair, matrix_spec, _benchmark_observable(n_qubits)), state._pair, matrix_spec
 
 
-def _benchmark_workload_value(backend, *, path, parameter_family, values, n_qubits, depth):
+def _benchmark_workload_value(backend, *, path, parameter_family, values, n_qubits, depth, requires_grad=True):
     if path in {"statevector", "density"}:
-        return _benchmark_unitary_workload(backend, path=path, parameter_family=parameter_family, values=values, n_qubits=n_qubits, depth=depth)
+        return _benchmark_unitary_workload(backend, path=path, parameter_family=parameter_family, values=values, n_qubits=n_qubits, depth=depth, requires_grad=requires_grad)
     return _benchmark_channel_workload(backend, path=path, values=values, n_qubits=n_qubits, depth=depth)
 
 
@@ -612,7 +615,7 @@ def run_benchmark_workload(backend, *, communication_mode, path, gradient_method
             if requires_grad and parameter_family == "raw_state"
             else leaves
         )
-        value, state, spec = _benchmark_workload_value(backend, path=path, parameter_family=parameter_family, values=workload_values, n_qubits=n_qubits, depth=depth)
+        value, state, spec = _benchmark_workload_value(backend, path=path, parameter_family=parameter_family, values=workload_values, n_qubits=n_qubits, depth=depth, requires_grad=requires_grad)
         return value, state, spec, leaves
 
     point = np.asarray([0.19 + 0.03 * index for index in range(parameters)], dtype=np.float64)

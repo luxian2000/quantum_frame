@@ -673,8 +673,27 @@ def _replicated_all_reduce(tensor, *, communicator) -> torch.Tensor:
     return _ReplicatedAllReduceFn.apply(tensor, communicator)
 
 
-def _scatter_root_pair(pair_or_none, *, communicator, root, local_shape) -> _Pair:
-    """Scatter root-owned paired-real shards and gather their gradients to root."""
+def _scatter_root_pair(
+    pair_or_none,
+    *,
+    communicator,
+    root,
+    local_shape,
+    root_requires_grad: bool = True,
+) -> _Pair:
+    """Scatter root-owned paired-real shards and gather their gradients to root.
+
+    ``root_requires_grad`` 必须在所有 rank 上取相同值，表示本次求值是否会经由
+    这次 scatter 反向。非 root rank 拿不到 root 的实际参数，只能由调用方给出这个
+    集合一致的判断：simulator 侧只有 native autograd 路由才会走到这里（恒为
+    True），benchmark 侧则直接透传 ``requires_grad``。
+
+    过去这里把占位张量硬编码成 ``requires_grad=True``。当 root 其实不需要梯度
+    （纯前向求值）时，root 走 forward-only 分支而其余 rank 却建出一张永远不会
+    backward 的图，于是 `_LaunchedPairExchange.wait` 在非 root rank 上取不到归还
+    时机，pooled buffer 只借不还——表现为 density 前向路径在非 root rank 上
+    ``buffer_reuse_count`` 恒为 0，且 ``requires_grad`` 在各 rank 间不对称。
+    """
 
     parsed_root = _safe_int(root)
     parsed_shape = _safe_shape(local_shape)
@@ -725,17 +744,20 @@ def _scatter_root_pair(pair_or_none, *, communicator, root, local_shape) -> _Pai
     if is_root:
         root_real, root_imag = pair_or_none.real, pair_or_none.imag
     else:
+        # 占位张量的 requires_grad 必须跟随 root 的真实需求：为 True 时各 rank
+        # 都建图，scatter 的 backward（gather 到 root）才能在所有 rank 上齐步
+        # 执行；为 False 时各 rank 一致走纯前向，buffer 才会被及时归还。
         root_real = torch.zeros(
             local_shape,
             dtype=torch.float32,
             device=communicator.device,
-            requires_grad=True,
+            requires_grad=bool(root_requires_grad),
         )
         root_imag = torch.zeros(
             local_shape,
             dtype=torch.float32,
             device=communicator.device,
-            requires_grad=True,
+            requires_grad=bool(root_requires_grad),
         )
     real, imag = _RootScatterPairFn.apply(
         root_real,

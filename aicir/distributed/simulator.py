@@ -1662,6 +1662,8 @@ class DistSimulator:
                 communicator=self._backend.communicator,
                 root=0,
                 local_shape=spec.local_shape,
+                # 只有 native autograd 路由会走到这里，各 rank 必然一致。
+                root_requires_grad=True,
             ),
             spec=spec,
             backend=self._backend,
@@ -1726,6 +1728,8 @@ class DistSimulator:
                 communicator=self._backend.communicator,
                 root=0,
                 local_shape=spec.local_shape,
+                # 只有 native autograd 路由会走到这里，各 rank 必然一致。
+                root_requires_grad=True,
             ),
             spec=spec,
             backend=self._backend,

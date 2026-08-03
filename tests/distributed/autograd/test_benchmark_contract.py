@@ -170,6 +170,9 @@ def test_density_factor_workload_materializes_full_factor_only_on_root(monkeypat
             backend,
             vector_spec,
             (torch.tensor(0.19, dtype=torch.float32, requires_grad=rank == 0),),
+            # 非 root rank 的叶子按设计不需要梯度，因此这个集合一致的标志
+            # 必须由调用方透传，不能从 values 就地推断。
+            requires_grad=True,
         )
         assert state.local_shape == (2, 4)
     assert captures[0] is not None

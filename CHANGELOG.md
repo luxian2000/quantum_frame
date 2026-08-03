@@ -6,6 +6,18 @@
 
 ### 修复
 
+- **root-owned scatter 在非 root rank 上强制 `requires_grad=True`。**
+  `_scatter_root_pair` 给非 root rank 的占位张量硬编码 `requires_grad=True`。
+  当 root 其实不需要梯度（纯前向求值）时，root 走 forward-only 分支、其余 rank
+  却建出一张永远不会 backward 的图，`_LaunchedPairExchange.wait` 因此在非 root
+  rank 上等不到归还时机，pooled buffer 只借不还（实测非 root rank 42 次 acquire、
+  0 次 release），并使 `requires_grad` 在各 rank 间不对称。现在由调用方透传集合
+  一致的 `root_requires_grad`：simulator 侧只有 native autograd 路由会走到这里
+  （恒为 True），benchmark 侧透传 `requires_grad`。占位张量不能就地推断该标志——
+  非 root rank 的 `DensityParam` 叶子按设计恒不需要梯度。修复后十个 workload ×
+  三种通信模式在各 rank 上的 `buffer_reuse_count` 完全一致且 acquire==release。
+  回归测试见 `tests/distributed/autograd/test_root_scatter_requires_grad_multiprocess.py`。
+
 - **paired-real buffer 池的 `discard`/`release` 竞争使复用失效。**
   `_LaunchedPairExchange.wait` 会给前向输出挂 weakref finalizer 调用
   `_PairBufferPool.discard`，而 autograd Function 的输出张量与 `buffer.real`
