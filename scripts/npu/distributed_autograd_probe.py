@@ -1769,7 +1769,16 @@ def _contract_section(backend):
                     device=backend._device,
                 ),
             )
-        return simulator.run(trainable_circuit(), initial_state=state)
+        # 必须显式传本 section 的 layout。这里的 spec 用的是倒序显式 layout，
+        # 而 run() 的自动 layout 只有在 world_size=2 时才恰好等于倒序
+        # （W=2: (1,0)==(1,0)；W=4: (2,1,0)!=(2,0,1)；W=8: (3,2,1,0)!=(3,0,1,2)）。
+        # 不传 layout 时 W>=4 会先触发 "DistState 的 n_qubits/layout 与线路不一致"，
+        # shape/dtype 这两个 case 就永远测不到自己要测的东西。
+        return simulator.run(
+            trainable_circuit(),
+            initial_state=state,
+            layout=layout.logical_to_storage,
+        )
 
     def unsupported_gate():
         parameter = torch.tensor(
