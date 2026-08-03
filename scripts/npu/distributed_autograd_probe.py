@@ -1752,6 +1752,12 @@ def _contract_section(backend):
         )
         state = DistState.from_pair(pair, spec=spec, backend=backend)
         if backend.rank == 0:
+            # 不能用 torch.float64 构造这个反例：Ascend 没有 double，
+            # torch_npu 会静默降精度成 float32（stderr 出现
+            # "Device do not support double dtype now, dtype cast repalce
+            # with float"），于是这个 leaf 反而合法、预期的 ValueError 不会
+            # 抛出，contract case 在真机上必然记成 NO_ERROR。float16 是
+            # Ascend 原生支持、又不等于 float32 的 dtype，才能真正触发校验。
             object.__setattr__(
                 state._pair,
                 "real",
@@ -1759,7 +1765,7 @@ def _contract_section(backend):
                     (spec.local_shape[0] + 1, *spec.local_shape[1:])
                     if not dtype
                     else spec.local_shape,
-                    dtype=torch.float64 if dtype else torch.float32,
+                    dtype=torch.float16 if dtype else torch.float32,
                     device=backend._device,
                 ),
             )

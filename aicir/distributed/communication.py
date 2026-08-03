@@ -8,6 +8,28 @@ import time
 import torch
 
 
+# ``ProcessGroup::send`` 把 tag 绑定成 32 位 C++ int，超出即抛
+# ``TypeError: send(): incompatible function arguments``。上层按
+# (指令, 噪声规则, Kraus 项, partner mask) 组合出的 tag 会随门数线性膨胀，
+# 因此在传输边界统一取模。取模基数是偶数，`exchange` 的 (2t, 2t+1)
+# 实部/虚部配对在取模后仍然相邻且奇偶不变。
+_TAG_MODULUS = 1 << 30
+
+
+def _wrap_tag(tag: int) -> int:
+    """Fold one logical tag into the transport's 32-bit signed tag space.
+
+    分布式执行里每个 rank 按同一顺序发起同一组 P2P 交换，且每次交换在下一次
+    之前完成等待，因此同一 (peer, tag) 上的消息按发起顺序匹配，取模造成的
+    重复 tag 不会错配。
+    """
+
+    tag = int(tag)
+    if tag < 0:
+        raise ValueError("P2P tag 必须非负")
+    return tag % _TAG_MODULUS
+
+
 class _P2PWorkGroup:
     """One logical P2P operation backed by its send and receive works."""
 
@@ -183,20 +205,21 @@ class _Communicator:
         ):
             raise ValueError("P2P receive buffer 必须与发送张量同 shape、dtype、device 且连续")
         send = tensor.contiguous()
+        tag = _wrap_tag(tag)
         operations = [
             self._dist.P2POp(
                 self._dist.isend,
                 send,
                 int(peer),
                 group=self.group,
-                tag=int(tag),
+                tag=tag,
             ),
             self._dist.P2POp(
                 self._dist.irecv,
                 receive,
                 int(peer),
                 group=self.group,
-                tag=int(tag),
+                tag=tag,
             ),
         ]
         works = self._dist.batch_isend_irecv(operations)

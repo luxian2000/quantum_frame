@@ -2,6 +2,33 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-08-03
+
+### 修复
+
+- **分布式 P2P tag 溢出 32 位。** `aicir/distributed` 的 tag 由
+  (指令序号, 噪声规则, Kraus 项, partner mask) 逐层相乘得到，每个门消耗约
+  `1.07e9` 的 tag 空间，而 `ProcessGroup::send` 的 tag 绑定成 32 位 C++
+  int，越界直接抛 `TypeError: send(): incompatible function arguments`。
+  实测：CPU/gloo 契约下带噪声线路的**第 3 个门**即崩溃；真机
+  `supports_complex=False` 时 `exchange` 还要把复数拆成 `2t`/`2t+1` 两次实数
+  传输，可用空间再减半，**第 2 个门**就崩溃——即 Ascend 上只有线路的第一个
+  门能挂噪声。现在在传输边界 `_Communicator._exchange_tensor_async` 统一对
+  tag 取模 `2**30`。各 rank 按同一顺序发起同一组交换、且每次交换在下一次之前
+  完成等待，同一 `(peer, tag)` 上的消息按发起顺序匹配，故折叠不会错配；取模
+  基数为偶数，实部/虚部的 `(2t, 2t+1)` 配对与奇偶性保持不变，探针的
+  `paired_transport_tags` 证据语义不变。`communication_records` 仍记录折叠前的
+  逻辑 tag。回归测试见 `tests/distributed/test_tag_overflow_multiprocess.py`
+  （两种传输契约各覆盖一条 6 门噪声线路）。
+
+- **分布式自动微分探针的 `dtype` contract case 在真机上恒为 NO_ERROR。**
+  `scripts/npu/distributed_autograd_probe.py` 原先用 `torch.float64` 构造非法
+  paired-real leaf，但 Ascend 没有 double，`torch_npu` 会静默降精度成
+  `float32`（stderr 出现 `Device do not support double dtype now, dtype cast
+  repalce with float`），于是该 leaf 反而合法、预期的 `ValueError` 不会抛出，
+  case 记成 `NO_ERROR` 并使整个 `contract` section 失败。改用 Ascend 原生支持
+  且不等于 `float32` 的 `torch.float16`，精确错误类型和文本不变。
+
 ## 2026-08-02
 
 ### 新增
