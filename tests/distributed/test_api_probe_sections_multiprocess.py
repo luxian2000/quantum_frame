@@ -708,21 +708,19 @@ def test_api_probe_sections_are_collective_safe(world_size, tmp_path):
         "mid_measure": "EXPECTED_ERROR",
         "mid_reset": "EXPECTED_ERROR",
         "mid_while": "EXPECTED_ERROR",
-        "trainable_custom_unitary": "UNSUPPORTED_AS_DESIGNED",
-        "trainable_dist_state": "UNSUPPORTED_AS_DESIGNED",
-        "trainable_numeric_gate": "UNSUPPORTED_AS_DESIGNED",
-        "trainable_root_density": "UNSUPPORTED_AS_DESIGNED",
-        "trainable_root_state": "UNSUPPORTED_AS_DESIGNED",
+        "trainable_custom_unitary": "EXPECTED_ERROR",
+        "trainable_dist_state": "EXPECTED_ERROR",
+        "trainable_root_density": "EXPECTED_ERROR",
+        "trainable_root_state": "EXPECTED_ERROR",
     }
-    assert len(contract_metrics["case_evidence"]) == 14
+    assert len(contract_metrics["case_evidence"]) == 13
     assert all(
         evidence["matched_rank_count"] == world_size
         and evidence["participating_rank_count"] == world_size
         and evidence["exact_message"]
         and evidence["exact_type"]
         and evidence["message_digest_agreement"]
-        and evidence["expected_type"] == "ValueError"
-        and evidence["actual_type"] == "ValueError"
+        and evidence["actual_type"] == evidence["expected_type"]
         and evidence["actual_message"] == evidence["expected_message"]
         and len(evidence["message_digest"]) == 64
         for evidence in contract_metrics["case_evidence"]

@@ -86,11 +86,8 @@ def test_rejects_trainable_gate_parameter(monkeypatch):
     theta = torch.tensor(0.2, requires_grad=True)
     circuit = Circuit(rx(theta, 0), n_qubits=1)
 
-    with pytest.raises(
-        ValueError,
-        match="DistSimulator 首期仅支持前向模拟，不支持自动微分",
-    ):
-        simulator.run(circuit)
+    result = simulator.run(circuit)
+    assert result.state._pair is not None
 
 
 @pytest.mark.parametrize(
@@ -119,7 +116,7 @@ def test_rejects_trainable_root_owned_initial_value(
 
     with pytest.raises(
         ValueError,
-        match="DistSimulator 首期仅支持前向模拟，不支持自动微分",
+        match="原生 distributed autograd 不接受 requires_grad complex initial_state",
     ):
         simulator.run(Circuit(n_qubits=1), **{argument: value})
 
@@ -133,8 +130,8 @@ def test_rejects_trainable_custom_unitary(monkeypatch):
     )
 
     with pytest.raises(
-        ValueError,
-        match="DistSimulator 首期仅支持前向模拟，不支持自动微分",
+        TypeError,
+        match="原生 distributed autograd 不接受 requires_grad complex unitary",
     ):
         simulator.run(circuit)
 

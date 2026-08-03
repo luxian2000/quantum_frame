@@ -18,7 +18,7 @@ class DistResult:
 
     state: DistState | None
     local_probabilities: object | None
-    expectations: Mapping[str, float | complex]
+    expectations: Mapping[str, torch.Tensor | float | complex]
     counts: Mapping[str, int] | None
     rank: int
     world_size: int
@@ -45,6 +45,36 @@ class DistResult:
     def is_root(self) -> bool:
         return int(self.rank) == 0
 
+    @property
+    def is_differentiable(self) -> bool:
+        """Whether this result retains a paired-real native autograd graph.
+
+        ``gather_probabilities`` and state materialization remain explicit
+        detach boundaries; losses must use ``local_probabilities`` or
+        ``expectations`` while this property is true.
+        """
+
+        if isinstance(self.local_probabilities, torch.Tensor) and (
+            self.local_probabilities.requires_grad
+            or self.local_probabilities.grad_fn is not None
+        ):
+            return True
+        if any(
+            isinstance(value, torch.Tensor)
+            and (value.requires_grad or value.grad_fn is not None)
+            for value in self.expectations.values()
+        ):
+            return True
+        state = self.state if self.state is not None else self._probability_state
+        pair = None if state is None else getattr(state, "_pair", None)
+        return bool(
+            pair is not None
+            and any(
+                tensor.requires_grad or tensor.grad_fn is not None
+                for tensor in (pair.real, pair.imag)
+            )
+        )
+
     def gather_probabilities(self, *, root: int = 0):
         if self.local_probabilities is None:
             return None
@@ -58,7 +88,7 @@ class DistResult:
                 "gather_probabilities 需要 result.state 的布局元数据"
             )
         shards = metadata_state.backend.communicator.gather_to_root(
-            self.local_probabilities.reshape(-1),
+            self.local_probabilities.detach().reshape(-1),
             root=root,
         )
         if self.rank != int(root):

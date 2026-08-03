@@ -4,6 +4,111 @@
 它是一套独立的显式 API，不会改变 `State`、`Circuit`、`Measure` 或
 `NPUBackend` 的既有语义，也不会把普通模拟调用自动转换为分布式执行。
 
+> **Native-autograd release status (2026-08-02).** The trainable path below is
+> implemented and locally contract-tested, but there is **no measured Ascend
+> HCCL evidence yet** for world sizes 2, 4, or 8.  Therefore its release gate
+> is `BLOCKED`; do not infer an NPU performance, stability, or scale claim
+> from CPU/Gloo tests or this documentation.
+
+## Native paired-real autograd (strict release scope)
+
+`DistSimulator.run()` automatically selects the native paired-real path when a
+supported input or circuit/noise parameter has `requires_grad=True`.  Ordinary
+forward calls retain their existing forward path.  All ranks must call both
+`run()` and `backward()` in the same order.
+
+```python
+import torch
+
+from aicir import Circuit, PauliString, ry
+from aicir.distributed import DistSimulator, PureStateParam
+
+simulator = DistSimulator.from_env(fallback_to_cpu=False)
+theta = torch.tensor(0.31, dtype=torch.float32, device=simulator.backend._device,
+                     requires_grad=True)  # replicated, equal value on every rank
+if simulator.backend.rank == 0:
+    real = torch.tensor([1., 0., 0., 0.], dtype=torch.float32,
+                        device=simulator.backend._device, requires_grad=True)
+    imag = torch.zeros_like(real, requires_grad=True)
+    initial_state = PureStateParam(real, imag)
+else:
+    initial_state = None
+
+result = simulator.run(
+    Circuit(ry(theta, 0), n_qubits=2),
+    initial_state=initial_state,
+    observables={"z0": PauliString("ZI", n_qubits=2)},
+    grad_checkpoint="auto",
+)
+result.expectations["z0"].backward()  # collective backward on every rank
+```
+
+The trainable initial-state containers use paired real `torch.float32` leaves:
+
+- `PureStateParam(real, imag)` normalizes unconstrained amplitudes.
+- `DensityParam(real, imag)` constructs the physical, trace-one state
+  `L L† / Tr(L L†)`.
+- `StinespringParam(input_dim, output_dim, environment_dim, real, imag,
+  target_qubits=...)` is a trainable square-channel parameter for a supported
+  noise rule.  Its raw real/imaginary leaves must have shape
+  `(output_dim * environment_dim, output_dim * environment_dim)`.
+
+`result.expectations`, returned paired `result.state`, and
+`result.local_probabilities` remain differentiable in this route.  `shots`,
+counts/sampling, and `collapse=True` are deliberately non-differentiable and
+are rejected before state transport.  A direct complex trainable tensor is
+also rejected: use the paired-real containers instead.
+
+`grad_checkpoint` accepts `"none"`, `"auto"`, or a positive integer interval.
+It controls saved/recomputed paired-real gate states; it does not alter the
+logical circuit result.  The strict release scope excludes MPS execution,
+sampling/counts, collapse, mid-circuit measurement/reset/control flow,
+circuit cutting, quantum networking, and **multi-node** native autograd.
+
+### Required remote 2/4/8 evidence workflow
+
+On an actual single-node Ascend environment (after loading that environment's
+CANN setup), run each command independently from the exact commit to be
+released.  The probe refuses tracked, staged, **or untracked** files, so put
+the reports in an existing directory outside the checkout (replace the
+example path with an absolute path on the target host):
+
+```bash
+EVIDENCE_DIR=/absolute/path/outside/quantum_frame
+PYTHONPATH=.:${PYTHONPATH:-} torchrun --nproc-per-node=2 scripts/npu/distributed_autograd_probe.py --section all --output-json "${EVIDENCE_DIR}/world2.json"
+PYTHONPATH=.:${PYTHONPATH:-} torchrun --nproc-per-node=4 scripts/npu/distributed_autograd_probe.py --section all --output-json "${EVIDENCE_DIR}/world4.json"
+PYTHONPATH=.:${PYTHONPATH:-} torchrun --nproc-per-node=8 scripts/npu/distributed_autograd_probe.py --section all --output-json "${EVIDENCE_DIR}/world8.json"
+PYTHONPATH=. python scripts/npu/distributed_autograd_evidence.py aggregate "${EVIDENCE_DIR}/world2.json" "${EVIDENCE_DIR}/world4.json" "${EVIDENCE_DIR}/world8.json" --output "${EVIDENCE_DIR}/manifest.json"
+```
+
+Archive only the unedited rank-0 reports and generated manifest under
+`docs/evidence/distributed-autograd/<full-commit-sha>/`.  Before archiving,
+`validate-run` must accept each report.  The evidence validator requires the
+same clean full commit SHA, a canonical full-probe command, a unique UUIDv4
+and UTC interval per run, exact rank-to-`npu:LOCAL_RANK` bindings, HCCL, no
+CPU fallback, all 13 PASS sections, and completed work handles.  Every numeric
+metric must be finite.
+
+Performance evidence is an exact ten-record multiset: five native/oracle
+pairs, each measured in `baseline`, `reuse`, and `overlap` mode.  Every native
+median must be strictly below its applicable parameter-shift or central
+finite-difference median, and every mode records an actual fixed-float32
+all-rank disagreement at most `1e-6`.  Memory evidence repeats each of
+`none`, `auto`, and interval `16`; the validator recomputes each growth value
+from the finite allocator samples and requires the maximum to be at most 1%.
+An unavailable allocator measurement is an explicit failed invariant and
+blocks the report—it is never encoded as NaN.
+
+The producer hashes the exact compact JSON bytes after replacing the one
+`raw_sha256` value with 64 zero bytes, then atomically replaces the report
+from a temporary file in the same directory.  Reformatting or changing one
+byte invalidates the digest.  Aggregation likewise writes atomically and
+rejects an output path that resolves to an input report.  Missing 8-NPU
+evidence is blocked: Missing 8-NPU evidence is `BLOCKED`, never `SKIPPED`;
+only a complete manifest can contain
+`release_gate="PASS"`.  **No 2/4/8 measured evidence is currently archived;
+the release gate remains `BLOCKED`.**
+
 ## 目录
 
 - [1. 功能模型与前提条件](#1-功能模型与前提条件)
@@ -48,7 +153,8 @@ collective。`rank` 只标识某段存储属于哪个进程，不是量子寄存
 - `world_size = 2^p`，例如 1、2、4、8；
 - 线路量子比特数满足 `n_qubits >= p`；
 - 状态和门矩阵固定使用 `torch.complex64`；
-- 仅支持前向模拟，不支持 autograd 或 `requires_grad=True`；
+- 不含可训练输入时保持既有前向路径；受支持的 paired-real
+  `requires_grad=True` 输入会进入 native autograd 路径（见页首严格范围）；
 - Ascend 真机使用 HCCL；CPU/Gloo 只用于本地契约测试；
 - 正常模拟不会隐式聚合完整状态、密度矩阵或概率向量。
 
@@ -305,6 +411,7 @@ def run(
     layout=None,
     return_state=True,
     return_probabilities=True,
+    grad_checkpoint="auto",
 ) -> DistResult:
     ...
 ```
@@ -324,6 +431,7 @@ def run(
 | `layout`                 | `None` 自动选择；或传逻辑比特到存储轴的完整排列           |
 | `return_state`           | 是否通过`DistResult.state` 暴露最终分片态                 |
 | `return_probabilities`   | 是否计算并保存每个 rank 的局部概率分片                      |
+| `grad_checkpoint`        | native autograd 的检查点策略：`"none"`、`"auto"` 或正整数间隔 |
 
 `initial_state` 与 `initial_density_matrix` 不能同时提供。除“rank 0
 完整初态”这种约定外，每个 rank 的线路、参数和执行顺序必须一致。
@@ -800,12 +908,12 @@ HCCL 带宽、kernel 粒度和临时缓冲影响。
 | 支持                                                    | 不支持或拒绝                     |
 | ------------------------------------------------------- | -------------------------------- |
 | `world_size=2^p` 且 `n_qubits >= p`                 | 非 2 的幂 world size             |
-| 前向`complex64` 状态向量                              | autograd、`requires_grad=True` |
+| 前向`complex64` 状态向量；受支持的 paired-real native autograd | 直接 complex trainable leaf |
 | 行分片密度矩阵                                          | 任意二维分块或列分块             |
 | 能解析局部门矩阵的酉门                                  | 隐式完整全局酉矩阵               |
 | 门后触发的确定性局部 Kraus 噪声                         | 随机纯态轨迹、全系统自定义 Kraus |
 | Pauli、Pauli Hamiltonian、显式目标的局部稠密 observable | 无结构的全系统稠密 observable    |
-| 末端 Z 基 shots 和逻辑比特子集                          | 中途测量、reset、非 Z 末端采样   |
+| 前向路径的末端 Z 基 shots 和逻辑比特子集                | autograd 下的 sampling/counts、collapse；中途测量、reset、非 Z 末端采样 |
 | `shots=1, collapse=True`                              | 多 shot collapse                 |
 | rank 0 完整初态或所有 rank 的匹配`DistState`          | 混合初态提供模式                 |
 | 显式 root gather                                        | 隐式完整状态/概率 gather         |
@@ -818,7 +926,7 @@ HCCL 带宽、kernel 粒度和临时缓冲影响。
 | `shots <= 0`                                           | 抛出`ValueError`       |
 | `collapse=True` 且 `shots != 1`                      | 抛出`ValueError`       |
 | 线路包含 measure/reset/控制流                            | 在状态分配和门执行前拒绝 |
-| 门参数`requires_grad=True`                             | 在门规划时拒绝           |
+| 不支持的 gate/channel/observable 或 direct complex trainable leaf | 在 native-autograd 预检阶段拒绝 |
 | layout 不是完整排列                                      | 抛出`ValueError`       |
 | 不同 rank 的线路或关键选项不一致                         | 摘要一致性检查失败       |
 | 复用的`DistState` 属于另一 backend/layout              | 抛出`ValueError`       |
@@ -867,14 +975,14 @@ NumPy 不参与被测的分布式状态演化，也不是模拟 fallback。
 | `communication` | 局部门零 P2P、分布式轴门实际 P2P、peer 覆盖及实部/虚部成对 tag                           |
 | `contract`      | 14 个不支持或非法调用在所有 rank 上得到完全相同的类型和精确错误文本                      |
 
-`contract` 包含训练输入。首期只支持前向；状态、密度矩阵或门参数带
-`requires_grad=True` 时必须在所有 rank 精确报错：
+`contract` 还包含 native-autograd 的拒绝边界：sample/counts、collapse、
+direct complex trainable leaves、结构/所有权/shape/dtype 不一致、未支持
+gate/channel/observable、非 HCCL、CPU fallback、无效 checkpoint policy 和
+forward/backward tag 注入必须在所有 rank 得到一致的精确错误。受支持的
+paired-real 参数则由 `DistSimulator.run()` 正常路由，不能把这些拒绝项
+解释为“整个分布式模拟器不支持 autograd”。
 
-```text
-DistSimulator 首期仅支持前向模拟，不支持自动微分
-```
-
-14 个 case 分为：
+历史前向 API probe 的 14 个 case 分为：
 
 - `EXPECTED_ERROR`：`invalid_explicit_layout`、
   `invalid_root_vector_shape`、`invalid_root_density_shape`、
@@ -894,7 +1002,7 @@ DistSimulator 首期仅支持前向模拟，不支持自动微分
 | `passed`                                            | 只有所有 rank、所有所选 section 均通过时才为`true`                                        |
 | `world_size`                                        | 必须与本次`--nproc-per-node` 相同，即分别为 2 和 4                                        |
 | `fallback_to_cpu`                                   | 必须为`false`                                                                             |
-| `sections.<name>.status`                            | 正常支持项只能为`PASS` 或 `FAIL`                                                        |
+| `sections.<name>.status` | 正常支持项只能为 `PASS` 或 `FAIL` |
 | `sections.<name>.passed`                            | 该 section 的数值、行为和跨 rank 证据是否全部满足                                           |
 | `sections.<name>.metrics`                           | 该 section 的具体误差、计数、布局或通信证据                                                 |
 | `sections.contract.metrics.case_statuses`           | 每个错误契约 case 的状态映射；预期拒绝项为`EXPECTED_ERROR` 或 `UNSUPPORTED_AS_DESIGNED` |
@@ -929,10 +1037,12 @@ DistSimulator 首期仅支持前向模拟，不支持自动微分
 首期完整 NPU API 验收通过。通过只证明该软硬件组合的正确性，不证明
 多 NPU 性能加速。
 
-### 17.3 2026-07-30 真机验收记录
+### 17.3 Historical forward-only API record (not native-autograd evidence)
 
-2026-07-30 在同一远程 Ascend 作业环境完成 2 NPU 和 4 NPU 的
-`--section all` 严格验收。两次执行均满足：
+The following 2026-07-30 record concerns the older forward-only API probe.
+It is **not** evidence for native autograd and cannot satisfy the current
+2/4/8 release gate; native-autograd measured evidence remains pending.  That
+forward-only run completed 2 NPU and 4 NPU `--section all` acceptance:
 
 - 顶层 `passed=true`、`failed_invariants=[]`、
   `fallback_to_cpu=false`；

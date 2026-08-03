@@ -43,7 +43,6 @@ from aicir import (
     while_,
 )
 from aicir.distributed import DistSimulator
-from aicir.distributed._contracts import AUTOGRAD_ERROR
 
 
 STATE_ATOL = 1e-6
@@ -1539,6 +1538,10 @@ def _run_communication_section(simulator):
 
 
 def _expected_error(call, expected_message, expected_type):
+    # ``UNSUPPORTED_AS_DESIGNED`` remains a historical evidence status in
+    # archived API reports; Task 11 upgrades the eligible trainable paths to
+    # automatic routing and records their remaining exact rejections as
+    # ``EXPECTED_ERROR`` instead.
     try:
         call()
     except Exception as error:  # noqa: BLE001
@@ -1717,7 +1720,7 @@ def _run_contract_section(simulator):
         ),
         (
             "trainable_root_state",
-            "UNSUPPORTED_AS_DESIGNED",
+            "EXPECTED_ERROR",
             lambda: simulator.run(
                 empty,
                 initial_state=root_value(
@@ -1729,12 +1732,12 @@ def _run_contract_section(simulator):
                 ),
                 layout=identity_layout,
             ),
-            AUTOGRAD_ERROR,
+            "原生 distributed autograd 不接受 requires_grad complex initial_state；请使用 PureStateParam(real, imag)",
             ValueError,
         ),
         (
             "trainable_root_density",
-            "UNSUPPORTED_AS_DESIGNED",
+            "EXPECTED_ERROR",
             lambda: simulator.run(
                 empty,
                 initial_density_matrix=root_value(
@@ -1746,39 +1749,23 @@ def _run_contract_section(simulator):
                 ),
                 layout=identity_layout,
             ),
-            AUTOGRAD_ERROR,
+            "原生 distributed autograd 不接受 requires_grad complex initial_state；请使用 PureStateParam(real, imag)",
             ValueError,
         ),
         (
             "trainable_dist_state",
-            "UNSUPPORTED_AS_DESIGNED",
+            "EXPECTED_ERROR",
             lambda: simulator.run(
                 empty,
                 initial_state=trainable_dist_state,
                 layout=identity_layout,
             ),
-            AUTOGRAD_ERROR,
-            ValueError,
-        ),
-        (
-            "trainable_numeric_gate",
-            "UNSUPPORTED_AS_DESIGNED",
-            lambda: simulator.run(
-                Circuit(
-                    rx(
-                        torch.tensor(0.2, requires_grad=True),
-                        target_qubit=0,
-                    ),
-                    n_qubits=n_qubits,
-                ),
-                layout=identity_layout,
-            ),
-            AUTOGRAD_ERROR,
-            ValueError,
+            "自动微分模式的初态必须是 PureStateParam、DensityParam 或 paired-real DistState",
+            TypeError,
         ),
         (
             "trainable_custom_unitary",
-            "UNSUPPORTED_AS_DESIGNED",
+            "EXPECTED_ERROR",
             lambda: simulator.run(
                 Circuit(
                     {
@@ -1795,8 +1782,8 @@ def _run_contract_section(simulator):
                 ),
                 layout=identity_layout,
             ),
-            AUTOGRAD_ERROR,
-            ValueError,
+            "原生 distributed autograd 不接受 requires_grad complex unitary；请提供 _Pair(real, imag) 或在 CPU 参考路径构造该矩阵",
+            TypeError,
         ),
     )
 

@@ -13,6 +13,12 @@ API_PROBE = (
     / "npu"
     / "distributed_api_probe.py"
 )
+AUTOGRAD_PROBE = (
+    Path(__file__).resolve().parents[2]
+    / "scripts"
+    / "npu"
+    / "distributed_autograd_probe.py"
+)
 MANUAL = (
     Path(__file__).resolve().parents[2]
     / "aicir"
@@ -60,7 +66,7 @@ def test_npu_launch_instructions_preserve_cann_pythonpath():
         ]
         assert launch_lines
         assert all(
-            line.startswith("PYTHONPATH=.:${PYTHONPATH} torchrun")
+            line.startswith("PYTHONPATH=.:${PYTHONPATH") and "torchrun" in line
             for line in launch_lines
         )
 
@@ -160,7 +166,15 @@ def test_manual_documents_full_npu_api_acceptance_contract():
         "`failed_invariants`",
         "`local_tensor_sizes`",
         "`fallback_to_cpu=False`",
-        "DistSimulator 首期仅支持前向模拟，不支持自动微分",
+        "Native-autograd release status",
+        "PureStateParam",
+        "DensityParam",
+        "StinespringParam",
+        "grad_checkpoint",
+        "scripts/npu/distributed_autograd_probe.py",
+        "--nproc-per-node=8",
+        "release_gate",
+        "Missing 8-NPU evidence is `BLOCKED`, never `SKIPPED`",
         "14 个不支持或非法调用",
         "Gloo",
         "不能作为 NPU 验收",
@@ -186,3 +200,14 @@ def test_manual_documents_full_npu_api_acceptance_contract():
         "分布式状态演化，也不是模拟 fallback。"
         in normalized
     )
+
+
+def test_native_autograd_probe_keeps_trainable_paths_contextual_and_sharded():
+    source = AUTOGRAD_PROBE.read_text(encoding="utf-8")
+
+    assert "_AutogradExecutionContext()" in source
+    assert "def _local_initial_pair" in source
+    assert "spec.global_start, spec.global_stop" in source
+    assert "for global_component in range(1 << n_qubits)" in source
+    assert "_cpu_complex128_expectation" in source
+    assert "DistSimulator" in source
