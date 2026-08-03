@@ -4,30 +4,26 @@
 
 ## 2026-08-02
 
-### Added
+### 新增
 
-- **Distributed native-autograd evidence gate tooling.** Added
-  `scripts/npu/distributed_autograd_evidence.py` and its contract tests.  It
-  accepts only independently completed 2/4/8-NPU HCCL reports from one full
-  clean commit with canonical commands and unique run provenance.  The probe
-  emits an exact-byte, zero-placeholder SHA-256; the validator rejects
-  non-finite numerics, any deviation from the exact ten native/oracle workload
-  records and their three communication modes, missing measured
-  rank-disagreement, or memory growth not reproducible from repeated finite
-  allocator samples.  Report and manifest writes are same-directory atomic,
-  and aggregation rejects input/output collisions.  CPU fallback, incomplete
-  sections/handles, correctness/performance/stability failures, or a missing
-  world size produce `BLOCKED`, never `SKIPPED`.  The tooling does not execute
-  remote jobs on its own or manufacture evidence.
+- **分布式原生自动微分证据门禁工具。** 新增
+  `scripts/npu/distributed_autograd_evidence.py` 及其契约测试。工具只接受
+  来自同一个完整干净提交、使用规范命令并带有唯一运行来源信息的独立
+  2/4/8-NPU HCCL 报告。探针生成基于精确字节、零占位值的 SHA-256；验证器
+  拒绝非有限数值、偏离精确十条原生/Oracle 工作负载记录及其三种通信模式、
+  缺失的实测 rank 差异，或无法由重复有限内存分配器样本复算的内存增长。
+  报告和清单均在同一目录中原子写入，聚合器拒绝输入与输出路径冲突。
+  CPU 回退、不完整的 section/通信句柄、正确性/性能/稳定性失败或缺少某个
+  world size 均产生 `BLOCKED`，不会标记为 `SKIPPED`。工具不会自行执行远程
+  作业，也不会伪造证据。
 
-### Documentation
+### 文档
 
-- **Trainable `DistSimulator.run()` and evidence workflow.** Documented the
-  paired-real `PureStateParam`, `DensityParam`, and `StinespringParam` inputs,
-  differentiable outputs, checkpoint policies, explicit exclusions, and the
-  exact remote 2/4/8 commands.  Measured native-autograd evidence for 2/4/8
-  Ascend NPU runs is still pending, so this release gate is currently
-  `BLOCKED`; no performance, stability, or NPU-scale claim is made.
+- **可训练的 `DistSimulator.run()` 与证据工作流。** 记录配对实数
+  `PureStateParam`、`DensityParam` 和 `StinespringParam` 输入、可微输出、
+  checkpoint 策略、明确排除项以及精确的远程 2/4/8 命令。2/4/8 Ascend NPU
+  运行的原生自动微分实测证据仍待补充，因此当前发布门禁为 `BLOCKED`；
+  不作性能、稳定性或 NPU 规模声明。
 
 ## 2026-07-29
 
