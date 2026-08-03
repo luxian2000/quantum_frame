@@ -1195,7 +1195,13 @@ class DistSimulator:
             bool(return_state),
             bool(return_probabilities),
         )
-        digest = hashlib.sha256(repr(payload).encode("utf-8")).digest()
+        # 不能用 repr(payload)：可训练门的参数是 torch tensor，非 CPU tensor 的
+        # repr 里带设备号（rank0 是 device='npu:0'，rank1 是 device='npu:1'），
+        # 于是各 rank 摘要必然不同，真机上任何可训练 run() 都会被误判成"线路不
+        # 一致"。CPU/gloo 的 repr 不含设备名，所以本地测试永远复现不出来。
+        # _contract_value 只保留 shape/dtype/requires_grad 和内容哈希，与设备无关，
+        # 同时仍能发现各 rank 参数取值真的不同的情况。
+        digest = _contract_digest(_contract_value(payload))
         local = torch.tensor(
             list(digest),
             dtype=torch.uint8,

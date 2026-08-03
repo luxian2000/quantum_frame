@@ -6,6 +6,21 @@
 
 ### 修复
 
+- **真机多卡上任何可训练 `DistSimulator.run()` 都被误判为"线路不一致"。**
+  `_assert_process_agreement` 用 `repr(payload)` 计算跨 rank 摘要，而 payload 里
+  含可训练门的 torch tensor 参数。非 CPU tensor 的 `repr` 带设备号（rank0 是
+  `device='npu:0'`，rank1 是 `device='npu:1'`），各 rank 摘要必然不同，于是公开
+  的 native autograd 入口在真机上 100% 抛
+  `ValueError: 各 rank 的线路、布局或运行选项不一致`。CPU/gloo 的 repr 不含设备
+  名，本地多进程测试与 CPU oracle 对拍都复现不出来；`scripts/npu/distributed_autograd_probe.py`
+  的 `contract` section 也只体现为 `public_routing_enabled=False`（其余 section
+  直接调内核、不经过公开 `run()`，因此照常通过）。改用模块内既有的
+  `_contract_digest(_contract_value(payload))`：只保留 shape/dtype/requires_grad
+  与内容哈希，与设备无关，同时仍能发现各 rank 参数取值、线路结构或
+  `requires_grad` 路由真的不同。回归测试见
+  `tests/distributed/test_process_agreement_device.py`（注入带设备号的 repr，
+  直接跑 `_assert_process_agreement` 本身）。
+
 - **分布式 P2P tag 溢出 32 位。** `aicir/distributed` 的 tag 由
   (指令序号, 噪声规则, Kraus 项, partner mask) 逐层相乘得到，每个门消耗约
   `1.07e9` 的 tag 空间，而 `ProcessGroup::send` 的 tag 绑定成 32 位 C++
