@@ -6,6 +6,21 @@
 
 ### 修复
 
+- **paired-real buffer 池的 `discard`/`release` 竞争使复用失效。**
+  `_LaunchedPairExchange.wait` 会给前向输出挂 weakref finalizer 调用
+  `_PairBufferPool.discard`，而 autograd Function 的输出张量与 `buffer.real`
+  并非同一个 Python 对象，因此 finalizer 可能早于
+  `_LaunchedPairExchangeFn.backward` 触发。修复前 `release` 依赖 `_checked_out`
+  取归还键，被 `discard` 清掉后即变成空操作，buffer 再也回不到池里：
+  `raw_state` 与 `density_factor` 两条路径的 `buffer_reuse_count` 在 reuse /
+  overlap 模式下恒为 0（真机与 CPU/gloo 表现一致），其余路径也在漏掉部分复用。
+  现在归还键记在 buffer 自身上，`release` 不再依赖 `_checked_out` 且幂等；
+  `discard` 仍然只清账、不回收——finalizer 触发时前向输出可能仍被存活的计算图
+  引用，提前放回池里会让后续 exchange 覆写下游 backward 保存的张量。修复后
+  五条 native 路径复用计数分别为 15/10/10/50/30（此前为 10/0/0/45/25）。
+  数值结果不受影响（`state_max_abs_error`、`gradient_max_abs_error` 一直是
+  0.0），这是一处被浪费的显存复用，不是正确性缺陷。
+
 - **真机多卡上任何可训练 `DistSimulator.run()` 都被误判为"线路不一致"。**
   `_assert_process_agreement` 用 `repr(payload)` 计算跨 rank 摘要，而 payload 里
   含可训练门的 torch tensor 参数。非 CPU tensor 的 `repr` 带设备号（rank0 是

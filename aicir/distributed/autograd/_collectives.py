@@ -36,6 +36,10 @@ class _AsyncPairExchange:
         return self._pair
 
 
+# 记在 _Pair 实例上的归还键。_Pair 是 frozen dataclass，故用 object.__setattr__ 写入。
+_POOL_KEY_ATTRIBUTE = "_pool_key"
+
+
 class _PairBufferPool:
     """Reusable paired-real buffers keyed by transport identity.
 
@@ -71,17 +75,26 @@ class _PairBufferPool:
         if available:
             self.reuse_count += 1
             pair = available.pop()
-            self._checked_out[id(pair)] = key
-            return pair
-        real = torch.empty(tuple(shape), dtype=dtype, device=device)
-        pair = _Pair(real, torch.empty_like(real))
+        else:
+            real = torch.empty(tuple(shape), dtype=dtype, device=device)
+            pair = _Pair(real, torch.empty_like(real))
+        # 归还所需的 key 记在 buffer 自身上，而不是只记在 _checked_out 里。
+        # `_LaunchedPairExchange.wait` 会给前向输出挂一个 weakref finalizer
+        # （见 `discard`），而该输出与 buffer.real 并非同一个 Python 对象，
+        # 因此 finalizer 可能早于 backward 触发。若 release 依赖 _checked_out
+        # 取 key，finalizer 先跑就会让随后真正的 release 变成空操作，buffer
+        # 再也回不到池里——表现为整条路径的 buffer_reuse_count 恒为 0。
+        object.__setattr__(pair, _POOL_KEY_ATTRIBUTE, key)
         self._checked_out[id(pair)] = key
         return pair
 
     def release(self, pair: _Pair, *, real_work=None, imag_work=None) -> None:
-        key = self._checked_out.pop(id(pair), None)
+        key = getattr(pair, _POOL_KEY_ATTRIBUTE, None)
         if key is None:
             return
+        # 清空标记使 release 幂等，重复归还不会把同一个 buffer 放进池两次。
+        object.__setattr__(pair, _POOL_KEY_ATTRIBUTE, None)
+        self._checked_out.pop(id(pair), None)
         if real_work is not None or imag_work is not None:
             if real_work is None or imag_work is None:
                 raise ValueError("paired buffer release 必须同时提供 real/imag work")
@@ -90,7 +103,13 @@ class _PairBufferPool:
             self._available.setdefault(key, []).append(pair)
 
     def discard(self, pair_id: int) -> None:
-        """Forget an output that was dropped without an autograd backward."""
+        """Trim bookkeeping for an output dropped before backward ran.
+
+        这里只清账，不把 buffer 放回 `_available`：finalizer 触发时前向输出
+        仍可能被存活的计算图引用（下游算子会为自己的 backward 保存这块显存），
+        提前回收会让后续 exchange 覆写别人保存的张量。真正的归还只发生在
+        `_LaunchedPairExchangeFn.backward` 里，那时下游 backward 已经用完。
+        """
 
         self._checked_out.pop(int(pair_id), None)
 
