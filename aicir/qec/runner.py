@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 
@@ -242,3 +244,68 @@ def _residual_from_readout(code, readout, frame, logical_state):
         if parity ^ flip:
             residual ^= code.logical_x[i] if logical_state in ("0", "1") else code.logical_z[i]
     return residual
+
+
+@dataclass
+class TimingModel:
+    """实时预算模型。
+
+    用**声明代价**而非 Python wall-clock：Python 解码器比 FPGA 慢约 10⁴ 倍，
+    wall-clock 对实时可行性毫无意义。解码器经 cost_of() 声明自己的复杂度度量，
+    cost_to_seconds 把它映射到用户掌控的硬件模型（例如「每单位代价对应多少纳秒」）。
+
+    wall-clock 也照常记录（免费），但在**独立字段** QECShotRecord.wall_clock 里，
+    绝不与建模时间混同——一个是 Python 解释器实测的秒数，一个是研究者假想中
+    目标硬件（FPGA/ASIC）会花费的秒数，二者数量级可以相差 10⁴ 倍以上。
+    """
+    round_duration: float
+    cost_to_seconds: Callable[[float], float] = float
+
+    def __post_init__(self):
+        if float(self.round_duration) <= 0.0:
+            raise ValueError(f"round_duration 必须为正，收到 {self.round_duration}")
+
+
+def backlog_sequence(decode_times, round_duration: float) -> list[float]:
+    """确定性到达的单服务台排队：backlog[t] = max(0, backlog[t−1] + decode[t] − 轮时长)。
+
+    每轮综合征都在轮时长 round_duration 之后「到达」，解码器要花 decode[t] 秒处理它；
+    backlog 是尚未被消化的积压时间。backlog 线性增长（斜率为正）即**吞吐失败模式**：
+    解码器永久落后，无论运行多久都追不上新到来的轮次——这是比「单轮偶尔超时」更
+    根本的判据。
+    """
+    out, backlog = [], 0.0
+    for dt in decode_times:
+        backlog = max(0.0, backlog + float(dt) - float(round_duration))
+        out.append(backlog)
+    return out
+
+
+def _fill_shot_timing(record, decoder, steps, timing: TimingModel, rounds: int) -> None:
+    """按声明代价填充该 shot 的 backlog 与提交延迟。"""
+    decode_times = [float(timing.cost_to_seconds(step.cost)) for step in steps]
+    backlog = backlog_sequence(decode_times, timing.round_duration)
+    lag = int(getattr(decoder, "commit_lag", 0))
+    # 提交延迟 = 排队延迟（该轮 backlog 减去自身解码时长，下限 0）+ 解码时长
+    #            + 滞后提交带来的 lag × 轮时长
+    latency = [
+        max(0.0, backlog[t] - decode_times[t]) + decode_times[t] + lag * timing.round_duration
+        for t in range(len(steps))
+    ]
+    record.backlog = np.asarray(backlog, dtype=float)
+    record.commit_latency = np.asarray(latency, dtype=float)
+    record.decode_times = np.asarray(decode_times, dtype=float)
+
+
+def _fill_timing_aggregates(result, records, timing: TimingModel) -> None:
+    """把逐 shot timing 汇总到 QECResult。"""
+    if not records:
+        result.max_backlog, result.mean_commit_latency, result.budget_violations = 0.0, 0.0, 0
+        return
+    result.max_backlog = float(max(r.backlog.max() for r in records))
+    result.mean_commit_latency = float(
+        np.mean(np.concatenate([r.commit_latency for r in records]))
+    )
+    result.budget_violations = int(sum(
+        int((r.decode_times > timing.round_duration).sum()) for r in records
+    ))

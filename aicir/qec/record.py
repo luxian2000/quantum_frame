@@ -21,6 +21,7 @@ class QECShotRecord:
     decode_steps: list = field(default_factory=list)
     commit_latency: np.ndarray | None = None
     backlog: np.ndarray | None = None
+    decode_times: np.ndarray | None = None
     wall_clock: np.ndarray | None = None
     observable_raw: np.ndarray | None = None
     frame_flips: np.ndarray | None = None

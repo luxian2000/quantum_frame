@@ -16,10 +16,11 @@ from .schedules import (BareAncillaSchedule, register_schedule, resolve_schedule
 from .errors import ErrorEvent, PauliErrorModel
 from .decoders import (DecodeStep, LookupDecoder, register_decoder, resolve_decoder)
 from .record import QECResult, QECShotRecord
-from .runner import run
+from .runner import TimingModel, run
 
 __all__ = ["StabilizerCode", "pauli_to_gf2", "gf2_to_pauli", "symplectic_product", "CODES", "get_code", "register_code", "Detector", "Observable", "DetectorLayout"]
 __all__ += ["BareAncillaSchedule", "register_schedule", "resolve_schedule", "verify_schedule"]
 __all__ += ["ErrorEvent", "PauliErrorModel"]
 __all__ += ["DecodeStep", "LookupDecoder", "register_decoder", "resolve_decoder"]
 __all__ += ["QECShotRecord", "QECResult", "run"]
+__all__ += ["TimingModel"]
