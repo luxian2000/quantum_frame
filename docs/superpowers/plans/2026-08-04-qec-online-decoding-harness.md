@@ -2131,11 +2131,20 @@ class SpyDecoder:
 
 
 class RegressingDecoder(SpyDecoder):
+    """轮 0 正常提交，轮 1 起明确回退到比此前已提交值更小的 committed_through。
+
+    **不能让 update() 恒返回 0**：运行器的检查是 `step.committed_through < committed`，
+    而 `committed` 初值为 −1，轮 0 汇报 0 后各轮再汇报 0 从不小于它，回退检查永不触发，
+    `pytest.raises` 会以 DID NOT RAISE 失败。必须真的返回比此前提交值更小的数。
+    """
+
     name = "regressing"
 
     def update(self, round_index, events):
         super().update(round_index, events)
-        return DecodeStep(committed_through=0, cost=1.0)   # 第二轮起回退
+        if round_index == 0:
+            return DecodeStep(committed_through=0, cost=1.0)
+        return DecodeStep(committed_through=-1, cost=1.0)   # 轮 1 起真正回退
 
 
 def test_decoder_is_called_once_per_round_in_order():
