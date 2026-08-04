@@ -1,0 +1,36 @@
+{
+  "commit": "0aa038146b7610a4939074b6ce9f76b517efc63b",
+  "failed_conditions": [],
+  "release_gate": "PASS",
+  "reports": [
+    {
+      "finished_at": "2026-08-04T02:04:43.983820Z",
+      "path": "/root/work/filestorage/luxian/tmp6/distributed-autograd-evidence/world2.json",
+      "raw_sha256": "5767c3be7ded7ce0d969697f62ef918b0a76df5d9cf01568d1cddb88e96c7d09",
+      "run_id": "d3faa0b0-50ce-43d4-bf7c-98d96345f35c",
+      "started_at": "2026-08-04T02:02:52.680203Z",
+      "world_size": 2
+    },
+    {
+      "finished_at": "2026-08-04T02:07:33.157292Z",
+      "path": "/root/work/filestorage/luxian/tmp6/distributed-autograd-evidence/world4.json",
+      "raw_sha256": "7457b1cfd479a4899762255ffeb2b05dc25c8a4dd6147a7099cb238ece2bc7d8",
+      "run_id": "4a458b6e-5557-44ad-a575-1540eb21c3c1",
+      "started_at": "2026-08-04T02:04:58.838634Z",
+      "world_size": 4
+    },
+    {
+      "finished_at": "2026-08-04T02:12:22.988342Z",
+      "path": "/root/work/filestorage/luxian/tmp6/distributed-autograd-evidence/world8.json",
+      "raw_sha256": "6ceceb42feab896b419dfe409ae2973814d347922313af0ddf6d0ae16588a29c",
+      "run_id": "cc83704c-9750-4d27-96e1-4e03c205a58c",
+      "started_at": "2026-08-04T02:07:49.493758Z",
+      "world_size": 8
+    }
+  ],
+  "required_world_sizes": [
+    2,
+    4,
+    8
+  ]
+}

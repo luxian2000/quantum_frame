@@ -4,17 +4,37 @@
 
 ## 2026-08-04
 
+### 修复
+
+- **自动微分探针的有限差分 oracle 步长过小，判据被 float32 量化噪声顶穿。**
+  `finite_difference_gradient` 原以 `epsilon=1e-3` 调用。float32 下中心差分的
+  舍入项 ≈ `ε·|f|/(2h)`，该步长使四条 oracle 的误差落在 1e-5~2e-4，与门禁
+  `gradient_max_abs_error <= 1e-4` 同量级，且随 world size 增长：W=2 为
+  1.74e-5、W=4 为 9.87e-5（仅以 1.3% 险过）、W=8 的 stinespring overlap 为
+  1.22e-4 而失败。同一批 native 与 parameter-shift 梯度误差恒为 0.0（至多
+  2.4e-7），可见问题出在 oracle 精度而非被测的分布式反向。改为实测最优的
+  `2e-3`（见常量注释中的步长扫描表；理论最优 `(3ε)^(1/3)≈5e-3` 会让截断项主导
+  stinespring，实测反而恶化到 1.6e-4）。这是收紧而非放宽判据——oracle 越准，
+  真正的 native 梯度错误越容易暴露。
+
 ### 验证
 
-- **分布式原生自动微分：2/4 Ascend NPU 实测通过。** 在提交 `9d2d50c` 上以
-  `torchrun --nproc-per-node={2,4} scripts/npu/distributed_autograd_probe.py
-  --section all` 运行，两次均 `exit=0`、13 个 section 全部 `PASS`、
-  `fallback_to_cpu=false`；`distributed_autograd_evidence.py validate-run` 对两份
+- **分布式原生自动微分：2/4/8 Ascend NPU 实测通过，发布门禁 `PASS`。**
+  在提交 `0aa038146b7610a4939074b6ce9f76b517efc63b` 上以
+  `torchrun --nproc-per-node={2,4,8} scripts/npu/distributed_autograd_probe.py
+  --section all` 独立运行三次，均 `exit=0`、13 个 section 全部 `PASS`、
+  `fallback_to_cpu=false`；`distributed_autograd_evidence.py validate-run` 对三份
   报告均返回 `"failed_conditions": []`（独立复核提交 SHA、规范命令、UUID/时间区间
   唯一性、rank 与 `npu:LOCAL_RANK` 绑定、HCCL、十条 native/oracle 性能记录中每条
-  native 中位数均严格快于其 oracle，并由分配器采样重算内存增长）。
-  发布门禁仍为 `BLOCKED`：manifest 要求 2/4/8 三个 world size，8-NPU 证据尚未产出。
-  该结果只覆盖本探针范围内的正确性与通信契约，不构成多 NPU 加速结论。
+  native 中位数均严格快于其 oracle，并由分配器采样重算内存增长）；`aggregate`
+  的 manifest 为 `release_gate="PASS"`、`failed_conditions=[]`。
+  所有 native 与 parameter-shift 梯度误差恒为 0.0（至多 2.4e-7），
+  `state_max_abs_error` 全为 0.0；有限差分 oracle 的最大误差 W=2/4/8 分别为
+  2.94e-5 / 3.54e-5 / 6.46e-5。**注意 W=8 距 1e-4 判据仅约 1.55 倍余量，且该量
+  受 float32 量化噪声限制**：后续改动若使其再次逼近判据，应正视 oracle 精度上限
+  （为有限差分行单独定标），而不是继续调步长常数。
+  该结果覆盖本探针范围内的正确性、通信契约与相对 oracle 的性能，
+  不构成多 NPU 绝对加速结论，也未覆盖多节点、更大 world size 与容错。
 
 ## 2026-08-03
 
