@@ -521,8 +521,12 @@ def test_builtin_code_validates_and_has_expected_shape(name, kwargs, n, k, dist)
 @pytest.mark.parametrize("name,kwargs,n,k,dist", BUILTINS)
 def test_builtin_code_weight_one_errors_are_detected_in_protected_basis(name, kwargs, n, k, dist):
     code = get_code(name, **kwargs)
-    basis = "X" if name == "repetition" and kwargs["basis"] == "Z" else None
-    bases = [basis] if basis else ["X", "Y", "Z"]
+    if name == "repetition":
+        # 重复码只保护一个基：ZZ 型稳定子检测 X 错误，XX 型稳定子检测 Z 错误。
+        # 同型错误与稳定子对易，必然漏检——已实测：basis="X" 时 X 错误在 0 个比特上被检测到。
+        bases = ["X"] if kwargs["basis"] == "Z" else ["Z"]
+    else:
+        bases = ["X", "Y", "Z"]
     for q in range(code.n):
         for p in bases:
             label = "I" * q + p + "I" * (code.n - q - 1)
