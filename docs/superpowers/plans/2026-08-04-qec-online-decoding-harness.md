@@ -1108,8 +1108,15 @@ def test_resolve_schedule_accepts_name_and_instance():
 
 
 def test_verify_schedule_reports_offending_detector():
-    """人为破坏调度（漏掉 ancilla reset）必须被 verify_schedule 抓住。"""
-    code = get_code("repetition", d=3, basis="Z")
+    """人为破坏调度（漏掉 ancilla reset）必须被 verify_schedule 抓住。
+
+    **必须用 Steane，不能用 repetition**：漏 reset 时读数变成 raw[t] = XOR_{i≤t} s_i。
+    repetition(Z 基) 全部生成元是纯 Z 型，在 |0…0⟩ 上 s_i 恒为 0，这条 XOR 链精确
+    抵消为 0——该 bug 在这个码上**数学上不可观测**，用它写的测试是空断言（已实测：
+    repetition 上坏调度不被抓住，Steane 上被抓住）。Steane 有 X 型生成元，轮 0 读数
+    真随机，坏调度下相邻轮 XOR 必然非零。
+    """
+    code = get_code("steane")
 
     class BrokenSchedule(BareAncillaSchedule):
         def build_round(self, code, round_index, *, creg_name="syn"):
