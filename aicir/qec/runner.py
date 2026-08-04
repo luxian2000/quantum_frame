@@ -281,26 +281,48 @@ def backlog_sequence(decode_times, round_duration: float) -> list[float]:
     return out
 
 
+def commit_latency_sequence(decode_times, round_duration: float, commit_lag: int = 0) -> list[float]:
+    """由声明代价与轮时长算出每轮的提交延迟（FIFO 单服务台 sojourn time）。
+
+    `backlog_sequence` 实现的是 Lindley 递推：`backlog[t]` 是第 t 轮**处理完之后**
+    遗留的积压，也就是第 t+1 轮到达时看到的排队延迟——不是第 t 轮自己的排队延迟。
+    第 t 轮自己的排队延迟是 `backlog[t-1]`（`t=0` 时前面没有历史，取 0）。
+    错用 `backlog[t]` 会把每个拥堵轮次的延迟低估恰好一个 `round_duration`。
+
+    提交延迟 = 排队延迟（`backlog[t-1]`）+ 该轮解码时长 + 滞后提交带来的
+    `commit_lag × round_duration`。
+    """
+    backlog = backlog_sequence(decode_times, round_duration)
+    out, prev_backlog = [], 0.0
+    for t, dt in enumerate(decode_times):
+        queueing_delay = prev_backlog          # backlog[t-1]；t=0 时记 0
+        out.append(queueing_delay + float(dt) + int(commit_lag) * float(round_duration))
+        prev_backlog = backlog[t]
+    return out
+
+
 def _fill_shot_timing(record, decoder, steps, timing: TimingModel, rounds: int) -> None:
     """按声明代价填充该 shot 的 backlog 与提交延迟。"""
     decode_times = [float(timing.cost_to_seconds(step.cost)) for step in steps]
-    backlog = backlog_sequence(decode_times, timing.round_duration)
     lag = int(getattr(decoder, "commit_lag", 0))
-    # 提交延迟 = 排队延迟（该轮 backlog 减去自身解码时长，下限 0）+ 解码时长
-    #            + 滞后提交带来的 lag × 轮时长
-    latency = [
-        max(0.0, backlog[t] - decode_times[t]) + decode_times[t] + lag * timing.round_duration
-        for t in range(len(steps))
-    ]
+    backlog = backlog_sequence(decode_times, timing.round_duration)
+    latency = commit_latency_sequence(decode_times, timing.round_duration, lag)
     record.backlog = np.asarray(backlog, dtype=float)
     record.commit_latency = np.asarray(latency, dtype=float)
     record.decode_times = np.asarray(decode_times, dtype=float)
 
 
 def _fill_timing_aggregates(result, records, timing: TimingModel) -> None:
-    """把逐 shot timing 汇总到 QECResult。"""
+    """把逐 shot timing 汇总到 QECResult。
+
+    `records` 为空（例如 `keep_records=0`）时没有任何数据可汇总——保持
+    `None` 而非编造 `0.0`/`0`，理由与 `TimingModel=None → None` 一致：
+    「没测」和「测出来是零」是两件事，不能混同。
+    """
     if not records:
-        result.max_backlog, result.mean_commit_latency, result.budget_violations = 0.0, 0.0, 0
+        result.max_backlog = None
+        result.mean_commit_latency = None
+        result.budget_violations = None
         return
     result.max_backlog = float(max(r.backlog.max() for r in records))
     result.mean_commit_latency = float(

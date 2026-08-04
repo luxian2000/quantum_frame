@@ -7,20 +7,43 @@ from aicir.qec import run
 from aicir.qec.codes import get_code
 from aicir.qec.decoders.lookup import LookupDecoder
 from aicir.qec.errors import PauliErrorModel
-from aicir.qec.runner import TimingModel, backlog_sequence
+from aicir.qec.runner import TimingModel, backlog_sequence, commit_latency_sequence
 
 
 def test_backlog_recurrence_matches_hand_computed_sequence():
     """backlog[t] = max(0, backlog[t-1] + decode_time[t] - round_duration)"""
     decode = [3.0, 0.5, 2.0, 0.25]
     got = backlog_sequence(decode, round_duration=1.0)
-    # t0: max(0, 0+3-1)=2 ; t1: max(0, 2+0.5-1)=1.5 ; t2: max(0, 1.5+2-1)=2.5 ; t3: max(0,2.5+0.25-1)=1.75
+    # 轮0: max(0, 0+3-1)=2 ; 轮1: max(0, 2+0.5-1)=1.5 ; 轮2: max(0, 1.5+2-1)=2.5 ; 轮3: max(0,2.5+0.25-1)=1.75
     assert got == pytest.approx([2.0, 1.5, 2.5, 1.75])
 
 
 def test_backlog_stays_zero_when_decoder_keeps_up():
     got = backlog_sequence([0.2, 0.2, 0.2], round_duration=1.0)
     assert got == pytest.approx([0.0, 0.0, 0.0])
+
+
+def test_commit_latency_uses_previous_round_backlog_not_current():
+    """提交延迟是 FIFO 单服务台的 sojourn time：第 t 轮的排队延迟是 backlog[t-1]
+    （t=0 时前面无历史，取 0），不是 backlog[t]——backlog[t] 是第 t 轮处理完之后
+    留给下一轮的积压。用错索引会把每个拥堵轮次的延迟低估恰好一个 round_duration。
+
+    与 test_backlog_recurrence_matches_hand_computed_sequence 共用同一组手算输入，
+    便于两个数列对照检查：backlog=[2.0,1.5,2.5,1.75]，
+    真实 FIFO sojourn time=[3.0,2.5,3.5,2.75]（= decode_time[t] + backlog[t-1]）。
+    """
+    decode = [3.0, 0.5, 2.0, 0.25]
+    got = commit_latency_sequence(decode, round_duration=1.0, commit_lag=0)
+    assert got == pytest.approx([3.0, 2.5, 3.5, 2.75])
+
+
+def test_commit_latency_adds_commit_lag_times_round_duration():
+    """commit_lag>0 时，每轮延迟额外加上 commit_lag × round_duration。"""
+    decode = [3.0, 0.5, 2.0, 0.25]
+    got = commit_latency_sequence(decode, round_duration=1.0, commit_lag=2)
+    # 在 test_commit_latency_uses_previous_round_backlog_not_current 的结果上
+    # 逐轮加 2 × 1.0 = 2.0。
+    assert got == pytest.approx([5.0, 4.5, 5.5, 4.75])
 
 
 def test_timing_fields_populate_when_model_given():
