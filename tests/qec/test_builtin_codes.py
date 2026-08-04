@@ -29,10 +29,9 @@ def test_builtin_code_validates_and_has_expected_shape(name, kwargs, n, k, dist)
 def test_builtin_code_weight_one_errors_are_detected_in_protected_basis(name, kwargs, n, k, dist):
     code = get_code(name, **kwargs)
     if name == "repetition":
-        if kwargs["basis"] == "Z":
-            bases = ["X"]  # ZZ stabilizers protect against X
-        else:  # basis == "X"
-            bases = ["Z"]  # XX stabilizers protect against Z
+        # 重复码只保护一个基：ZZ 型稳定子检测 X 错误，XX 型稳定子检测 Z 错误。
+        # 同型错误与稳定子对易，必然漏检——已实测：basis="X" 时 X 错误在 0 个比特上被检测到。
+        bases = ["X"] if kwargs["basis"] == "Z" else ["Z"]
     else:
         bases = ["X", "Y", "Z"]
     for q in range(code.n):
