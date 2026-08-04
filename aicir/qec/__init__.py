@@ -11,5 +11,8 @@ from __future__ import annotations
 from .code import StabilizerCode, gf2_to_pauli, pauli_to_gf2, symplectic_product
 from .codes import CODES, get_code, register_code
 from .detectors import Detector, DetectorLayout, Observable
+from .schedules import (BareAncillaSchedule, register_schedule, resolve_schedule,
+                        verify_schedule)
 
 __all__ = ["StabilizerCode", "pauli_to_gf2", "gf2_to_pauli", "symplectic_product", "CODES", "get_code", "register_code", "Detector", "Observable", "DetectorLayout"]
+__all__ += ["BareAncillaSchedule", "register_schedule", "resolve_schedule", "verify_schedule"]
