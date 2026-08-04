@@ -73,6 +73,24 @@ SECTIONS = (
     "contract",
 )
 
+# float32 中心差分的步长。这个值只对 oracle 自身的精度负责：同一批 native 与
+# parameter-shift 梯度误差恒为 0.0（至多 2.4e-7），而四条 finite-difference
+# oracle 的误差在 1e-5~2e-4 之间，与门禁 1e-4 的判据同量级——误差来自 oracle，
+# 不是被测的分布式反向。
+#
+# 不要按 h≈(3ε)^(1/3) 的理论最优取值。实测（gloo/float32，W=2 与 W=4 下四条
+# oracle 的最大误差）表明误差随 h 并不平滑，float32 对目标值的量化才是主导项
+# （4.36e-05、2.98e-07 这类值会在不同 h 上原样复现）：
+#
+#   h        5e-4     1e-3     1.5e-3   2e-3     3e-3     5e-3
+#   worst    2.3e-4   9.4e-5   5.4e-5   4.4e-5   4.4e-5   1.6e-4
+#
+# h=5e-3 会让截断项主导 stinespring（W=2 从 4.4e-5 恶化到 1.6e-4），h=5e-4 则让
+# 舍入项主导。取实测最优的 2e-3。这是收紧而非放宽判据——oracle 越准，真正的
+# native 梯度错误越容易暴露。注意本判据受 float32 量化噪声限制，余量只有约
+# 2 倍；若某次运行仍逼近 1e-4，应正视 oracle 精度上限而不是继续调这个常数。
+_FINITE_DIFFERENCE_EPSILON = 2e-3
+
 _FAILURE_TYPE_BYTES = 128
 _FAILURE_MESSAGE_BYTES = 512
 _FAILURE_PAYLOAD_BYTES = 5 + _FAILURE_TYPE_BYTES + _FAILURE_MESSAGE_BYTES
@@ -636,7 +654,9 @@ def run_benchmark_workload(backend, *, communication_mode, path, gradient_method
                 ])
             if gradient_method == "parameter_shift":
                 return parameter_shift_gradient(numerical_objective, point)
-            return finite_difference_gradient(numerical_objective, point, epsilon=1e-3)
+            return finite_difference_gradient(
+                numerical_objective, point, epsilon=_FINITE_DIFFERENCE_EPSILON
+            )
         def captured_forward():
             captured["forward"] = forward()
             return captured["forward"]

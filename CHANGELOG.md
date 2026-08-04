@@ -2,6 +2,20 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-08-04
+
+### 验证
+
+- **分布式原生自动微分：2/4 Ascend NPU 实测通过。** 在提交 `9d2d50c` 上以
+  `torchrun --nproc-per-node={2,4} scripts/npu/distributed_autograd_probe.py
+  --section all` 运行，两次均 `exit=0`、13 个 section 全部 `PASS`、
+  `fallback_to_cpu=false`；`distributed_autograd_evidence.py validate-run` 对两份
+  报告均返回 `"failed_conditions": []`（独立复核提交 SHA、规范命令、UUID/时间区间
+  唯一性、rank 与 `npu:LOCAL_RANK` 绑定、HCCL、十条 native/oracle 性能记录中每条
+  native 中位数均严格快于其 oracle，并由分配器采样重算内存增长）。
+  发布门禁仍为 `BLOCKED`：manifest 要求 2/4/8 三个 world size，8-NPU 证据尚未产出。
+  该结果只覆盖本探针范围内的正确性与通信契约，不构成多 NPU 加速结论。
+
 ## 2026-08-03
 
 ### 修复
@@ -62,6 +76,14 @@
   `paired_transport_tags` 证据语义不变。`communication_records` 仍记录折叠前的
   逻辑 tag。回归测试见 `tests/distributed/test_tag_overflow_multiprocess.py`
   （两种传输契约各覆盖一条 6 门噪声线路）。
+
+- **分布式自动微分探针的 contract section 在 `world_size>=4` 上测不到 shape/dtype。**
+  `_contract_section` 用倒序显式 layout 构造 spec，但 `paired_state_mismatch`
+  调 `simulator.run()` 时没传 `layout=`，于是走自动 layout。两者只有在
+  `world_size=2` 时恰好相等（W=2 是 `(1,0)==(1,0)`；W=4 是
+  `(2,1,0)!=(2,0,1)`；W=8 是 `(3,2,1,0)!=(3,0,1,2)`），因此 W>=4 时先抛
+  "DistState 的 n_qubits/layout 与线路不一致"，`shape` 与 `dtype` 两个 case
+  永远测不到自己要测的东西。现在显式传入本 section 的 layout。
 
 - **分布式自动微分探针的 `dtype` contract case 在真机上恒为 NO_ERROR。**
   `scripts/npu/distributed_autograd_probe.py` 原先用 `torch.float64` 构造非法
