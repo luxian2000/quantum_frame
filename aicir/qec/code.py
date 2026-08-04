@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 from itertools import combinations, product
-from typing import Sequence
 
 import numpy as np
 
@@ -56,12 +55,17 @@ def symplectic_product(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """辛积 (a_x·b_z + a_z·b_x) mod 2。0 = 对易，1 = 反对易。
 
     a 可为 (2n,) 或 (m, 2n)；b 为 (2n,)。返回标量或 (m,)。
+
+    标量 vs. 数组由 a 输入时的维度决定（1-D → 标量，2-D → (m,)），
+    不能用输出 size 判断——否则 m=1 的批量输入会被错误折叠成标量。
     """
-    a = np.atleast_2d(np.asarray(a, dtype=np.uint8))
+    a_arr = np.asarray(a, dtype=np.uint8)
+    was_1d = a_arr.ndim == 1
+    a2 = np.atleast_2d(a_arr)
     b = np.asarray(b, dtype=np.uint8).ravel()
     n = b.size // 2
-    out = (a[:, :n] @ b[n:] + a[:, n:] @ b[:n]) % 2
-    return out.astype(np.uint8) if out.size > 1 else np.uint8(out[0])
+    out = (a2[:, :n] @ b[n:] + a2[:, n:] @ b[:n]) % 2
+    return np.uint8(out[0]) if was_1d else out.astype(np.uint8)
 
 
 def _gf2_rank(rows: np.ndarray) -> int:

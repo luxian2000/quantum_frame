@@ -64,6 +64,25 @@ def test_validate_rejects_logical_not_in_normalizer():
         ).validate()
 
 
+def test_symplectic_product_single_row_batch_stays_array():
+    # 回归测试：m=1 时 (1,2n) 批量输入不能被折叠成 0-d 标量
+    rows = np.stack([pauli_to_gf2("ZZ")])
+    out = symplectic_product(rows, pauli_to_gf2("XI"))
+    assert out.shape == (1,)
+
+
+def test_validate_with_single_generator():
+    # 回归测试：m=1 的合法码应能通过 validate()，此前会在 normalizer
+    # 检查处因 symplectic_product 把单行批量折叠成 0-d 标量而崩溃。
+    # ZZ 与自身对易；XX、ZI 都与 ZZ 对易（在 normalizer 内）；
+    # XX 与 ZI 反对易（辛积=1），满足 logical_x/logical_z 配对要求。
+    code = StabilizerCode.from_paulis(
+        ["ZZ"], logical_x=["XX"], logical_z=["ZI"], name="m1test",
+    )
+    code.validate()
+    assert (code.n, code.k, code.m) == (2, 1, 1)
+
+
 def test_syndrome_of_single_qubit_errors():
     code = StabilizerCode.from_paulis(
         FIVE_GENS, logical_x=["XXXXX"], logical_z=["ZZZZZ"], name="five_qubit",
