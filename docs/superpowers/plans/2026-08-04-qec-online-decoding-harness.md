@@ -1235,9 +1235,17 @@ def build_layout(code, schedule, rounds: int, *, logical_state: str = "0") -> De
             recs = (cur,) if t == 0 else ((t - 1) * m + s, cur)
             detectors.append(Detector(index=idx, records=recs, stabilizer=s, round_index=t))
             idx += 1
+    # observable 的 record 必须由**该逻辑算符的实际支持**派生，不能一律取全部 n 个 data 比特。
+    # 后者对五个内置 k=1 码碰巧等价（全比特奇偶是同一陪集的代表元），但会让 k>1 码的各逻辑
+    # 比特拿到完全相同的 record 集合、彼此不可区分——Task 10 注册的 [[4,2,2]] 正是 k=2。
     base = int(rounds) * m
+    state = str(logical_state)
+    if state in ("0", "1"):
+        support = code.logical_z[:, code.n:]           # Z 基读出 → 取 logical_z 的 z 块
+    else:                                              # "+"/"-"；非法值已由
+        support = code.logical_x[:, :code.n]           # deterministic_round0 抛出
     observables = tuple(
-        Observable(index=i, records=tuple(range(base, base + code.n)))
+        Observable(index=i, records=tuple(base + q for q in range(code.n) if support[i, q]))
         for i in range(code.k)
     )
     return DetectorLayout(
