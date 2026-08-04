@@ -9,5 +9,6 @@
 from __future__ import annotations
 
 from .code import StabilizerCode, gf2_to_pauli, pauli_to_gf2, symplectic_product
+from .codes import CODES, get_code, register_code
 
-__all__ = ["StabilizerCode", "pauli_to_gf2", "gf2_to_pauli", "symplectic_product"]
+__all__ = ["StabilizerCode", "pauli_to_gf2", "gf2_to_pauli", "symplectic_product", "CODES", "get_code", "register_code"]
