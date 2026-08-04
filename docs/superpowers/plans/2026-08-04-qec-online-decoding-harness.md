@@ -2612,17 +2612,35 @@ def backlog_sequence(decode_times, round_duration: float) -> list[float]:
     return out
 
 
+def commit_latency_sequence(decode_times, round_duration: float, commit_lag: int = 0) -> list[float]:
+    """由声明代价与轮时长算出每轮的提交延迟（FIFO 单服务台 sojourn time）。
+
+    **这里极易写错，务必按下述索引实现。** `backlog_sequence` 实现的是 Lindley 递推：
+    `backlog[t]` 是第 t 轮**处理完之后**遗留的积压，即第 t+1 轮到达时看到的排队延迟，
+    **不是**第 t 轮自己的排队延迟。第 t 轮自己的排队延迟是 `backlog[t-1]`（t=0 取 0）。
+    错用 `backlog[t]` 会把每个拥堵轮次的延迟**低估恰好一个 round_duration**，从而污染
+    `mean_commit_latency`——而那正是本模块用来回答「解码器跟得上吗」的头号指标，
+    偏偏在它唯一有意义的拥堵区间失真。
+
+    已用 FIFO 单服务台模拟核对：decode=[3.0,0.5,2.0,0.25]、round_duration=1.0、
+    commit_lag=0 时 backlog=[2.0,1.5,2.5,1.75]，真实逗留时间=[3.0,2.5,3.5,2.75]；
+    错误写法给出 [3.0,1.5,2.5,1.75]。测试必须断言**具体数值**，只断言形状抓不到本 bug。
+    """
+    backlog = backlog_sequence(decode_times, round_duration)
+    out, prev_backlog = [], 0.0
+    for t, dt in enumerate(decode_times):
+        queueing_delay = prev_backlog          # backlog[t-1]；t=0 时记 0
+        out.append(queueing_delay + float(dt) + int(commit_lag) * float(round_duration))
+        prev_backlog = backlog[t]
+    return out
+
+
 def _fill_shot_timing(record, decoder, steps, timing: TimingModel, rounds: int) -> None:
     """按声明代价填充该 shot 的 backlog 与提交延迟。"""
     decode_times = [float(timing.cost_to_seconds(step.cost)) for step in steps]
-    backlog = backlog_sequence(decode_times, timing.round_duration)
     lag = int(getattr(decoder, "commit_lag", 0))
-    # 提交延迟 = 排队延迟（该轮 backlog 减去自身解码时长，下限 0）+ 解码时长
-    #            + 滞后提交带来的 lag × 轮时长
-    latency = [
-        max(0.0, backlog[t] - decode_times[t]) + decode_times[t] + lag * timing.round_duration
-        for t in range(len(steps))
-    ]
+    backlog = backlog_sequence(decode_times, timing.round_duration)
+    latency = commit_latency_sequence(decode_times, timing.round_duration, lag)
     record.backlog = np.asarray(backlog, dtype=float)
     record.commit_latency = np.asarray(latency, dtype=float)
     record.decode_times = np.asarray(decode_times, dtype=float)
