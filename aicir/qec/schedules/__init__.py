@@ -81,6 +81,14 @@ def build_layout(code, schedule, rounds: int, *, logical_state: str = "0") -> De
 
     detector (s, t)：轮 t 的稳定子 s 读数 XOR 轮 t−1 的读数。
     t=0 **只对 deterministic_round0 内的生成元建 detector**（其余轮 0 读数随机）。
+
+    Observable(i) 的 records 取该逻辑比特**实际逻辑算符的支持**，而非笼统的
+    「全部 n 个 data 比特」：Z 基读出（'0'/'1'）用 logical_z[i] 的 z 块，
+    X 基读出（'+'/'-'）用 logical_x[i] 的 x 块（GF(2) 向量布局 x 块在前、
+    z 块在后，各宽 n）。k=1 的内置码里「全 n 比特奇偶」恰好是稳定子等价的
+    合法代表元，故数值不变；但 k>1 时（如 Task 10 的 [[4,2,2]] 码）不同逻辑
+    比特的算符支持不同，笼统写法会让所有逻辑比特共用同一组 record、彼此不可
+    区分，必须按各自算符的真实支持取值。
     """
     schedule = resolve_schedule(schedule)
     m = code.m
@@ -95,8 +103,13 @@ def build_layout(code, schedule, rounds: int, *, logical_state: str = "0") -> De
             detectors.append(Detector(index=idx, records=recs, stabilizer=s, round_index=t))
             idx += 1
     base = int(rounds) * m
+    state = str(logical_state)
+    if state in ("0", "1"):
+        support = code.logical_z[:, code.n:]         # z 块给出逻辑 Z 算符支持
+    else:                                              # "+"/"-"；非法值已由上面的
+        support = code.logical_x[:, :code.n]           # deterministic_round0 抛出
     observables = tuple(
-        Observable(index=i, records=tuple(range(base, base + code.n)))
+        Observable(index=i, records=tuple(base + q for q in range(code.n) if support[i, q]))
         for i in range(code.k)
     )
     return DetectorLayout(

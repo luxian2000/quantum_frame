@@ -1,5 +1,6 @@
 import pytest
 
+from aicir.qec.code import StabilizerCode
 from aicir.qec.codes import get_code
 from aicir.qec.schedules import (
     BareAncillaSchedule, build_layout, resolve_schedule, verify_schedule,
@@ -99,3 +100,53 @@ def test_verify_schedule_reports_offending_detector():
 
     with pytest.raises(ValueError, match="detector"):
         verify_schedule(code, BrokenSchedule(), rounds=3)
+
+
+def test_detector_records_are_correctly_indexed():
+    """Detector.records 必须是真实的 record 下标，而非只有个数正确。
+
+    只断言 n_detectors/round_slice 长度的测试抓不住转置类 bug（例如把
+    cur = t*m+s 误写成 s*rounds+t）——数量与 verify_schedule 都不受影响
+    （verify_schedule 直接读 raw 数组，不经过 records），只有直接比对
+    records 内容才能发现。"""
+    code = get_code("steane")
+    m = code.m
+    layout = build_layout(code, BareAncillaSchedule(), rounds=3)
+    # 轮 0 detector 只含单个 record，下标为 0*m+s。
+    for s in layout.round0_stabilizers:
+        det = layout.detector_at(s, 0)
+        assert det.records == (0 * m + s,)
+    # 轮 2 detector 含两个 record：上一轮 (1*m+s) 与本轮 (2*m+s)，顺序固定。
+    for s in range(m):
+        det = layout.detector_at(s, 2)
+        assert det.records == (1 * m + s, 2 * m + s)
+
+
+def test_observable_records_follow_logical_operator_support():
+    """Observable.records 必须取逻辑算符自身的支持，而非笼统的「全部 n 个 data
+    比特」——否则 k>1 时不同逻辑比特会共用同一组 record、彼此不可区分。
+
+    对 k=1 的内置码，「全 n 比特奇偶」恰好与逻辑算符的实际支持稳定子等价，
+    数值可能巧合相同；repetition(d=3, Z 基) 的 logical_z="ZII" 支持只有
+    qubit 0，用它来暴露「全 n 比特」与「真实支持」的差异。
+    """
+    code = get_code("repetition", d=3, basis="Z")
+    layout = build_layout(code, BareAncillaSchedule(), rounds=1, logical_state="0")
+    base = 1 * code.m
+    assert layout.observables[0].records == (base + 0,)
+
+    # k=2：[[4,2,2]] iceberg 码（Task 10 将注册的同一构造）。两个逻辑比特的
+    # logical_z 支持不同（"ZIZI" 对 qubit 0,2；"ZZII" 对 qubit 0,1），
+    # records 必须彼此不同，否则解码器无法区分两个逻辑比特。
+    code42 = StabilizerCode.from_paulis(
+        generators=["XXXX", "ZZZZ"],
+        logical_x=["XXII", "XIXI"],
+        logical_z=["ZIZI", "ZZII"],
+        name="iceberg_422",
+    )
+    code42.validate()
+    layout42 = build_layout(code42, BareAncillaSchedule(), rounds=1, logical_state="0")
+    base42 = 1 * code42.m
+    assert layout42.observables[0].records == (base42 + 0, base42 + 2)
+    assert layout42.observables[1].records == (base42 + 0, base42 + 1)
+    assert layout42.observables[0].records != layout42.observables[1].records
