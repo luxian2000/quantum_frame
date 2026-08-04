@@ -22,3 +22,6 @@ CLAUDE.md
 .worktrees/
 CONTENTS.md
 NEXT.md
+
+# SDD 工作区（子代理驱动开发的临时产物）
+.superpowers/
