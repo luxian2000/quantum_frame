@@ -147,7 +147,8 @@ def _run_one_shot(code, schedule, errors, decoder, rounds, layout, reference,
     events_log = np.zeros((rounds, code.m), dtype=np.uint8)
     injected, steps, wall = [], [], np.zeros(rounds, dtype=float)
     frame = np.zeros(2 * code.k, dtype=np.uint8)
-    applied = np.zeros(2 * code.n, dtype=np.uint8)     # active 模式下已施加修正的累积
+    applied = np.zeros(2 * code.n, dtype=np.uint8)          # active 模式下已施加修正的累积
+    applied_prev = np.zeros(2 * code.n, dtype=np.uint8)     # 上一轮开始时的累积（见 _applied_syndrome_delta）
     committed = -1
 
     for t in range(rounds):
@@ -173,12 +174,19 @@ def _run_one_shot(code, schedule, errors, decoder, rounds, layout, reference,
         if correction_mode == "active":
             # active 模式下已施加的修正会把原始稳定子读数复位，若不扣除，
             # 下一轮的朴素差分会放出一个虚假 detection event。
-            ev = (ev ^ _applied_syndrome_delta(code, applied, raw, t)).astype(np.uint8)
+            ev = (ev ^ _applied_syndrome_delta(code, applied, applied_prev, t)).astype(np.uint8)
         events_log[t] = ev
 
         t0 = time.perf_counter()
         step = decoder.update(t, ev)
         wall[t] = time.perf_counter() - t0
+
+        if correction_mode == "active" and step.corrections is None:
+            raise ValueError(
+                f"correction_mode='active' 要求解码器每轮产出 corrections 门列表，但 "
+                f"{getattr(decoder, 'name', '?')} 在轮 {t} 返回了 corrections=None。"
+                f"改用 correction_mode='frame'，或让解码器填充 DecodeStep.corrections"
+            )
 
         if step.committed_through < committed:
             raise ValueError(
@@ -190,13 +198,17 @@ def _run_one_shot(code, schedule, errors, decoder, rounds, layout, reference,
 
         if step.frame_flips is not None:
             frame ^= np.asarray(step.frame_flips, dtype=np.uint8).ravel()[:2 * code.k]
-        if correction_mode == "active" and step.corrections:
-            state = _apply_pauli_gates(state, step.corrections, backend, n_total, rng)
-            for q, p in step.corrections:
-                if p in ("X", "Y"):
-                    applied[q] ^= 1
-                if p in ("Z", "Y"):
-                    applied[code.n + q] ^= 1
+        if correction_mode == "active":
+            # applied_prev 记录本轮开始时（施加本轮修正之前）的累积值，供下一轮
+            # _applied_syndrome_delta 取「仅上一轮新增」的修正增量——见该函数注释。
+            applied_prev = applied.copy()
+            if step.corrections:
+                state = _apply_pauli_gates(state, step.corrections, backend, n_total, rng)
+                for q, p in step.corrections:
+                    if p in ("X", "Y"):
+                        applied[q] ^= 1
+                    if p in ("Z", "Y"):
+                        applied[code.n + q] ^= 1
 
     final = decoder.flush()
     if final.committed_through < committed:
@@ -208,6 +220,15 @@ def _run_one_shot(code, schedule, errors, decoder, rounds, layout, reference,
     ro_res = run_trajectory(ro.circuit, state, backend, tm=False, measure_qubits=None,
                             snap_ops=set(), rng=rng)
     readout = _read_creg(ro_res.classical, ro.creg_name, code.n)
+
+    if correction_mode == "active":
+        # 与 _applied_syndrome_delta 同理：active 模式下末尾读数已经把累积施加的
+        # 物理修正烙进了态里，而 frame 从未真正修正、只靠 frame 记账。若不先把
+        # readout 里已施加修正贡献的那部分翻回去，就会与 frame 记的账重复抵消
+        # 一遍，判定因此和 frame 模式对不上。Z 基读数只受 X/Y 修正翻转，X 基
+        # 读数只受 Z/Y 修正翻转，分别对应 applied 的 x 块 / z 块。
+        block = applied[:code.n] if logical_state in ("0", "1") else applied[code.n:]
+        readout = (readout ^ block).astype(np.uint8)
 
     residual = _residual_from_readout(code, readout, frame, logical_state)
     verdict = code.verdict(residual)
@@ -222,11 +243,23 @@ def _run_one_shot(code, schedule, errors, decoder, rounds, layout, reference,
     return record
 
 
-def _applied_syndrome_delta(code, applied, raw, t):
-    """active 模式：已施加修正自身对各稳定子的贡献。"""
-    if t == 0 or not applied.any():
+def _applied_syndrome_delta(code, applied, applied_prev, t):
+    """active 模式：需要从朴素差分里扣掉的综合征增量。
+
+    raw[t] 是在「本轮修正尚未施加」但「此前所有轮次的修正均已施加」的态上测得的，
+    即 raw[t] = physical(t) ^ syndrome(applied)（此刻 applied 恰为「上一轮末已施加
+    的累积修正」）。raw[t-1] 同理等于 physical(t-1) ^ syndrome(applied_prev)（那一轮
+    自己开始时的累积）。朴素差分 raw[t]^raw[t-1] 因此额外带出
+    syndrome(applied) ^ syndrome(applied_prev) = syndrome(applied ^ applied_prev)——
+    **不是**整个累积 syndrome(applied) 本身。用全部累积会把更早轮次已经在上一次
+    差分里抵消过的修正贡献重复扣一遍，从第三轮起就会和 frame 模式对不上。
+    """
+    if t == 0:
         return np.zeros(code.m, dtype=np.uint8)
-    return code.syndrome(applied).astype(np.uint8)
+    delta = applied ^ applied_prev
+    if not delta.any():
+        return np.zeros(code.m, dtype=np.uint8)
+    return code.syndrome(delta).astype(np.uint8)
 
 
 def _residual_from_readout(code, readout, frame, logical_state):
