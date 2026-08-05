@@ -21,6 +21,11 @@
 - 解码器**只**能从 `reset(layout)` 与 `update(round, events)` 获得运行期信息。运行器不得向解码器传 `Circuit` / `StabilizerCode` / `State` / 后端。
 - `TimingModel` 为 `None` 时，所有 timing 字段必须是 `None`——**不得编造数字**。
 - M1 **不使用** `if_` / `ControlFlow`。修正在轮间由 Python 侧计算。
+- **轮 0 是投影式制备，不是纠错轮。** `|0…0⟩` 一般不在任何稳定子码的码空间内，轮 0 的提取过程本身把态投影进码空间。由此：
+  - **轮 0 的 detector 只对「在制备基下确定」的生成元存在**——`|0…0⟩` 制备时即 x 块全零者（Z 型）；`|+…+⟩` 制备时即 z 块全零者。其余生成元轮 0 读数是 50/50 随机的（已在真机上实测：Steane 的 X 型生成元轮 0 读数 12 shot 中 6/6 分裂，轮 1/2 则恒等于轮 0），它们的首个 detector 在轮 1。
+  - 各码轮 0 确定的生成元个数（实测）：repetition 2/2、Steane 3/6、Shor 6/8、surface_d3 4/8、**five_qubit 0/4**（非 CSS，无纯 Z 型生成元）。
+  - `reference` 恒为 `zeros(m)`（Z 型稳定子在 `|0…0⟩` 上读数为 0），**不从某次噪声无关运行中实测得来**——那样每 shot 的随机轮 0 读数会与它错配，导致每 shot 都有约半数 X 型 detector 虚假触发。
+  - **`PauliErrorModel` 从轮 1 开始注入**，轮 0 不注入。故任何检验「错误被纠正」的测试都需 `rounds ≥ 2`。`rounds=1` 只做制备。
 - M1 非目标（不要实现）：DEM、Stim / PyMatching 任何代码、MWPM、union-find、`benchmark()` 扫描、任何可视化、tableau 模拟器、子系统码。
 - 每个 Task 结束提交一次。
 
@@ -516,8 +521,12 @@ def test_builtin_code_validates_and_has_expected_shape(name, kwargs, n, k, dist)
 @pytest.mark.parametrize("name,kwargs,n,k,dist", BUILTINS)
 def test_builtin_code_weight_one_errors_are_detected_in_protected_basis(name, kwargs, n, k, dist):
     code = get_code(name, **kwargs)
-    basis = "X" if name == "repetition" and kwargs["basis"] == "Z" else None
-    bases = [basis] if basis else ["X", "Y", "Z"]
+    if name == "repetition":
+        # 重复码只保护一个基：ZZ 型稳定子检测 X 错误，XX 型稳定子检测 Z 错误。
+        # 同型错误与稳定子对易，必然漏检——已实测：basis="X" 时 X 错误在 0 个比特上被检测到。
+        bases = ["X"] if kwargs["basis"] == "Z" else ["Z"]
+    else:
+        bases = ["X", "Y", "Z"]
     for q in range(code.n):
         for p in bases:
             label = "I" * q + p + "I" * (code.n - q - 1)
@@ -796,10 +805,12 @@ git commit -m "feat(qec): 内置码注册表与五个参考稳定子码"
 - Produces:
   - `Detector(index: int, records: tuple[int, ...], stabilizer: int, round_index: int)`
   - `Observable(index: int, records: tuple[int, ...])`
-  - `DetectorLayout(n_detectors, n_rounds, n_stabilizers, detectors, observables, coords)`
+  - `DetectorLayout(n_detectors, n_rounds, n_stabilizers, detectors, observables, coords, round0_stabilizers)`
   - `.detector_at(stabilizer, round_index) -> Detector`
   - `.round_slice(round_index) -> tuple[int, ...]`（该轮所有 detector 的全局下标）
   - `.detection_events(raw_syndromes, round_index, reference) -> np.ndarray` shape `(n_stabilizers,)`
+
+**轮 0 语义（见 Global Constraints）：** `round0_stabilizers` 是轮 0 有 detector 的生成元下标元组。`detection_events` 在 `round_index==0` 时把不在该集合内的分量**掩为 0**——那些生成元轮 0 读数随机，不构成 detector。事件向量对每轮恒为 `(n_stabilizers,)`，使解码器协议与全部测试的形状保持统一。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -812,10 +823,13 @@ import pytest
 from aicir.qec.detectors import Detector, DetectorLayout, Observable
 
 
-def _layout(n_rounds=3, n_stab=2):
+def _layout(n_rounds=3, n_stab=2, round0=(0,)):
+    """稳定子 0 在轮 0 确定（有 detector），稳定子 1 不确定（轮 0 无 detector）。"""
     dets, idx = [], 0
     for r in range(n_rounds):
         for s in range(n_stab):
+            if r == 0 and s not in round0:
+                continue                     # 轮 0 只对确定的生成元建 detector
             recs = (r * n_stab + s,) if r == 0 else ((r - 1) * n_stab + s, r * n_stab + s)
             dets.append(Detector(index=idx, records=recs, stabilizer=s, round_index=r))
             idx += 1
@@ -823,42 +837,56 @@ def _layout(n_rounds=3, n_stab=2):
     return DetectorLayout(
         n_detectors=idx, n_rounds=n_rounds, n_stabilizers=n_stab,
         detectors=tuple(dets), observables=tuple(obs), coords={},
+        round0_stabilizers=tuple(round0),
     )
 
 
 def test_layout_shape_and_lookup():
     layout = _layout()
-    assert layout.n_detectors == 6
+    # 轮 0 只有 1 个 detector（稳定子 0），轮 1/2 各 2 个 → 共 5
+    assert layout.n_detectors == 5
     d = layout.detector_at(stabilizer=1, round_index=2)
-    assert d.stabilizer == 1 and d.round_index == 2 and d.index == 5
+    assert d.stabilizer == 1 and d.round_index == 2 and d.index == 4
 
 
 def test_round_slice_returns_that_rounds_detectors():
     layout = _layout()
-    assert layout.round_slice(0) == (0, 1)
-    assert layout.round_slice(2) == (4, 5)
+    assert layout.round_slice(0) == (0,)          # 轮 0 只有确定的那一个
+    assert layout.round_slice(2) == (3, 4)
 
 
-def test_detection_events_round_zero_uses_reference():
+def test_detection_events_round_zero_masks_nondeterministic_stabilizers():
+    """轮 0 读数随机的生成元不构成 detector，其事件必须被掩为 0。"""
     layout = _layout()
-    raw = np.array([[1, 0], [1, 0], [1, 1]], dtype=np.uint8)
+    raw = np.array([[1, 1], [1, 0], [1, 1]], dtype=np.uint8)
     ref = np.array([0, 0], dtype=np.uint8)
     ev0 = layout.detection_events(raw, 0, ref)
-    assert list(ev0) == [1, 0]          # 轮 0 与参考值比较
+    # 稳定子 0 确定：1 ^ 0 = 1 ；稳定子 1 不确定：掩为 0（尽管原始读数是 1）
+    assert list(ev0) == [1, 0]
 
 
-def test_detection_events_later_rounds_are_differences():
+def test_detection_events_later_rounds_are_differences_unmasked():
     layout = _layout()
-    raw = np.array([[1, 0], [1, 0], [1, 1]], dtype=np.uint8)
+    raw = np.array([[1, 1], [1, 0], [1, 1]], dtype=np.uint8)
     ref = np.array([0, 0], dtype=np.uint8)
-    assert list(layout.detection_events(raw, 1, ref)) == [0, 0]   # 与轮 0 相同 → 无事件
-    assert list(layout.detection_events(raw, 2, ref)) == [0, 1]   # 稳定子 1 翻转
+    # 轮 1：稳定子 1 由 1 变 0 → 事件；轮 1 不掩码
+    assert list(layout.detection_events(raw, 1, ref)) == [0, 1]
+    assert list(layout.detection_events(raw, 2, ref)) == [0, 1]
+
+
+def test_all_deterministic_layout_masks_nothing_at_round_zero():
+    layout = _layout(round0=(0, 1))
+    raw = np.array([[1, 1], [1, 1], [1, 1]], dtype=np.uint8)
+    ref = np.array([0, 0], dtype=np.uint8)
+    assert list(layout.detection_events(raw, 0, ref)) == [1, 1]
 
 
 def test_detector_at_rejects_unknown_pair():
     layout = _layout()
     with pytest.raises(KeyError):
         layout.detector_at(stabilizer=9, round_index=0)
+    with pytest.raises(KeyError):
+        layout.detector_at(stabilizer=1, round_index=0)   # 轮 0 该生成元无 detector
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -905,13 +933,19 @@ class Observable:
 
 @dataclass(frozen=True)
 class DetectorLayout:
-    """解码器面向的布局描述。"""
+    """解码器面向的布局描述。
+
+    round0_stabilizers：轮 0 有 detector 的生成元下标。|0…0⟩ 一般不在码空间内，
+    轮 0 的提取本身把态投影进码空间；只有在制备基下确定的生成元（|0⟩ 制备时即
+    x 块全零的 Z 型）轮 0 读数才确定，其余是 50/50 随机的，不构成 detector。
+    """
     n_detectors: int
     n_rounds: int
     n_stabilizers: int
     detectors: tuple[Detector, ...]
     observables: tuple[Observable, ...]
     coords: dict = field(default_factory=dict)
+    round0_stabilizers: tuple[int, ...] = ()
 
     def detector_at(self, stabilizer: int, round_index: int) -> Detector:
         """按 (稳定子, 轮) 取 detector。"""
@@ -933,12 +967,20 @@ class DetectorLayout:
         """由原始稳定子读数算出该轮的 detection event。
 
         raw_syndromes: (rounds, n_stabilizers) uint8 的原始读数
-        reference:     (n_stabilizers,) uint8，轮 0 的无噪声参考值
-        轮 0 与 reference 比较；其余轮与上一轮比较。
+        reference:     (n_stabilizers,) uint8，轮 0 参考值（恒为 zeros）
+        轮 0 与 reference 比较，且**只保留 round0_stabilizers 内的分量**（其余生成元
+        轮 0 读数随机、不构成 detector，掩为 0）；其余轮与上一轮比较、不掩码。
+
+        返回形状恒为 (n_stabilizers,)，使解码器协议与全部测试的形状保持统一。
         """
         raw = np.asarray(raw_syndromes, dtype=np.uint8)
-        prev = np.asarray(reference, dtype=np.uint8) if round_index == 0 else raw[round_index - 1]
-        return (raw[round_index] ^ prev).astype(np.uint8)
+        if round_index != 0:
+            return (raw[round_index] ^ raw[round_index - 1]).astype(np.uint8)
+        events = (raw[0] ^ np.asarray(reference, dtype=np.uint8)).astype(np.uint8)
+        mask = np.zeros(self.n_stabilizers, dtype=np.uint8)
+        for s in self.round0_stabilizers:
+            mask[s] = 1
+        return (events & mask).astype(np.uint8)
 ```
 
 在 `aicir/qec/__init__.py` 追加：
@@ -952,7 +994,7 @@ __all__ += ["Detector", "Observable", "DetectorLayout"]
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `PYTHONPATH=. pytest tests/qec/test_detectors.py -q`
-Expected: PASS（5 passed）
+Expected: PASS（6 passed）
 
 - [ ] **Step 5: 提交**
 
@@ -978,8 +1020,9 @@ git commit -m "feat(qec): Detector/Observable/DetectorLayout 解码器契约"
   - `Schedule` 协议：`build_encode(code, logical_state)` / `build_round(code, round_index, *, creg_name)` / `build_readout(code, logical_state)`
   - `BareAncillaSchedule`
   - `register_schedule(name, factory)` / `resolve_schedule(name_or_obj)`
-  - `verify_schedule(code, schedule, rounds, *, backend=None, shots=4) -> None`
-  - `build_layout(code, schedule, rounds) -> DetectorLayout`
+  - `verify_schedule(code, schedule, rounds, *, logical_state="0", backend=None, shots=4) -> None`
+  - `build_layout(code, schedule, rounds, *, logical_state="0") -> DetectorLayout`
+  - `deterministic_round0(code, logical_state) -> tuple[int, ...]`
 - 全局 qubit 编号约定：**data 比特 0..n−1，ancilla 比特 n..n+m−1**（ancilla j 测量生成元 j），线路总比特数 `n + m`。
 
 - [ ] **Step 1: 写失败测试**
@@ -1011,13 +1054,33 @@ def test_detectors_are_deterministic_without_noise(name, kwargs, rounds):
     verify_schedule(code, BareAncillaSchedule(), rounds)
 
 
-def test_layout_shape_matches_code_and_rounds():
-    code = get_code("steane")
+def test_layout_shape_accounts_for_partial_round_zero():
+    """Shor 码 8 个生成元中只有 6 个纯 Z 型 → 轮 0 只建 6 个 detector。
+
+    刻意选 Shor 而非 Steane/surface：后两者 X/Z 型各占一半，
+    len(round0) 恰等于 m/2，m*rounds 与正确值在某些轮数下会巧合相等。
+    """
+    code = get_code("shor")
     layout = build_layout(code, BareAncillaSchedule(), rounds=3)
-    assert layout.n_stabilizers == code.m
+    assert layout.n_stabilizers == code.m == 8
     assert layout.n_rounds == 3
-    assert layout.n_detectors == code.m * 3
-    assert len(layout.round_slice(1)) == code.m
+    assert layout.round0_stabilizers == (0, 1, 2, 3, 4, 5)
+    assert layout.n_detectors == 6 + 8 * 2 == 22
+    assert len(layout.round_slice(0)) == 6
+    assert len(layout.round_slice(1)) == 8
+
+
+@pytest.mark.parametrize("name,kwargs,expected", [
+    ("repetition", {"d": 3, "basis": "Z"}, (0, 1)),
+    ("five_qubit", {}, ()),                      # 非 CSS：轮 0 无任何确定生成元
+    ("steane", {}, (3, 4, 5)),
+    ("surface", {"d": 3}, (4, 5, 6, 7)),
+])
+def test_deterministic_round0_matches_measured_values(name, kwargs, expected):
+    """轮 0 确定的生成元集合 —— 数值已在真机上逐码实测确认。"""
+    from aicir.qec.schedules import deterministic_round0
+    code = get_code(name, **kwargs)
+    assert deterministic_round0(code, "0") == expected
 
 
 def test_round_circuit_uses_data_then_ancilla_numbering():
@@ -1045,8 +1108,15 @@ def test_resolve_schedule_accepts_name_and_instance():
 
 
 def test_verify_schedule_reports_offending_detector():
-    """人为破坏调度（漏掉 ancilla reset）必须被 verify_schedule 抓住。"""
-    code = get_code("repetition", d=3, basis="Z")
+    """人为破坏调度（漏掉 ancilla reset）必须被 verify_schedule 抓住。
+
+    **必须用 Steane，不能用 repetition**：漏 reset 时读数变成 raw[t] = XOR_{i≤t} s_i。
+    repetition(Z 基) 全部生成元是纯 Z 型，在 |0…0⟩ 上 s_i 恒为 0，这条 XOR 链精确
+    抵消为 0——该 bug 在这个码上**数学上不可观测**，用它写的测试是空断言（已实测：
+    repetition 上坏调度不被抓住，Steane 上被抓住）。Steane 有 X 型生成元，轮 0 读数
+    真随机，坏调度下相邻轮 XOR 必然非零。
+    """
+    code = get_code("steane")
 
     class BrokenSchedule(BareAncillaSchedule):
         def build_round(self, code, round_index, *, creg_name="syn"):
@@ -1127,46 +1197,85 @@ def resolve_schedule(name_or_obj) -> Schedule:
     return SCHEDULES[name_or_obj]()
 
 
-def build_layout(code, schedule, rounds: int) -> DetectorLayout:
+def deterministic_round0(code, logical_state: str = "0") -> tuple[int, ...]:
+    """哪些生成元在轮 0 读数确定 —— 即在制备基下 |0…0⟩/|+…+⟩ 是其本征态者。
+
+    |0…0⟩ 制备：x 块全零的生成元（纯 Z 型），读数确定为 0。
+    |+…+⟩ 制备：z 块全零的生成元（纯 X 型），读数确定为 0。
+    其余生成元轮 0 读数是 50/50 随机的，**不构成 detector**。
+
+    实测各码的确定生成元个数：repetition 2/2、Steane 3/6、Shor 6/8、
+    surface_d3 4/8、five_qubit **0/4**（非 CSS，无纯 Z 型生成元）。
+    """
+    state = str(logical_state)
+    if state in ("0", "1"):
+        block = code.generators[:, :code.n]          # x 块须全零
+    elif state in ("+", "-"):
+        block = code.generators[:, code.n:]          # z 块须全零
+    else:
+        raise ValueError(f"未知逻辑初态 {state!r}")
+    return tuple(int(j) for j in range(code.m) if not block[j].any())
+
+
+def build_layout(code, schedule, rounds: int, *, logical_state: str = "0") -> DetectorLayout:
     """由码与调度构造 DetectorLayout。
 
-    detector (s, t)：轮 t 的稳定子 s 读数 XOR 轮 t−1 的读数；t=0 时只含轮 0 的 record
-    （其参考值由初态确定，运行器以 reference 向量提供）。
+    detector (s, t)：轮 t 的稳定子 s 读数 XOR 轮 t−1 的读数。
+    t=0 **只对 deterministic_round0 内的生成元建 detector**（其余轮 0 读数随机）。
     """
     schedule = resolve_schedule(schedule)
     m = code.m
+    round0 = deterministic_round0(code, logical_state)
     detectors, idx = [], 0
     for t in range(int(rounds)):
         for s in range(m):
+            if t == 0 and s not in round0:
+                continue
             cur = t * m + s
             recs = (cur,) if t == 0 else ((t - 1) * m + s, cur)
             detectors.append(Detector(index=idx, records=recs, stabilizer=s, round_index=t))
             idx += 1
+    # observable 的 record 必须由**该逻辑算符的实际支持**派生，不能一律取全部 n 个 data 比特。
+    # 后者对五个内置 k=1 码碰巧等价（全比特奇偶是同一陪集的代表元），但会让 k>1 码的各逻辑
+    # 比特拿到完全相同的 record 集合、彼此不可区分——Task 10 注册的 [[4,2,2]] 正是 k=2。
     base = int(rounds) * m
+    state = str(logical_state)
+    if state in ("0", "1"):
+        support = code.logical_z[:, code.n:]           # Z 基读出 → 取 logical_z 的 z 块
+    else:                                              # "+"/"-"；非法值已由
+        support = code.logical_x[:, :code.n]           # deterministic_round0 抛出
     observables = tuple(
-        Observable(index=i, records=tuple(range(base, base + code.n)))
+        Observable(index=i, records=tuple(base + q for q in range(code.n) if support[i, q]))
         for i in range(code.k)
     )
     return DetectorLayout(
         n_detectors=idx, n_rounds=int(rounds), n_stabilizers=m,
         detectors=tuple(detectors), observables=observables, coords=dict(code.coords),
+        round0_stabilizers=round0,
     )
 
 
-def verify_schedule(code, schedule, rounds: int, *, backend=None, shots: int = 4) -> None:
+def verify_schedule(code, schedule, rounds: int, *, logical_state: str = "0",
+                    backend=None, shots: int = 4) -> None:
     """无噪声运行，断言每个 detector 恒为 0。不满足则抛 ValueError 并指名违规项。
 
     这是提取调度**唯一最有力的结构性检验**：它抓 CNOT 顺序错、漏掉 ancilla reset、
-    轮 0 参考值推错。公开它，使用户验证自己写的调度时享有与内置调度同等的保障。
+    轮 0 确定集合推错。公开它，使用户验证自己写的调度时享有与内置调度同等的保障。
+
+    参考值恒为 zeros(m)：轮 0 确定的生成元（|0…0⟩ 制备下即纯 Z 型）读数确定为 0。
+    **不从某次运行中实测 reference**——非确定生成元的轮 0 读数逐 shot 随机，
+    用某一次的实测值当参考会让检验对该 bug 视而不见（且轮 0 变成什么都不断言）。
     """
     from ..runner import collect_noiseless_syndromes   # 延迟导入，避免循环
 
     schedule = resolve_schedule(schedule)
+    layout = build_layout(code, schedule, int(rounds), logical_state=logical_state)
+    reference = np.zeros(code.m, dtype=np.uint8)
     for shot in range(int(shots)):
-        raw, reference = collect_noiseless_syndromes(
-            code, schedule, int(rounds), backend=backend, seed=shot,
+        raw = collect_noiseless_syndromes(
+            code, schedule, int(rounds), logical_state=logical_state,
+            backend=backend, seed=shot,
         )
-        layout = build_layout(code, schedule, int(rounds))
         for t in range(int(rounds)):
             events = layout.detection_events(raw, t, reference)
             bad = np.nonzero(events)[0]
@@ -1183,7 +1292,7 @@ from .bare import BareAncillaSchedule  # noqa: E402  自注册
 __all__ = [
     "RoundCircuit", "ReadoutCircuit", "Schedule", "BareAncillaSchedule",
     "SCHEDULES", "register_schedule", "resolve_schedule",
-    "build_layout", "verify_schedule",
+    "build_layout", "verify_schedule", "deterministic_round0",
 ]
 ```
 
@@ -1313,13 +1422,13 @@ def _read_creg(classical: dict, name: str, size: int) -> np.ndarray:
     return np.array(bits[:size], dtype=np.uint8)
 
 
-def collect_noiseless_syndromes(code, schedule, rounds: int, *, backend=None, seed: int = 0):
-    """无噪声运行 rounds 轮，返回 (raw_syndromes, reference)。
+def collect_noiseless_syndromes(code, schedule, rounds: int, *, logical_state: str = "0",
+                                backend=None, seed: int = 0) -> np.ndarray:
+    """无噪声运行 rounds 轮，返回 raw_syndromes，shape (rounds, m) uint8。
 
-    raw_syndromes: (rounds, m) uint8
-    reference:     (m,) uint8，轮 0 的参考值——即无噪声下轮 0 的读数本身。
-                   之所以取自实测而非恒 0：X 型稳定子在 |0…0> 上并非确定 +1，
-                   其值由第一轮提取过程本身确定，对固定调度是确定的。
+    **不返回 reference**：轮 0 参考值恒为 zeros(m)（见 verify_schedule 的说明）。
+    非确定生成元的轮 0 读数逐 shot 随机，任何「从一次运行实测 reference」的做法
+    都会与其他 shot 错配。
     """
     from .schedules import resolve_schedule
 
@@ -1329,8 +1438,8 @@ def collect_noiseless_syndromes(code, schedule, rounds: int, *, backend=None, se
     n_total = code.n + code.m
 
     state = run_trajectory(
-        schedule.build_encode(code, "0"), State.zero_state(n_total, backend), backend,
-        tm=False, measure_qubits=None, snap_ops=set(), rng=rng,
+        schedule.build_encode(code, logical_state), State.zero_state(n_total, backend),
+        backend, tm=False, measure_qubits=None, snap_ops=set(), rng=rng,
     ).pre
 
     raw = np.zeros((int(rounds), code.m), dtype=np.uint8)
@@ -1341,13 +1450,13 @@ def collect_noiseless_syndromes(code, schedule, rounds: int, *, backend=None, se
         state = res.pre
         raw[t] = _read_creg(res.classical, rc.creg_name, code.m)
 
-    return raw, raw[0].copy()
+    return raw
 ```
 
 - [ ] **Step 5: 运行测试确认通过**
 
 Run: `PYTHONPATH=. pytest tests/qec/test_schedules.py -q`
-Expected: PASS（15 passed）
+Expected: PASS（19 passed）
 
 若 `test_detectors_are_deterministic_without_noise` 失败，说明提取线路有误——**先修线路，不要放宽断言**。该测试是本模块正确性的地基。
 
@@ -1905,12 +2014,25 @@ def test_noiseless_run_never_reports_a_logical_error():
 @pytest.mark.parametrize("name,kwargs", [
     ("five_qubit", {}), ("steane", {}), ("surface", {"d": 3}),
 ])
-def test_single_round_weight_one_noise_is_corrected(name, kwargs):
-    """p 很小的单轮运行下，逻辑错误率必须为 0（权重 1 错误全可纠）。"""
+def test_low_rate_noise_after_preparation_is_corrected(name, kwargs):
+    """轮 0 制备、轮 1 注入低速率噪声 → 权重 1 错误全可纠，逻辑错误率为 0。
+
+    rounds=2 而非 1：轮 0 是投影式制备不注入错误（见 Global Constraints），
+    rounds=1 只做制备，不构成纠错检验。
+    """
     code = get_code(name, **kwargs)
     result = run(code, errors=PauliErrorModel(p_data=0.02, channel="depolarizing"),
-                 decoder=LookupDecoder(code), rounds=1, shots=64, seed=3)
+                 decoder=LookupDecoder(code), rounds=2, shots=64, seed=3)
     assert result.logical_error_rate == 0.0
+
+
+def test_round_zero_injects_no_errors():
+    """轮 0 是制备轮 —— 注入的错误事件不得出现在轮 0。"""
+    code = get_code("steane")
+    result = run(code, errors=PauliErrorModel(p_data=0.5, p_measure=0.5),
+                 decoder=LookupDecoder(code), rounds=3, shots=4, seed=1)
+    for rec in result.records:
+        assert all(e.round_index >= 1 for e in rec.injected_errors)
 
 
 def test_result_reports_stderr_and_config():
@@ -1937,9 +2059,15 @@ def test_records_capture_syndromes_and_detection_events():
 def test_keep_records_caps_memory_but_aggregates_cover_all_shots():
     code = get_code("steane")
     result = run(code, errors=PauliErrorModel(p_data=0.05), decoder=LookupDecoder(code),
-                 rounds=1, shots=40, seed=5, keep_records=3)
+                 rounds=2, shots=40, seed=5, keep_records=3)
     assert len(result.records) == 3
     assert sum(result.verdict_counts.values()) == 40
+
+
+def test_runner_rejects_missing_decoder():
+    code = get_code("steane")
+    with pytest.raises(ValueError, match="decoder"):
+        run(code, errors=PauliErrorModel(), decoder=None, rounds=2, shots=1)
 
 
 def test_timing_fields_are_none_without_a_timing_model():
@@ -2003,11 +2131,20 @@ class SpyDecoder:
 
 
 class RegressingDecoder(SpyDecoder):
+    """轮 0 正常提交，轮 1 起明确回退到比此前已提交值更小的 committed_through。
+
+    **不能让 update() 恒返回 0**：运行器的检查是 `step.committed_through < committed`，
+    而 `committed` 初值为 −1，轮 0 汇报 0 后各轮再汇报 0 从不小于它，回退检查永不触发，
+    `pytest.raises` 会以 DID NOT RAISE 失败。必须真的返回比此前提交值更小的数。
+    """
+
     name = "regressing"
 
     def update(self, round_index, events):
         super().update(round_index, events)
-        return DecodeStep(committed_through=0, cost=1.0)   # 第二轮起回退
+        if round_index == 0:
+            return DecodeStep(committed_through=0, cost=1.0)
+        return DecodeStep(committed_through=-1, cost=1.0)   # 轮 1 起真正回退
 
 
 def test_decoder_is_called_once_per_round_in_order():
@@ -2152,7 +2289,7 @@ def _apply_pauli_gates(state, pairs, backend, n_total, rng):
                           snap_ops=set(), rng=rng).pre
 
 
-def run(code, *, schedule="bare", errors=None, decoder=None, rounds=1, shots=1,
+def run(code, *, schedule="bare", errors=None, decoder=None, rounds=2, shots=1,
         logical_state="0", correction_mode="frame", timing=None, backend=None,
         seed=None, keep_records=100, keep_failures=100) -> QECResult:
     """逐 shot 交错「模拟 ↔ 解码」主循环。"""
@@ -2167,14 +2304,17 @@ def run(code, *, schedule="bare", errors=None, decoder=None, rounds=1, shots=1,
     if correction_mode not in ("frame", "active"):
         raise ValueError(f"correction_mode 只支持 'frame' / 'active'，收到 {correction_mode!r}")
 
+    if decoder is None:
+        raise ValueError("decoder 为必填参数；请传入实现 OnlineDecoder 协议的实例或已注册的名字")
     schedule = resolve_schedule(schedule)
     decoder = resolve_decoder(decoder)
     errors = errors if errors is not None else PauliErrorModel()
     backend = backend or NumpyBackend()
-    layout = build_layout(code, schedule, rounds)
+    layout = build_layout(code, schedule, rounds, logical_state=logical_state)
     n_total = code.n + code.m
 
-    _, reference = collect_noiseless_syndromes(code, schedule, rounds, backend=backend)
+    # 轮 0 参考值恒为 zeros：轮 0 确定的生成元读数确定为 0，其余已被 layout 掩掉。
+    reference = np.zeros(code.m, dtype=np.uint8)
 
     kept, failures, verdicts = [], [], {}
     for shot in range(shots):
@@ -2221,7 +2361,8 @@ def _run_one_shot(code, schedule, errors, decoder, rounds, layout, reference,
     committed = -1
 
     for t in range(rounds):
-        round_errors = errors.sample_round(t, code.n, code.m, rng)
+        # 轮 0 是投影式制备（|0…0⟩ 一般不在码空间内），不注入错误；从轮 1 开始注入。
+        round_errors = [] if t == 0 else errors.sample_round(t, code.n, code.m, rng)
         injected.extend(round_errors)
 
         rc = schedule.build_round(code, t)
@@ -2327,7 +2468,7 @@ __all__ += ["QECShotRecord", "QECResult", "run"]
 - [ ] **Step 5: 运行测试确认通过**
 
 Run: `PYTHONPATH=. pytest tests/qec/test_runner_frame.py tests/qec/test_online_protocol.py -q`
-Expected: PASS（14 passed）
+Expected: PASS（18 passed）
 
 - [ ] **Step 6: 提交**
 
@@ -2471,17 +2612,35 @@ def backlog_sequence(decode_times, round_duration: float) -> list[float]:
     return out
 
 
+def commit_latency_sequence(decode_times, round_duration: float, commit_lag: int = 0) -> list[float]:
+    """由声明代价与轮时长算出每轮的提交延迟（FIFO 单服务台 sojourn time）。
+
+    **这里极易写错，务必按下述索引实现。** `backlog_sequence` 实现的是 Lindley 递推：
+    `backlog[t]` 是第 t 轮**处理完之后**遗留的积压，即第 t+1 轮到达时看到的排队延迟，
+    **不是**第 t 轮自己的排队延迟。第 t 轮自己的排队延迟是 `backlog[t-1]`（t=0 取 0）。
+    错用 `backlog[t]` 会把每个拥堵轮次的延迟**低估恰好一个 round_duration**，从而污染
+    `mean_commit_latency`——而那正是本模块用来回答「解码器跟得上吗」的头号指标，
+    偏偏在它唯一有意义的拥堵区间失真。
+
+    已用 FIFO 单服务台模拟核对：decode=[3.0,0.5,2.0,0.25]、round_duration=1.0、
+    commit_lag=0 时 backlog=[2.0,1.5,2.5,1.75]，真实逗留时间=[3.0,2.5,3.5,2.75]；
+    错误写法给出 [3.0,1.5,2.5,1.75]。测试必须断言**具体数值**，只断言形状抓不到本 bug。
+    """
+    backlog = backlog_sequence(decode_times, round_duration)
+    out, prev_backlog = [], 0.0
+    for t, dt in enumerate(decode_times):
+        queueing_delay = prev_backlog          # backlog[t-1]；t=0 时记 0
+        out.append(queueing_delay + float(dt) + int(commit_lag) * float(round_duration))
+        prev_backlog = backlog[t]
+    return out
+
+
 def _fill_shot_timing(record, decoder, steps, timing: TimingModel, rounds: int) -> None:
     """按声明代价填充该 shot 的 backlog 与提交延迟。"""
     decode_times = [float(timing.cost_to_seconds(step.cost)) for step in steps]
-    backlog = backlog_sequence(decode_times, timing.round_duration)
     lag = int(getattr(decoder, "commit_lag", 0))
-    # 提交延迟 = 排队延迟（该轮 backlog 减去自身解码时长，下限 0）+ 解码时长
-    #            + 滞后提交带来的 lag × 轮时长
-    latency = [
-        max(0.0, backlog[t] - decode_times[t]) + decode_times[t] + lag * timing.round_duration
-        for t in range(len(steps))
-    ]
+    backlog = backlog_sequence(decode_times, timing.round_duration)
+    latency = commit_latency_sequence(decode_times, timing.round_duration, lag)
     record.backlog = np.asarray(backlog, dtype=float)
     record.commit_latency = np.asarray(latency, dtype=float)
     record.decode_times = np.asarray(decode_times, dtype=float)
@@ -2620,20 +2779,27 @@ Expected: FAIL —— `test_active_mode_rejects_frame_only_decoder` 不抛错；
 在 `_run_one_shot` 的 `step = decoder.update(t, ev)` 之后、`committed_through` 校验之前插入：
 
 ```python
-        if correction_mode == "active" and step.corrections is None and step.frame_flips is not None:
+        if correction_mode == "active" and step.corrections is None:
             raise ValueError(
-                f"correction_mode='active' 要求解码器产出 corrections 门列表，但 "
-                f"{getattr(decoder, 'name', '?')} 只给出了 frame_flips。"
+                f"correction_mode='active' 要求解码器每轮产出 corrections 门列表，但 "
+                f"{getattr(decoder, 'name', '?')} 在轮 {t} 返回了 corrections=None。"
                 f"改用 correction_mode='frame'，或让解码器填充 DecodeStep.corrections"
             )
 ```
+
+**注意条件里不要再加 `and step.frame_flips is not None`**：只产出 frame 的解码器
+（如本任务测试里的 `FrameOnlyDecoder`）两个字段都是 `None`，多这一个条件会让守卫
+永远不触发，其配套测试也就必然失败。空列表 `[]` 表示「本轮无需修正」，是合法值，
+只有 `None` 才代表「该解码器不支持 active 模式」。
 
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `PYTHONPATH=. pytest tests/qec/test_correction_modes.py -q`
 Expected: PASS（8 passed）
 
-若 `test_frame_and_active_produce_identical_event_streams` 失败，问题必然在 `_applied_syndrome_delta`——它必须返回**已累积施加的全部修正**对各稳定子的综合征贡献，而不是仅本轮的。**不要放宽断言**，这个测试存在的唯一目的就是守住这处细节。
+若 `test_frame_and_active_produce_identical_event_streams` 失败，问题在 `_applied_syndrome_delta`——它必须返回**相邻两轮累积修正之差**（`applied ^ applied_prev`）的综合征，**不是累积量本身**。推导：`raw[t] = s(E(t)) ⊕ s(C(t−1))`，detector 取相邻差分，故 `ev_naive = ev_frame ⊕ s(C(t−1) ⊕ C(t−2))`。用累积量会残留 `s(C(t−2))`，而 `C(t−2)` 首次非零出现在 `t=3`——所以 **`rounds≤3` 会通过、`rounds≥4` 才暴露**，务必测到 4 轮。**不要放宽断言**。
+
+若 `test_frame_and_active_agree_on_verdicts` 失败（事件流一致但判定分歧），问题在末端读出：active 模式下物理修正已烘焙进 `readout`，再叠加 `frame` 记账即重复计数，二者恰好抵消，使 active 模式**逻辑错误率恒为零**（对基准平台是最糟的失效方式：静默乐观）。须先 `readout ^= applied` 的相应半块（Z 基取 **x 块**，因为只有 X/Y 翻转 Z 基读数；X 基取 z 块），再算残余。
 
 - [ ] **Step 5: 全量回归**
 
@@ -2847,7 +3013,7 @@ def test_custom_decoder_works_with_timing_model():
 - [ ] **Step 2: 运行测试**
 
 Run: `PYTHONPATH=. pytest tests/qec/test_custom_plugin.py -q`
-Expected: PASS（7 passed）
+Expected: PASS（6 passed——本节代码块恰好定义 6 个 `def test_`，不要为凑数杜撰第 7 个）
 
 任何一项失败都说明**扩展点没做到位**——回头改实现，不要改这个测试来迁就实现。特别注意：
 - `committed_through` 初值为 `-1`，滞后提交的解码器在前 `commit_lag` 轮会报负数，运行器的单调性校验必须容许这一点。
@@ -3079,7 +3245,10 @@ git commit -m "docs(qec): 公开 API 收口、README 使用手册、在线解码
 - `DecodeStep` 字段 `frame_flips/corrections/committed_through/cost` 在 Task 6 定义，Task 7/8/9/10 使用一致。
 - `DetectorLayout.detection_events(raw, round_index, reference)` 在 Task 3 定义，Task 4/7 调用一致。
 - `QECShotRecord.decode_times` 在 Task 8 补入 `record.py`，仅由 `_fill_shot_timing`（Task 8）写、`_fill_timing_aggregates`（Task 8）读。
-- `collect_noiseless_syndromes(code, schedule, rounds, *, backend, seed)` 在 Task 4 定义，Task 7 的 `run` 调用一致。
+- `collect_noiseless_syndromes(code, schedule, rounds, *, logical_state, backend, seed) -> np.ndarray` 在 Task 4 定义，只返回 `raw`（不返回 reference）；`verify_schedule` 与 `run` 都自行用 `zeros(m)` 作参考值。
+- `deterministic_round0(code, logical_state) -> tuple[int, ...]` 在 Task 4 定义，`build_layout` 调用，Task 4 测试直接断言其返回值。
+- `DetectorLayout.round0_stabilizers` 在 Task 3 定义，Task 4 `build_layout` 填充，Task 3/4 测试断言。
+- `run(...)` 的 `rounds` 默认值为 **2**（轮 0 是制备轮，默认 1 不构成纠错运行）。
 - `verify_schedule(code, schedule, rounds, *, backend, shots)` 在 Task 4 定义，Task 10 与 demo 调用一致。
 - 解码器 `name` 属性：`LookupDecoder.name = "lookup"` 是类属性，`run` 用 `getattr(decoder, "name", ...)` 读取，测试断言 `result.decoder_name == "lookup"` 一致。
 
@@ -3087,4 +3256,5 @@ git commit -m "docs(qec): 公开 API 收口、README 使用手册、在线解码
 
 - Task 4 的 `verify_schedule` 依赖 Task 4 Step 4 的 `collect_noiseless_syndromes`，二者在同一 Task 内，`schedules/__init__.py` 对 `runner` 用**延迟导入**避免循环依赖——不要把它提到模块顶层。
 - Task 7 的 `_residual_from_readout` 是 M1 里最容易写错的函数。判据以 Task 7/9 的测试为准：无噪声必须 0 逻辑错误率、单轮小 p 必须 0 逻辑错误率、frame 与 active 判定必须完全一致。若这三条中任何一条不过，先怀疑这个函数。
-- Task 9 的 `_applied_syndrome_delta` 必须用**累积**已施加修正（`applied` 向量），不是本轮增量。
+- Task 9 的 `_applied_syndrome_delta` 必须返回**相邻两轮累积修正之差**（`applied ^ applied_prev`）的综合征，**不是累积量本身**。（本条曾写反，已按 GF(2) 推导更正：`raw[t] = s(E(t)) ⊕ s(C(t−1))`，detector 是相邻差分，故 `ev_naive = ev_frame ⊕ s(C(t−1) ⊕ C(t−2))`——要扣的是差、不是 `s(C(t−1))`。用累积量会残留 `s(C(t−2))`，仅当 `C(t−2)=0` 时才恰好正确，因此 `rounds≤3` 通过、`rounds≥4` 才暴露。）
+- Task 9 还需在末端读出后做**回退修正**：active 模式下物理修正已烘焙进 `readout`，若再叠加解码器的 `frame` 记账就会重复计数、相互抵消，使 active 模式的逻辑错误率**恒为零**。须先把 `readout` 与 `applied` 的相应半块异或（Z 基读出取 **x 块**——X/Y 才翻转 Z 基读数；X 基读出取 z 块），还原成「从未物理修正过」的读数，再交给 `_residual_from_readout`。

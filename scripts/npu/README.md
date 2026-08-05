@@ -43,7 +43,34 @@ scripts/npu/qml.sh --strict-npu --pytest-arg -vv --pytest-arg --tb=short
 - `qaoa`: gate-level QAOA with aicir `Hamiltonian`, Trotter order 1/2, exact energy, diagonal sampling, and QUBO helpers.
 - `tensor`: tensor network simulator and cotengra-facing paths.
 - `qas`: QAS/VQE workloads likely to stress NPU batch and gradient paths.
+- `qec`: QEC online-decoding harness (`tests/qec/`) plus `qec_probe.py`, which runs the
+  harness itself on a real device.
 - `demos`: demo and molecule smoke tests before long NPU jobs.
+
+## QEC harness probe
+
+`aicir.qec` imports numpy only, but it forwards `backend` to `State`/`run_trajectory`,
+so on NPU the exposed surface is the **measure hot path** — per-round `measure(creg=…)`
+Z-projection and `reset`, round-to-round state threading, and (in `active` mode) applying
+correction Paulis as real gates. The QEC path contains **no gradients**, so the complex64
+backward/accumulation gaps recorded in `CLAUDE.md` do not apply here; what needs real-device
+confirmation is projection, reset, and gate application under complex64.
+
+```sh
+scripts/npu/qec.sh                          # strict NPU
+scripts/npu/qec.sh --include-surface        # add surface d=3 (9+8 = 17 qubits, slower)
+scripts/npu/qec.sh --rounds 4 --shots 8     # widen the sweep
+scripts/npu/qec.sh --allow-cpu-fallback     # local development only, never as evidence
+```
+
+Seven cases, each independently guarded: minimal round circuit on device; detector
+determinism via `verify_schedule` (the strongest structural check — a device-side
+projection or ancilla-reuse discrepancy fails here immediately); noiseless run reporting
+exactly zero logical error rate; noisy run record shapes; `frame` vs `active` agreement on
+both detection-event streams and verdicts (forced to `rounds >= 4`, since that subtraction
+bug is invisible at fewer rounds); a `k=2` `[[4,2,2]]` code; and the real-time backlog model.
+
+Round 0 is projective preparation and injects no errors, so `--rounds` must be `>= 2`.
 
 ## Multi-card NPU probe
 
