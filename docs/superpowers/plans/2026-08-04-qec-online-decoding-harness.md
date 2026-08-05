@@ -2797,7 +2797,9 @@ Expected: FAIL —— `test_active_mode_rejects_frame_only_decoder` 不抛错；
 Run: `PYTHONPATH=. pytest tests/qec/test_correction_modes.py -q`
 Expected: PASS（8 passed）
 
-若 `test_frame_and_active_produce_identical_event_streams` 失败，问题必然在 `_applied_syndrome_delta`——它必须返回**已累积施加的全部修正**对各稳定子的综合征贡献，而不是仅本轮的。**不要放宽断言**，这个测试存在的唯一目的就是守住这处细节。
+若 `test_frame_and_active_produce_identical_event_streams` 失败，问题在 `_applied_syndrome_delta`——它必须返回**相邻两轮累积修正之差**（`applied ^ applied_prev`）的综合征，**不是累积量本身**。推导：`raw[t] = s(E(t)) ⊕ s(C(t−1))`，detector 取相邻差分，故 `ev_naive = ev_frame ⊕ s(C(t−1) ⊕ C(t−2))`。用累积量会残留 `s(C(t−2))`，而 `C(t−2)` 首次非零出现在 `t=3`——所以 **`rounds≤3` 会通过、`rounds≥4` 才暴露**，务必测到 4 轮。**不要放宽断言**。
+
+若 `test_frame_and_active_agree_on_verdicts` 失败（事件流一致但判定分歧），问题在末端读出：active 模式下物理修正已烘焙进 `readout`，再叠加 `frame` 记账即重复计数，二者恰好抵消，使 active 模式**逻辑错误率恒为零**（对基准平台是最糟的失效方式：静默乐观）。须先 `readout ^= applied` 的相应半块（Z 基取 **x 块**，因为只有 X/Y 翻转 Z 基读数；X 基取 z 块），再算残余。
 
 - [ ] **Step 5: 全量回归**
 
@@ -3254,4 +3256,5 @@ git commit -m "docs(qec): 公开 API 收口、README 使用手册、在线解码
 
 - Task 4 的 `verify_schedule` 依赖 Task 4 Step 4 的 `collect_noiseless_syndromes`，二者在同一 Task 内，`schedules/__init__.py` 对 `runner` 用**延迟导入**避免循环依赖——不要把它提到模块顶层。
 - Task 7 的 `_residual_from_readout` 是 M1 里最容易写错的函数。判据以 Task 7/9 的测试为准：无噪声必须 0 逻辑错误率、单轮小 p 必须 0 逻辑错误率、frame 与 active 判定必须完全一致。若这三条中任何一条不过，先怀疑这个函数。
-- Task 9 的 `_applied_syndrome_delta` 必须用**累积**已施加修正（`applied` 向量），不是本轮增量。
+- Task 9 的 `_applied_syndrome_delta` 必须返回**相邻两轮累积修正之差**（`applied ^ applied_prev`）的综合征，**不是累积量本身**。（本条曾写反，已按 GF(2) 推导更正：`raw[t] = s(E(t)) ⊕ s(C(t−1))`，detector 是相邻差分，故 `ev_naive = ev_frame ⊕ s(C(t−1) ⊕ C(t−2))`——要扣的是差、不是 `s(C(t−1))`。用累积量会残留 `s(C(t−2))`，仅当 `C(t−2)=0` 时才恰好正确，因此 `rounds≤3` 通过、`rounds≥4` 才暴露。）
+- Task 9 还需在末端读出后做**回退修正**：active 模式下物理修正已烘焙进 `readout`，若再叠加解码器的 `frame` 记账就会重复计数、相互抵消，使 active 模式的逻辑错误率**恒为零**。须先把 `readout` 与 `applied` 的相应半块异或（Z 基读出取 **x 块**——X/Y 才翻转 Z 基读数；X 基读出取 z 块），还原成「从未物理修正过」的读数，再交给 `_residual_from_readout`。
