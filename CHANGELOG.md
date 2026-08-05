@@ -2,6 +2,68 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-08-05
+
+### 新增
+
+- **`aicir.qec`：面向新型在线实时纠错/解码算法的实验平台（M1）。** 码、syndrome
+  提取调度、在线解码器三处均可插拔，均不需改模块内部代码；包内只依赖 numpy。
+  - `StabilizerCode`（GF(2) 辛表示，`from_paulis` 以 Pauli 串为公开 I/O；
+    `validate`/`syndrome`/`distance`/`logical_class`/`verdict`）。
+  - 五个内置参考码：repetition（任意奇数 d，Z/X 基）、`[[5,1,3]]`、Steane、
+    Shor、rotated surface d=3，经 `register_code`/`get_code`/`CODES` 注册。
+  - `Detector`/`Observable`/`DetectorLayout`：采用 Stim 语义的 detector 契约，
+    为 M2 的 Stim/PyMatching 互操作预留；raw syndrome 与 detection event 并存。
+  - `Schedule` 协议 + `BareAncillaSchedule` + `verify_schedule`（无噪声下断言
+    每个 detector 恒为 0，是提取调度最有力的结构性检验，公开给用户验证自写调度）。
+  - `PauliErrorModel`：逐 shot 随机 Pauli 采样，态全程保持纯态矢量；测量误差
+    作用在经典记录上（与 Stim 的 `X_ERROR` before `MR` 等价）。
+  - `OnlineDecoder` 流式协议（`reset`/`update`/`flush`/`cost_of`，带 `window`、
+    `commit_lag`、`committed_through`）+ `LookupDecoder` + 注册表。**因果性由
+    架构保证**：运行器逐轮交错模拟与解码，解码器只经 `reset(layout)` 与
+    `update(round, events)` 获得信息，无法看到尚未模拟的未来轮次。
+  - `qec.run(...)`：交错 simulate↔decode 主循环，`frame`（默认）/`active` 双
+    修正模式；`QECShotRecord`/`QECResult`。
+  - `TimingModel` + backlog 递推 + 提交延迟：用解码器**声明的代价**而非 Python
+    wall-clock 建模实时预算（Python 解码器比 FPGA 慢约 10⁴ 倍，wall-clock 对
+    实时可行性无意义）；wall-clock 另存独立字段。backlog 斜率为正即吞吐失败。
+  - `scripts/npu/qec_probe.py` + `scripts/npu/qec.sh`，并入 `run_npu_tests.py`
+    的 `qec` 套件。
+
+### 修复
+
+以下均为 M1 开发期发现并修复的实质缺陷，记录于此以免被重新引入（详见
+`aicir/qec/README.md` 的「已知局限」与相应 commit）：
+
+- **`active` 模式重复计数，使逻辑错误率恒为 0。** 物理修正已烘焙进末端读出，
+  再叠加解码器的 frame 记账即数了两次、正负抵消。**修复前的任何 active 模式
+  数字都不可信**——不是偏低，是恒为零，看起来像一个好得不像话的结果。现在末端
+  读出先与 `applied` 的相应半块异或（Z 基取 x 块）还原后再算残余。
+- **`commit_latency` 排队延迟错用 `backlog[t]`。** Lindley 递推下 `backlog[t]`
+  是第 t+1 轮到达时看到的排队延迟；第 t 轮自己的是 `backlog[t-1]`。原写法使
+  每个拥堵轮次低估恰好一个 `round_duration`，污染 `mean_commit_latency`——偏偏
+  在该指标唯一有意义的拥堵区间失真。已与 FIFO 单服务台模拟核对。
+- **detector 参考值不能取自某次实测。** X 型稳定子在 `|0…0⟩` 上不是本征态，
+  轮 0 读数逐 shot 50/50 随机（真机实测 12 shot 中 6/6 分裂）。改为基感知的
+  轮 0 detector（只有制备基下确定的生成元才有）+ `zeros` 参考。轮 0 因此定性
+  为**投影式制备轮**，误差从轮 1 起注入，纠错实验需 `rounds >= 2`。
+- **`_applied_syndrome_delta` 应扣相邻两轮累积修正之差**，不是累积量本身；
+  用累积量残留 `s(C(t−2))`，`rounds <= 3` 通过、`rounds >= 4` 才暴露。
+- **`Observable.records` 对每个逻辑比特一律取全部 data 比特**，k>1 时各逻辑
+  比特不可区分；改为按逻辑算符实际支持派生。
+
+### 验证
+
+- **`aicir.qec` 单卡 Ascend NPU 实测通过，7/7 case。** `scripts/npu/qec.sh` 在
+  `NPUBackend(dtype=torch.complex64, device=npu:0, npu_available=True)` 上三种
+  配置各跑一次，全部 `7/7 cases passed`：默认（rounds=3, shots=4，repetition +
+  Steane）、`--include-surface`（追加 surface d=3，9+8=17 比特）、
+  `--rounds 4 --shots 8`。覆盖设备侧 complex64 门施加、逐轮 `measure(creg)` 与
+  `reset` 投影、轮间态串联、`active` 模式下把修正 Pauli 作为真实门施加。
+  其中 `detector_determinism` 通过即说明设备侧投影与 ancilla 复用语义与 numpy
+  一致；`frame_active_agree` 内部强制 `rounds >= 4`，覆盖上述扣除量 bug 的暴露
+  区间。QEC 路径不含梯度，故 complex64 反向/累加缺失与本模块无关。
+
 ## 2026-08-04
 
 ### 修复
