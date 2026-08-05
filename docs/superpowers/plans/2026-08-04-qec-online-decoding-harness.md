@@ -3013,7 +3013,7 @@ def test_custom_decoder_works_with_timing_model():
 - [ ] **Step 2: 运行测试**
 
 Run: `PYTHONPATH=. pytest tests/qec/test_custom_plugin.py -q`
-Expected: PASS（7 passed）
+Expected: PASS（6 passed——本节代码块恰好定义 6 个 `def test_`，不要为凑数杜撰第 7 个）
 
 任何一项失败都说明**扩展点没做到位**——回头改实现，不要改这个测试来迁就实现。特别注意：
 - `committed_through` 初值为 `-1`，滞后提交的解码器在前 `commit_lag` 轮会报负数，运行器的单调性校验必须容许这一点。
