@@ -159,6 +159,14 @@ SUITES: dict[str, Suite] = {
             "tests/vqc/test_vqe_orchestration.py",
         ),
     ),
+    "qec": Suite(
+        name="qec",
+        description="QEC online-decoding harness: algebra/detector/schedule suite plus a real-device probe.",
+        targets=(
+            "tests/qec/",
+        ),
+        scripts=(("scripts/npu/qec_probe.py",),),
+    ),
     "demos": Suite(
         name="demos",
         description="Demo and molecule smoke tests that are reasonable to run before long NPU jobs.",
