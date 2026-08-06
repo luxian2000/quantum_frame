@@ -29,7 +29,13 @@ from ..ir import (
     instruction_qubits,
 )
 
-_CDTYPE = np.complex64
+#: 门矩阵的**构造**精度，恒为双精度。
+#:
+#: 精度策略见 ``aicir/dtypes.py``：dtype 的单一真源是后端。门矩阵一律在最宽精度下
+#: 构造，再由后端在边界处窄化（``backend.cast`` / ``astype(backend.dtype)``）。
+#: 反过来做是不可逆的——先把 Rx 构造成 complex64、再喂给 complex128 的态，
+#: 精度就永久损失了；而 double→single 的窄化不会损失超出目标精度的信息。
+_CDTYPE = np.complex128
 
 KET_0 = np.array([[1.0 + 0.0j], [0.0 + 0.0j]], dtype=_CDTYPE)
 KET_1 = np.array([[0.0 + 0.0j], [1.0 + 0.0j]], dtype=_CDTYPE)

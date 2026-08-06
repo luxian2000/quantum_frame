@@ -20,9 +20,37 @@ from typing import List
 import numpy as np
 import torch
 
+from ..dtypes import default_dtype_was_set_explicitly, get_default_dtype
 from .base import Backend
 
+#: Torch 后端的内建默认精度。
+#:
+#: 与 ``NumpyBackend``（complex128）不同，torch 侧默认单精度，原因有二：
+#: 1) PyTorch 生态是 float32-native —— ``nn.Linear`` 等经典层默认 float32，
+#:    量子层若读出 float64 会直接让混合模型报 dtype 不匹配；
+#: 2) 消费级 NVIDIA 卡的 fp64 吞吐仅为 fp32 的 1/32，双精度默认是性能陷阱。
+#: 用户显式调用 ``aicir.set_default_dtype(complex128)`` 时仍会服从。
 _CDTYPE = torch.complex64
+
+#: numpy 复数 dtype → torch 复数 dtype
+_TORCH_COMPLEX = {np.complex64: torch.complex64, np.complex128: torch.complex128}
+
+
+def to_torch_complex_dtype(dtype):
+    """把 numpy/torch 复数 dtype 归一化为 torch 复数 dtype。"""
+
+    if dtype is None:
+        if default_dtype_was_set_explicitly():
+            return _TORCH_COMPLEX.get(get_default_dtype(), _CDTYPE)
+        return _CDTYPE
+    if isinstance(dtype, torch.dtype):
+        if dtype not in (torch.complex64, torch.complex128):
+            raise ValueError(f"不支持的复数精度 {dtype!r}；可选 complex64 / complex128")
+        return dtype
+    try:
+        return _TORCH_COMPLEX[np.dtype(dtype).type]
+    except (TypeError, KeyError):
+        raise ValueError(f"不支持的复数精度 {dtype!r}；可选 complex64 / complex128")
 
 
 class GPUBackend(Backend):
@@ -31,10 +59,10 @@ class GPUBackend(Backend):
     def __init__(self, dtype=None, device=None):
         """
         参数:
-            dtype:  torch 复数数据类型，默认 torch.complex64
+            dtype:  torch 复数数据类型，默认取 ``aicir.get_default_dtype()``（complex128）
             device: 计算设备，默认自动选择（cuda > cpu）
         """
-        self._dtype = dtype or _CDTYPE
+        self._dtype = to_torch_complex_dtype(dtype)
         if device is None:
             self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:

@@ -16,9 +16,24 @@ from typing import List
 
 import numpy as np
 
+from ..dtypes import get_default_dtype, to_numpy_complex_dtype
 from .base import Backend
 
-_CDTYPE = np.complex64
+
+def _blas_safe_matmul(a, b):
+    """复数 matmul，屏蔽 BLAS 内核的伪警告。
+
+    某些 BLAS 实现（如 Apple Accelerate）会在复数 matmul 内核内部由中间量触发
+    divide/overflow/invalid 的 RuntimeWarning，而输出本身有限且正确。这里只对
+    该次调用抑制这三个标志，不改动 numpy 全局错误状态。
+
+    历史上此处还会把两个操作数无条件提升到 complex128 再转回——那是同一问题的
+    第一版尝试，errstate 才是真正的修复。提升会让 complex64 路径在每个门上白付
+    一次转换，因此已移除。
+    """
+
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        return np.asarray(a) @ np.asarray(b)
 
 
 def _local_offsets(axes, n_qubits: int):
@@ -47,9 +62,9 @@ class NumpyBackend(Backend):
     def __init__(self, dtype=None):
         """
         参数:
-            dtype: 复数数据类型，默认 np.complex64
+            dtype: 复数数据类型，默认取 ``aicir.get_default_dtype()``（complex128）
         """
-        self._dtype = dtype or _CDTYPE
+        self._dtype = to_numpy_complex_dtype(dtype) if dtype is not None else get_default_dtype()
 
     # ──────────────────────── 元信息 ────────────────────────────
 
@@ -84,18 +99,7 @@ class NumpyBackend(Backend):
     # ──────────────────────── 线性代数 ──────────────────────────
 
     def matmul(self, a, b):
-        # Promote to complex128 during multiplication to reduce backend/BLAS
-        # overflow/invalid warnings on some platforms, then cast back. Some
-        # BLAS builds (e.g. Apple Accelerate) still raise spurious divide/
-        # overflow/invalid RuntimeWarnings from transient values inside their
-        # complex matmul kernel even at complex128 and even though the actual
-        # output is finite and correct; errstate suppresses just those flags
-        # for this call without touching global numpy error state.
-        a128 = np.asarray(a, dtype=np.complex128)
-        b128 = np.asarray(b, dtype=np.complex128)
-        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
-            out = a128 @ b128
-        return out.astype(self._dtype)
+        return _blas_safe_matmul(a, b).astype(self._dtype, copy=False)
 
     def kron(self, a, b):
         return np.kron(a, b)
@@ -183,7 +187,7 @@ class NumpyBackend(Backend):
                 continue
             gathered_indices = [bases | offset for offset in offsets]
             gathered = np.stack([flat[index] for index in gathered_indices], axis=0)
-            updated = local @ gathered
+            updated = _blas_safe_matmul(local, gathered)
             for index, values in zip(gathered_indices, updated):
                 out[index] = values
 

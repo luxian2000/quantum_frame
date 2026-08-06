@@ -16,6 +16,10 @@ def _is_missing_torch(exc: ModuleNotFoundError) -> bool:
     return exc.name == "torch"
 
 
+from .dtypes import get_default_dtype, set_default_dtype
+
+_export(["get_default_dtype", "set_default_dtype"])
+
 from .backends.numpy_backend import NumpyBackend
 
 _export(["NumpyBackend"])

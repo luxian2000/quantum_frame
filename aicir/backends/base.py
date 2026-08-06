@@ -32,6 +32,17 @@ class Backend(ABC):
     def name(self) -> str:
         """后端的唯一名称标识符（用于日志/repr）。"""
 
+    @property
+    def dtype(self):
+        """后端的复数精度（单一真源）。
+
+        上层（门矩阵构造、``Circuit.unitary()`` 等）一律从这里取 dtype，
+        不再硬编码 complex64/complex128。精度是**后端能力**：
+        ``NPUBackend`` 因昇腾无 complex128 内核而恒为 ``complex64``。
+        """
+
+        return getattr(self, "_dtype", None)
+
     # ──────────────────────────── 张量工厂 ──────────────────────────
 
     @abstractmethod

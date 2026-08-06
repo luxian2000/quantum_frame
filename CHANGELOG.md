@@ -2,6 +2,48 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-08-06
+
+### Breaking：复数精度策略收口，后端成为 dtype 单一真源
+
+新增 `aicir/dtypes.py`，把散落在三处、互相矛盾的 dtype 决策收拢成一条策略。
+**精度是后端能力，不是全局常量**：
+
+| 后端 | 默认精度 | 理由 |
+| --- | --- | --- |
+| `NumpyBackend` | **`complex128`**（原 `complex64`） | 研究型 CPU 路径正确性优先；与 Qiskit-Aer / Qulacs 双精度默认对齐，便于横向对比 |
+| `GPUBackend` | `complex64` | PyTorch 生态 float32-native；消费级 GPU 的 fp64 吞吐仅为 fp32 的 1/32 |
+| `NPUBackend` | `complex64`（硬锁） | 昇腾无 complex128 内核；请求 complex128 现在**显式报错**而非静默降精度 |
+
+- 新增公开 API：`aicir.set_default_dtype(...)` / `aicir.get_default_dtype()`
+  （对标 TensorCircuit 的 `tc.set_dtype`），以及 `aicir.dtypes.reset_default_dtype()`。
+  显式调用 `set_default_dtype` 后 torch 后端亦服从该全局值；未调用时各后端按上表取默认。
+- 新增 `Backend.dtype` 公开属性（原先只有私有 `_dtype`）。
+- 新增 `aicir.backends.npu_backend.validate_npu_dtype(...)`，把 NPU 的精度约束
+  变成可单测的显式契约。
+
+### 修复
+
+- **`complex128` 此前不是真正的双精度。** `Circuit.unitary()` 与门矩阵构造硬编码
+  `complex64`，即使后端设为 `complex128`，门矩阵仍以单精度进入，末态范数误差约
+  `1e-7`（单精度量级）而非 `1e-16`。**修复前任何以 `NumpyBackend(dtype=complex128)`
+  得到的"双精度"结果都名不副实。** 现在门矩阵一律在最宽精度下构造、由后端在边界
+  窄化——反过来做不可逆，先构造成 `complex64` 再喂给 `complex128` 的态，精度永久损失。
+- **移除 `NumpyBackend.matmul` 中无条件提升到 `complex128` 的开销。** 该提升是
+  Apple Accelerate 伪警告问题的第一版尝试，真正的修复是 `np.errstate`；提升让
+  `complex64` 路径在每个门上白付一次转换，甚至使 `complex64` 在 n≤14 时比
+  `complex128` 更慢。修复后 `complex64` 在 n≥14 全面占优（n=20 快 3.49×）。
+- **补上 `_apply_local_matrix_to_state` 热路径缺失的 `errstate` 保护。** 该处
+  `local @ gathered` 未被守护，在 n≥14 的普通 H+CNOT 线路上就会泄漏
+  `divide by zero`/`overflow`/`invalid value` 三条 RuntimeWarning。
+
+### 迁移说明
+
+依赖 `NumpyBackend()` 返回 `complex64` 的代码需显式写出
+`NumpyBackend(dtype=np.complex64)`，或调用 `aicir.set_default_dtype(np.complex64)`。
+`GPUBackend`/`NPUBackend` 的默认精度不变，混合量子-经典模型（`QLayer`/`BatchLayer`/
+`build_classifier`）行为不变。
+
 ## 2026-08-05
 
 ### 新增

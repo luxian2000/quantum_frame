@@ -583,16 +583,39 @@ def _real_embedding_svd(matrix):
     return U, S, Vh
 
 
+def validate_npu_dtype(dtype):
+    """校验并解析 NPU 的复数精度。
+
+    精度在 aicir 里是**后端能力**：昇腾没有 complex128 内核（本文件所有算子都是
+    把 complex64 拆成 float32 实/虚部来规避缺失的 complex64 内核，double 更无从谈起），
+    `aicir.distributed` 的成对实数通道也按 float32 设计。因此 NPU 恒为 complex64，
+    请求 complex128 必须显式报错，而不是静默降精度。
+
+    与 CPU/GPU 后端不同，这里**不跟随** ``aicir.set_default_dtype``——
+    全局默认是 complex128 时 NPU 仍取 complex64。
+    """
+
+    if dtype is None:
+        return torch.complex64
+    if dtype in (torch.complex64, "complex64"):
+        return torch.complex64
+    raise ValueError(
+        f"NPUBackend 不支持 dtype={dtype!r}：昇腾无 complex128 内核，仅支持 complex64。"
+        " 需要双精度请改用 NumpyBackend 或 GPUBackend。"
+    )
+
+
 class NPUBackend(GPUBackend):
     """NPU-first backend for Ascend devices, compatible with GPUBackend API."""
 
     def __init__(self, dtype=None, device=None, fallback_to_cpu: bool = True):
         """
         Args:
-            dtype: torch complex dtype, default torch.complex64.
+            dtype: torch complex dtype. Ascend is complex64-only; complex128 raises.
             device: target device. If None, auto-selects npu:0 when available.
             fallback_to_cpu: if True, fall back to cpu when NPU is unavailable.
         """
+        dtype = validate_npu_dtype(dtype)
         resolved = self._resolve_device(device=device, fallback_to_cpu=fallback_to_cpu)
 
         if self._is_npu_device(resolved) and hasattr(torch, "npu") and hasattr(torch.npu, "set_device"):
