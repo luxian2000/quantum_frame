@@ -1,0 +1,6297 @@
+{
+  "commit": "edd54e86d05d7b96754b27a078ff793202e8ba50",
+  "worktree_dirty": false,
+  "run_id": "6d9b859b-b5f5-4ae3-a3ef-3252c21a5463",
+  "created_at": "2026-08-06T23:30:49.167480+00:00",
+  "release_gate": "PASS",
+  "failed_conditions": [],
+  "frameworks": {
+    "aicir": "0.1.0",
+    "qiskit": "2.4.2",
+    "qiskit_aer": "0.17.2",
+    "cirq": "1.7.0"
+  },
+  "environment": {
+    "python": "3.11.8",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "arm",
+    "threads": {
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": null,
+      "VECLIB_MAXIMUM_THREADS": "1",
+      "cpu_count": 10
+    },
+    "numpy_blas": "accelerate"
+  },
+  "n_results": 250,
+  "raw_sha256": "05333cd2d3e1c596319bd3c43f2775ff953f8441008cdcca447fcacf62c95f5c",
+  "results": [
+    {
+      "axis": "parity",
+      "spec": "ghz-n4",
+      "framework": "aicir",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "ghz-n4",
+      "framework": "qiskit",
+      "overlap": 0.9999999999999998,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "ghz-n4",
+      "framework": "qiskit_aer",
+      "overlap": 0.9999999999999999,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "ghz-n4",
+      "framework": "cirq",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "qft-n4",
+      "framework": "aicir",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "qft-n4",
+      "framework": "qiskit",
+      "overlap": 0.9999999999999994,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "qft-n4",
+      "framework": "qiskit_aer",
+      "overlap": 0.9999999999999997,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "qft-n4",
+      "framework": "cirq",
+      "overlap": 0.9999999999999997,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "random-n5-d3-s11",
+      "framework": "aicir",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "random-n5-d3-s11",
+      "framework": "qiskit",
+      "overlap": 0.9999999999999999,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "random-n5-d3-s11",
+      "framework": "qiskit_aer",
+      "overlap": 0.9999999999999999,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "random-n5-d3-s11",
+      "framework": "cirq",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "layered_ansatz-n4-d2-s5",
+      "framework": "aicir",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "layered_ansatz-n4-d2-s5",
+      "framework": "qiskit",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "layered_ansatz-n4-d2-s5",
+      "framework": "qiskit_aer",
+      "overlap": 1.0000000000000002,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "layered_ansatz-n4-d2-s5",
+      "framework": "cirq",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n8",
+      "family": "ghz",
+      "n_qubits": 8,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 8,
+      "n_two_qubit_gates": 7,
+      "gate_counts": {
+        "h": 1,
+        "cx": 7
+      },
+      "build": {
+        "median": 2.4916999791457783e-05,
+        "minimum": 2.3833000341255683e-05,
+        "maximum": 2.7166999643668532e-05,
+        "iqr": 3.333999302412849e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.000248540999564284,
+        "minimum": 0.00023012500059849117,
+        "maximum": 0.0002519169993320247,
+        "iqr": 2.1791998733533546e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n8",
+      "family": "ghz",
+      "n_qubits": 8,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 8,
+      "n_two_qubit_gates": 7,
+      "gate_counts": {
+        "h": 1,
+        "cx": 7
+      },
+      "build": {
+        "median": 2.5959000595321413e-05,
+        "minimum": 2.56670000453596e-05,
+        "maximum": 2.6959000024362467e-05,
+        "iqr": 1.2919999790028669e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0001616670006114873,
+        "minimum": 0.00015991700001904974,
+        "maximum": 0.0001675000003160676,
+        "iqr": 7.583000297017861e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n8",
+      "family": "ghz",
+      "n_qubits": 8,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 8,
+      "n_two_qubit_gates": 7,
+      "gate_counts": {
+        "h": 1,
+        "cx": 7
+      },
+      "build": {
+        "median": 3.720800032169791e-05,
+        "minimum": 3.5832999856211245e-05,
+        "maximum": 3.741699947568122e-05,
+        "iqr": 1.583999619469978e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.000247291000050609,
+        "minimum": 0.0002307089998794254,
+        "maximum": 0.00025762499990378274,
+        "iqr": 2.6916000024357345e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n8",
+      "family": "ghz",
+      "n_qubits": 8,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 8,
+      "n_two_qubit_gates": 7,
+      "gate_counts": {
+        "h": 1,
+        "cx": 7
+      },
+      "build": {
+        "median": 4.5124999815016054e-05,
+        "minimum": 4.475000059755985e-05,
+        "maximum": 4.829199951927876e-05,
+        "iqr": 3.541998921718914e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.000517000000400003,
+        "minimum": 0.0004982909995305818,
+        "maximum": 0.000527374999364838,
+        "iqr": 2.9083999834256247e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n9",
+      "family": "ghz",
+      "n_qubits": 9,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 9,
+      "n_two_qubit_gates": 8,
+      "gate_counts": {
+        "h": 1,
+        "cx": 8
+      },
+      "build": {
+        "median": 2.5708000066515524e-05,
+        "minimum": 2.5499999537714757e-05,
+        "maximum": 2.8500000553322025e-05,
+        "iqr": 3.0000010156072676e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.000275791000603931,
+        "minimum": 0.00026866600001085317,
+        "maximum": 0.00027604099977907026,
+        "iqr": 7.374999768217094e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n9",
+      "family": "ghz",
+      "n_qubits": 9,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 9,
+      "n_two_qubit_gates": 8,
+      "gate_counts": {
+        "h": 1,
+        "cx": 8
+      },
+      "build": {
+        "median": 2.7541000235942192e-05,
+        "minimum": 2.6124999749299604e-05,
+        "maximum": 3.195799945387989e-05,
+        "iqr": 5.832999704580288e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00017600000046513742,
+        "minimum": 0.00017475000004196772,
+        "maximum": 0.00018320799972570967,
+        "iqr": 8.457999683741946e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n9",
+      "family": "ghz",
+      "n_qubits": 9,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 9,
+      "n_two_qubit_gates": 8,
+      "gate_counts": {
+        "h": 1,
+        "cx": 8
+      },
+      "build": {
+        "median": 3.775000004679896e-05,
+        "minimum": 3.616600042732898e-05,
+        "maximum": 4.07919997087447e-05,
+        "iqr": 4.625999281415716e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00024716600000829203,
+        "minimum": 0.00021445900074468227,
+        "maximum": 0.0002707919993554242,
+        "iqr": 5.6332998610741924e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n9",
+      "family": "ghz",
+      "n_qubits": 9,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 9,
+      "n_two_qubit_gates": 8,
+      "gate_counts": {
+        "h": 1,
+        "cx": 8
+      },
+      "build": {
+        "median": 4.8040999899967574e-05,
+        "minimum": 4.6457999815174844e-05,
+        "maximum": 4.9500000386615284e-05,
+        "iqr": 3.0420005714404397e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0005508750000444707,
+        "minimum": 0.0005475829993883963,
+        "maximum": 0.0005565830006162287,
+        "iqr": 9.0000012278324e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n10",
+      "family": "ghz",
+      "n_qubits": 10,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 10,
+      "n_two_qubit_gates": 9,
+      "gate_counts": {
+        "h": 1,
+        "cx": 9
+      },
+      "build": {
+        "median": 3.033299981325399e-05,
+        "minimum": 2.8375000511005055e-05,
+        "maximum": 3.2791999728942756e-05,
+        "iqr": 4.4169992179377005e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00030958299976191483,
+        "minimum": 0.0003092079996349639,
+        "maximum": 0.00031429200043930905,
+        "iqr": 5.0840008043451235e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n10",
+      "family": "ghz",
+      "n_qubits": 10,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 10,
+      "n_two_qubit_gates": 9,
+      "gate_counts": {
+        "h": 1,
+        "cx": 9
+      },
+      "build": {
+        "median": 3.0915999559510965e-05,
+        "minimum": 2.8417000066838227e-05,
+        "maximum": 3.1582999326928984e-05,
+        "iqr": 3.165999260090757e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00024483400011376943,
+        "minimum": 0.00024208300055761356,
+        "maximum": 0.00024666599983902415,
+        "iqr": 4.5829992814105935e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n10",
+      "family": "ghz",
+      "n_qubits": 10,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 10,
+      "n_two_qubit_gates": 9,
+      "gate_counts": {
+        "h": 1,
+        "cx": 9
+      },
+      "build": {
+        "median": 3.983300030085957e-05,
+        "minimum": 3.879099949699594e-05,
+        "maximum": 4.2749999920488335e-05,
+        "iqr": 3.959000423492398e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0002609999992273515,
+        "minimum": 0.000248291999923822,
+        "maximum": 0.0002737909999268595,
+        "iqr": 2.549900000303751e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n10",
+      "family": "ghz",
+      "n_qubits": 10,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 10,
+      "n_two_qubit_gates": 9,
+      "gate_counts": {
+        "h": 1,
+        "cx": 9
+      },
+      "build": {
+        "median": 5.291700017551193e-05,
+        "minimum": 5.266700009087799e-05,
+        "maximum": 5.370899998524692e-05,
+        "iqr": 1.041999894368928e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0005993750000925502,
+        "minimum": 0.0005941250001342269,
+        "maximum": 0.0006133749993750826,
+        "iqr": 1.9249999240855686e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n11",
+      "family": "ghz",
+      "n_qubits": 11,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 11,
+      "n_two_qubit_gates": 10,
+      "gate_counts": {
+        "h": 1,
+        "cx": 10
+      },
+      "build": {
+        "median": 3.2250000003841706e-05,
+        "minimum": 3.0500000320898835e-05,
+        "maximum": 3.51250000676373e-05,
+        "iqr": 4.624999746738467e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0003723330000866554,
+        "minimum": 0.0003636250003182795,
+        "maximum": 0.000375540999812074,
+        "iqr": 1.1915999493794516e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n11",
+      "family": "ghz",
+      "n_qubits": 11,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 11,
+      "n_two_qubit_gates": 10,
+      "gate_counts": {
+        "h": 1,
+        "cx": 10
+      },
+      "build": {
+        "median": 3.2250000003841706e-05,
+        "minimum": 3.174999983457383e-05,
+        "maximum": 3.379099962330656e-05,
+        "iqr": 2.0409997887327336e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0002728749996094848,
+        "minimum": 0.0002718330006246106,
+        "maximum": 0.0002797919996737619,
+        "iqr": 7.958999049151316e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n11",
+      "family": "ghz",
+      "n_qubits": 11,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 11,
+      "n_two_qubit_gates": 10,
+      "gate_counts": {
+        "h": 1,
+        "cx": 10
+      },
+      "build": {
+        "median": 4.029200044897152e-05,
+        "minimum": 4.029100000479957e-05,
+        "maximum": 4.383299983601319e-05,
+        "iqr": 3.541999831213616e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00025874999937514076,
+        "minimum": 0.000255250000009255,
+        "maximum": 0.00026937499933410436,
+        "iqr": 1.4124999324849341e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n11",
+      "family": "ghz",
+      "n_qubits": 11,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 11,
+      "n_two_qubit_gates": 10,
+      "gate_counts": {
+        "h": 1,
+        "cx": 10
+      },
+      "build": {
+        "median": 5.891699947824236e-05,
+        "minimum": 5.6417000450892374e-05,
+        "maximum": 6.42080003672163e-05,
+        "iqr": 7.790999916323926e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0006542500004798057,
+        "minimum": 0.0006500829995275126,
+        "maximum": 0.0006786670001019957,
+        "iqr": 2.858400057448307e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n12",
+      "family": "ghz",
+      "n_qubits": 12,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 12,
+      "n_two_qubit_gates": 11,
+      "gate_counts": {
+        "h": 1,
+        "cx": 11
+      },
+      "build": {
+        "median": 3.533400013111532e-05,
+        "minimum": 3.399999968678458e-05,
+        "maximum": 3.616699996200623e-05,
+        "iqr": 2.1670002752216533e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00046016699980100384,
+        "minimum": 0.0004510830003709998,
+        "maximum": 0.00046133399973768974,
+        "iqr": 1.0250999366689939e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n12",
+      "family": "ghz",
+      "n_qubits": 12,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 12,
+      "n_two_qubit_gates": 11,
+      "gate_counts": {
+        "h": 1,
+        "cx": 11
+      },
+      "build": {
+        "median": 3.550000019458821e-05,
+        "minimum": 3.287499930593185e-05,
+        "maximum": 3.579199983505532e-05,
+        "iqr": 2.91700052912347e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00034991699976671953,
+        "minimum": 0.00034020800012513064,
+        "maximum": 0.00035841700082528405,
+        "iqr": 1.820900070015341e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n12",
+      "family": "ghz",
+      "n_qubits": 12,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 12,
+      "n_two_qubit_gates": 11,
+      "gate_counts": {
+        "h": 1,
+        "cx": 11
+      },
+      "build": {
+        "median": 4.5957999645906966e-05,
+        "minimum": 4.483300017454894e-05,
+        "maximum": 5.345899990061298e-05,
+        "iqr": 8.625999726064038e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00027283300005365163,
+        "minimum": 0.00026695800079323817,
+        "maximum": 0.00028079200001229765,
+        "iqr": 1.3833999219059478e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n12",
+      "family": "ghz",
+      "n_qubits": 12,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 12,
+      "n_two_qubit_gates": 11,
+      "gate_counts": {
+        "h": 1,
+        "cx": 11
+      },
+      "build": {
+        "median": 6.170799952087691e-05,
+        "minimum": 5.804100055684103e-05,
+        "maximum": 6.370800019794842e-05,
+        "iqr": 5.666999641107395e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.000742875000469212,
+        "minimum": 0.0007257499992192606,
+        "maximum": 0.0008044590003919438,
+        "iqr": 7.87090011726832e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n13",
+      "family": "ghz",
+      "n_qubits": 13,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 13,
+      "n_two_qubit_gates": 12,
+      "gate_counts": {
+        "h": 1,
+        "cx": 12
+      },
+      "build": {
+        "median": 3.9000000469968654e-05,
+        "minimum": 3.841600027953973e-05,
+        "maximum": 3.96249997720588e-05,
+        "iqr": 1.2089994925190695e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0006123750008555362,
+        "minimum": 0.0006035420001353486,
+        "maximum": 0.0006207079995874665,
+        "iqr": 1.716599945211783e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n13",
+      "family": "ghz",
+      "n_qubits": 13,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 13,
+      "n_two_qubit_gates": 12,
+      "gate_counts": {
+        "h": 1,
+        "cx": 12
+      },
+      "build": {
+        "median": 3.8084000152593944e-05,
+        "minimum": 3.679100063891383e-05,
+        "maximum": 4.012499994132668e-05,
+        "iqr": 3.333999302412849e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.000494667000566551,
+        "minimum": 0.0004760000001624576,
+        "maximum": 0.0005228330001045833,
+        "iqr": 4.683299994212575e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n13",
+      "family": "ghz",
+      "n_qubits": 13,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 13,
+      "n_two_qubit_gates": 12,
+      "gate_counts": {
+        "h": 1,
+        "cx": 12
+      },
+      "build": {
+        "median": 4.724999962490983e-05,
+        "minimum": 4.6624999413324986e-05,
+        "maximum": 4.958299996360438e-05,
+        "iqr": 2.958000550279394e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00035679200027516345,
+        "minimum": 0.00033929199980775593,
+        "maximum": 0.0003764590001082979,
+        "iqr": 3.7167000300541986e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n13",
+      "family": "ghz",
+      "n_qubits": 13,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 13,
+      "n_two_qubit_gates": 12,
+      "gate_counts": {
+        "h": 1,
+        "cx": 12
+      },
+      "build": {
+        "median": 6.770900017727399e-05,
+        "minimum": 6.57499995213584e-05,
+        "maximum": 6.941700030438369e-05,
+        "iqr": 3.667000783025287e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0008317080000779242,
+        "minimum": 0.0008250840000982862,
+        "maximum": 0.0008347909997610259,
+        "iqr": 9.70699966273969e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n14",
+      "family": "ghz",
+      "n_qubits": 14,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 14,
+      "n_two_qubit_gates": 13,
+      "gate_counts": {
+        "h": 1,
+        "cx": 13
+      },
+      "build": {
+        "median": 3.945899970858591e-05,
+        "minimum": 3.9167000068118796e-05,
+        "maximum": 4.079100017406745e-05,
+        "iqr": 1.624000105948653e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.000908042000446585,
+        "minimum": 0.0009004169996842393,
+        "maximum": 0.0009173329999612179,
+        "iqr": 1.6916000276978593e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n14",
+      "family": "ghz",
+      "n_qubits": 14,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 14,
+      "n_two_qubit_gates": 13,
+      "gate_counts": {
+        "h": 1,
+        "cx": 13
+      },
+      "build": {
+        "median": 3.854199985653395e-05,
+        "minimum": 3.7542000427492894e-05,
+        "maximum": 3.975000072387047e-05,
+        "iqr": 2.208000296377577e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0007531250003012246,
+        "minimum": 0.0007489169993277756,
+        "maximum": 0.0007676660006836755,
+        "iqr": 1.8749001355899964e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n14",
+      "family": "ghz",
+      "n_qubits": 14,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 14,
+      "n_two_qubit_gates": 13,
+      "gate_counts": {
+        "h": 1,
+        "cx": 13
+      },
+      "build": {
+        "median": 4.90829997943365e-05,
+        "minimum": 4.7790999815333635e-05,
+        "maximum": 5.4334000196831767e-05,
+        "iqr": 6.543000381498132e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0004526669999904698,
+        "minimum": 0.00042916700022033183,
+        "maximum": 0.0004560000006677001,
+        "iqr": 2.683300044736825e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n14",
+      "family": "ghz",
+      "n_qubits": 14,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 14,
+      "n_two_qubit_gates": 13,
+      "gate_counts": {
+        "h": 1,
+        "cx": 13
+      },
+      "build": {
+        "median": 7.533300049544778e-05,
+        "minimum": 7.249999998748535e-05,
+        "maximum": 7.59999993533711e-05,
+        "iqr": 3.499999365885742e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.001081874999727006,
+        "minimum": 0.0010419159998491523,
+        "maximum": 0.0011294579999230336,
+        "iqr": 8.754200007388135e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n15",
+      "family": "ghz",
+      "n_qubits": 15,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 15,
+      "n_two_qubit_gates": 14,
+      "gate_counts": {
+        "h": 1,
+        "cx": 14
+      },
+      "build": {
+        "median": 4.441600049176486e-05,
+        "minimum": 4.204099968774244e-05,
+        "maximum": 5.3499999921768904e-05,
+        "iqr": 1.1459000234026462e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.001518332999694394,
+        "minimum": 0.0015065840007082443,
+        "maximum": 0.0015430420007760404,
+        "iqr": 3.645800006779609e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n15",
+      "family": "ghz",
+      "n_qubits": 15,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 15,
+      "n_two_qubit_gates": 14,
+      "gate_counts": {
+        "h": 1,
+        "cx": 14
+      },
+      "build": {
+        "median": 4.162499953963561e-05,
+        "minimum": 3.991699941252591e-05,
+        "maximum": 4.2499999835854396e-05,
+        "iqr": 2.5830004233284853e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.001209832999848004,
+        "minimum": 0.0012006249999103602,
+        "maximum": 0.0012230829997861292,
+        "iqr": 2.245799987576902e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n15",
+      "family": "ghz",
+      "n_qubits": 15,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 15,
+      "n_two_qubit_gates": 14,
+      "gate_counts": {
+        "h": 1,
+        "cx": 14
+      },
+      "build": {
+        "median": 5.200000032345997e-05,
+        "minimum": 5.0708000344457105e-05,
+        "maximum": 5.3249999837134965e-05,
+        "iqr": 2.54199949267786e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0017630840002311743,
+        "minimum": 0.0017361249992973171,
+        "maximum": 0.0017897919997267309,
+        "iqr": 5.366700042941375e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n15",
+      "family": "ghz",
+      "n_qubits": 15,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 15,
+      "n_two_qubit_gates": 14,
+      "gate_counts": {
+        "h": 1,
+        "cx": 14
+      },
+      "build": {
+        "median": 7.841699971322669e-05,
+        "minimum": 7.737499981885776e-05,
+        "maximum": 8.024999988265336e-05,
+        "iqr": 2.8750000637955964e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0013346249997994164,
+        "minimum": 0.00132241699975566,
+        "maximum": 0.001361124999675667,
+        "iqr": 3.870799992000684e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n16",
+      "family": "ghz",
+      "n_qubits": 16,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 16,
+      "n_two_qubit_gates": 15,
+      "gate_counts": {
+        "h": 1,
+        "cx": 15
+      },
+      "build": {
+        "median": 4.6875000407453626e-05,
+        "minimum": 4.6457999815174844e-05,
+        "maximum": 4.724999962490983e-05,
+        "iqr": 7.91999809734989e-07,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0029205419996287674,
+        "minimum": 0.002913332999924023,
+        "maximum": 0.003417791999709152,
+        "iqr": 0.000504458999785129,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n16",
+      "family": "ghz",
+      "n_qubits": 16,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 16,
+      "n_two_qubit_gates": 15,
+      "gate_counts": {
+        "h": 1,
+        "cx": 15
+      },
+      "build": {
+        "median": 4.5957999645906966e-05,
+        "minimum": 4.362500021670712e-05,
+        "maximum": 5.008300013287226e-05,
+        "iqr": 6.457999916165136e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0023380000002362067,
+        "minimum": 0.0023160000000643777,
+        "maximum": 0.0025365419996887795,
+        "iqr": 0.0002205419996244018,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n16",
+      "family": "ghz",
+      "n_qubits": 16,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 16,
+      "n_two_qubit_gates": 15,
+      "gate_counts": {
+        "h": 1,
+        "cx": 15
+      },
+      "build": {
+        "median": 5.820899968966842e-05,
+        "minimum": 5.441699977382086e-05,
+        "maximum": 5.9625000176311005e-05,
+        "iqr": 5.208000402490143e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0032849999997779378,
+        "minimum": 0.0032822079992911313,
+        "maximum": 0.0032958749998215353,
+        "iqr": 1.3667000530404039e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n16",
+      "family": "ghz",
+      "n_qubits": 16,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 16,
+      "n_two_qubit_gates": 15,
+      "gate_counts": {
+        "h": 1,
+        "cx": 15
+      },
+      "build": {
+        "median": 8.283300030598184e-05,
+        "minimum": 7.995800024218624e-05,
+        "maximum": 8.983399948192528e-05,
+        "iqr": 9.87599923973903e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0019297079998068511,
+        "minimum": 0.0018953750004584435,
+        "maximum": 0.00193970799955423,
+        "iqr": 4.433299909578636e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n17",
+      "family": "ghz",
+      "n_qubits": 17,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 17,
+      "n_two_qubit_gates": 16,
+      "gate_counts": {
+        "h": 1,
+        "cx": 16
+      },
+      "build": {
+        "median": 4.8624999180901796e-05,
+        "minimum": 4.85419996039127e-05,
+        "maximum": 4.974999956175452e-05,
+        "iqr": 1.207999957841821e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.007877666999775101,
+        "minimum": 0.007773207999889564,
+        "maximum": 0.007916167000075802,
+        "iqr": 0.00014295900018623797,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n17",
+      "family": "ghz",
+      "n_qubits": 17,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 17,
+      "n_two_qubit_gates": 16,
+      "gate_counts": {
+        "h": 1,
+        "cx": 16
+      },
+      "build": {
+        "median": 4.7124999582592864e-05,
+        "minimum": 4.666600034397561e-05,
+        "maximum": 4.837500000576256e-05,
+        "iqr": 1.7089996617869474e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.008135916999890469,
+        "minimum": 0.008071166999798152,
+        "maximum": 0.00840299999981653,
+        "iqr": 0.0003318330000183778,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n17",
+      "family": "ghz",
+      "n_qubits": 17,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 17,
+      "n_two_qubit_gates": 16,
+      "gate_counts": {
+        "h": 1,
+        "cx": 16
+      },
+      "build": {
+        "median": 6.216600013431162e-05,
+        "minimum": 5.6999999287654646e-05,
+        "maximum": 6.233400017663371e-05,
+        "iqr": 5.3340008889790624e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.006759167000382149,
+        "minimum": 0.006685625000500295,
+        "maximum": 0.00676141700023436,
+        "iqr": 7.579199973406503e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n17",
+      "family": "ghz",
+      "n_qubits": 17,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 17,
+      "n_two_qubit_gates": 16,
+      "gate_counts": {
+        "h": 1,
+        "cx": 16
+      },
+      "build": {
+        "median": 8.712499948160257e-05,
+        "minimum": 8.395799977733986e-05,
+        "maximum": 8.775000060268212e-05,
+        "iqr": 3.7920008253422566e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.003117457999906037,
+        "minimum": 0.003043249999791442,
+        "maximum": 0.003207582999493752,
+        "iqr": 0.0001643329997023102,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n18",
+      "family": "ghz",
+      "n_qubits": 18,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 18,
+      "n_two_qubit_gates": 17,
+      "gate_counts": {
+        "h": 1,
+        "cx": 17
+      },
+      "build": {
+        "median": 5.1875000281143e-05,
+        "minimum": 5.170800068299286e-05,
+        "maximum": 5.212500036577694e-05,
+        "iqr": 4.169996827840805e-07,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.016534917000171845,
+        "minimum": 0.016295665999678022,
+        "maximum": 0.01691583400042873,
+        "iqr": 0.0006201680007507093,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n18",
+      "family": "ghz",
+      "n_qubits": 18,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 18,
+      "n_two_qubit_gates": 17,
+      "gate_counts": {
+        "h": 1,
+        "cx": 17
+      },
+      "build": {
+        "median": 4.895799975201953e-05,
+        "minimum": 4.8083999899972696e-05,
+        "maximum": 5.208299990044907e-05,
+        "iqr": 3.9990000004763715e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.017059165999853576,
+        "minimum": 0.01659816699975636,
+        "maximum": 0.017349333000311162,
+        "iqr": 0.0007511660005548038,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n18",
+      "family": "ghz",
+      "n_qubits": 18,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 18,
+      "n_two_qubit_gates": 17,
+      "gate_counts": {
+        "h": 1,
+        "cx": 17
+      },
+      "build": {
+        "median": 6.312499954219675e-05,
+        "minimum": 5.904099998588208e-05,
+        "maximum": 6.737500007147901e-05,
+        "iqr": 8.334000085596927e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.013874333999410737,
+        "minimum": 0.013715875000343658,
+        "maximum": 0.013935832999777631,
+        "iqr": 0.00021995799943397287,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n18",
+      "family": "ghz",
+      "n_qubits": 18,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 18,
+      "n_two_qubit_gates": 17,
+      "gate_counts": {
+        "h": 1,
+        "cx": 17
+      },
+      "build": {
+        "median": 9.120800041273469e-05,
+        "minimum": 8.937500024330802e-05,
+        "maximum": 9.341700024378952e-05,
+        "iqr": 4.042000000481494e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.005844166999850131,
+        "minimum": 0.005707041000277968,
+        "maximum": 0.005876209000234667,
+        "iqr": 0.00016916799995669862,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n8-d4-s17",
+      "family": "qft",
+      "n_qubits": 8,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 36,
+      "n_two_qubit_gates": 28,
+      "gate_counts": {
+        "h": 8,
+        "cp": 28
+      },
+      "build": {
+        "median": 0.00017179099995701108,
+        "minimum": 0.00016962500012596138,
+        "maximum": 0.0001727500002743909,
+        "iqr": 3.1250001484295353e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.000661791999846173,
+        "minimum": 0.0006540829999721609,
+        "maximum": 0.0006785420000596787,
+        "iqr": 2.445900008751778e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n8-d4-s17",
+      "family": "qft",
+      "n_qubits": 8,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 36,
+      "n_two_qubit_gates": 28,
+      "gate_counts": {
+        "h": 8,
+        "cp": 28
+      },
+      "build": {
+        "median": 8.720899950276362e-05,
+        "minimum": 8.400000024266774e-05,
+        "maximum": 8.98749995030812e-05,
+        "iqr": 5.8749992604134604e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0007587909994981601,
+        "minimum": 0.0007412909999402473,
+        "maximum": 0.000773415999901772,
+        "iqr": 3.2124999961524736e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n8-d4-s17",
+      "family": "qft",
+      "n_qubits": 8,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 36,
+      "n_two_qubit_gates": 28,
+      "gate_counts": {
+        "h": 8,
+        "cp": 28
+      },
+      "build": {
+        "median": 9.287500051868847e-05,
+        "minimum": 9.283400049753254e-05,
+        "maximum": 9.720900015963707e-05,
+        "iqr": 4.374999662104528e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0009557500006849295,
+        "minimum": 0.0009377079995829263,
+        "maximum": 0.000976708000052895,
+        "iqr": 3.9000000469968654e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n8-d4-s17",
+      "family": "qft",
+      "n_qubits": 8,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 36,
+      "n_two_qubit_gates": 28,
+      "gate_counts": {
+        "h": 8,
+        "cp": 28
+      },
+      "build": {
+        "median": 0.0001397500000166474,
+        "minimum": 0.0001385000005029724,
+        "maximum": 0.00013995800054544816,
+        "iqr": 1.45800004247576e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0010609999999360298,
+        "minimum": 0.001058625000041502,
+        "maximum": 0.0010855419996005367,
+        "iqr": 2.6916999559034593e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n9-d4-s17",
+      "family": "qft",
+      "n_qubits": 9,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 45,
+      "n_two_qubit_gates": 36,
+      "gate_counts": {
+        "h": 9,
+        "cp": 36
+      },
+      "build": {
+        "median": 0.00021491600000445032,
+        "minimum": 0.00020754100023623323,
+        "maximum": 0.0002262920006614877,
+        "iqr": 1.875100042525446e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0008512079994034139,
+        "minimum": 0.0008494169996993151,
+        "maximum": 0.0008643750006740447,
+        "iqr": 1.4958000974729657e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n9-d4-s17",
+      "family": "qft",
+      "n_qubits": 9,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 45,
+      "n_two_qubit_gates": 36,
+      "gate_counts": {
+        "h": 9,
+        "cp": 36
+      },
+      "build": {
+        "median": 0.00010449999990669312,
+        "minimum": 0.00010241699965263251,
+        "maximum": 0.00011033300052076811,
+        "iqr": 7.916000868135598e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0009855830003289157,
+        "minimum": 0.0009823749996940023,
+        "maximum": 0.0009917499992297962,
+        "iqr": 9.374999535793904e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n9-d4-s17",
+      "family": "qft",
+      "n_qubits": 9,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 45,
+      "n_two_qubit_gates": 36,
+      "gate_counts": {
+        "h": 9,
+        "cp": 36
+      },
+      "build": {
+        "median": 0.0001094999997803825,
+        "minimum": 0.00010716700035118265,
+        "maximum": 0.00011916600033146096,
+        "iqr": 1.1998999980278313e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0011290000002190936,
+        "minimum": 0.0011268749994997052,
+        "maximum": 0.001171625000097265,
+        "iqr": 4.475000059755985e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n9-d4-s17",
+      "family": "qft",
+      "n_qubits": 9,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 45,
+      "n_two_qubit_gates": 36,
+      "gate_counts": {
+        "h": 9,
+        "cp": 36
+      },
+      "build": {
+        "median": 0.00016766699991421774,
+        "minimum": 0.00016649999997753184,
+        "maximum": 0.00017095800012612017,
+        "iqr": 4.458000148588326e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.001261792000150308,
+        "minimum": 0.0012600829995790264,
+        "maximum": 0.0012737919996652636,
+        "iqr": 1.370900008623721e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n10-d4-s17",
+      "family": "qft",
+      "n_qubits": 10,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 55,
+      "n_two_qubit_gates": 45,
+      "gate_counts": {
+        "h": 10,
+        "cp": 45
+      },
+      "build": {
+        "median": 0.00026416599939693697,
+        "minimum": 0.0002627910007504397,
+        "maximum": 0.0002737079994403757,
+        "iqr": 1.0916998689936008e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0011459170000307495,
+        "minimum": 0.0011231660000703414,
+        "maximum": 0.001209832999848004,
+        "iqr": 8.666699977766257e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n10-d4-s17",
+      "family": "qft",
+      "n_qubits": 10,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 55,
+      "n_two_qubit_gates": 45,
+      "gate_counts": {
+        "h": 10,
+        "cp": 45
+      },
+      "build": {
+        "median": 0.00011512499986565672,
+        "minimum": 0.00011433399959059898,
+        "maximum": 0.00011966599959123414,
+        "iqr": 5.332000000635162e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0014513750002151937,
+        "minimum": 0.0014462500002991874,
+        "maximum": 0.0014536250000674045,
+        "iqr": 7.374999768217094e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n10-d4-s17",
+      "family": "qft",
+      "n_qubits": 10,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 55,
+      "n_two_qubit_gates": 45,
+      "gate_counts": {
+        "h": 10,
+        "cp": 45
+      },
+      "build": {
+        "median": 0.00013349999971978832,
+        "minimum": 0.00012808300016331486,
+        "maximum": 0.00013775000024907058,
+        "iqr": 9.667000085755717e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0014251249995140824,
+        "minimum": 0.001329083000200626,
+        "maximum": 0.0014354589993672562,
+        "iqr": 0.00010637599916663021,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n10-d4-s17",
+      "family": "qft",
+      "n_qubits": 10,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 55,
+      "n_two_qubit_gates": 45,
+      "gate_counts": {
+        "h": 10,
+        "cp": 45
+      },
+      "build": {
+        "median": 0.00019979199987574248,
+        "minimum": 0.00019100000008620555,
+        "maximum": 0.00020608399972843472,
+        "iqr": 1.5083999642229173e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0015077500002007582,
+        "minimum": 0.0014974160003475845,
+        "maximum": 0.001532375000351749,
+        "iqr": 3.495900000416441e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n11-d4-s17",
+      "family": "qft",
+      "n_qubits": 11,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 66,
+      "n_two_qubit_gates": 55,
+      "gate_counts": {
+        "h": 11,
+        "cp": 55
+      },
+      "build": {
+        "median": 0.00033233299927815096,
+        "minimum": 0.0003214170001228922,
+        "maximum": 0.0003323340006318176,
+        "iqr": 1.0917000508925412e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0015832079998290283,
+        "minimum": 0.001578833999701601,
+        "maximum": 0.0015880410001045675,
+        "iqr": 9.207000402966514e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n11-d4-s17",
+      "family": "qft",
+      "n_qubits": 11,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 66,
+      "n_two_qubit_gates": 55,
+      "gate_counts": {
+        "h": 11,
+        "cp": 55
+      },
+      "build": {
+        "median": 0.0001458749993616948,
+        "minimum": 0.0001437089995306451,
+        "maximum": 0.0001481669996792334,
+        "iqr": 4.458000148588326e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0019342499999766005,
+        "minimum": 0.0019073339999522432,
+        "maximum": 0.0019542500003808527,
+        "iqr": 4.691600042860955e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n11-d4-s17",
+      "family": "qft",
+      "n_qubits": 11,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 66,
+      "n_two_qubit_gates": 55,
+      "gate_counts": {
+        "h": 11,
+        "cp": 55
+      },
+      "build": {
+        "median": 0.00015658400025131414,
+        "minimum": 0.00015612500010320218,
+        "maximum": 0.00016208299985009944,
+        "iqr": 5.957999746897258e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0016529170006833738,
+        "minimum": 0.001607125000191445,
+        "maximum": 0.0018242500000269501,
+        "iqr": 0.00021712499983550515,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n11-d4-s17",
+      "family": "qft",
+      "n_qubits": 11,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 66,
+      "n_two_qubit_gates": 55,
+      "gate_counts": {
+        "h": 11,
+        "cp": 55
+      },
+      "build": {
+        "median": 0.00023508300000685267,
+        "minimum": 0.00023366699952021008,
+        "maximum": 0.00023537500055681448,
+        "iqr": 1.7080010366044007e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0018540840001151082,
+        "minimum": 0.0018303750002814922,
+        "maximum": 0.0018543749993114034,
+        "iqr": 2.3999999029911123e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n12-d4-s17",
+      "family": "qft",
+      "n_qubits": 12,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 78,
+      "n_two_qubit_gates": 66,
+      "gate_counts": {
+        "h": 12,
+        "cp": 66
+      },
+      "build": {
+        "median": 0.00037704099941038294,
+        "minimum": 0.00037599999996018596,
+        "maximum": 0.0003818750001300941,
+        "iqr": 5.875000169908162e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0023320000000239816,
+        "minimum": 0.0023117499995350954,
+        "maximum": 0.0023334169991358067,
+        "iqr": 2.166699960071128e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n12-d4-s17",
+      "family": "qft",
+      "n_qubits": 12,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 78,
+      "n_two_qubit_gates": 66,
+      "gate_counts": {
+        "h": 12,
+        "cp": 66
+      },
+      "build": {
+        "median": 0.00017087499963963637,
+        "minimum": 0.0001639160000195261,
+        "maximum": 0.00017266600025322987,
+        "iqr": 8.750000233703759e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.002568625000094471,
+        "minimum": 0.0025485000005573966,
+        "maximum": 0.002615833999698225,
+        "iqr": 6.733399914082838e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n12-d4-s17",
+      "family": "qft",
+      "n_qubits": 12,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 78,
+      "n_two_qubit_gates": 66,
+      "gate_counts": {
+        "h": 12,
+        "cp": 66
+      },
+      "build": {
+        "median": 0.0001824589999159798,
+        "minimum": 0.0001789170000847662,
+        "maximum": 0.00018529200042394223,
+        "iqr": 6.37500033917604e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0019584589999794844,
+        "minimum": 0.0019259999999121646,
+        "maximum": 0.002178957999603881,
+        "iqr": 0.0002529579996917164,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n12-d4-s17",
+      "family": "qft",
+      "n_qubits": 12,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 78,
+      "n_two_qubit_gates": 66,
+      "gate_counts": {
+        "h": 12,
+        "cp": 66
+      },
+      "build": {
+        "median": 0.00026920900018012617,
+        "minimum": 0.00026820799939741846,
+        "maximum": 0.00027383399992686464,
+        "iqr": 5.6260005294461735e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0022109999999884167,
+        "minimum": 0.0022037090002413606,
+        "maximum": 0.0022169160001794808,
+        "iqr": 1.3206999938120134e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n13-d4-s17",
+      "family": "qft",
+      "n_qubits": 13,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 91,
+      "n_two_qubit_gates": 78,
+      "gate_counts": {
+        "h": 13,
+        "cp": 78
+      },
+      "build": {
+        "median": 0.0004375420003270847,
+        "minimum": 0.00042950000079144957,
+        "maximum": 0.00044183300087752286,
+        "iqr": 1.2333000086073298e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.005401000000347267,
+        "minimum": 0.005248999999821535,
+        "maximum": 0.005509833000360231,
+        "iqr": 0.00026083300053869607,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n13-d4-s17",
+      "family": "qft",
+      "n_qubits": 13,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 91,
+      "n_two_qubit_gates": 78,
+      "gate_counts": {
+        "h": 13,
+        "cp": 78
+      },
+      "build": {
+        "median": 0.00019933299972763052,
+        "minimum": 0.0001965000001291628,
+        "maximum": 0.00020479200065892655,
+        "iqr": 8.292000529763754e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0046749580005780444,
+        "minimum": 0.004652874999919732,
+        "maximum": 0.004829207999136997,
+        "iqr": 0.00017633299921726575,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n13-d4-s17",
+      "family": "qft",
+      "n_qubits": 13,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 91,
+      "n_two_qubit_gates": 78,
+      "gate_counts": {
+        "h": 13,
+        "cp": 78
+      },
+      "build": {
+        "median": 0.00021433300025819335,
+        "minimum": 0.0002124579996234388,
+        "maximum": 0.00022774999979446875,
+        "iqr": 1.529200017102994e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.002457333000165818,
+        "minimum": 0.0024125420004565967,
+        "maximum": 0.00249512499976845,
+        "iqr": 8.25829993118532e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n13-d4-s17",
+      "family": "qft",
+      "n_qubits": 13,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 91,
+      "n_two_qubit_gates": 78,
+      "gate_counts": {
+        "h": 13,
+        "cp": 78
+      },
+      "build": {
+        "median": 0.00032133300010173116,
+        "minimum": 0.0003103750004811445,
+        "maximum": 0.0003254169996580458,
+        "iqr": 1.50419991769013e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0028053750002072775,
+        "minimum": 0.0027323340000293683,
+        "maximum": 0.0028989169995838893,
+        "iqr": 0.00016658299955452094,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n14-d4-s17",
+      "family": "qft",
+      "n_qubits": 14,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 105,
+      "n_two_qubit_gates": 91,
+      "gate_counts": {
+        "h": 14,
+        "cp": 91
+      },
+      "build": {
+        "median": 0.0005051670004831976,
+        "minimum": 0.0004987080001228605,
+        "maximum": 0.0005146670000613085,
+        "iqr": 1.595899993844796e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.007815250000021479,
+        "minimum": 0.007777291999445879,
+        "maximum": 0.008217292000153975,
+        "iqr": 0.0004400000007080962,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n14-d4-s17",
+      "family": "qft",
+      "n_qubits": 14,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 105,
+      "n_two_qubit_gates": 91,
+      "gate_counts": {
+        "h": 14,
+        "cp": 91
+      },
+      "build": {
+        "median": 0.00022733300011168467,
+        "minimum": 0.00022562499998457497,
+        "maximum": 0.00022995900053501828,
+        "iqr": 4.3340005504433066e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.007497749999856751,
+        "minimum": 0.007339708000472456,
+        "maximum": 0.007529249999606691,
+        "iqr": 0.00018954199913423508,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n14-d4-s17",
+      "family": "qft",
+      "n_qubits": 14,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 105,
+      "n_two_qubit_gates": 91,
+      "gate_counts": {
+        "h": 14,
+        "cp": 91
+      },
+      "build": {
+        "median": 0.00024295799994433764,
+        "minimum": 0.00024070899962680414,
+        "maximum": 0.0002516669992473908,
+        "iqr": 1.0957999620586634e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00330529100028798,
+        "minimum": 0.003223875000003318,
+        "maximum": 0.0033098329995482345,
+        "iqr": 8.595799954491667e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n14-d4-s17",
+      "family": "qft",
+      "n_qubits": 14,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 105,
+      "n_two_qubit_gates": 91,
+      "gate_counts": {
+        "h": 14,
+        "cp": 91
+      },
+      "build": {
+        "median": 0.00035954200029664207,
+        "minimum": 0.00035887499961972935,
+        "maximum": 0.00036700000055134296,
+        "iqr": 8.125000931613613e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.003541499999300868,
+        "minimum": 0.0035262920000604936,
+        "maximum": 0.0035790000001725275,
+        "iqr": 5.2708000112033915e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n15-d4-s17",
+      "family": "qft",
+      "n_qubits": 15,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 120,
+      "n_two_qubit_gates": 105,
+      "gate_counts": {
+        "h": 15,
+        "cp": 105
+      },
+      "build": {
+        "median": 0.0005823749997944105,
+        "minimum": 0.0005720409999412368,
+        "maximum": 0.0005889170006412314,
+        "iqr": 1.687600069999462e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.017178374999275547,
+        "minimum": 0.017038667000633723,
+        "maximum": 0.017329166999843437,
+        "iqr": 0.0002904999992097146,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n15-d4-s17",
+      "family": "qft",
+      "n_qubits": 15,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 120,
+      "n_two_qubit_gates": 105,
+      "gate_counts": {
+        "h": 15,
+        "cp": 105
+      },
+      "build": {
+        "median": 0.00024149999990186188,
+        "minimum": 0.0002399160002823919,
+        "maximum": 0.00026954099939757725,
+        "iqr": 2.9624999115185346e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.01225504100057151,
+        "minimum": 0.012006709000161209,
+        "maximum": 0.012354082999991078,
+        "iqr": 0.0003473739998298697,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n15-d4-s17",
+      "family": "qft",
+      "n_qubits": 15,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 120,
+      "n_two_qubit_gates": 105,
+      "gate_counts": {
+        "h": 15,
+        "cp": 105
+      },
+      "build": {
+        "median": 0.00026379100017948076,
+        "minimum": 0.00026212499960820423,
+        "maximum": 0.000277832999927341,
+        "iqr": 1.5708000319136772e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.007259999999405409,
+        "minimum": 0.007088707999173494,
+        "maximum": 0.007292792000043846,
+        "iqr": 0.0002040840008703526,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n15-d4-s17",
+      "family": "qft",
+      "n_qubits": 15,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 120,
+      "n_two_qubit_gates": 105,
+      "gate_counts": {
+        "h": 15,
+        "cp": 105
+      },
+      "build": {
+        "median": 0.0004045409996251692,
+        "minimum": 0.0003999170003226027,
+        "maximum": 0.0004053329994349042,
+        "iqr": 5.415999112301506e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.004745915999592398,
+        "minimum": 0.00469608299954416,
+        "maximum": 0.004919750000226486,
+        "iqr": 0.00022366700068232603,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n16-d4-s17",
+      "family": "qft",
+      "n_qubits": 16,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 136,
+      "n_two_qubit_gates": 120,
+      "gate_counts": {
+        "h": 16,
+        "cp": 120
+      },
+      "build": {
+        "median": 0.0006664169995929115,
+        "minimum": 0.0006636660000367556,
+        "maximum": 0.0006817499997850973,
+        "iqr": 1.808399974834174e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.03136504100075399,
+        "minimum": 0.030110542000329588,
+        "maximum": 0.03173241700005747,
+        "iqr": 0.0016218749997278792,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n16-d4-s17",
+      "family": "qft",
+      "n_qubits": 16,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 136,
+      "n_two_qubit_gates": 120,
+      "gate_counts": {
+        "h": 16,
+        "cp": 120
+      },
+      "build": {
+        "median": 0.0002887919999920996,
+        "minimum": 0.00027991699971607886,
+        "maximum": 0.0002941250004369067,
+        "iqr": 1.420800072082784e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.022528790999785997,
+        "minimum": 0.022470042000350077,
+        "maximum": 0.022591541999645415,
+        "iqr": 0.00012149999929533806,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n16-d4-s17",
+      "family": "qft",
+      "n_qubits": 16,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 136,
+      "n_two_qubit_gates": 120,
+      "gate_counts": {
+        "h": 16,
+        "cp": 120
+      },
+      "build": {
+        "median": 0.0003032079994227388,
+        "minimum": 0.0002991249994011014,
+        "maximum": 0.0003125000002910383,
+        "iqr": 1.3375000889936928e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0123446249999688,
+        "minimum": 0.012129249999816238,
+        "maximum": 0.01241154200033634,
+        "iqr": 0.0002822920005201013,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n16-d4-s17",
+      "family": "qft",
+      "n_qubits": 16,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 136,
+      "n_two_qubit_gates": 120,
+      "gate_counts": {
+        "h": 16,
+        "cp": 120
+      },
+      "build": {
+        "median": 0.0004547500002445304,
+        "minimum": 0.0004530420001174207,
+        "maximum": 0.00046466700041492004,
+        "iqr": 1.1625000297499355e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.006854042000668414,
+        "minimum": 0.006808707999880426,
+        "maximum": 0.0071775420001358725,
+        "iqr": 0.0003688340002554469,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n17-d4-s17",
+      "family": "qft",
+      "n_qubits": 17,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 153,
+      "n_two_qubit_gates": 136,
+      "gate_counts": {
+        "h": 17,
+        "cp": 136
+      },
+      "build": {
+        "median": 0.0007462910007234314,
+        "minimum": 0.0007357499998761341,
+        "maximum": 0.0007553749992439407,
+        "iqr": 1.9624999367806595e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.08397408400014683,
+        "minimum": 0.07878366699969774,
+        "maximum": 0.08525616599945351,
+        "iqr": 0.006472498999755771,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n17-d4-s17",
+      "family": "qft",
+      "n_qubits": 17,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 153,
+      "n_two_qubit_gates": 136,
+      "gate_counts": {
+        "h": 17,
+        "cp": 136
+      },
+      "build": {
+        "median": 0.00032699999974283855,
+        "minimum": 0.0003206249994036625,
+        "maximum": 0.00033320799957436975,
+        "iqr": 1.2583000170707237e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.07950112499929674,
+        "minimum": 0.07915529100046115,
+        "maximum": 0.08068474999981845,
+        "iqr": 0.0015294589993573027,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n17-d4-s17",
+      "family": "qft",
+      "n_qubits": 17,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 153,
+      "n_two_qubit_gates": 136,
+      "gate_counts": {
+        "h": 17,
+        "cp": 136
+      },
+      "build": {
+        "median": 0.00033533300029375823,
+        "minimum": 0.00033029199948941823,
+        "maximum": 0.0003372919991306844,
+        "iqr": 6.999999641266186e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.02296379200015508,
+        "minimum": 0.022762000000511762,
+        "maximum": 0.0232058749998032,
+        "iqr": 0.00044387499929143814,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n17-d4-s17",
+      "family": "qft",
+      "n_qubits": 17,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 153,
+      "n_two_qubit_gates": 136,
+      "gate_counts": {
+        "h": 17,
+        "cp": 136
+      },
+      "build": {
+        "median": 0.0005111669997859281,
+        "minimum": 0.0005107920005684718,
+        "maximum": 0.0005181249998713611,
+        "iqr": 7.33299930288922e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.01109870799973578,
+        "minimum": 0.01109512499988341,
+        "maximum": 0.011328708000291954,
+        "iqr": 0.00023358300040854374,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n18-d4-s17",
+      "family": "qft",
+      "n_qubits": 18,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 171,
+      "n_two_qubit_gates": 153,
+      "gate_counts": {
+        "h": 18,
+        "cp": 153
+      },
+      "build": {
+        "median": 0.000826542000140762,
+        "minimum": 0.0008222500000556465,
+        "maximum": 0.0008452920001218445,
+        "iqr": 2.3042000066197943e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.18068766699980188,
+        "minimum": 0.18041291600002296,
+        "maximum": 0.19185899999956746,
+        "iqr": 0.011446083999544499,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n18-d4-s17",
+      "family": "qft",
+      "n_qubits": 18,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 171,
+      "n_two_qubit_gates": 153,
+      "gate_counts": {
+        "h": 18,
+        "cp": 153
+      },
+      "build": {
+        "median": 0.00036458299928199267,
+        "minimum": 0.00035350000052858377,
+        "maximum": 0.00037925000015093246,
+        "iqr": 2.5749999622348696e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.17308691600010206,
+        "minimum": 0.17187908300002164,
+        "maximum": 0.17345949999980803,
+        "iqr": 0.0015804169997863937,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n18-d4-s17",
+      "family": "qft",
+      "n_qubits": 18,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 171,
+      "n_two_qubit_gates": 153,
+      "gate_counts": {
+        "h": 18,
+        "cp": 153
+      },
+      "build": {
+        "median": 0.0003739590001714532,
+        "minimum": 0.0003693329999805428,
+        "maximum": 0.00038091699934739154,
+        "iqr": 1.158399936684873e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.04612195800018526,
+        "minimum": 0.04518774999996822,
+        "maximum": 0.046596832999966864,
+        "iqr": 0.0014090829999986454,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "qft-n18-d4-s17",
+      "family": "qft",
+      "n_qubits": 18,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 171,
+      "n_two_qubit_gates": 153,
+      "gate_counts": {
+        "h": 18,
+        "cp": 153
+      },
+      "build": {
+        "median": 0.0005644170005325577,
+        "minimum": 0.000548707999769249,
+        "maximum": 0.0005795420001959428,
+        "iqr": 3.083400042669382e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.020210042000144313,
+        "minimum": 0.019765207999626,
+        "maximum": 0.021212542000284884,
+        "iqr": 0.0014473340006588842,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n8-d4-s17",
+      "family": "random",
+      "n_qubits": 8,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 46,
+      "n_two_qubit_gates": 14,
+      "gate_counts": {
+        "rz": 10,
+        "ry": 9,
+        "rx": 13,
+        "cx": 14
+      },
+      "build": {
+        "median": 0.00011470899971754989,
+        "minimum": 0.00011150000045745401,
+        "maximum": 0.0001154589999714517,
+        "iqr": 3.958999513997696e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0009642499999245047,
+        "minimum": 0.000955791999331268,
+        "maximum": 0.0009646250000514556,
+        "iqr": 8.833000720187556e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n8-d4-s17",
+      "family": "random",
+      "n_qubits": 8,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 46,
+      "n_two_qubit_gates": 14,
+      "gate_counts": {
+        "rz": 10,
+        "ry": 9,
+        "rx": 13,
+        "cx": 14
+      },
+      "build": {
+        "median": 0.00010287500026606722,
+        "minimum": 0.0001020419995256816,
+        "maximum": 0.00010612500045681372,
+        "iqr": 4.083000931132119e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0007068750001053559,
+        "minimum": 0.0007059580002533039,
+        "maximum": 0.0007174580005084863,
+        "iqr": 1.1500000255182385e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n8-d4-s17",
+      "family": "random",
+      "n_qubits": 8,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 46,
+      "n_two_qubit_gates": 14,
+      "gate_counts": {
+        "rz": 10,
+        "ry": 9,
+        "rx": 13,
+        "cx": 14
+      },
+      "build": {
+        "median": 0.00010829100028786343,
+        "minimum": 0.00010704199939937098,
+        "maximum": 0.00011045799965359038,
+        "iqr": 3.416000254219398e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0006861660003778525,
+        "minimum": 0.000639124999906926,
+        "maximum": 0.0006979999998293351,
+        "iqr": 5.887499992240919e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n8-d4-s17",
+      "family": "random",
+      "n_qubits": 8,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 46,
+      "n_two_qubit_gates": 14,
+      "gate_counts": {
+        "rz": 10,
+        "ry": 9,
+        "rx": 13,
+        "cx": 14
+      },
+      "build": {
+        "median": 0.00016399999913119245,
+        "minimum": 0.00015825000082259066,
+        "maximum": 0.00017124999976658728,
+        "iqr": 1.2999998943996616e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.001359167000373418,
+        "minimum": 0.0013534159998016548,
+        "maximum": 0.0013932910005678423,
+        "iqr": 3.987500076618744e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n9-d4-s17",
+      "family": "random",
+      "n_qubits": 9,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 52,
+      "n_two_qubit_gates": 16,
+      "gate_counts": {
+        "rz": 10,
+        "ry": 11,
+        "rx": 15,
+        "cx": 16
+      },
+      "build": {
+        "median": 0.000134292000439018,
+        "minimum": 0.0001270830007342738,
+        "maximum": 0.00013545799993153196,
+        "iqr": 8.374999197258148e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0011673330000121496,
+        "minimum": 0.0011522499999045976,
+        "maximum": 0.0011681249998218846,
+        "iqr": 1.5874999917286914e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n9-d4-s17",
+      "family": "random",
+      "n_qubits": 9,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 52,
+      "n_two_qubit_gates": 16,
+      "gate_counts": {
+        "rz": 10,
+        "ry": 11,
+        "rx": 15,
+        "cx": 16
+      },
+      "build": {
+        "median": 0.0001110419998440193,
+        "minimum": 0.0001067080002030707,
+        "maximum": 0.00011191700014023809,
+        "iqr": 5.208999937167391e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0008492920005664928,
+        "minimum": 0.0008239170001616003,
+        "maximum": 0.0008694999996805564,
+        "iqr": 4.558299951895606e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n9-d4-s17",
+      "family": "random",
+      "n_qubits": 9,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 52,
+      "n_two_qubit_gates": 16,
+      "gate_counts": {
+        "rz": 10,
+        "ry": 11,
+        "rx": 15,
+        "cx": 16
+      },
+      "build": {
+        "median": 0.00011449999965407187,
+        "minimum": 0.00011249999988649506,
+        "maximum": 0.00012720799986709608,
+        "iqr": 1.4707999980601016e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0006962500001463923,
+        "minimum": 0.0006750419997842982,
+        "maximum": 0.0007020000002739835,
+        "iqr": 2.695800048968522e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n9-d4-s17",
+      "family": "random",
+      "n_qubits": 9,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 52,
+      "n_two_qubit_gates": 16,
+      "gate_counts": {
+        "rz": 10,
+        "ry": 11,
+        "rx": 15,
+        "cx": 16
+      },
+      "build": {
+        "median": 0.00018095899940817617,
+        "minimum": 0.00017933299932337832,
+        "maximum": 0.00018933400042442372,
+        "iqr": 1.0001001101045404e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0015457079998668632,
+        "minimum": 0.0015384159996756352,
+        "maximum": 0.0015497920003326726,
+        "iqr": 1.1376000657037366e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n10-d4-s17",
+      "family": "random",
+      "n_qubits": 10,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 58,
+      "n_two_qubit_gates": 18,
+      "gate_counts": {
+        "rz": 10,
+        "ry": 13,
+        "rx": 17,
+        "cx": 18
+      },
+      "build": {
+        "median": 0.00015008299942564918,
+        "minimum": 0.00014770799953112146,
+        "maximum": 0.0001506670005255728,
+        "iqr": 2.959000994451344e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0013867499992556986,
+        "minimum": 0.0013707080006497563,
+        "maximum": 0.001397125000039523,
+        "iqr": 2.6416999389766715e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n10-d4-s17",
+      "family": "random",
+      "n_qubits": 10,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 58,
+      "n_two_qubit_gates": 18,
+      "gate_counts": {
+        "rz": 10,
+        "ry": 13,
+        "rx": 17,
+        "cx": 18
+      },
+      "build": {
+        "median": 0.0001171669991890667,
+        "minimum": 0.00011333299971738597,
+        "maximum": 0.00011745800020435126,
+        "iqr": 4.125000486965291e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.001134084000113944,
+        "minimum": 0.001120749999245163,
+        "maximum": 0.0011380830001144204,
+        "iqr": 1.7333000869257376e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n10-d4-s17",
+      "family": "random",
+      "n_qubits": 10,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 58,
+      "n_two_qubit_gates": 18,
+      "gate_counts": {
+        "rz": 10,
+        "ry": 13,
+        "rx": 17,
+        "cx": 18
+      },
+      "build": {
+        "median": 0.00013987500005896436,
+        "minimum": 0.00013420899995253421,
+        "maximum": 0.00016316700020979624,
+        "iqr": 2.895800025726203e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.000760958999308059,
+        "minimum": 0.0007084580001901486,
+        "maximum": 0.0008255419998022262,
+        "iqr": 0.0001170839996120776,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n10-d4-s17",
+      "family": "random",
+      "n_qubits": 10,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 58,
+      "n_two_qubit_gates": 18,
+      "gate_counts": {
+        "rz": 10,
+        "ry": 13,
+        "rx": 17,
+        "cx": 18
+      },
+      "build": {
+        "median": 0.00019837499985442264,
+        "minimum": 0.0001978330001293216,
+        "maximum": 0.00019862499993905658,
+        "iqr": 7.91999809734989e-07,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.001767083999766328,
+        "minimum": 0.001766082999893115,
+        "maximum": 0.0018147500004488393,
+        "iqr": 4.866700055572437e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n11-d4-s17",
+      "family": "random",
+      "n_qubits": 11,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 64,
+      "n_two_qubit_gates": 20,
+      "gate_counts": {
+        "rz": 11,
+        "ry": 14,
+        "rx": 19,
+        "cx": 20
+      },
+      "build": {
+        "median": 0.00016158300059032626,
+        "minimum": 0.00016116599999804748,
+        "maximum": 0.00016216599942708854,
+        "iqr": 9.99999429041054e-07,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0018080420004480402,
+        "minimum": 0.0018005410001933342,
+        "maximum": 0.0018174160004491569,
+        "iqr": 1.687500025582267e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n11-d4-s17",
+      "family": "random",
+      "n_qubits": 11,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 64,
+      "n_two_qubit_gates": 20,
+      "gate_counts": {
+        "rz": 11,
+        "ry": 14,
+        "rx": 19,
+        "cx": 20
+      },
+      "build": {
+        "median": 0.00012733299990941305,
+        "minimum": 0.0001188750002256711,
+        "maximum": 0.00013554100041801576,
+        "iqr": 1.6666000192344654e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0016082500005722977,
+        "minimum": 0.001600583999788796,
+        "maximum": 0.0016470000000481377,
+        "iqr": 4.641600025934167e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n11-d4-s17",
+      "family": "random",
+      "n_qubits": 11,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 64,
+      "n_two_qubit_gates": 20,
+      "gate_counts": {
+        "rz": 11,
+        "ry": 14,
+        "rx": 19,
+        "cx": 20
+      },
+      "build": {
+        "median": 0.00013645899980474496,
+        "minimum": 0.00013099999978294363,
+        "maximum": 0.0001380420007990324,
+        "iqr": 7.042001016088761e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0009229170000253362,
+        "minimum": 0.0008921250000639702,
+        "maximum": 0.0011392500000511063,
+        "iqr": 0.0002471249999871361,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n11-d4-s17",
+      "family": "random",
+      "n_qubits": 11,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 64,
+      "n_two_qubit_gates": 20,
+      "gate_counts": {
+        "rz": 11,
+        "ry": 14,
+        "rx": 19,
+        "cx": 20
+      },
+      "build": {
+        "median": 0.0002194580001741997,
+        "minimum": 0.00021520799964491744,
+        "maximum": 0.00022320799962471938,
+        "iqr": 7.999999979801942e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.002065874999971129,
+        "minimum": 0.0020556660001602722,
+        "maximum": 0.0020689169996330747,
+        "iqr": 1.3250999472802505e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n12-d4-s17",
+      "family": "random",
+      "n_qubits": 12,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 70,
+      "n_two_qubit_gates": 22,
+      "gate_counts": {
+        "rz": 11,
+        "ry": 17,
+        "rx": 20,
+        "cx": 22
+      },
+      "build": {
+        "median": 0.00017608300004212651,
+        "minimum": 0.0001734590005071368,
+        "maximum": 0.00018141700002161087,
+        "iqr": 7.957999514474068e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0026428749997648993,
+        "minimum": 0.0026007910000771517,
+        "maximum": 0.0026473750003788155,
+        "iqr": 4.6584000301663764e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n12-d4-s17",
+      "family": "random",
+      "n_qubits": 12,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 70,
+      "n_two_qubit_gates": 22,
+      "gate_counts": {
+        "rz": 11,
+        "ry": 17,
+        "rx": 20,
+        "cx": 22
+      },
+      "build": {
+        "median": 0.00013645899980474496,
+        "minimum": 0.000135541999952693,
+        "maximum": 0.0001384170000164886,
+        "iqr": 2.8750000637955964e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0018115830007445766,
+        "minimum": 0.0017997499999182764,
+        "maximum": 0.001832167000429763,
+        "iqr": 3.241700051148655e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n12-d4-s17",
+      "family": "random",
+      "n_qubits": 12,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 70,
+      "n_two_qubit_gates": 22,
+      "gate_counts": {
+        "rz": 11,
+        "ry": 17,
+        "rx": 20,
+        "cx": 22
+      },
+      "build": {
+        "median": 0.00014941600056772586,
+        "minimum": 0.0001491249995524413,
+        "maximum": 0.00015787499978614505,
+        "iqr": 8.750000233703759e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0010936670005321503,
+        "minimum": 0.0010922079991360079,
+        "maximum": 0.0011224580002817675,
+        "iqr": 3.0250001145759597e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n12-d4-s17",
+      "family": "random",
+      "n_qubits": 12,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 70,
+      "n_two_qubit_gates": 22,
+      "gate_counts": {
+        "rz": 11,
+        "ry": 17,
+        "rx": 20,
+        "cx": 22
+      },
+      "build": {
+        "median": 0.0002397499993094243,
+        "minimum": 0.0002336249999643769,
+        "maximum": 0.00024320800002897158,
+        "iqr": 9.583000064594671e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.002532249999603664,
+        "minimum": 0.0025067500000659493,
+        "maximum": 0.002787542000078247,
+        "iqr": 0.00028079200001229765,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n13-d4-s17",
+      "family": "random",
+      "n_qubits": 13,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 76,
+      "n_two_qubit_gates": 24,
+      "gate_counts": {
+        "rz": 12,
+        "ry": 19,
+        "rx": 21,
+        "cx": 24
+      },
+      "build": {
+        "median": 0.00019299999985378236,
+        "minimum": 0.00019149999934597872,
+        "maximum": 0.0001937910001288401,
+        "iqr": 2.2910007828613743e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.007980500000485335,
+        "minimum": 0.007526915999733319,
+        "maximum": 0.008458874999632826,
+        "iqr": 0.000931958999899507,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n13-d4-s17",
+      "family": "random",
+      "n_qubits": 13,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 76,
+      "n_two_qubit_gates": 24,
+      "gate_counts": {
+        "rz": 12,
+        "ry": 19,
+        "rx": 21,
+        "cx": 24
+      },
+      "build": {
+        "median": 0.00015495800016651629,
+        "minimum": 0.000149583000165876,
+        "maximum": 0.00015662500027247006,
+        "iqr": 7.04200010659406e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.003283209000073839,
+        "minimum": 0.0032732919999034493,
+        "maximum": 0.003297000000202388,
+        "iqr": 2.3708000298938714e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n13-d4-s17",
+      "family": "random",
+      "n_qubits": 13,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 76,
+      "n_two_qubit_gates": 24,
+      "gate_counts": {
+        "rz": 12,
+        "ry": 19,
+        "rx": 21,
+        "cx": 24
+      },
+      "build": {
+        "median": 0.00017270800071855774,
+        "minimum": 0.00016870900071808137,
+        "maximum": 0.00019466699995973613,
+        "iqr": 2.595799924165476e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0015255419993991381,
+        "minimum": 0.001412292000168236,
+        "maximum": 0.0015500409999731346,
+        "iqr": 0.00013774899980489863,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n13-d4-s17",
+      "family": "random",
+      "n_qubits": 13,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 76,
+      "n_two_qubit_gates": 24,
+      "gate_counts": {
+        "rz": 12,
+        "ry": 19,
+        "rx": 21,
+        "cx": 24
+      },
+      "build": {
+        "median": 0.00026329200045438483,
+        "minimum": 0.00025683300009404775,
+        "maximum": 0.00026612500005285256,
+        "iqr": 9.291999958804809e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0033222500005649636,
+        "minimum": 0.0033165830000143615,
+        "maximum": 0.0034518749998824205,
+        "iqr": 0.00013529199986805907,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n14-d4-s17",
+      "family": "random",
+      "n_qubits": 14,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 82,
+      "n_two_qubit_gates": 26,
+      "gate_counts": {
+        "rz": 12,
+        "ry": 22,
+        "rx": 22,
+        "cx": 26
+      },
+      "build": {
+        "median": 0.00021304199981386773,
+        "minimum": 0.00020483299977058778,
+        "maximum": 0.00021433300025819335,
+        "iqr": 9.500000487605575e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.010742208000010578,
+        "minimum": 0.009659124999416235,
+        "maximum": 0.011935708000237355,
+        "iqr": 0.0022765830008211196,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n14-d4-s17",
+      "family": "random",
+      "n_qubits": 14,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 82,
+      "n_two_qubit_gates": 26,
+      "gate_counts": {
+        "rz": 12,
+        "ry": 22,
+        "rx": 22,
+        "cx": 26
+      },
+      "build": {
+        "median": 0.00016820800010464154,
+        "minimum": 0.00015958299991325475,
+        "maximum": 0.00016954199963947758,
+        "iqr": 9.958999726222828e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.004719458999716153,
+        "minimum": 0.004716166000434896,
+        "maximum": 0.004728875000182597,
+        "iqr": 1.2708999747701455e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n14-d4-s17",
+      "family": "random",
+      "n_qubits": 14,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 82,
+      "n_two_qubit_gates": 26,
+      "gate_counts": {
+        "rz": 12,
+        "ry": 22,
+        "rx": 22,
+        "cx": 26
+      },
+      "build": {
+        "median": 0.00017475000004196772,
+        "minimum": 0.00017012500029522926,
+        "maximum": 0.00018045799970423104,
+        "iqr": 1.0332999409001786e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0022569169996131677,
+        "minimum": 0.0021955830006845645,
+        "maximum": 0.0023986249998415587,
+        "iqr": 0.00020304199915699428,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n14-d4-s17",
+      "family": "random",
+      "n_qubits": 14,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 82,
+      "n_two_qubit_gates": 26,
+      "gate_counts": {
+        "rz": 12,
+        "ry": 22,
+        "rx": 22,
+        "cx": 26
+      },
+      "build": {
+        "median": 0.0002802500002871966,
+        "minimum": 0.00027908399988518795,
+        "maximum": 0.0002824579996740795,
+        "iqr": 3.373999788891524e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.004373000000668981,
+        "minimum": 0.004359999999905995,
+        "maximum": 0.004400666000037745,
+        "iqr": 4.066600013175048e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n15-d4-s17",
+      "family": "random",
+      "n_qubits": 15,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 88,
+      "n_two_qubit_gates": 28,
+      "gate_counts": {
+        "rz": 13,
+        "ry": 24,
+        "rx": 23,
+        "cx": 28
+      },
+      "build": {
+        "median": 0.00022354199973051436,
+        "minimum": 0.0002213749994552927,
+        "maximum": 0.0002302919992871466,
+        "iqr": 8.9169998318539e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.013094208000438812,
+        "minimum": 0.012763665999955265,
+        "maximum": 0.015580332999888924,
+        "iqr": 0.002816666999933659,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n15-d4-s17",
+      "family": "random",
+      "n_qubits": 15,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 88,
+      "n_two_qubit_gates": 28,
+      "gate_counts": {
+        "rz": 13,
+        "ry": 24,
+        "rx": 23,
+        "cx": 28
+      },
+      "build": {
+        "median": 0.0001843330001065624,
+        "minimum": 0.0001812090004023048,
+        "maximum": 0.0001866669999799342,
+        "iqr": 5.45799957762938e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.007440874999701919,
+        "minimum": 0.00725645800048369,
+        "maximum": 0.007578124999781721,
+        "iqr": 0.00032166699929803144,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n15-d4-s17",
+      "family": "random",
+      "n_qubits": 15,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 88,
+      "n_two_qubit_gates": 28,
+      "gate_counts": {
+        "rz": 13,
+        "ry": 24,
+        "rx": 23,
+        "cx": 28
+      },
+      "build": {
+        "median": 0.00018920899947261205,
+        "minimum": 0.00018783299947244814,
+        "maximum": 0.00019466600042505888,
+        "iqr": 6.833000952610746e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0036537920004775515,
+        "minimum": 0.0035132499997416744,
+        "maximum": 0.003802000000177941,
+        "iqr": 0.0002887500004362664,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n15-d4-s17",
+      "family": "random",
+      "n_qubits": 15,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 88,
+      "n_two_qubit_gates": 28,
+      "gate_counts": {
+        "rz": 13,
+        "ry": 24,
+        "rx": 23,
+        "cx": 28
+      },
+      "build": {
+        "median": 0.00030020800022612093,
+        "minimum": 0.0002953330003947485,
+        "maximum": 0.00030375000005733455,
+        "iqr": 8.416999662586022e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.007014916999651177,
+        "minimum": 0.007008999999925436,
+        "maximum": 0.007429416999912064,
+        "iqr": 0.00042041699998662807,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n16-d4-s17",
+      "family": "random",
+      "n_qubits": 16,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 94,
+      "n_two_qubit_gates": 30,
+      "gate_counts": {
+        "rz": 16,
+        "ry": 25,
+        "rx": 23,
+        "cx": 30
+      },
+      "build": {
+        "median": 0.00024291600038850447,
+        "minimum": 0.00023841599977458827,
+        "maximum": 0.0002443749999656575,
+        "iqr": 5.959000191069208e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.02742762500020035,
+        "minimum": 0.025824207999903592,
+        "maximum": 0.027670375000525382,
+        "iqr": 0.00184616700062179,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n16-d4-s17",
+      "family": "random",
+      "n_qubits": 16,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 94,
+      "n_two_qubit_gates": 30,
+      "gate_counts": {
+        "rz": 16,
+        "ry": 25,
+        "rx": 23,
+        "cx": 30
+      },
+      "build": {
+        "median": 0.00019358400004421128,
+        "minimum": 0.00018662500042410102,
+        "maximum": 0.00019608399998105597,
+        "iqr": 9.45899955695495e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.013454750000164495,
+        "minimum": 0.013432417000331043,
+        "maximum": 0.01383037499999773,
+        "iqr": 0.0003979579996666871,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n16-d4-s17",
+      "family": "random",
+      "n_qubits": 16,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 94,
+      "n_two_qubit_gates": 30,
+      "gate_counts": {
+        "rz": 16,
+        "ry": 25,
+        "rx": 23,
+        "cx": 30
+      },
+      "build": {
+        "median": 0.00019741699998121476,
+        "minimum": 0.00019420799981162418,
+        "maximum": 0.00020087499979126733,
+        "iqr": 6.666999979643151e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.006602457999179023,
+        "minimum": 0.006505000000288419,
+        "maximum": 0.006617916999857698,
+        "iqr": 0.00011291699956927914,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n16-d4-s17",
+      "family": "random",
+      "n_qubits": 16,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 94,
+      "n_two_qubit_gates": 30,
+      "gate_counts": {
+        "rz": 16,
+        "ry": 25,
+        "rx": 23,
+        "cx": 30
+      },
+      "build": {
+        "median": 0.0003230419997635181,
+        "minimum": 0.00032250000003841706,
+        "maximum": 0.00032462499984831084,
+        "iqr": 2.1249998098937795e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.011956540999563003,
+        "minimum": 0.010589125000478816,
+        "maximum": 0.012171333999503986,
+        "iqr": 0.0015822089990251698,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n17-d4-s17",
+      "family": "random",
+      "n_qubits": 17,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 100,
+      "n_two_qubit_gates": 32,
+      "gate_counts": {
+        "rz": 18,
+        "ry": 26,
+        "rx": 24,
+        "cx": 32
+      },
+      "build": {
+        "median": 0.0002527919996282435,
+        "minimum": 0.00024849999954312807,
+        "maximum": 0.00025904199992510257,
+        "iqr": 1.0542000381974503e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.06423174999963521,
+        "minimum": 0.06309108300047228,
+        "maximum": 0.06541833299979771,
+        "iqr": 0.0023272499993254314,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n17-d4-s17",
+      "family": "random",
+      "n_qubits": 17,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 100,
+      "n_two_qubit_gates": 32,
+      "gate_counts": {
+        "rz": 18,
+        "ry": 26,
+        "rx": 24,
+        "cx": 32
+      },
+      "build": {
+        "median": 0.00020320799922046717,
+        "minimum": 0.00019633300053101266,
+        "maximum": 0.00020408300042618066,
+        "iqr": 7.749999895168003e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.046998958000585844,
+        "minimum": 0.04653958399921976,
+        "maximum": 0.04702587500014488,
+        "iqr": 0.0004862910009251209,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n17-d4-s17",
+      "family": "random",
+      "n_qubits": 17,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 100,
+      "n_two_qubit_gates": 32,
+      "gate_counts": {
+        "rz": 18,
+        "ry": 26,
+        "rx": 24,
+        "cx": 32
+      },
+      "build": {
+        "median": 0.000216291000469937,
+        "minimum": 0.00021520900008908939,
+        "maximum": 0.00021883299996261485,
+        "iqr": 3.623999873525463e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.011591041000428959,
+        "minimum": 0.011572583000088343,
+        "maximum": 0.011625707999883161,
+        "iqr": 5.3124999794817995e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n17-d4-s17",
+      "family": "random",
+      "n_qubits": 17,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 100,
+      "n_two_qubit_gates": 32,
+      "gate_counts": {
+        "rz": 18,
+        "ry": 26,
+        "rx": 24,
+        "cx": 32
+      },
+      "build": {
+        "median": 0.0003347909996591625,
+        "minimum": 0.0003287919998911093,
+        "maximum": 0.00034533400048530893,
+        "iqr": 1.6542000594199635e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.018999583000550047,
+        "minimum": 0.01899712499925954,
+        "maximum": 0.019962584000495553,
+        "iqr": 0.0009654590012360131,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n18-d4-s17",
+      "family": "random",
+      "n_qubits": 18,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 106,
+      "n_two_qubit_gates": 34,
+      "gate_counts": {
+        "rz": 21,
+        "ry": 27,
+        "rx": 24,
+        "cx": 34
+      },
+      "build": {
+        "median": 0.00027308300013828557,
+        "minimum": 0.00026941699979943223,
+        "maximum": 0.0002768340000329772,
+        "iqr": 7.417000233544968e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.1387432909996278,
+        "minimum": 0.13845275000039692,
+        "maximum": 0.14310383400061255,
+        "iqr": 0.004651084000215633,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n18-d4-s17",
+      "family": "random",
+      "n_qubits": 18,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 106,
+      "n_two_qubit_gates": 34,
+      "gate_counts": {
+        "rz": 21,
+        "ry": 27,
+        "rx": 24,
+        "cx": 34
+      },
+      "build": {
+        "median": 0.00020862499968643533,
+        "minimum": 0.00019762500051001552,
+        "maximum": 0.00021099999958096305,
+        "iqr": 1.3374999070947524e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.09810491699954582,
+        "minimum": 0.09683712500009278,
+        "maximum": 0.09811783399982232,
+        "iqr": 0.0012807089997295407,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n18-d4-s17",
+      "family": "random",
+      "n_qubits": 18,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 106,
+      "n_two_qubit_gates": 34,
+      "gate_counts": {
+        "rz": 21,
+        "ry": 27,
+        "rx": 24,
+        "cx": 34
+      },
+      "build": {
+        "median": 0.00022362500021699816,
+        "minimum": 0.00022195800011104438,
+        "maximum": 0.00023129100009100512,
+        "iqr": 9.332999979960732e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.023509917000410496,
+        "minimum": 0.02338899999995192,
+        "maximum": 0.02392291700016358,
+        "iqr": 0.0005339170002116589,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "random-n18-d4-s17",
+      "family": "random",
+      "n_qubits": 18,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 106,
+      "n_two_qubit_gates": 34,
+      "gate_counts": {
+        "rz": 21,
+        "ry": 27,
+        "rx": 24,
+        "cx": 34
+      },
+      "build": {
+        "median": 0.0003541249998306739,
+        "minimum": 0.000343291000717727,
+        "maximum": 0.00035445799949229695,
+        "iqr": 1.1166998774569947e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.041373083000507904,
+        "minimum": 0.04040529199937737,
+        "maximum": 0.041551541999979236,
+        "iqr": 0.0011462500006018672,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n8-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 8,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 92,
+      "n_two_qubit_gates": 28,
+      "gate_counts": {
+        "ry": 32,
+        "rz": 32,
+        "cx": 28
+      },
+      "build": {
+        "median": 0.000232792000133486,
+        "minimum": 0.00023216699992190115,
+        "maximum": 0.00023554099971079268,
+        "iqr": 3.373999788891524e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0018570830006865435,
+        "minimum": 0.001847874999839405,
+        "maximum": 0.0018894999993790407,
+        "iqr": 4.162499953963561e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n8-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 8,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 92,
+      "n_two_qubit_gates": 28,
+      "gate_counts": {
+        "ry": 32,
+        "rz": 32,
+        "cx": 28
+      },
+      "build": {
+        "median": 0.0001850829994509695,
+        "minimum": 0.00018437499966239557,
+        "maximum": 0.00018687500050873496,
+        "iqr": 2.5000008463393897e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.001337499999863212,
+        "minimum": 0.00132887500058132,
+        "maximum": 0.001352874999611231,
+        "iqr": 2.3999999029911123e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n8-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 8,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 92,
+      "n_two_qubit_gates": 28,
+      "gate_counts": {
+        "ry": 32,
+        "rz": 32,
+        "cx": 28
+      },
+      "build": {
+        "median": 0.00018983299924002495,
+        "minimum": 0.00018762500076263677,
+        "maximum": 0.00019058399993809871,
+        "iqr": 2.9589991754619405e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.001090207999368431,
+        "minimum": 0.0009592500000508153,
+        "maximum": 0.0011953330003962037,
+        "iqr": 0.00023608300034538843,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n8-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 8,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 92,
+      "n_two_qubit_gates": 28,
+      "gate_counts": {
+        "ry": 32,
+        "rz": 32,
+        "cx": 28
+      },
+      "build": {
+        "median": 0.00032008299967856146,
+        "minimum": 0.0003081250006289338,
+        "maximum": 0.00032166700020752614,
+        "iqr": 1.3541999578592367e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0024528750000172295,
+        "minimum": 0.002450124999995751,
+        "maximum": 0.002462209000441362,
+        "iqr": 1.208400044561131e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n9-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 9,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 104,
+      "n_two_qubit_gates": 32,
+      "gate_counts": {
+        "ry": 36,
+        "rz": 36,
+        "cx": 32
+      },
+      "build": {
+        "median": 0.00026304099992557894,
+        "minimum": 0.0002606670004752232,
+        "maximum": 0.00026420800077175954,
+        "iqr": 3.5410002965363674e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.002282000000377593,
+        "minimum": 0.0022186670003065956,
+        "maximum": 0.002306624999619089,
+        "iqr": 8.795799931249348e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n9-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 9,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 104,
+      "n_two_qubit_gates": 32,
+      "gate_counts": {
+        "ry": 36,
+        "rz": 36,
+        "cx": 32
+      },
+      "build": {
+        "median": 0.00020312499964347808,
+        "minimum": 0.00019866700040438445,
+        "maximum": 0.00021399999968707561,
+        "iqr": 1.5332999282691162e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0016432920001534512,
+        "minimum": 0.0016206669997700374,
+        "maximum": 0.0016809999997349223,
+        "iqr": 6.033299996488495e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n9-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 9,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 104,
+      "n_two_qubit_gates": 32,
+      "gate_counts": {
+        "ry": 36,
+        "rz": 36,
+        "cx": 32
+      },
+      "build": {
+        "median": 0.00021141599972906988,
+        "minimum": 0.0002108329999828129,
+        "maximum": 0.00021300000025803456,
+        "iqr": 2.1670002752216533e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0012065410001014243,
+        "minimum": 0.0011915830000361893,
+        "maximum": 0.0013994170003570616,
+        "iqr": 0.0002078340003208723,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n9-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 9,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 104,
+      "n_two_qubit_gates": 32,
+      "gate_counts": {
+        "ry": 36,
+        "rz": 36,
+        "cx": 32
+      },
+      "build": {
+        "median": 0.0003607499993449892,
+        "minimum": 0.0003537920001690509,
+        "maximum": 0.0003664579999167472,
+        "iqr": 1.2665999747696333e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0028494580001279246,
+        "minimum": 0.002802625000185799,
+        "maximum": 0.002864083999156719,
+        "iqr": 6.145899897092022e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n10-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 10,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 116,
+      "n_two_qubit_gates": 36,
+      "gate_counts": {
+        "ry": 40,
+        "rz": 40,
+        "cx": 36
+      },
+      "build": {
+        "median": 0.00029608299973915564,
+        "minimum": 0.00029545899997174274,
+        "maximum": 0.00029883299976063427,
+        "iqr": 3.373999788891524e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0027385829998820554,
+        "minimum": 0.0027246250001553562,
+        "maximum": 0.0027622919997156714,
+        "iqr": 3.766699956031516e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n10-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 10,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 116,
+      "n_two_qubit_gates": 36,
+      "gate_counts": {
+        "ry": 40,
+        "rz": 40,
+        "cx": 36
+      },
+      "build": {
+        "median": 0.00022579100004804786,
+        "minimum": 0.00022529200032295194,
+        "maximum": 0.00022662499941361602,
+        "iqr": 1.3329990906640887e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0021744999994552927,
+        "minimum": 0.0021694999995816033,
+        "maximum": 0.002179500000238477,
+        "iqr": 1.0000000656873453e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n10-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 10,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 116,
+      "n_two_qubit_gates": 36,
+      "gate_counts": {
+        "ry": 40,
+        "rz": 40,
+        "cx": 36
+      },
+      "build": {
+        "median": 0.00023420900015480584,
+        "minimum": 0.00022795800032326952,
+        "maximum": 0.00024195900004997384,
+        "iqr": 1.4000999726704322e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0014737080000486458,
+        "minimum": 0.0013662910005223239,
+        "maximum": 0.0016398749994550599,
+        "iqr": 0.000273583998932736,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n10-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 10,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 116,
+      "n_two_qubit_gates": 36,
+      "gate_counts": {
+        "ry": 40,
+        "rz": 40,
+        "cx": 36
+      },
+      "build": {
+        "median": 0.0003942500006814953,
+        "minimum": 0.00038987500010989606,
+        "maximum": 0.00039724999987811316,
+        "iqr": 7.374999768217094e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0033632909999141702,
+        "minimum": 0.0032200830000874703,
+        "maximum": 0.0034051250004267786,
+        "iqr": 0.0001850420003393083,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n11-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 11,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 128,
+      "n_two_qubit_gates": 40,
+      "gate_counts": {
+        "ry": 44,
+        "rz": 44,
+        "cx": 40
+      },
+      "build": {
+        "median": 0.00032904199997574324,
+        "minimum": 0.00032374999955209205,
+        "maximum": 0.000329250000504544,
+        "iqr": 5.5000009524519555e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.003634333000263723,
+        "minimum": 0.00362924999990355,
+        "maximum": 0.003642374999799358,
+        "iqr": 1.3124999895808287e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n11-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 11,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 128,
+      "n_two_qubit_gates": 40,
+      "gate_counts": {
+        "ry": 44,
+        "rz": 44,
+        "cx": 40
+      },
+      "build": {
+        "median": 0.00024129199937306112,
+        "minimum": 0.00023387500004901085,
+        "maximum": 0.00024383399977523368,
+        "iqr": 9.958999726222828e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0032207499998548883,
+        "minimum": 0.0032169579999390407,
+        "maximum": 0.0032259580002573784,
+        "iqr": 9.000000318337698e-06,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n11-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 11,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 128,
+      "n_two_qubit_gates": 40,
+      "gate_counts": {
+        "ry": 44,
+        "rz": 44,
+        "cx": 40
+      },
+      "build": {
+        "median": 0.000256624999565247,
+        "minimum": 0.0002508329998818226,
+        "maximum": 0.00025991700022132136,
+        "iqr": 9.084000339498743e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0015607499999532592,
+        "minimum": 0.0015270829999280977,
+        "maximum": 0.0016869579994818196,
+        "iqr": 0.00015987499955372186,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n11-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 11,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 128,
+      "n_two_qubit_gates": 40,
+      "gate_counts": {
+        "ry": 44,
+        "rz": 44,
+        "cx": 40
+      },
+      "build": {
+        "median": 0.00043045800066465745,
+        "minimum": 0.00042458400002942653,
+        "maximum": 0.00043529200047487393,
+        "iqr": 1.0708000445447396e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.003891915999702178,
+        "minimum": 0.0038563340003747726,
+        "maximum": 0.003951708999920811,
+        "iqr": 9.537499954603845e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n12-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 12,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 140,
+      "n_two_qubit_gates": 44,
+      "gate_counts": {
+        "ry": 48,
+        "rz": 48,
+        "cx": 44
+      },
+      "build": {
+        "median": 0.0003529999994498212,
+        "minimum": 0.000347124999279913,
+        "maximum": 0.0003534580000632559,
+        "iqr": 6.333000783342868e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.006755041999895184,
+        "minimum": 0.005161875000339933,
+        "maximum": 0.0068915000001652515,
+        "iqr": 0.0017296249998253188,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n12-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 12,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 140,
+      "n_two_qubit_gates": 44,
+      "gate_counts": {
+        "ry": 48,
+        "rz": 48,
+        "cx": 44
+      },
+      "build": {
+        "median": 0.0002720830007092445,
+        "minimum": 0.0002622089996293653,
+        "maximum": 0.0002815829993778607,
+        "iqr": 1.9373999748495407e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00544641699980275,
+        "minimum": 0.005439667000246118,
+        "maximum": 0.0054567500001212466,
+        "iqr": 1.7082999875128735e-05,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n12-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 12,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 140,
+      "n_two_qubit_gates": 44,
+      "gate_counts": {
+        "ry": 48,
+        "rz": 48,
+        "cx": 44
+      },
+      "build": {
+        "median": 0.00027645800037134904,
+        "minimum": 0.00026733400045486633,
+        "maximum": 0.0002793749999909778,
+        "iqr": 1.2040999536111485e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0018526249996284605,
+        "minimum": 0.0018363330000283895,
+        "maximum": 0.001940249999279331,
+        "iqr": 0.00010391699925094144,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n12-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 12,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 140,
+      "n_two_qubit_gates": 44,
+      "gate_counts": {
+        "ry": 48,
+        "rz": 48,
+        "cx": 44
+      },
+      "build": {
+        "median": 0.00046470800043607596,
+        "minimum": 0.000449417000709218,
+        "maximum": 0.0004735409993372741,
+        "iqr": 2.4123998628056142e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0047280420003517065,
+        "minimum": 0.004650458000469371,
+        "maximum": 0.004881208999904629,
+        "iqr": 0.00023075099943525856,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n13-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 13,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 152,
+      "n_two_qubit_gates": 48,
+      "gate_counts": {
+        "ry": 52,
+        "rz": 52,
+        "cx": 48
+      },
+      "build": {
+        "median": 0.00038154100002429914,
+        "minimum": 0.0003796660002990393,
+        "maximum": 0.00039216599998326274,
+        "iqr": 1.249999968422344e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.01605729200036876,
+        "minimum": 0.013165416999981971,
+        "maximum": 0.0163225419992159,
+        "iqr": 0.003157124999233929,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n13-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 13,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 152,
+      "n_two_qubit_gates": 48,
+      "gate_counts": {
+        "ry": 52,
+        "rz": 52,
+        "cx": 48
+      },
+      "build": {
+        "median": 0.0002842499998223502,
+        "minimum": 0.0002822499991452787,
+        "maximum": 0.00028604199997062096,
+        "iqr": 3.7920008253422566e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.006587875000150234,
+        "minimum": 0.0052683330004583695,
+        "maximum": 0.006600624999919091,
+        "iqr": 0.0013322919994607219,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n13-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 13,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 152,
+      "n_two_qubit_gates": 48,
+      "gate_counts": {
+        "ry": 52,
+        "rz": 52,
+        "cx": 48
+      },
+      "build": {
+        "median": 0.0002942080000138958,
+        "minimum": 0.00028791600016120356,
+        "maximum": 0.0002962500002468005,
+        "iqr": 8.334000085596927e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.002525124999920081,
+        "minimum": 0.002515707999918959,
+        "maximum": 0.0027169169998160214,
+        "iqr": 0.0002012089998970623,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n13-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 13,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 152,
+      "n_two_qubit_gates": 48,
+      "gate_counts": {
+        "ry": 52,
+        "rz": 52,
+        "cx": 48
+      },
+      "build": {
+        "median": 0.0004987499996786937,
+        "minimum": 0.0004916669995509437,
+        "maximum": 0.0005129159999341937,
+        "iqr": 2.124900038324995e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.005568290999690362,
+        "minimum": 0.005524416999833193,
+        "maximum": 0.005666625000230852,
+        "iqr": 0.0001422080003976589,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n14-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 14,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 164,
+      "n_two_qubit_gates": 52,
+      "gate_counts": {
+        "ry": 56,
+        "rz": 56,
+        "cx": 52
+      },
+      "build": {
+        "median": 0.00042012500034616096,
+        "minimum": 0.0004192500000499422,
+        "maximum": 0.0004220420005367487,
+        "iqr": 2.7920004868065007e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.019084792000285233,
+        "minimum": 0.018755541000246012,
+        "maximum": 0.024590625000200816,
+        "iqr": 0.005835083999954804,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n14-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 14,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 164,
+      "n_two_qubit_gates": 52,
+      "gate_counts": {
+        "ry": 56,
+        "rz": 56,
+        "cx": 52
+      },
+      "build": {
+        "median": 0.00030345800041686743,
+        "minimum": 0.0002919170001405291,
+        "maximum": 0.00030583300031139515,
+        "iqr": 1.3916000170866027e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00987608299965359,
+        "minimum": 0.009848125000644359,
+        "maximum": 0.009983916999772191,
+        "iqr": 0.00013579199912783224,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n14-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 14,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 164,
+      "n_two_qubit_gates": 52,
+      "gate_counts": {
+        "ry": 56,
+        "rz": 56,
+        "cx": 52
+      },
+      "build": {
+        "median": 0.00032383300003857585,
+        "minimum": 0.0003198340000380995,
+        "maximum": 0.00032545799967920175,
+        "iqr": 5.623999641102273e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.004075082999406732,
+        "minimum": 0.0039188339997053845,
+        "maximum": 0.004084500000317348,
+        "iqr": 0.00016566600061196368,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n14-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 14,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 164,
+      "n_two_qubit_gates": 52,
+      "gate_counts": {
+        "ry": 56,
+        "rz": 56,
+        "cx": 52
+      },
+      "build": {
+        "median": 0.0005261659998723189,
+        "minimum": 0.0005202499996812548,
+        "maximum": 0.0005478749999383581,
+        "iqr": 2.7625000257103238e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.007733124999504071,
+        "minimum": 0.007553541000561381,
+        "maximum": 0.009317041000031168,
+        "iqr": 0.0017634999994697864,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n15-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 15,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 176,
+      "n_two_qubit_gates": 56,
+      "gate_counts": {
+        "ry": 60,
+        "rz": 60,
+        "cx": 56
+      },
+      "build": {
+        "median": 0.000435375000051863,
+        "minimum": 0.00043399999958637636,
+        "maximum": 0.0004465000001800945,
+        "iqr": 1.2500000593718141e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.031627583999579656,
+        "minimum": 0.03151841599992622,
+        "maximum": 0.03217162500004633,
+        "iqr": 0.0006532090001201141,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n15-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 15,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 176,
+      "n_two_qubit_gates": 56,
+      "gate_counts": {
+        "ry": 60,
+        "rz": 60,
+        "cx": 56
+      },
+      "build": {
+        "median": 0.0003254160001233686,
+        "minimum": 0.00032441700022900477,
+        "maximum": 0.0003272079993621446,
+        "iqr": 2.7909991331398487e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.014872417000333371,
+        "minimum": 0.014736291999724926,
+        "maximum": 0.014881917000820977,
+        "iqr": 0.00014562500109605026,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n15-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 15,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 176,
+      "n_two_qubit_gates": 56,
+      "gate_counts": {
+        "ry": 60,
+        "rz": 60,
+        "cx": 56
+      },
+      "build": {
+        "median": 0.00033504200018796837,
+        "minimum": 0.00033483300012449035,
+        "maximum": 0.00033829199946922017,
+        "iqr": 3.4589993447298184e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.008238375000473752,
+        "minimum": 0.008130207999784034,
+        "maximum": 0.00853808299962111,
+        "iqr": 0.00040787499983707676,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n15-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 15,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 176,
+      "n_two_qubit_gates": 56,
+      "gate_counts": {
+        "ry": 60,
+        "rz": 60,
+        "cx": 56
+      },
+      "build": {
+        "median": 0.0005584999998973217,
+        "minimum": 0.0005559169994739932,
+        "maximum": 0.0005691659998774412,
+        "iqr": 1.3249000403448008e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.01151674999982788,
+        "minimum": 0.011148124999635911,
+        "maximum": 0.013482999999723688,
+        "iqr": 0.002334875000087777,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n16-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 16,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 188,
+      "n_two_qubit_gates": 60,
+      "gate_counts": {
+        "ry": 64,
+        "rz": 64,
+        "cx": 60
+      },
+      "build": {
+        "median": 0.00047033400005602743,
+        "minimum": 0.0004686660004153964,
+        "maximum": 0.00047212499976012623,
+        "iqr": 3.4589993447298184e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.05296441700011201,
+        "minimum": 0.05225400000017544,
+        "maximum": 0.054409250000389875,
+        "iqr": 0.002155250000214437,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n16-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 16,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 188,
+      "n_two_qubit_gates": 60,
+      "gate_counts": {
+        "ry": 64,
+        "rz": 64,
+        "cx": 60
+      },
+      "build": {
+        "median": 0.00034537499959697016,
+        "minimum": 0.0003451250004218309,
+        "maximum": 0.00035762499919655966,
+        "iqr": 1.2499998774728738e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.026251416000377503,
+        "minimum": 0.02572645799955353,
+        "maximum": 0.02656495800056291,
+        "iqr": 0.000838500001009379,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n16-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 16,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 188,
+      "n_two_qubit_gates": 60,
+      "gate_counts": {
+        "ry": 64,
+        "rz": 64,
+        "cx": 60
+      },
+      "build": {
+        "median": 0.0003615420000642189,
+        "minimum": 0.00035433399989415193,
+        "maximum": 0.0003631669997048448,
+        "iqr": 8.832999810692854e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.013991083000291837,
+        "minimum": 0.013856999999916297,
+        "maximum": 0.014216875000784057,
+        "iqr": 0.0003598750008677598,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n16-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 16,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 188,
+      "n_two_qubit_gates": 60,
+      "gate_counts": {
+        "ry": 64,
+        "rz": 64,
+        "cx": 60
+      },
+      "build": {
+        "median": 0.0006192500004544854,
+        "minimum": 0.0006181250000736327,
+        "maximum": 0.0006316250000963919,
+        "iqr": 1.3500000022759195e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.01816370799951983,
+        "minimum": 0.018137000000024273,
+        "maximum": 0.019469959000161907,
+        "iqr": 0.0013329590001376346,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n17-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 17,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 200,
+      "n_two_qubit_gates": 64,
+      "gate_counts": {
+        "ry": 68,
+        "rz": 68,
+        "cx": 64
+      },
+      "build": {
+        "median": 0.000502292000419402,
+        "minimum": 0.0004938749998473213,
+        "maximum": 0.000502333000440558,
+        "iqr": 8.458000593236648e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.12890862500080402,
+        "minimum": 0.1276302090000172,
+        "maximum": 0.13115166700026748,
+        "iqr": 0.003521458000250277,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n17-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 17,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 200,
+      "n_two_qubit_gates": 64,
+      "gate_counts": {
+        "ry": 68,
+        "rz": 68,
+        "cx": 64
+      },
+      "build": {
+        "median": 0.00036870799976895796,
+        "minimum": 0.0003642090005087084,
+        "maximum": 0.00037441699987539323,
+        "iqr": 1.0207999366684817e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0925665000004301,
+        "minimum": 0.0924501670006066,
+        "maximum": 0.09280720800052222,
+        "iqr": 0.00035704099991562543,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n17-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 17,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 200,
+      "n_two_qubit_gates": 64,
+      "gate_counts": {
+        "ry": 68,
+        "rz": 68,
+        "cx": 64
+      },
+      "build": {
+        "median": 0.0003756669993890682,
+        "minimum": 0.0003720840004461934,
+        "maximum": 0.0003782089997912408,
+        "iqr": 6.124999345047399e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.027058665999902587,
+        "minimum": 0.026973791999807872,
+        "maximum": 0.027094832999864593,
+        "iqr": 0.0001210410000567208,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n17-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 17,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 200,
+      "n_two_qubit_gates": 64,
+      "gate_counts": {
+        "ry": 68,
+        "rz": 68,
+        "cx": 64
+      },
+      "build": {
+        "median": 0.0006542500004798057,
+        "minimum": 0.0006501669995486736,
+        "maximum": 0.0006566250003743335,
+        "iqr": 6.4580008256598376e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.032431375000669505,
+        "minimum": 0.03224983299969608,
+        "maximum": 0.03463958399970579,
+        "iqr": 0.00238975100000971,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n18-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 18,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 212,
+      "n_two_qubit_gates": 68,
+      "gate_counts": {
+        "ry": 72,
+        "rz": 72,
+        "cx": 68
+      },
+      "build": {
+        "median": 0.0005322090000845492,
+        "minimum": 0.0005254999996395782,
+        "maximum": 0.0005367920002754545,
+        "iqr": 1.129200063587632e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.27361045900033787,
+        "minimum": 0.27265524999984336,
+        "maximum": 0.27458791700064467,
+        "iqr": 0.0019326670008013025,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n18-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 18,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 212,
+      "n_two_qubit_gates": 68,
+      "gate_counts": {
+        "ry": 72,
+        "rz": 72,
+        "cx": 68
+      },
+      "build": {
+        "median": 0.0003917499998351559,
+        "minimum": 0.0003827089994956623,
+        "maximum": 0.0003919160008081235,
+        "iqr": 9.207001312461216e-06,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.19452212500073074,
+        "minimum": 0.18959491600071487,
+        "maximum": 0.19694791699930647,
+        "iqr": 0.007353000998591597,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n18-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 18,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 212,
+      "n_two_qubit_gates": 68,
+      "gate_counts": {
+        "ry": 72,
+        "rz": 72,
+        "cx": 68
+      },
+      "build": {
+        "median": 0.000400708999222843,
+        "minimum": 0.0003906250003637979,
+        "maximum": 0.00040675000036571873,
+        "iqr": 1.6125000001920853e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0534044999994876,
+        "minimum": 0.053140708000682935,
+        "maximum": 0.053681624999626365,
+        "iqr": 0.0005409169989434304,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "layered_ansatz-n18-d4-s17",
+      "family": "layered_ansatz",
+      "n_qubits": 18,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 212,
+      "n_two_qubit_gates": 68,
+      "gate_counts": {
+        "ry": 72,
+        "rz": 72,
+        "cx": 68
+      },
+      "build": {
+        "median": 0.0006826669996371493,
+        "minimum": 0.0006740830003764131,
+        "maximum": 0.0007006250007179915,
+        "iqr": 2.6542000341578387e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.06439704100012023,
+        "minimum": 0.06293858299977728,
+        "maximum": 0.06473374999950465,
+        "iqr": 0.0017951669997273711,
+        "repeats": 3,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "vqe",
+      "framework": "aicir",
+      "n_qubits": 8,
+      "layers": 2,
+      "n_parameters": 48,
+      "energy": 0.1616826582831578,
+      "spectral_bound": 11.0,
+      "gradient_length": 48,
+      "gradient_norm": 1.1511294897417867,
+      "energy_eval": {
+        "median": 0.0017820000002757297,
+        "minimum": 0.0017714579998937552,
+        "maximum": 0.001825542000005953,
+        "iqr": 5.408400011219783e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "gradient_eval": {
+        "median": 0.16899383300005866,
+        "minimum": 0.16899383300005866,
+        "maximum": 0.16899383300005866,
+        "iqr": 0.0,
+        "repeats": 1,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "vqe",
+      "framework": "aicir",
+      "n_qubits": 10,
+      "layers": 2,
+      "n_parameters": 60,
+      "energy": -0.14488491233072714,
+      "spectral_bound": 14.0,
+      "gradient_length": 60,
+      "gradient_norm": 2.04899247258123,
+      "energy_eval": {
+        "median": 0.0024780839994491544,
+        "minimum": 0.0024367910000364645,
+        "maximum": 0.0024903339999582386,
+        "iqr": 5.3542999921774026e-05,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "gradient_eval": {
+        "median": 0.3009471670002313,
+        "minimum": 0.3009471670002313,
+        "maximum": 0.3009471670002313,
+        "iqr": 0.0,
+        "repeats": 1,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "vqe",
+      "framework": "aicir",
+      "n_qubits": 12,
+      "layers": 2,
+      "n_parameters": 72,
+      "energy": 0.48401198393284284,
+      "spectral_bound": 17.0,
+      "gradient_length": 72,
+      "gradient_norm": 1.6707045924415316,
+      "energy_eval": {
+        "median": 0.0045354589992712135,
+        "minimum": 0.004509250000410248,
+        "maximum": 0.005003250000299886,
+        "iqr": 0.0004939999998896383,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "gradient_eval": {
+        "median": 0.6998429999994187,
+        "minimum": 0.6998429999994187,
+        "maximum": 0.6998429999994187,
+        "iqr": 0.0,
+        "repeats": 1,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "vqe",
+      "framework": "aicir",
+      "n_qubits": 14,
+      "layers": 2,
+      "n_parameters": 84,
+      "energy": -0.011131465754132217,
+      "spectral_bound": 20.0,
+      "gradient_length": 84,
+      "gradient_norm": 1.6667979359590794,
+      "energy_eval": {
+        "median": 0.019162874999892665,
+        "minimum": 0.016063624999333115,
+        "maximum": 0.022286124999482126,
+        "iqr": 0.006222500000149012,
+        "repeats": 3,
+        "warmup": 1
+      },
+      "gradient_eval": {
+        "median": 3.334812208000585,
+        "minimum": 3.334812208000585,
+        "maximum": 3.334812208000585,
+        "iqr": 0.0,
+        "repeats": 1,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "memory",
+      "framework": "aicir",
+      "spec": "ghz-n8",
+      "n_qubits": 8,
+      "peak_bytes": 24684,
+      "theoretical_bytes": 4096,
+      "overhead_ratio": 6.0263671875,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "aicir",
+      "spec": "ghz-n9",
+      "n_qubits": 9,
+      "peak_bytes": 41276,
+      "theoretical_bytes": 8192,
+      "overhead_ratio": 5.03857421875,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "aicir",
+      "spec": "ghz-n10",
+      "n_qubits": 10,
+      "peak_bytes": 73716,
+      "theoretical_bytes": 16384,
+      "overhead_ratio": 4.499267578125,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "aicir",
+      "spec": "ghz-n11",
+      "n_qubits": 11,
+      "peak_bytes": 139700,
+      "theoretical_bytes": 32768,
+      "overhead_ratio": 4.2633056640625,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "aicir",
+      "spec": "ghz-n12",
+      "n_qubits": 12,
+      "peak_bytes": 270892,
+      "theoretical_bytes": 65536,
+      "overhead_ratio": 4.13348388671875,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "aicir",
+      "spec": "ghz-n13",
+      "n_qubits": 13,
+      "peak_bytes": 533124,
+      "theoretical_bytes": 131072,
+      "overhead_ratio": 4.067413330078125,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "aicir",
+      "spec": "ghz-n14",
+      "n_qubits": 14,
+      "peak_bytes": 1057500,
+      "theoretical_bytes": 262144,
+      "overhead_ratio": 4.0340423583984375,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "aicir",
+      "spec": "ghz-n15",
+      "n_qubits": 15,
+      "peak_bytes": 2106164,
+      "theoretical_bytes": 524288,
+      "overhead_ratio": 4.017189025878906,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "aicir",
+      "spec": "ghz-n16",
+      "n_qubits": 16,
+      "peak_bytes": 4200496,
+      "theoretical_bytes": 1048576,
+      "overhead_ratio": 4.0059051513671875,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "aicir",
+      "spec": "ghz-n17",
+      "n_qubits": 17,
+      "peak_bytes": 8394888,
+      "theoretical_bytes": 2097152,
+      "overhead_ratio": 4.002994537353516,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "aicir",
+      "spec": "ghz-n18",
+      "n_qubits": 18,
+      "peak_bytes": 16783584,
+      "theoretical_bytes": 4194304,
+      "overhead_ratio": 4.001518249511719,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit",
+      "spec": "ghz-n8",
+      "n_qubits": 8,
+      "peak_bytes": 23298,
+      "theoretical_bytes": 4096,
+      "overhead_ratio": 5.68798828125,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit",
+      "spec": "ghz-n9",
+      "n_qubits": 9,
+      "peak_bytes": 39834,
+      "theoretical_bytes": 8192,
+      "overhead_ratio": 4.862548828125,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit",
+      "spec": "ghz-n10",
+      "n_qubits": 10,
+      "peak_bytes": 72962,
+      "theoretical_bytes": 16384,
+      "overhead_ratio": 4.4532470703125,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit",
+      "spec": "ghz-n11",
+      "n_qubits": 11,
+      "peak_bytes": 138690,
+      "theoretical_bytes": 32768,
+      "overhead_ratio": 4.23248291015625,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit",
+      "spec": "ghz-n12",
+      "n_qubits": 12,
+      "peak_bytes": 269882,
+      "theoretical_bytes": 65536,
+      "overhead_ratio": 4.118072509765625,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit",
+      "spec": "ghz-n13",
+      "n_qubits": 13,
+      "peak_bytes": 532146,
+      "theoretical_bytes": 131072,
+      "overhead_ratio": 4.0599517822265625,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit",
+      "spec": "ghz-n14",
+      "n_qubits": 14,
+      "peak_bytes": 1056554,
+      "theoretical_bytes": 262144,
+      "overhead_ratio": 4.030433654785156,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit",
+      "spec": "ghz-n15",
+      "n_qubits": 15,
+      "peak_bytes": 2105250,
+      "theoretical_bytes": 524288,
+      "overhead_ratio": 4.015445709228516,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit",
+      "spec": "ghz-n16",
+      "n_qubits": 16,
+      "peak_bytes": 4202522,
+      "theoretical_bytes": 1048576,
+      "overhead_ratio": 4.007837295532227,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit",
+      "spec": "ghz-n17",
+      "n_qubits": 17,
+      "peak_bytes": 8396946,
+      "theoretical_bytes": 2097152,
+      "overhead_ratio": 4.003975868225098,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit",
+      "spec": "ghz-n18",
+      "n_qubits": 18,
+      "peak_bytes": 16785674,
+      "theoretical_bytes": 4194304,
+      "overhead_ratio": 4.002016544342041,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit_aer",
+      "spec": "ghz-n8",
+      "n_qubits": 8,
+      "peak_bytes": 14993,
+      "theoretical_bytes": 4096,
+      "overhead_ratio": 3.660400390625,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit_aer",
+      "spec": "ghz-n9",
+      "n_qubits": 9,
+      "peak_bytes": 19126,
+      "theoretical_bytes": 8192,
+      "overhead_ratio": 2.334716796875,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit_aer",
+      "spec": "ghz-n10",
+      "n_qubits": 10,
+      "peak_bytes": 27359,
+      "theoretical_bytes": 16384,
+      "overhead_ratio": 1.66986083984375,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit_aer",
+      "spec": "ghz-n11",
+      "n_qubits": 11,
+      "peak_bytes": 43900,
+      "theoretical_bytes": 32768,
+      "overhead_ratio": 1.3397216796875,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit_aer",
+      "spec": "ghz-n12",
+      "n_qubits": 12,
+      "peak_bytes": 76949,
+      "theoretical_bytes": 65536,
+      "overhead_ratio": 1.1741485595703125,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit_aer",
+      "spec": "ghz-n13",
+      "n_qubits": 13,
+      "peak_bytes": 142650,
+      "theoretical_bytes": 131072,
+      "overhead_ratio": 1.0883331298828125,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit_aer",
+      "spec": "ghz-n14",
+      "n_qubits": 14,
+      "peak_bytes": 273301,
+      "theoretical_bytes": 262144,
+      "overhead_ratio": 1.0425605773925781,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit_aer",
+      "spec": "ghz-n15",
+      "n_qubits": 15,
+      "peak_bytes": 535425,
+      "theoretical_bytes": 524288,
+      "overhead_ratio": 1.0212421417236328,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit_aer",
+      "spec": "ghz-n16",
+      "n_qubits": 16,
+      "peak_bytes": 1061135,
+      "theoretical_bytes": 1048576,
+      "overhead_ratio": 1.011977195739746,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit_aer",
+      "spec": "ghz-n17",
+      "n_qubits": 17,
+      "peak_bytes": 2108421,
+      "theoretical_bytes": 2097152,
+      "overhead_ratio": 1.005373477935791,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "qiskit_aer",
+      "spec": "ghz-n18",
+      "n_qubits": 18,
+      "peak_bytes": 4206413,
+      "theoretical_bytes": 4194304,
+      "overhead_ratio": 1.0028870105743408,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "cirq",
+      "spec": "ghz-n8",
+      "n_qubits": 8,
+      "peak_bytes": 41842,
+      "theoretical_bytes": 4096,
+      "overhead_ratio": 10.21533203125,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "cirq",
+      "spec": "ghz-n9",
+      "n_qubits": 9,
+      "peak_bytes": 58148,
+      "theoretical_bytes": 8192,
+      "overhead_ratio": 7.09814453125,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "cirq",
+      "spec": "ghz-n10",
+      "n_qubits": 10,
+      "peak_bytes": 94927,
+      "theoretical_bytes": 16384,
+      "overhead_ratio": 5.79388427734375,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "cirq",
+      "spec": "ghz-n11",
+      "n_qubits": 11,
+      "peak_bytes": 178894,
+      "theoretical_bytes": 32768,
+      "overhead_ratio": 5.45941162109375,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "cirq",
+      "spec": "ghz-n12",
+      "n_qubits": 12,
+      "peak_bytes": 343454,
+      "theoretical_bytes": 65536,
+      "overhead_ratio": 5.240692138671875,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "cirq",
+      "spec": "ghz-n13",
+      "n_qubits": 13,
+      "peak_bytes": 671664,
+      "theoretical_bytes": 131072,
+      "overhead_ratio": 5.1243896484375,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "cirq",
+      "spec": "ghz-n14",
+      "n_qubits": 14,
+      "peak_bytes": 1328807,
+      "theoretical_bytes": 262144,
+      "overhead_ratio": 5.068996429443359,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "cirq",
+      "spec": "ghz-n15",
+      "n_qubits": 15,
+      "peak_bytes": 2640652,
+      "theoretical_bytes": 524288,
+      "overhead_ratio": 5.036643981933594,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "cirq",
+      "spec": "ghz-n16",
+      "n_qubits": 16,
+      "peak_bytes": 5263132,
+      "theoretical_bytes": 1048576,
+      "overhead_ratio": 5.019313812255859,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "cirq",
+      "spec": "ghz-n17",
+      "n_qubits": 17,
+      "peak_bytes": 10507392,
+      "theoretical_bytes": 2097152,
+      "overhead_ratio": 5.01031494140625,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "memory",
+      "framework": "cirq",
+      "spec": "ghz-n18",
+      "n_qubits": 18,
+      "peak_bytes": 20994277,
+      "theoretical_bytes": 4194304,
+      "overhead_ratio": 5.005425691604614,
+      "note": "tracemalloc 仅覆盖 Python 分配器；C++ 后端内部分配不计入"
+    },
+    {
+      "axis": "strong_scaling",
+      "world_size": 1,
+      "shard_exponent": 0,
+      "n_qubits": 18,
+      "bytes_per_rank": 2097152,
+      "command": "torchrun --nproc-per-node=1 scripts/npu/distributed_autograd_probe.py --section all"
+    },
+    {
+      "axis": "strong_scaling",
+      "world_size": 2,
+      "shard_exponent": 1,
+      "n_qubits": 18,
+      "bytes_per_rank": 1048576,
+      "command": "torchrun --nproc-per-node=2 scripts/npu/distributed_autograd_probe.py --section all"
+    },
+    {
+      "axis": "strong_scaling",
+      "world_size": 4,
+      "shard_exponent": 2,
+      "n_qubits": 18,
+      "bytes_per_rank": 524288,
+      "command": "torchrun --nproc-per-node=4 scripts/npu/distributed_autograd_probe.py --section all"
+    },
+    {
+      "axis": "strong_scaling",
+      "world_size": 8,
+      "shard_exponent": 3,
+      "n_qubits": 18,
+      "bytes_per_rank": 262144,
+      "command": "torchrun --nproc-per-node=8 scripts/npu/distributed_autograd_probe.py --section all"
+    },
+    {
+      "axis": "weak_scaling",
+      "world_size": 1,
+      "shard_exponent": 0,
+      "n_qubits": 18,
+      "bytes_per_rank": 2097152,
+      "command": "torchrun --nproc-per-node=1 scripts/npu/distributed_autograd_probe.py --section all"
+    },
+    {
+      "axis": "weak_scaling",
+      "world_size": 2,
+      "shard_exponent": 1,
+      "n_qubits": 19,
+      "bytes_per_rank": 2097152,
+      "command": "torchrun --nproc-per-node=2 scripts/npu/distributed_autograd_probe.py --section all"
+    },
+    {
+      "axis": "weak_scaling",
+      "world_size": 4,
+      "shard_exponent": 2,
+      "n_qubits": 20,
+      "bytes_per_rank": 2097152,
+      "command": "torchrun --nproc-per-node=4 scripts/npu/distributed_autograd_probe.py --section all"
+    },
+    {
+      "axis": "weak_scaling",
+      "world_size": 8,
+      "shard_exponent": 3,
+      "n_qubits": 21,
+      "bytes_per_rank": 2097152,
+      "command": "torchrun --nproc-per-node=8 scripts/npu/distributed_autograd_probe.py --section all"
+    },
+    {
+      "axis": "npu_vs_cpu",
+      "npu_available": false,
+      "skipped_reason": "本机无昇腾设备；须在 NPU 机器上运行",
+      "precision": "complex64",
+      "precision_note": "昇腾无 complex128 内核，CPU 侧必须同样用 complex64 才可比",
+      "families": [
+        "ghz",
+        "qft",
+        "random"
+      ],
+      "qubit_range": [
+        12,
+        20
+      ],
+      "command": "scripts/bench/bench.sh --axis npu --precision single"
+    },
+    {
+      "axis": "capability",
+      "matrix": {
+        "aicir": {
+          "available": true,
+          "version": "0.1.0",
+          "capabilities": {
+            "statevector": true,
+            "density_matrix": true,
+            "tensor_network": true,
+            "mps": true,
+            "single_state_sharding": true,
+            "non_cuda_accelerator": true,
+            "differentiable_on_non_cuda": true,
+            "architecture_search": true,
+            "trainability_metrics": true
+          },
+          "evidence": {
+            "single_state_sharding": "aicir/distributed/ + docs/evidence/distributed-autograd/<sha>/",
+            "non_cuda_accelerator": "aicir/backends/npu_backend.py + scripts/npu/",
+            "differentiable_on_non_cuda": "scripts/npu/deriv.sh --strict-npu",
+            "architecture_search": "aicir/qas/ (10 methods via aicir.qas.run)",
+            "trainability_metrics": "aicir/metrics/ + aicir/qml/diagnostics.py"
+          }
+        },
+        "qiskit": {
+          "available": true,
+          "version": "2.4.2",
+          "capabilities": {
+            "statevector": true,
+            "density_matrix": true,
+            "tensor_network": false,
+            "mps": false,
+            "single_state_sharding": false,
+            "non_cuda_accelerator": false,
+            "differentiable_on_non_cuda": false,
+            "architecture_search": false,
+            "trainability_metrics": false
+          },
+          "evidence": {}
+        },
+        "qiskit_aer": {
+          "available": true,
+          "version": "0.17.2",
+          "capabilities": {
+            "statevector": true,
+            "density_matrix": true,
+            "tensor_network": true,
+            "mps": true,
+            "single_state_sharding": false,
+            "non_cuda_accelerator": false,
+            "differentiable_on_non_cuda": false,
+            "architecture_search": false,
+            "trainability_metrics": false
+          },
+          "evidence": {
+            "mps": "AerSimulator(method='matrix_product_state')"
+          }
+        },
+        "cirq": {
+          "available": true,
+          "version": "1.7.0",
+          "capabilities": {
+            "statevector": true,
+            "density_matrix": true,
+            "tensor_network": false,
+            "mps": false,
+            "single_state_sharding": false,
+            "non_cuda_accelerator": false,
+            "differentiable_on_non_cuda": false,
+            "architecture_search": false,
+            "trainability_metrics": false
+          },
+          "evidence": {}
+        },
+        "qulacs": {
+          "available": false,
+          "version": null,
+          "capabilities": {
+            "statevector": true,
+            "density_matrix": true,
+            "tensor_network": false,
+            "mps": false,
+            "single_state_sharding": false,
+            "non_cuda_accelerator": false,
+            "differentiable_on_non_cuda": false,
+            "architecture_search": false,
+            "trainability_metrics": false
+          },
+          "evidence": {}
+        },
+        "tensorcircuit": {
+          "available": false,
+          "version": null,
+          "capabilities": {
+            "statevector": true,
+            "density_matrix": true,
+            "tensor_network": true,
+            "mps": true,
+            "single_state_sharding": false,
+            "non_cuda_accelerator": false,
+            "differentiable_on_non_cuda": false,
+            "architecture_search": false,
+            "trainability_metrics": false
+          },
+          "evidence": {
+            "tensor_network": "tc.Circuit contraction backend"
+          }
+        }
+      }
+    }
+  ]
+}
