@@ -104,6 +104,21 @@ class QiskitAerAdapter(QiskitAdapter):
     def __init__(self, precision: str = "double"):
         #: Aer 支持 "single"/"double"，用于与 aicir 的 complex64/complex128 对齐。
         self._precision = precision
+        self._simulator = None
+
+    def _sim(self):
+        """惰性构造并**复用**模拟器实例。
+
+        每次 ``run`` 都新建 ``AerSimulator`` 会把实例化开销计进执行时间——那是
+        适配器的产物，不是引擎的速度。同理 ``save_statevector`` 属于线路组装，
+        归入 build 阶段。
+        """
+
+        if self._simulator is None:
+            from qiskit_aer import AerSimulator
+
+            self._simulator = AerSimulator(method="statevector", precision=self._precision)
+        return self._simulator
 
     def build(self, spec: CircuitSpec):
         circuit = super().build(spec)
@@ -111,10 +126,7 @@ class QiskitAerAdapter(QiskitAdapter):
         return circuit
 
     def run(self, circuit, spec: CircuitSpec):
-        from qiskit_aer import AerSimulator
-
-        sim = AerSimulator(method="statevector", precision=self._precision)
-        result = sim.run(circuit).result()
+        result = self._sim().run(circuit).result()
         state = np.asarray(result.get_statevector(circuit))
         return reverse_qubit_order(state, spec.n_qubits)
 

@@ -52,13 +52,14 @@ Qulacs 只在 double 表中出现——论文表格需注明这是构建限制�
 
 ## 结构
 
-```
+```text
 scripts/bench/
 ├── core/
 │   ├── spec.py       # 框架无关的 CircuitSpec：所有适配器的唯一输入
 │   ├── timing.py     # 中位数/IQR、预热剔除、构建-执行分离
 │   └── manifest.py   # 证据清单（对齐 distributed-autograd 的形状）
 ├── adapters/         # 每框架一个适配器，比特序在此归一化
+├── axes.py           # 轴 C–G（VQE / 内存 / NPU / 多卡 / 能力矩阵）
 └── run_bench.py      # CLI
 ```
 
@@ -85,8 +86,47 @@ BLAS 实现。不记录线程数与 BLAS，跨机器的 CPU 计时无法解释�
 
 工作区脏（`worktree_dirty=true`）时跑出的数字不可复现，归档前请先提交。
 
+## 测量轴
+
+| 轴 | `--axis` | 内容 | 参与者 |
+| --- | --- | --- | --- |
+| A | `micro` | 单门吞吐（GHZ）vs n | 全部 CPU 框架 |
+| B | `circuits` | QFT / random / layered_ansatz vs n | 全部 CPU 框架 |
+| C | `vqe` | 变分负载：单次能量、单次梯度（参数移位） | 目前仅 aicir |
+| D | `memory` | 峰值内存 vs 理论下界 | 全部（有局限，见下） |
+| E | `npu` | 昇腾 vs CPU | 仅 aicir，**需真机** |
+| F | `scaling` | 多卡强/弱扩展计划 | 仅 aicir，**需真机** |
+| G | `capability` | 能力矩阵：谁**跑得了**每一行 | 全部 |
+
+A–D 用来建立可信度，E–G 承载论点。**A–D 输掉某一行可以接受并须如实报告；
+悄悄不报不可接受。**
+
+### 轴 C（VQE）为何只有 aicir
+
+梯度走参数移位（所有框架都能做、且与硬件语义一致；自动微分只有部分框架支持，
+混在一起比较不成立）。但各框架的 VQE 封装差异很大，公平的跨框架 VQE 需要为每个
+框架单独实现等价的能量/梯度路径——尚未完成，是当前最大缺口。
+
+轴 C 用 `StatevectorEstimator` primitive，即 `BasicVQE` 默认的精确能量路径，
+因此测到的是真实 VQE 循环里的那条路径。返回值含能量与谱界 `Σ|cᵢ|`，
+给计时结果加一道物理校验——算得快但算错没有意义。
+
+**耗时提示**：参数移位的代价是 `2 × n_params` 次能量求值，`n=12`、2 层 HEA
+约 72 个参数即 144 次求值。跑轴 C 时请调小 `--max-qubits` 与 `--repeats`。
+
+### 轴 D（内存）的局限
+
+`tracemalloc` 只看得见 Python 分配器。Aer/Qulacs 的 C++ 后端在其内部分配的内存
+**不计入**，因此内存列**不可跨框架横比**，只能在同一框架内看 n 的增长趋势与
+`overhead_ratio`（实测峰值 / `2^n·16B` 理论下界）。论文中必须写明这一点。
+
+### 轴 E/F 在无真机时的行为
+
+只产出**计划**并记录跳过原因，同时在本机校验参数合法性（`world_size` 为 2 的幂、
+`n_qubits >= p`）——避免上真机排队数小时后才发现配置非法。
+
 ## 已知缺口
 
-- 尚未覆盖的轴：VQE 端到端墙钟（轴 C）、峰值内存（轴 D）、NPU vs CPU（轴 E）、
-  多卡强/弱扩展（轴 F）、能力矩阵（轴 G）。
-- `qiskit-aer` / `qulacs` / `tensorcircuit` 未安装时自动跳过并在清单中记录。
+- 轴 C 尚未覆盖 Qiskit/Cirq/Aer——跨框架 VQE 比较需要为每个框架实现等价封装。
+- 轴 E/F 未在真机执行（本机无昇腾设备）。
+- `qulacs` / `tensorcircuit` 未安装时自动跳过并在清单中记录。

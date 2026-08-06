@@ -22,6 +22,13 @@ import traceback
 import numpy as np
 
 from scripts.bench.adapters import available_adapters, get_adapter
+from scripts.bench.axes import (
+    capability_matrix,
+    measure_peak_memory,
+    npu_vs_cpu_plan,
+    run_vqe_axis,
+    strong_scaling_plan,
+)
 from scripts.bench.core.manifest import build_manifest, write_manifest
 from scripts.bench.core.spec import build_spec, gate_counts
 from scripts.bench.core.timing import time_callable
@@ -155,6 +162,47 @@ def run_timing(
     return records
 
 
+def _print_capability_matrix(matrix: dict) -> None:
+    """轴 G：能力矩阵。论文里最强的一张表——它说明的是"谁跑得了"，不是"谁跑得快"。"""
+
+    rows = sorted(matrix)
+    caps = sorted({c for entry in matrix.values() for c in entry["capabilities"]})
+    width = max(len(c) for c in caps) + 2
+
+    print("\n=== 能力矩阵（轴 G）===")
+    header = " " * width + " ".join(f"{name[:12]:>13}" for name in rows)
+    print(header)
+    print("-" * len(header))
+    for cap in caps:
+        cells = []
+        for name in rows:
+            value = matrix[name]["capabilities"].get(cap)
+            cells.append(f"{'yes' if value else ('-' if value is False else '?'):>13}")
+        print(f"{cap:<{width}}" + " ".join(cells))
+    print()
+    for name in rows:
+        if not matrix[name]["available"]:
+            print(f"  [note] {name} 未安装——表中为其声明能力，非本机实测")
+
+
+def _print_axis_table(records: list[dict], axis: str, columns: list[tuple[str, str]], title: str) -> None:
+    rows = [r for r in records if r.get("axis") == axis]
+    if not rows:
+        return
+    print(f"\n=== {title} ===")
+    header = " ".join(f"{label:>18}" for label, _ in columns)
+    print(header)
+    print("-" * len(header))
+    for row in rows:
+        cells = []
+        for _, key in columns:
+            value = row
+            for part in key.split("."):
+                value = value.get(part, "-") if isinstance(value, dict) else "-"
+            cells.append(f"{value:>18.6f}" if isinstance(value, float) else f"{str(value):>18}")
+        print(" ".join(cells))
+
+
 def _print_timing_table(records: list[dict]) -> None:
     rows = [r for r in records if r.get("axis") == "timing" and "run" in r]
     if not rows:
@@ -178,7 +226,11 @@ def _print_timing_table(records: list[dict]) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="aicir 跨框架基准")
-    parser.add_argument("--axis", default="parity", choices=["parity", "micro", "circuits", "all"])
+    parser.add_argument(
+        "--axis",
+        default="parity",
+        choices=["parity", "micro", "circuits", "vqe", "memory", "capability", "npu", "scaling", "all"],
+    )
     parser.add_argument("--frameworks", default=None, help="逗号分隔；默认全部可用")
     parser.add_argument("--precision", default="double", choices=["double", "single"])
     parser.add_argument("--min-qubits", type=int, default=4)
@@ -243,7 +295,57 @@ def main(argv=None) -> int:
                 )
             )
 
+    if args.axis in ("vqe", "all"):
+        for n_qubits in range(args.min_qubits, min(args.max_qubits, 14) + 1, 2):
+            try:
+                records.append(
+                    run_vqe_axis("aicir", n_qubits=n_qubits, layers=2, repeats=args.repeats, warmup=args.warmup)
+                )
+            except NotImplementedError as exc:
+                print(f"[skip] 轴 C n={n_qubits}: {exc}", file=sys.stderr)
+                break
+
+    if args.axis in ("memory", "all"):
+        for name in adapters:
+            for n_qubits in qubit_range:
+                try:
+                    records.append(measure_peak_memory(name, build_spec("ghz", n_qubits=n_qubits)))
+                except Exception as exc:
+                    records.append({"axis": "memory", "framework": name, "error": str(exc)})
+
+    if args.axis in ("scaling", "all"):
+        try:
+            records.extend(strong_scaling_plan(n_qubits=args.max_qubits, world_sizes=(1, 2, 4, 8)))
+            records.extend(strong_scaling_plan(n_qubits=args.max_qubits, world_sizes=(1, 2, 4, 8), mode="weak"))
+        except ValueError as exc:
+            failed.append(f"scaling_plan_invalid:{exc}")
+
+    if args.axis in ("npu", "all"):
+        plan = npu_vs_cpu_plan()
+        records.append(plan)
+        if not plan["npu_available"]:
+            print(f"\n[skip] 轴 E：{plan['skipped_reason']}")
+
     _print_timing_table(records)
+    _print_axis_table(
+        records,
+        "vqe",
+        [("n_qubits", "n_qubits"), ("params", "n_parameters"), ("energy(s)", "energy_eval.median"),
+         ("grad(s)", "gradient_eval.median")],
+        "VQE 端到端（轴 C，aicir）",
+    )
+    _print_axis_table(
+        records,
+        "memory",
+        [("framework", "framework"), ("n", "n_qubits"), ("peak_bytes", "peak_bytes"),
+         ("overhead", "overhead_ratio")],
+        "峰值内存（轴 D）",
+    )
+
+    if args.axis in ("capability", "all"):
+        matrix = capability_matrix()
+        _print_capability_matrix(matrix)
+        records.append({"axis": "capability", "matrix": matrix})
 
     manifest = build_manifest(results=records, failed_conditions=failed)
     print(f"\nrelease_gate = {manifest['release_gate']}")
