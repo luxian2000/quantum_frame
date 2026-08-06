@@ -145,6 +145,48 @@ class TestHighQubitCountAvoidsDimensionLimit:
         assert flat[dim // 2] == pytest.approx(1 / np.sqrt(2), abs=1e-6)
 
 
+class TestAllocationFootprint:
+    """单次门应用的分配量必须接近"一份输出 + 一块暂存"。
+
+    带宽受限区间里，峰值分配基本等价于运行时间——少一次 `2^n` 的中间量就是
+    少一趟内存。基线：朴素写法 `a*s0 + b*s1` 每个输出块要 3 次分配，
+    实测峰值达理论下界的 4 倍；目标是输出 1 份 + 暂存半份 = 1.5 份。
+    """
+
+    @staticmethod
+    def _peak_bytes(fn):
+        import tracemalloc
+
+        tracemalloc.start()
+        tracemalloc.reset_peak()
+        fn()
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        return peak
+
+    def test_single_qubit_apply_stays_under_two_state_copies(self):
+        n_qubits = 18
+        state = _random_state(n_qubits, np.complex128, seed=1)
+        matrix = _random_unitary(2, np.complex128, seed=1)
+        backend = NumpyBackend(dtype=np.complex128)
+
+        state_bytes = (1 << n_qubits) * 16
+        peak = self._peak_bytes(lambda: backend.apply_statevector_local(state, matrix, (5,), n_qubits))
+        ratio = peak / state_bytes
+        assert ratio < 2.0, f"单比特门峰值分配为态大小的 {ratio:.2f} 倍，应 <2（输出 1 + 暂存 0.5）"
+
+    def test_two_qubit_apply_stays_under_two_state_copies(self):
+        n_qubits = 18
+        state = _random_state(n_qubits, np.complex128, seed=2)
+        matrix = _random_unitary(4, np.complex128, seed=2)
+        backend = NumpyBackend(dtype=np.complex128)
+
+        state_bytes = (1 << n_qubits) * 16
+        peak = self._peak_bytes(lambda: backend.apply_statevector_local(state, matrix, (3, 7), n_qubits))
+        ratio = peak / state_bytes
+        assert ratio < 2.0, f"双比特门峰值分配为态大小的 {ratio:.2f} 倍，应 <2"
+
+
 class TestNPUKeepsGather:
     """NPU 必须继续走 gather——昇腾的 8 维上限没有消失。"""
 

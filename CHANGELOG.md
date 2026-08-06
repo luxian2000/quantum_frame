@@ -101,6 +101,50 @@ numpy 实现却领先明显，说明差距不在语言而在实现策略（就�
 这直接影响论文策略：原定"CPU 平价 + 昇腾独占"的框架里，"平价"目前并不成立，
 需在 Phase B 结束前决定是继续优化，还是把论述重心移到轴 G（可达工作负载）。
 
+### 性能：`_apply_local_strided` 消除中间分配
+
+朴素的 `a*s0 + b*s1` 每个输出块要 3 次 `2^(n-1)` 分配；在带宽受限区间里，那就是
+3 趟多余的内存往返。改为全程 `np.multiply/np.add(..., out=)` 就地写入，只保留
+一块可复用暂存（双比特路径的第一项直接写进目标块，省掉一次分配与一次加法）。
+
+单次门应用（`n=20`，complex128，单线程）：5.39 ms → 3.63 ms（1.48×），
+峰值分配 2.02× → 1.52× 态大小。端到端 GHZ `n=20`：0.1224 s → 0.0796 s（1.54×）。
+
+**未采用真正的原地更新**：实测只再快 0.6 ms，却要打破"不修改入参"的契约，
+而 `Measure` 的态快照/轨迹路径依赖该契约。收益与风险不成比例。
+
+`tests/backends/test_numpy_strided_apply.py` 新增两个分配上限用例（单/双比特均须
+< 2 倍态大小），防止中间量悄悄回潮。**NPU 不受影响**：`NPUBackend` 的 MRO 是
+`NPUBackend → GPUBackend → Backend`，不经过 `NumpyBackend`，且
+`_apply_local_strided` 只有一个调用点。
+
+更新后的 GHZ 站位（`n=20`）：aicir 0.0796 / cirq 0.0208 / qiskit 0.2044 /
+aer 0.0657——与 Aer 的差距由 1.75× 收窄到 1.21×，与 Cirq 由 5.3× 收窄到 3.8×。
+
+### 已知问题：精确期望值路径构造稠密 `2^n × 2^n` 矩阵
+
+`Hamiltonian.to_matrix()` 逐项 kron 出完整稠密矩阵，`Hamiltonian.expectation` 与
+`StatevectorEstimator._expectation` 都走这条路。`n=12`、23 项的 TFIM 上实测：
+单次能量求值 3.77 s，其中 3.59 s 花在建矩阵（253 次 `kron`），真正的
+`expectation_sv` 只要 0.017 s。
+
+这是**变分栈的规模上限**，与模拟器本身无关——态矢量演化在 `n=20` 毫无压力，
+但稠密哈密顿量在 `n=14` 就要 4.3 GB、`n=16` 要 68 GB、`n=18` 要 1.1 TB：
+
+| n | 稠密 H | 态矢量 |
+| --- | --- | --- |
+| 12 | 0.27 GB | 0.07 MB |
+| 14 | 4.29 GB | 0.26 MB |
+| 16 | 68.72 GB | 1.05 MB |
+
+后果：轴 C（VQE）在 `n=12` 时单次参数移位梯度耗时 **520 s**，`n≥14` 实际不可用。
+VQE/QAOA/VQD/SSVQE 与 QAS 的变分内循环全部经此路径。
+
+正确做法是逐项计算 `⟨ψ|P|ψ⟩`：Pauli 串对基态只做"比特翻转 + 相位"，
+每项 O(2^n)、无需矩阵。`docs/superpowers/plans/2026-07-05-sparse-pauli-qaoa.md`
+已为 **QAOA** 规划了同一思路，但 `Hamiltonian.expectation` /
+`StatevectorEstimator` 这条通用路径尚未覆盖。
+
 ### 修复
 
 - **`unitary` 自定义门此前忽略 `qubits` 字段，恒作用在比特 `0..k-1`。**

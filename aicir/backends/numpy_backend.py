@@ -120,9 +120,17 @@ def _apply_local_strided(state, local_matrix, axes, n_qubits: int, dtype):
         dst = out.reshape(left, 2, right)
         s0 = src[:, 0, :]
         s1 = src[:, 1, :]
-        # 两个目标块都在写入前算完，故 src 是不是 out 的别名都不影响正确性。
-        dst[:, 0, :] = local[0, 0] * s0 + local[0, 1] * s1
-        dst[:, 1, :] = local[1, 0] * s0 + local[1, 1] * s1
+        d0 = dst[:, 0, :]
+        d1 = dst[:, 1, :]
+        # 全程 out= 就地写，只留一块可复用暂存：朴素的 `a*s0 + b*s1` 每个输出块
+        # 要 3 次 2^(n-1) 分配，在带宽受限区间里那就是 3 趟多余的内存往返。
+        scratch = np.empty_like(s0)
+        np.multiply(s0, local[0, 0], out=d0)
+        np.multiply(s1, local[0, 1], out=scratch)
+        np.add(d0, scratch, out=d0)
+        np.multiply(s0, local[1, 0], out=d1)
+        np.multiply(s1, local[1, 1], out=scratch)
+        np.add(d1, scratch, out=d1)
         return out.reshape(dim, 1)
 
     first, second = axes
@@ -142,18 +150,26 @@ def _apply_local_strided(state, local_matrix, axes, n_qubits: int, dtype):
         return (bit_first << 1) | bit_second
 
     blocks = {(i, j): src[:, i, :, j, :] for i in (0, 1) for j in (0, 1)}
+    scratch = np.empty_like(blocks[(0, 0)])
     for i in (0, 1):
         for j in (0, 1):
             row = _local_index(i, j)
-            acc = None
+            target = dst[:, i, :, j, :]
+            written = False
             for p in (0, 1):
                 for q in (0, 1):
                     coeff = local[row, _local_index(p, q)]
                     if coeff == 0:
                         continue
-                    term = coeff * blocks[(p, q)]
-                    acc = term if acc is None else acc + term
-            dst[:, i, :, j, :] = acc if acc is not None else 0
+                    if not written:
+                        # 第一项直接写进目标块，省掉一次分配与一次加法。
+                        np.multiply(blocks[(p, q)], coeff, out=target)
+                        written = True
+                    else:
+                        np.multiply(blocks[(p, q)], coeff, out=scratch)
+                        np.add(target, scratch, out=target)
+            if not written:
+                target[...] = 0
     return out.reshape(dim, 1)
 
 
