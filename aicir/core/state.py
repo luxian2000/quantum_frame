@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Dict, Optional
 
 import numpy as np
 
+from ..dtypes import resolve_dtype
+
 if TYPE_CHECKING:
     from ..backends.base import Backend
 
@@ -211,7 +213,10 @@ class State:
     def from_array(cls, array, n_qubits: int = None, backend: "Backend" = None, bit_order: str = "msb") -> "State":
         """从 numpy array / list 构造态向量（自动归一化）。n_qubits 省略时由长度推断。"""
         backend = backend if backend is not None else _default_backend()
-        np_array = np.asarray(array, dtype=np.complex64).reshape(-1)
+        # dtype 取自后端（见 aicir/dtypes.py）。此处曾硬编码 complex64，再由
+        # backend.cast 拓宽回 complex128——精度在拓宽前就丢了，表现为范数误差
+        # 约 1e-8 而非 1e-16，且不报错。
+        np_array = np.asarray(array, dtype=resolve_dtype(backend)).reshape(-1)
         if n_qubits is None:
             n_qubits = _infer_n_qubits(np_array.shape[0])
         norm = float(np.linalg.norm(np_array))
@@ -224,7 +229,7 @@ class State:
     def from_matrix(cls, matrix, n_qubits: int = None, backend: "Backend" = None) -> "State":
         """从密度矩阵 (2^n,2^n) 构造混合/纯态（matrix 形态）。n_qubits 省略时由形状推断。"""
         backend = backend if backend is not None else _default_backend()
-        np_m = np.asarray(matrix, dtype=np.complex64)
+        np_m = np.asarray(matrix, dtype=resolve_dtype(backend))
         if np_m.ndim != 2 or np_m.shape[0] != np_m.shape[1]:
             raise ValueError("from_matrix 需要方阵 (2^n, 2^n)")
         if n_qubits is None:

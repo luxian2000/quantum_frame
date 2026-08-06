@@ -205,10 +205,43 @@ class PauliString:
             backend: 计算后端
         返回:
             shape (2^n, 2^n) 后端原生张量
+
+        注意：求期望值**不要**走这里。稠密矩阵在 n=14 就要 4.3 GB、n=16 要 68 GB，
+        而 ``masks()`` + 稀疏路径每项只要 O(2^n)。本方法保留给确实需要显式矩阵的
+        场合（对拍、小规模调试、密度矩阵构造）。
         """
         matrices = [backend.cast(PAULI_MAP[lbl]) for lbl in self._qubit_labels]
         mat_np = backend.to_numpy(backend.tensor_product(*matrices))
         return backend.cast(self.coefficient * mat_np)
+
+    def masks(self) -> tuple[int, int, int]:
+        """返回 ``(x_mask, z_mask, y_count)``，用于免矩阵的期望值计算。
+
+        Pauli 串对计算基只做"比特翻转 + 相位"：
+
+            P|b⟩ = i^{n_Y} · (-1)^{popcount(b & z_mask)} · |b ⊕ x_mask⟩
+
+        其中 ``x_mask`` 标记 X/Y 作用的比特（发生翻转），``z_mask`` 标记 Z/Y 作用的
+        比特（贡献符号）。Y = iXZ 中的 Z 作用在**翻转前**的比特上，故 Y 同时进入
+        两个掩码——这是最容易写错的一处。
+
+        比特序与本仓库一致（大端）：qubit ``q`` 位于第 ``n_qubits-1-q`` 位。
+        """
+
+        x_mask = 0
+        z_mask = 0
+        y_count = 0
+        for qubit, label in enumerate(self._qubit_labels):
+            bit = 1 << (self.n_qubits - 1 - qubit)
+            if label == "X":
+                x_mask |= bit
+            elif label == "Z":
+                z_mask |= bit
+            elif label == "Y":
+                x_mask |= bit
+                z_mask |= bit
+                y_count += 1
+        return x_mask, z_mask, y_count
 
     @property
     def qubit_labels(self) -> List[str]:
@@ -237,6 +270,77 @@ _HamiltonianTerm = (
 # ──────────────────────────────────────────────────────────────────────────────
 # Hamiltonian
 # ──────────────────────────────────────────────────────────────────────────────
+
+def _popcount_parity(indices: np.ndarray, mask: int) -> np.ndarray:
+    """返回 ``(-1)^{popcount(indices & mask)}``，实数 ±1 数组。"""
+
+    if mask == 0:
+        return np.ones(indices.shape, dtype=np.float64)
+    masked = indices & np.int64(mask)
+    # 折半异或求奇偶：比逐位循环快，且与比特数无关地只做 log2 步。
+    parity = masked
+    shift = 32
+    while shift:
+        parity = parity ^ (parity >> shift)
+        shift >>= 1
+    return 1.0 - 2.0 * (parity & 1).astype(np.float64)
+
+
+def _sparse_expectation(pauli, state, backend):
+    """免矩阵的 ``⟨ψ|P|ψ⟩`` / ``Tr(ρP)``；无法处理时返回 ``None``。
+
+    利用 ``P|b⟩ = i^{n_Y}·(-1)^{popcount(b & z_mask)}·|b ⊕ x_mask⟩``，每项只要
+    O(2^n)，不构造任何 ``2^n × 2^n`` 矩阵——后者在 n=14 就要 4.3 GB，是变分栈
+    卡在 n≈13 的**唯一**原因（态矢量演化本身在 n=20 毫无压力）。
+
+    **仅对 numpy 态启用。** torch/NPU 张量返回 ``None`` 走原稠密路径：昇腾缺
+    complex64 的高级索引内核（``aclnnIndex``）与复数归约，直接照搬会在真机上崩。
+    该路径的 real/imag 分解版本是后续工作，与 ``mps.py:_permute_basis`` 同法。
+    """
+
+    from .state import State
+
+    if isinstance(state, State):
+        data = state.data
+        is_density = state.is_density
+    else:
+        data = state
+        is_density = getattr(data, "ndim", 1) == 2 and data.shape[0] == data.shape[1] and data.shape[1] > 1
+
+    if not isinstance(data, np.ndarray):
+        return None  # torch/NPU：见 docstring
+
+    x_mask, z_mask, y_count = pauli.masks()
+    dim = 1 << pauli.n_qubits
+    indices = np.arange(dim, dtype=np.int64)
+    signs = _popcount_parity(indices, z_mask)
+    # i^{n_Y}：只有四种取值，避免引入复数幂运算。
+    phase = (1.0, 1j, -1.0, -1j)[y_count % 4]
+
+    if is_density:
+        rho = np.asarray(data)
+        if rho.shape != (dim, dim):
+            return None
+        # Tr(ρP) = Σ_b ρ[b, b⊕x] · P[b⊕x, b] = Σ_b ρ[b, b⊕x] · phase · sign(b)
+        # 注意符号取在 **b** 上，与态矢量分支取在 b⊕x 上不同：那里算符作用在 ket，
+        # 这里配对的是 P 的 (b⊕x, b) 元素。
+        cols = indices ^ np.int64(x_mask)
+        diag = rho[indices, cols]
+        total = complex(np.sum(diag * signs))
+        return float(np.real(pauli.coefficient * phase * total))
+
+    psi = np.asarray(data).reshape(-1)
+    if psi.shape[0] != dim:
+        return None
+    # (Pψ)[b] = phase · sign(b⊕x) · ψ[b⊕x]：符号取在**被作用**的下标 b⊕x 上，
+    # 不是 b 上。二者仅在 x_mask=0（纯 Z）或 z_mask=0（纯 X）时重合，所以写错
+    # 时只有含 Y 的串会露馅。
+    cols = indices if x_mask == 0 else (indices ^ np.int64(x_mask))
+    permuted = psi if x_mask == 0 else psi[cols]
+    col_signs = signs if x_mask == 0 else _popcount_parity(cols, z_mask)
+    total = complex(np.vdot(psi, permuted * col_signs))
+    return float(np.real(pauli.coefficient * phase * total))
+
 
 class Hamiltonian:
     """
@@ -403,6 +507,19 @@ class Hamiltonian:
         """
         from .state import State
 
+        # 稀疏路径：逐项累加 ⟨ψ|Pᵢ|ψ⟩，全程不构造 2^n × 2^n 矩阵。
+        # 任一项无法稀疏处理（如 torch/NPU 张量）就整体回退，避免两条路径混用。
+        total = 0.0
+        for term in self._terms:
+            value = _sparse_expectation(term, state, backend)
+            if value is None:
+                total = None
+                break
+            total += value
+        if total is not None:
+            return float(total)
+
+        # 回退：稠密矩阵（见 _sparse_expectation 的说明）。
         H_mat = self.to_matrix(backend)
         if isinstance(state, State):
             return state.expectation(H_mat)

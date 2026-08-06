@@ -48,6 +48,47 @@ class TestGateMatrixFollowsBackend(unittest.TestCase):
         self.assertEqual(np.asarray(unitary).dtype, np.complex64)
 
 
+class TestStateConstructionPrecision(unittest.TestCase):
+    """``State.from_array`` / ``from_matrix`` 必须遵循后端精度。
+
+    历史 bug：两者都硬编码 ``np.complex64``，再由 ``backend.cast`` 拓宽回
+    complex128——精度在拓宽前就已经丢了。表现是范数误差约 1e-8（单精度量级）
+    而非 1e-16，且**不报错**。与 `Circuit.unitary()` 的旧 bug 同源：核心路径里
+    不该出现裸 complex64 字面量，dtype 一律取自后端。
+    """
+
+    def test_from_array_preserves_double_precision(self):
+        backend = NumpyBackend(dtype=np.complex128)
+        rng = np.random.default_rng(5)
+        vec = rng.normal(size=8) + 1j * rng.normal(size=8)
+        vec = (vec / np.linalg.norm(vec)).astype(np.complex128)
+
+        state = A.State.from_array(vec, backend=backend)
+        data = np.asarray(state.to_numpy())
+        self.assertEqual(data.dtype, np.complex128)
+        norm_error = abs(float(np.linalg.norm(data)) - 1.0)
+        self.assertLess(norm_error, 1e-14, f"from_array 范数误差 {norm_error:.3e} 达不到双精度")
+
+    def test_from_array_honours_complex64_backend(self):
+        backend = NumpyBackend(dtype=np.complex64)
+        vec = np.array([1.0, 1.0], dtype=np.complex128) / np.sqrt(2)
+        state = A.State.from_array(vec, backend=backend)
+        self.assertEqual(np.asarray(state.to_numpy()).dtype, np.complex64)
+
+    def test_from_matrix_preserves_double_precision(self):
+        backend = NumpyBackend(dtype=np.complex128)
+        rng = np.random.default_rng(6)
+        vec = rng.normal(size=4) + 1j * rng.normal(size=4)
+        vec = (vec / np.linalg.norm(vec)).astype(np.complex128)
+        rho = np.outer(vec, vec.conj())
+
+        state = A.State.from_matrix(rho, backend=backend)
+        data = np.asarray(state.to_numpy())
+        self.assertEqual(data.dtype, np.complex128)
+        trace_error = abs(complex(np.trace(data)).real - 1.0)
+        self.assertLess(trace_error, 1e-14, f"from_matrix 迹误差 {trace_error:.3e} 达不到双精度")
+
+
 class TestEvolutionPrecision(unittest.TestCase):
     """complex128 必须是真正的双精度，而不是被 complex64 门矩阵污染。"""
 

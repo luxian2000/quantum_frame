@@ -23,6 +23,12 @@ class StatevectorEstimator(BaseEstimator):
 
     def _expectation(self, circuit, observable) -> float:
         result = Measure(self.backend).run(circuit, shots=None, return_state=True)
+
+        # Pauli 型可观测量走自身的稀疏路径：逐项 O(2^n)，不构造 2^n × 2^n 矩阵。
+        # 稠密矩阵在 n=14 就要 4.3 GB，是变分栈规模上限的根因（模拟器本身无压力）。
+        if hasattr(observable, "expectation"):
+            return float(observable.expectation(result.state, self.backend))
+
         state = self.backend.cast(result.state.to_numpy())
         if hasattr(observable, "to_matrix"):
             matrix = observable.to_matrix(self.backend)
