@@ -28,10 +28,17 @@ def _builders():
     def _cp(q, p):
         """受控相位 CP(θ)=diag(1,1,1,e^{iθ})。
 
-        aicir 没有原生 phase/cp 门。恒等式（已数值验证，见 tests/bench）：
-            CP(θ) ≡ CRZ(θ) · RZ_control(θ/2)   （相差一个全局相位 e^{iθ/4}）
-        注意 **CRZ 不等于 CP**——两者在 |10⟩ 上差一个相位，直接拿 CRZ 冒充 CP
-        会让 QFT 与其他框架对不上，且错得很安静。
+        aicir 没有原生 phase/cp 门，故按恒等式展开（已数值验证）：
+            CP(θ) ≡ CRZ(θ) · RZ_control(θ/2)   （相差全局相位 e^{iθ/4}）
+        注意 **CRZ 不等于 CP**——两者在 |10⟩ 上差一个相位，拿 CRZ 冒充 CP 会让
+        QFT 与其他框架对不上，且错得很安静。
+
+        **已知不公平**：这让 aicir 在 QFT 上跑 1.9 倍于 Qiskit/Cirq 的门数
+        （n=16 时 256 次门应用 vs 136 次），QFT 一行的差距因此被高估。
+        本想用单条 ``unitary`` 指令给出 4×4 矩阵来对齐门数，但 aicir 的 ``unitary``
+        门会**忽略 qubits 字段**、恒作用在比特 0..k-1（见 core/gates.py 的
+        ``list(range(gate_qubits))``），非相邻比特会静默算错。该 bug 修好后，
+        这里应改回单条 unitary 指令。
         """
 
         theta = p[0]

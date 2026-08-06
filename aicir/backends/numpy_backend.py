@@ -56,6 +56,107 @@ def _zero_target_bases(start: int, stop: int, axes, n_qubits: int) -> np.ndarray
     return basis[mask]
 
 
+def _apply_local_gather(state, local_matrix, axes, n_qubits: int, dtype, chunk_size: int = 1 << 20):
+    """gather/scatter 版局部门应用（**昇腾策略的 CPU 参照实现**）。
+
+    物化 int64 索引数组、fancy indexing 取值、matmul、再散回。这是 NPU 上的必需
+    做法——`aclnnComplex` 限 8 维，复数态无法 reshape 成 `(2,)*n`，只能走扁平位
+    置换。NumPy 没有该限制，因此 CPU 热路径改用 `_apply_local_strided`，这里保留
+    两个用途：跨路径正确性 oracle（见 `tests/backends/test_numpy_strided_apply.py`），
+    以及 NPU 策略的可读参照。
+    """
+
+    axes = tuple(int(axis) for axis in axes)
+    dim_local = 1 << len(axes)
+    local = np.asarray(local_matrix, dtype=dtype)
+    flat = np.asarray(state).reshape(-1)
+    dim = 1 << int(n_qubits)
+
+    out = np.empty_like(flat)
+    chunk_size = max(int(chunk_size), 1)
+    offsets = _local_offsets(axes, n_qubits)
+
+    for start in range(0, dim, chunk_size):
+        stop = min(start + chunk_size, dim)
+        bases = _zero_target_bases(start, stop, axes, n_qubits)
+        if bases.size == 0:
+            continue
+        gathered_indices = [bases | offset for offset in offsets]
+        gathered = np.stack([flat[index] for index in gathered_indices], axis=0)
+        updated = _blas_safe_matmul(local, gathered)
+        for index, values in zip(gathered_indices, updated):
+            out[index] = values
+
+    return out.reshape(dim, 1)
+
+
+def _apply_local_strided(state, local_matrix, axes, n_qubits: int, dtype):
+    """跨步视图版局部门应用（CPU 快路径）。
+
+    把扁平态 reshape 成**秩恒定**的分块视图，直接按块读写：
+
+    - 单比特门（作用在 axis ``k``）→ ``(2^k, 2, 2^(n-1-k))``，秩 3；
+    - 双比特门（作用在 ``lo < hi``）→ ``(2^lo, 2, 2^(hi-lo-1), 2, 2^(n-1-hi))``，秩 5。
+
+    秩为 ``2*len(axes)+1``，**与比特数无关**，因此既不触碰 numpy 的维度上限，也
+    不需要 `(2,)*n` 那种随 n 增长的 reshape。相比 gather 版省掉了：整份 int64
+    索引数组的构造、随机访问的 gather/scatter，以及 `np.stack` 的中间拷贝。
+
+    注意局部矩阵的比特序跟随 **给定的 axes 顺序**（``axes[0]`` 是局部高位），
+    而不是排序后的物理顺序——反序时必须换算，否则结果安静地错。
+    """
+
+    axes = tuple(int(axis) for axis in axes)
+    local = np.asarray(local_matrix, dtype=dtype)
+    flat = np.asarray(state, dtype=dtype).reshape(-1)
+    dim = 1 << int(n_qubits)
+    out = np.empty_like(flat)
+
+    if len(axes) == 1:
+        axis = axes[0]
+        left = 1 << axis
+        right = 1 << (n_qubits - 1 - axis)
+        src = flat.reshape(left, 2, right)
+        dst = out.reshape(left, 2, right)
+        s0 = src[:, 0, :]
+        s1 = src[:, 1, :]
+        # 两个目标块都在写入前算完，故 src 是不是 out 的别名都不影响正确性。
+        dst[:, 0, :] = local[0, 0] * s0 + local[0, 1] * s1
+        dst[:, 1, :] = local[1, 0] * s0 + local[1, 1] * s1
+        return out.reshape(dim, 1)
+
+    first, second = axes
+    lo, hi = (first, second) if first < second else (second, first)
+    left = 1 << lo
+    middle = 1 << (hi - lo - 1)
+    right = 1 << (n_qubits - 1 - hi)
+    shape = (left, 2, middle, 2, right)
+    src = flat.reshape(shape)
+    dst = out.reshape(shape)
+
+    def _local_index(bit_lo: int, bit_hi: int) -> int:
+        """把 (低位轴比特, 高位轴比特) 换算成局部矩阵的行/列号。"""
+
+        bit_first = bit_lo if first == lo else bit_hi
+        bit_second = bit_hi if second == hi else bit_lo
+        return (bit_first << 1) | bit_second
+
+    blocks = {(i, j): src[:, i, :, j, :] for i in (0, 1) for j in (0, 1)}
+    for i in (0, 1):
+        for j in (0, 1):
+            row = _local_index(i, j)
+            acc = None
+            for p in (0, 1):
+                for q in (0, 1):
+                    coeff = local[row, _local_index(p, q)]
+                    if coeff == 0:
+                        continue
+                    term = coeff * blocks[(p, q)]
+                    acc = term if acc is None else acc + term
+            dst[:, i, :, j, :] = acc if acc is not None else 0
+    return out.reshape(dim, 1)
+
+
 class NumpyBackend(Backend):
     """基于 NumPy 的 CPU 计算后端（无自动微分支持）。"""
 
@@ -175,23 +276,10 @@ class NumpyBackend(Backend):
         if flat.size != dim:
             raise ValueError(f"state length {flat.size} does not match n_qubits={n_qubits}")
 
-        out = np.empty_like(flat)
-        chunk_size = int(getattr(self, "_statevector_chunk_size", 1 << 20))
-        chunk_size = max(chunk_size, 1)
-        offsets = _local_offsets(axes, n_qubits)
-
-        for start in range(0, dim, chunk_size):
-            stop = min(start + chunk_size, dim)
-            bases = _zero_target_bases(start, stop, axes, n_qubits)
-            if bases.size == 0:
-                continue
-            gathered_indices = [bases | offset for offset in offsets]
-            gathered = np.stack([flat[index] for index in gathered_indices], axis=0)
-            updated = _blas_safe_matmul(local, gathered)
-            for index, values in zip(gathered_indices, updated):
-                out[index] = values
-
-        return out.reshape(dim, 1)
+        # CPU 走跨步视图快路径。gather 版是**昇腾**的必需策略（`aclnnComplex` 限
+        # 8 维），NumPy 没有该限制，不该替 NPU 交这笔税：实测跨步版在态仍驻留
+        # cache 的区间快 1.2–1.9×，n=20 时快约 7×。
+        return _apply_local_strided(state, local, axes, n_qubits, self._dtype)
 
     def inner_product(self, bra, ket):
         b = np.asarray(bra).reshape(-1)
