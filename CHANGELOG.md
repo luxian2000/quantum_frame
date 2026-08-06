@@ -2,6 +2,57 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-08-07
+
+### 性能：Pauli 期望值改走稀疏路径，去掉稠密 `2^n × 2^n` 矩阵
+
+`Hamiltonian.expectation` 与 `StatevectorEstimator` 此前都经 `to_matrix()` 逐项
+kron 出完整稠密矩阵。实测 `n=12`、23 项 TFIM 的单次能量求值 3.77 s，其中 **3.59 s
+花在建矩阵**，真正的期望只要 0.017 s；稠密 H 在 `n=14` 要 4.3 GB、`n=16` 要 68 GB。
+**变分栈因此卡在 n≈13——与模拟器无关**（态矢量演化在 n=20 毫无压力）。
+
+改用 `PauliString.masks()` 给出的 `(x_mask, z_mask, y_count)`：
+
+```text
+P|b⟩ = i^{n_Y} · (-1)^{popcount(b & z_mask)} · |b ⊕ x_mask⟩
+```
+
+每项 O(2^n)，不构造任何矩阵。轴 C（VQE：TFIM + 2 层 HEA，参数移位梯度）实测：
+
+| n | 能量 before → after | 梯度 before → after |
+| --- | --- | --- |
+| 10 | 0.1615 s → 0.0022 s | 19.7 s → 0.267 s（**74×**） |
+| 12 | 3.7738 s → 0.0040 s | 520.6 s → 0.568 s（**917×**） |
+| 14 | 稠密不可行（4.3 GB） → 0.0111 s | 稠密不可行 → 1.77 s |
+
+两处符号约定极易写错，已各自加测试钉死：**态矢量分支符号取在 `b⊕x_mask`**
+（算符作用在 ket），**密度矩阵分支取在 `b`**（配对的是 P 的 `(b⊕x, b)` 元素）。
+二者仅在纯 X 或纯 Z 时重合，故只有含 Y 的串会露馅——开发中正是只有 Y 用例先红。
+
+### 新增：torch/NPU 的 real/imag 稀疏路径
+
+稀疏公式在 torch 上不能照搬 numpy 写法——它恰好命中昇腾缺失的**全部三类**内核：
+`aclnnIndex`(complex64) 高级索引、`aclnnAdd`/`aclnnMul`(complex64)、复数归约。
+
+拆成实部/虚部后三类全部消失：索引变成两次实数 `index_select`，
+`conj(ψ)·φ = (ac+bd) + i(ad−bc)` 变成四次实数乘加。与
+`aicir/simulator/mps.py:_permute_basis` 同法；`torch.real`/`torch.imag` 只取实数视图。
+
+`tests/core/test_pauli_sparse_torch.py` 用 `TorchDispatchMode` 在 CPU 上**复现昇腾的
+内核缺口**，无需真机即可证明该路径 NPU-safe：任何复数 add/mul/sub/index/sum/matmul
+直接抛错。并附反证测试——同一拦截下稠密路径必须失败，否则这道断言形同虚设。
+
+torch(complex64) 实测：`n=14` 单次期望 3.17 ms，而同规模稠密 H 需 2.1 GB。
+昇腾真机验证待补（本机无设备）。
+
+### 修复
+
+- **`State.from_array` / `from_matrix` 硬编码 `np.complex64`。** 再由 `backend.cast`
+  拓宽回 complex128——精度在拓宽前就丢了，范数误差约 `1e-8`（单精度量级）而非
+  `1e-16`，且**不报错**。与 2026-08-06 修复的 `Circuit.unitary()` 同源：核心路径
+  不得出现裸 complex64 字面量，dtype 一律经 `resolve_dtype(backend)` 取自后端。
+  发现路径：稀疏期望的稠密 oracle 精度异常。
+
 ## 2026-08-06
 
 ### Breaking：复数精度策略收口，后端成为 dtype 单一真源

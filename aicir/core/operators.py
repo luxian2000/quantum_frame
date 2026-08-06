@@ -286,6 +286,78 @@ def _popcount_parity(indices: np.ndarray, mask: int) -> np.ndarray:
     return 1.0 - 2.0 * (parity & 1).astype(np.float64)
 
 
+def _torch_parity(indices, mask: int, real_dtype):
+    """torch 版 ``(-1)^{popcount(indices & mask)}``，全程整数/实数算子。"""
+
+    import torch
+
+    if mask == 0:
+        return torch.ones(indices.shape, dtype=real_dtype, device=indices.device)
+    parity = torch.bitwise_and(indices, mask)
+    shift = 32
+    while shift:
+        parity = torch.bitwise_xor(parity, torch.bitwise_right_shift(parity, shift))
+        shift >>= 1
+    return 1.0 - 2.0 * torch.bitwise_and(parity, 1).to(real_dtype)
+
+
+def _sparse_expectation_torch(pauli, data, is_density, x_mask, z_mask, phase, dim):
+    """torch/NPU 的 real/imag 稀疏路径。
+
+    昇腾缺 ``aclnnIndex``(complex64)、``aclnnAdd``/``aclnnMul``(complex64) 与复数
+    归约，而稀疏公式恰好会命中全部三类。拆成实部/虚部后：索引变成两次**实数**
+    ``index_select``；``conj(ψ)·φ = (ac+bd) + i(ad−bc)`` 变成四次**实数**乘加。
+    与 ``aicir/simulator/mps.py:_permute_basis`` 同法。
+
+    ``torch.real``/``torch.imag`` 只取实数视图，不产生复数算子（CLAUDE.md 推荐做法）。
+    """
+
+    import torch
+
+    re = torch.real(data)
+    im = torch.imag(data)
+    real_dtype = re.dtype
+    device = re.device
+    indices = torch.arange(dim, dtype=torch.int64, device=device)
+    signs = _torch_parity(indices, z_mask, real_dtype)
+
+    if is_density:
+        if tuple(re.shape) != (dim, dim):
+            return None
+        cols = torch.bitwise_xor(indices, x_mask) if x_mask else indices
+        # 实数视图上做高级索引——复数索引在昇腾上不可用。
+        diag_re = re[indices, cols]
+        diag_im = im[indices, cols]
+        total = complex(
+            float(torch.sum(diag_re * signs)),
+            float(torch.sum(diag_im * signs)),
+        )
+        return float((pauli.coefficient * phase * total).real)
+
+    re = re.reshape(-1)
+    im = im.reshape(-1)
+    if re.shape[0] != dim:
+        return None
+
+    if x_mask == 0:
+        perm_re, perm_im, col_signs = re, im, signs
+    else:
+        cols = torch.bitwise_xor(indices, x_mask)
+        perm_re = re.index_select(0, cols)
+        perm_im = im.index_select(0, cols)
+        col_signs = _torch_parity(cols, z_mask, real_dtype)
+
+    perm_re = perm_re * col_signs
+    perm_im = perm_im * col_signs
+    # ⟨ψ|φ⟩ = Σ conj(ψ)·φ = Σ(re·pr + im·pi) + i·Σ(re·pi − im·pr)
+    # 用 sum(a*b) 而非 torch.dot：CLAUDE.md 明确不把 torch.dot 当作 NPU 规避手段。
+    total = complex(
+        float(torch.sum(re * perm_re + im * perm_im)),
+        float(torch.sum(re * perm_im - im * perm_re)),
+    )
+    return float((pauli.coefficient * phase * total).real)
+
+
 def _sparse_expectation(pauli, state, backend):
     """免矩阵的 ``⟨ψ|P|ψ⟩`` / ``Tr(ρP)``；无法处理时返回 ``None``。
 
@@ -293,9 +365,9 @@ def _sparse_expectation(pauli, state, backend):
     O(2^n)，不构造任何 ``2^n × 2^n`` 矩阵——后者在 n=14 就要 4.3 GB，是变分栈
     卡在 n≈13 的**唯一**原因（态矢量演化本身在 n=20 毫无压力）。
 
-    **仅对 numpy 态启用。** torch/NPU 张量返回 ``None`` 走原稠密路径：昇腾缺
-    complex64 的高级索引内核（``aclnnIndex``）与复数归约，直接照搬会在真机上崩。
-    该路径的 real/imag 分解版本是后续工作，与 ``mps.py:_permute_basis`` 同法。
+    numpy 与 torch/NPU 各有实现：numpy 直接用复数运算；torch 走
+    ``_sparse_expectation_torch`` 的 real/imag 分解，以避开昇腾缺失的
+    complex64 索引/加乘/归约内核。其余类型返回 ``None`` 回退稠密路径。
     """
 
     from .state import State
@@ -307,15 +379,22 @@ def _sparse_expectation(pauli, state, backend):
         data = state
         is_density = getattr(data, "ndim", 1) == 2 and data.shape[0] == data.shape[1] and data.shape[1] > 1
 
-    if not isinstance(data, np.ndarray):
-        return None  # torch/NPU：见 docstring
-
     x_mask, z_mask, y_count = pauli.masks()
     dim = 1 << pauli.n_qubits
-    indices = np.arange(dim, dtype=np.int64)
-    signs = _popcount_parity(indices, z_mask)
     # i^{n_Y}：只有四种取值，避免引入复数幂运算。
     phase = (1.0, 1j, -1.0, -1j)[y_count % 4]
+
+    if not isinstance(data, np.ndarray):
+        try:
+            import torch
+        except ImportError:
+            return None
+        if not isinstance(data, torch.Tensor):
+            return None
+        return _sparse_expectation_torch(pauli, data, is_density, x_mask, z_mask, phase, dim)
+
+    indices = np.arange(dim, dtype=np.int64)
+    signs = _popcount_parity(indices, z_mask)
 
     if is_density:
         rho = np.asarray(data)
