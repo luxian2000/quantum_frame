@@ -20,9 +20,6 @@ from .decoders import resolve_decoder
 from .errors import PauliErrorModel
 from .record import QECResult, QECShotRecord
 
-_PAULI_GATE = {"X": "pauli_x", "Y": "pauli_y", "Z": "pauli_z"}
-
-
 def _read_creg(classical: dict, name: str, size: int) -> np.ndarray:
     """从轨迹经典 store 读出 size 位，缺位补 0。"""
     bits = list(classical.get(name, []))
@@ -85,14 +82,23 @@ def run(code, *, schedule="bare", errors=None, decoder=None, rounds=2, shots=1,
     """逐 shot 交错「模拟 ↔ 解码」主循环。"""
     from .schedules import build_layout, resolve_schedule
 
+    # 先校验枚举再校验数值区间：这样传了非法 correction_mode 的调用无论 rounds 取值
+    # 如何都会得到指名 correction_mode 的报错，而不是被 rounds 的报错抢先掩盖。
+    if correction_mode not in ("frame", "active"):
+        raise ValueError(f"correction_mode 只支持 'frame' / 'active'，收到 {correction_mode!r}")
     rounds = int(rounds)
-    if rounds < 1:
-        raise ValueError(f"rounds 必须 ≥1，收到 {rounds}")
+    if rounds < 2:
+        # 轮 0 是投影式制备轮，不注入任何错误（见下方主循环）。因此 rounds=1 的运行
+        # 恒不注入错误、判定恒为 corrected、逻辑错误率恒为 0.0——**无论 errors 传了
+        # 多大的 p**。那是个看起来极好、实则毫无意义的数字，与本模块历史上「active
+        # 模式重复计数导致错误率恒为零」属同一类静默乐观失效。宁可在入口拒绝。
+        raise ValueError(
+            f"rounds 必须 ≥2，收到 {rounds}：轮 0 是投影式制备轮、不注入错误，"
+            f"rounds=1 会恒定报出 0.0 的逻辑错误率而与 errors 无关"
+        )
     shots = int(shots)
     if shots < 1:
         raise ValueError(f"shots 必须 ≥1，收到 {shots}")
-    if correction_mode not in ("frame", "active"):
-        raise ValueError(f"correction_mode 只支持 'frame' / 'active'，收到 {correction_mode!r}")
 
     if decoder is None:
         raise ValueError("decoder 为必填参数；请传入实现 OnlineDecoder 协议的实例或已注册的名字")

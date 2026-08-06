@@ -111,6 +111,17 @@ class StabilizerCode:
             raise ValueError("logical_x 与 logical_z 数量必须相同")
         if self.signs.size != self.generators.shape[0]:
             raise ValueError("signs 长度必须与生成元数一致")
+        # M1 全程按「所有稳定子号为 +1」处理：syndrome/validate/deterministic_round0/
+        # build_round 都不消费 signs。若默默接受 −1 号生成元，validate() 仍会报「码合法」，
+        # 而综合征会以错误的本征值为参考计算，detector 确定性静默失效、结果貌似合理却是
+        # 错的。接受用户自定义码正是本模块的立身之本，故在构造期就把这条路堵死，
+        # 而不是留一个安静的陷阱。（消费 signs 是 M2 的事。）
+        if self.signs.any():
+            bad = [int(j) for j in np.nonzero(self.signs)[0]]
+            raise ValueError(
+                f"[{self.name}] M1 只支持号为 +1 的稳定子生成元，但生成元 {bad} 的 signs 为 −1。"
+                f"当前实现不消费 signs，静默接受会得到错误但看似合理的综合征"
+            )
 
     @property
     def m(self) -> int:

@@ -129,3 +129,27 @@ def test_logical_class_and_verdict():
     cls = code.logical_class(pauli_to_gf2("XXXXX"))
     assert cls.shape == (1, 2)
     assert list(cls[0]) == [1, 0]
+
+
+def test_nonzero_signs_are_rejected_at_construction():
+    """M1 不消费 signs，故必须在构造期拒绝 −1 号生成元而非静默按 +1 处理。
+
+    静默接受的后果是 validate() 仍报「码合法」，而综合征以错误的本征值为参考
+    计算——detector 确定性静默失效，结果貌似合理却是错的。接受用户自定义码正是
+    本模块的立身之本，这条路必须在入口堵死。
+    """
+    with pytest.raises(ValueError, match="signs"):
+        StabilizerCode.from_paulis(
+            ["ZZI", "IZZ"], logical_x=["XXX"], logical_z=["ZII"], name="signed",
+            signs=[1, 0],
+        )
+
+
+def test_all_plus_signs_still_accepted():
+    """显式传全 +1 的 signs 与不传等价，不应误伤。"""
+    code = StabilizerCode.from_paulis(
+        ["ZZI", "IZZ"], logical_x=["XXX"], logical_z=["ZII"], name="unsigned",
+        signs=[0, 0],
+    )
+    code.validate()
+    assert code.m == 2

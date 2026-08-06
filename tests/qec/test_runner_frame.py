@@ -87,3 +87,23 @@ def test_runner_rejects_bad_rounds():
     code = get_code("steane")
     with pytest.raises(ValueError, match="rounds"):
         run(code, errors=PauliErrorModel(), decoder=LookupDecoder(code), rounds=0, shots=1)
+
+
+def test_runner_rejects_rounds_one_because_it_injects_nothing():
+    """rounds=1 只有制备轮，恒不注入错误 → 逻辑错误率恒为 0.0 且与 errors 无关。
+
+    这是静默乐观失效（一个看起来极好、实则毫无意义的数字），必须在入口拒绝，
+    而不是让调用方拿到 0.0 之后自己去怀疑。
+    """
+    code = get_code("steane")
+    with pytest.raises(ValueError, match="rounds"):
+        run(code, errors=PauliErrorModel(p_data=0.5), decoder=LookupDecoder(code),
+            rounds=1, shots=4)
+
+
+def test_invalid_correction_mode_is_reported_even_when_rounds_also_invalid():
+    """枚举先于数值区间校验：非法 correction_mode 不应被 rounds 的报错掩盖。"""
+    code = get_code("steane")
+    with pytest.raises(ValueError, match="correction_mode"):
+        run(code, errors=PauliErrorModel(), decoder=LookupDecoder(code),
+            rounds=1, shots=1, correction_mode="teleport")
