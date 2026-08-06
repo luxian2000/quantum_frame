@@ -26,23 +26,18 @@ def _builders():
     import aicir as A
 
     def _cp(q, p):
-        """受控相位 CP(θ)=diag(1,1,1,e^{iθ})。
+        """受控相位 CP(θ)=diag(1,1,1,e^{iθ})，作为**单条**双比特 unitary 指令。
 
-        aicir 没有原生 phase/cp 门，故按恒等式展开（已数值验证）：
-            CP(θ) ≡ CRZ(θ) · RZ_control(θ/2)   （相差全局相位 e^{iθ/4}）
-        注意 **CRZ 不等于 CP**——两者在 |10⟩ 上差一个相位，拿 CRZ 冒充 CP 会让
-        QFT 与其他框架对不上，且错得很安静。
+        aicir 没有原生 phase/cp 门。可以用恒等式 ``CP(θ) ≡ CRZ(θ)·RZ_control(θ/2)``
+        （差一个全局相位）拆成两个门，但那样 aicir 在 QFT 上要跑 1.9 倍于
+        Qiskit/Cirq 的门数——比较的就不再是同等工作量，基准会把适配器的选择
+        误记成引擎的差距。这里直接给出 4×4 矩阵，三个框架门数一致。
 
-        **已知不公平**：这让 aicir 在 QFT 上跑 1.9 倍于 Qiskit/Cirq 的门数
-        （n=16 时 256 次门应用 vs 136 次），QFT 一行的差距因此被高估。
-        本想用单条 ``unitary`` 指令给出 4×4 矩阵来对齐门数，但 aicir 的 ``unitary``
-        门会**忽略 qubits 字段**、恒作用在比特 0..k-1（见 core/gates.py 的
-        ``list(range(gate_qubits))``），非相邻比特会静默算错。该 bug 修好后，
-        这里应改回单条 unitary 指令。
+        注意 **CRZ 不等于 CP**（两者在 |10⟩ 上差一个相位），不能拿 CRZ 冒充。
         """
 
-        theta = p[0]
-        return [A.crz(theta, q[1], [q[0]]), A.rz(theta / 2.0, q[0])]
+        matrix = np.diag([1.0, 1.0, 1.0, np.exp(1j * p[0])]).astype(np.complex128)
+        return [{"type": "unitary", "qubits": [q[0], q[1]], "parameter": matrix}]
 
     _GATE_BUILDERS = {
         "h": lambda q, p: [A.hadamard(q[0])],

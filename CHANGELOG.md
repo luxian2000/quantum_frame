@@ -22,7 +22,81 @@
 - 新增 `aicir.backends.npu_backend.validate_npu_dtype(...)`，把 NPU 的精度约束
   变成可单测的显式契约。
 
+### 新增：跨框架基准脚手架 `scripts/bench/`
+
+面向论文 §8 的性能基准，与 `scripts/npu/`（真机正确性探针）并列。
+
+- `core/spec.py`：**框架无关**的声明式 `CircuitSpec`，是所有适配器的唯一输入。
+  四个线路族 `ghz`/`qft`/`random`/`layered_ansatz`；同 family 同 seed 逐字节复现。
+- `adapters/`：aicir / Qiskit / Qiskit-Aer / Cirq / Qulacs / TensorCircuit。
+  未安装的框架自动跳过并记入清单。**比特序在适配器内归一化**（Qiskit 态矢量是
+  小端，Cirq/TensorCircuit 是大端）。
+- `core/timing.py`：中位数 + IQR（不用均值——一次 GC 停顿即毁），预热剔除
+  （JIT 框架首次调用含编译时间），**构建与执行分开计时**（把 transpile 算进
+  执行时间，比较的就成了编译器）。
+- `core/manifest.py`：证据清单，形状对齐 `docs/evidence/distributed-autograd/`，
+  记录 commit、工作区是否干净、框架版本、线程环境与 numpy 链接的 BLAS。
+- `run_bench.py` / `bench.sh`：CLI；**parity 未通过时拒绝产出计时数据**——态对不上
+  时，计时表比较的是不同的计算。
+
+已在 aicir / Qiskit 2.4.2 / Cirq 1.7.0 三方跑通 parity。建立过程中发现三处语义陷阱
+（均已在代码注释中标注）：`CP ≠ CRZ`（差 |10⟩ 上一个相位）；Qulacs 的 `R*` 用
+`exp(+iθ/2·P)` 约定，与 Qiskit/aicir 相反；**`ghz` 与 `qft` 从 |0…0⟩ 出发的末态在
+比特反转下不变**，对比特序错误完全失明，只有带随机角度的族有区分力——已加元测试
+钉住 parity 套件必须保留有区分力的线路族。
+
+### 性能：`NumpyBackend` 局部门应用改用跨步视图
+
+`apply_statevector_local` 原先物化 int64 索引数组做 gather/scatter。那是**昇腾的
+约束**——`aclnnComplex` 限 8 维，NPU 上无法把复数态 reshape 成 `(2,)*n`，只能走扁平
+位置换。但 NumPy 没有这个限制，CPU 后端不该替 NPU 交这笔税。
+
+新路径把扁平态视作秩恒为 `2*len(axes)+1` 的分块视图（单比特 `(2^k, 2, 2^(n-1-k))`，
+双比特 `(2^lo, 2, 2^(hi-lo-1), 2, 2^(n-1-hi))`）——**秩与比特数无关**，故既不触碰
+numpy 的维度上限，也无需随 n 增长的 reshape。省掉了索引数组构造、随机访问的
+gather/scatter 与 `np.stack` 的中间拷贝。
+
+同一次门应用的实测对比（complex128，单线程）：
+
+| n | gather | 跨步视图 | 提速 |
+| --- | --- | --- | --- |
+| 14 | 0.060 ms | 0.052 ms | 1.15× |
+| 16 | 0.307 ms | 0.180 ms | 1.71× |
+| 18 | 1.678 ms | 0.897 ms | 1.87× |
+| 20 | 20.18 ms | 2.85 ms | 7.09× |
+
+端到端（GHZ，`n=18`）从 47.9 ms 降到 18.8 ms（2.5×）。
+
+`NPUBackend` **继续走 gather**——昇腾的 8 维上限没有消失。原实现保留为模块级
+`_apply_local_gather`，既是 NPU 策略的可读参照，也是新路径的正确性 oracle：
+`tests/backends/test_numpy_strided_apply.py` 的 31 个用例要求两条路径逐位相同，
+覆盖每个轴位置、两种 dtype、**反序 axes**（局部矩阵的比特序跟随给定顺序而非排序
+顺序）与 `n=24`。
+
 ### 修复
+
+- **`unitary` 自定义门此前忽略 `qubits` 字段，恒作用在比特 `0..k-1`。**
+  `apply_gate_to_state` 传的是 `list(range(gate_qubits))`，`gate_to_matrix` 用 kron
+  右填充单位阵——两者都把门钉死在前导比特，指令自带的 `qubits` 从未被读取：
+
+  ```python
+  Operation("unitary", qubits=(1, 2), params=(matrix,))   # 修复前实际作用在 (0, 1)
+  ```
+
+  不报错、不告警，**静默算错**。作用在从 0 开始的相邻比特时结果恰好正确，
+  README §4.5 的示例正是 `qubits=(0, 1)`，故长期未被发现。更隐蔽的是
+  `gate_tensors`（张量网络路径）一直读 `qubits`，因此**三条执行路径互相矛盾**：
+  同一条含非相邻 `unitary` 的线路，`Measure.run` 与 `tn_statevector` 会给出不同结果。
+
+  修复：新增 `_unitary_axes(gate, n_matrix_qubits)` 作为作用轴的单一来源，
+  `unitary` 不再特例化——与其余所有门一样经 `_expand_local_matrix_to_full` 嵌入。
+  `qubits` 缺失时退回前导比特，老调用方行为不变；矩阵维度与 `qubits` 个数不符、
+  作用比特重复或越界现在都会显式报错（此前静默通过）。
+
+  发现路径：跨框架基准想用单条 4×4 `unitary` 指令表示受控相位以对齐门数，
+  parity 校验给出重叠度 0.5999（应为 1.0）。修复后 `scripts/bench` 的 aicir 适配器
+  改回单条 unitary 指令，QFT 门数与 Qiskit/Cirq 对齐（`n=16` 从 256 次降到 136 次），
+  该行执行时间 `n=18` 由 0.390 s 降至 0.203 s（1.92×，正是门数比）。
 
 - **`complex128` 此前不是真正的双精度。** `Circuit.unitary()` 与门矩阵构造硬编码
   `complex64`，即使后端设为 `complex128`，门矩阵仍以单精度进入，末态范数误差约

@@ -1051,15 +1051,15 @@ def apply_gate_to_state(gate, state, n_qubits: int, backend):
         inferred = int(round(math.log2(dim))) if dim > 0 else 0
         if (1 << inferred) != dim:
             raise ValueError("unitary 门矩阵维度必须是 2 的幂")
-        gate_qubits = int(instruction_n_qubits(gate, inferred))
-        if (1 << gate_qubits) != dim:
-            raise ValueError("unitary 门的 n_qubits 与矩阵维度不一致")
-        if gate_qubits > n_qubits:
-            raise ValueError(f"量子门的量子比特数量超出总量子比特数: {gate_qubits} > {n_qubits}")
+        axes = _unitary_axes(gate, inferred)
+        if inferred > n_qubits:
+            raise ValueError(f"量子门的量子比特数量超出总量子比特数: {inferred} > {n_qubits}")
+        if any(axis < 0 or axis >= n_qubits for axis in axes):
+            raise ValueError(f"unitary 门的作用比特超出线路宽度: {axes} (n_qubits={n_qubits})")
         return _apply_local_matrix_to_state(
             state,
             matrix,
-            list(range(gate_qubits)),
+            axes,
             n_qubits,
             backend,
         )
@@ -1082,6 +1082,29 @@ def _local_target_qubits(gate):
     if qubits:
         return [int(q) for q in qubits]
     raise ValueError("门缺少 qubits/target_qubit，无法定位作用比特")
+
+
+def _unitary_axes(gate, n_matrix_qubits: int):
+    """``unitary`` 自定义门的作用轴。
+
+    历史上 ``apply_gate_to_state`` 与 ``gate_to_matrix`` 都无视指令自带的 ``qubits``，
+    把门钉死在比特 ``0..k-1``（前者传 ``range(k)``，后者 kron 右填充单位阵），
+    而 ``gate_tensors`` 却一直读 ``qubits`` —— 三条路径互相矛盾，且非相邻比特上
+    **静默算错**。此处收拢为单一来源。
+
+    ``qubits`` 缺失时退回前导比特，保持老调用方的行为不变。
+    """
+
+    qubits = instruction_qubits(gate)
+    axes = [int(q) for q in qubits] if qubits else list(range(n_matrix_qubits))
+    if len(axes) != n_matrix_qubits:
+        raise ValueError(
+            f"unitary 门矩阵为 {1 << n_matrix_qubits}×{1 << n_matrix_qubits}，"
+            f"需要 {n_matrix_qubits} 个作用比特，但 qubits 给了 {len(axes)} 个"
+        )
+    if len(set(axes)) != len(axes):
+        raise ValueError(f"unitary 门的作用比特不能重复: {axes}")
+    return axes
 
 
 def gate_to_matrix(gate, cir_qubits=1, backend=None):
@@ -1113,20 +1136,13 @@ def gate_to_matrix(gate, cir_qubits=1, backend=None):
         if (1 << inferred) != dim:
             raise ValueError("unitary 门矩阵维度必须是 2 的幂")
 
-        gate_qubits = instruction_n_qubits(gate, inferred)
-        if (1 << int(gate_qubits)) != dim:
-            raise ValueError("unitary 门的 n_qubits 与矩阵维度不一致")
-
-        gate_matrix = matrix
-        if gate_qubits < cir_qubits:
-            for _ in range(gate_qubits, cir_qubits):
-                if backend is None:
-                    gate_matrix = np.kron(gate_matrix, IDENTITY_2)
-                else:
-                    gate_matrix = backend.kron(gate_matrix, backend.cast(IDENTITY_2))
-        elif gate_qubits > cir_qubits:
-            raise ValueError(f"量子门的量子比特数量超出总量子比特数: {gate_qubits} > {cir_qubits}")
-        return gate_matrix
+        axes = _unitary_axes(gate, inferred)
+        if inferred > cir_qubits:
+            raise ValueError(f"量子门的量子比特数量超出总量子比特数: {inferred} > {cir_qubits}")
+        if any(axis < 0 or axis >= cir_qubits for axis in axes):
+            raise ValueError(f"unitary 门的作用比特超出线路宽度: {axes} (n_qubits={cir_qubits})")
+        # 与其余所有门走同一条嵌入路径；原先的 kron 右填充等价于把门钉在前导比特。
+        return _expand_local_matrix_to_full(matrix, axes, int(cir_qubits), backend=backend)
 
     if gate_type == "identity":
         return identity(cir_qubits) if backend is None else backend.eye(1 << cir_qubits)
