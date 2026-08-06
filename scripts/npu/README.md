@@ -16,6 +16,7 @@ scripts/npu/run_all.sh --strict-npu
 scripts/npu/multi_card.sh --nproc-per-node 4
 scripts/npu/qnn_4card.sh --nproc-per-node 4
 scripts/npu/qaoa_8card.sh --nproc-per-node 8
+scripts/npu/pauli_sparse.sh
 ```
 
 Use `--dry-run` to inspect commands without executing them:
@@ -45,6 +46,9 @@ scripts/npu/qml.sh --strict-npu --pytest-arg -vv --pytest-arg --tb=short
 - `qas`: QAS/VQE workloads likely to stress NPU batch and gradient paths.
 - `qec`: QEC online-decoding harness (`tests/qec/`) plus `qec_probe.py`, which runs the
   harness itself on a real device.
+- `pauli_sparse`: sparse Pauli expectation via real/imag decomposition, plus
+  `pauli_sparse_probe.py` (correctness vs CPU, Y-string sign convention, density
+  matrix, no-complex-kernel check, device residency, and scale past the dense limit).
 - `demos`: demo and molecule smoke tests before long NPU jobs.
 
 ## QEC harness probe

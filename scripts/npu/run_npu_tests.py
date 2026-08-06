@@ -167,6 +167,15 @@ SUITES: dict[str, Suite] = {
         ),
         scripts=(("scripts/npu/qec_probe.py",),),
     ),
+    "pauli_sparse": Suite(
+        name="pauli_sparse",
+        description="Sparse Pauli expectation on device (real/imag decomposition), plus scale beyond the dense-matrix limit.",
+        targets=(
+            "tests/core/test_pauli_sparse_torch.py",
+            "tests/core/test_pauli_sparse_expectation.py",
+        ),
+        scripts=(("scripts/npu/pauli_sparse_probe.py",),),
+    ),
     "demos": Suite(
         name="demos",
         description="Demo and molecule smoke tests that are reasonable to run before long NPU jobs.",
