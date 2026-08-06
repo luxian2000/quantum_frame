@@ -1,0 +1,45 @@
+{
+  "passed": 8,
+  "total": 8,
+  "failed": [],
+  "device": "npu:0",
+  "fallback_to_cpu": false,
+  "n_qubits": 14,
+  "max_qubits": 20,
+  "metrics": {
+    "correctness_abs_error": 1.7189087372221357e-08,
+    "y_string_max_error": 2.1762817985215843e-08,
+    "density_abs_error": 1.713248283519153e-08,
+    "ban_mode_value": -0.03126647521276027,
+    "devices_seen": [
+      "npu"
+    ],
+    "sparse_s": 0.0288874389603734,
+    "dense_s": 0.20427909325808286,
+    "speedup": 7.071554302141651,
+    "scale": {
+      "n14": {
+        "seconds": 0.050203477032482624,
+        "value": -0.010061094362754375,
+        "dense_would_need_gb": 2.147483648
+      },
+      "n16": {
+        "seconds": 0.1711329212412238,
+        "value": -0.014470050926320255,
+        "dense_would_need_gb": 34.359738368
+      },
+      "n18": {
+        "seconds": 0.32735933270305395,
+        "value": -0.016222394078795332,
+        "dense_would_need_gb": 549.755813888
+      },
+      "n20": {
+        "seconds": 1.0609634155407548,
+        "value": 0.0010591309546725824,
+        "dense_would_need_gb": 8796.093022208
+      }
+    },
+    "vqe_energy": 5.92056393250823,
+    "vqe_seconds": 0.13793963845819235
+  }
+}

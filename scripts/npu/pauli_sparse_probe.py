@@ -58,6 +58,32 @@ def _backend(allow_cpu_fallback: bool) -> NPUBackend:
     return backend
 
 
+def _sync(backend) -> None:
+    """等待设备把队列跑完。
+
+    NPU 执行是异步的：不同步就计时，量到的是 kernel launch 而非完成时间。
+    2d21ac3 那轮 n=16 的 171 / 616 / 679 ms（4× 波动）就是这么来的。
+    """
+
+    device = getattr(backend, "_device", None)
+    if getattr(device, "type", None) == "npu" and hasattr(torch, "npu"):
+        torch.npu.synchronize()
+
+
+def _time(backend, fn, repeats: int = 3) -> float:
+    """同步计时，返回中位数秒数。"""
+
+    fn()
+    _sync(backend)
+    samples = []
+    for _ in range(repeats):
+        start = time.perf_counter()
+        fn()
+        _sync(backend)
+        samples.append(time.perf_counter() - start)
+    return sorted(samples)[len(samples) // 2]
+
+
 def _random_vec(n_qubits: int, seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(seed)
     dim = 1 << n_qubits
@@ -171,16 +197,25 @@ def case_no_complex_kernels(backend, n, metrics):
 
 
 def case_device_residency(backend, n, metrics):
-    """设备驻留：期望值计算过程中不得把工作张量搬回 CPU。
+    """设备驻留：不得出现会静默回落 CPU 的算子。
 
-    通过 dispatch 记录所有产生的张量设备；出现 cpu 张量即判失败
-    （最终标量转 Python float 属于合法出口，不计入）。
+    **这道 case 在 2d21ac3 上是坏的**：当时只记录张量的 device，而 torch_npu 的
+    ``npu_cpu_fallback`` 会把结果搬回 NPU，于是记录到的设备恒为 npu——尽管
+    ``aten::bitwise_right_shift`` 实际在 CPU 上跑，每个 Pauli 项一次 H2D/D2H 往返。
+    一个无法失败的断言什么也没证明。
+
+    现在改为拦截**算子**本身：位运算在昇腾上无内核，出现即判失败。
     """
+
+    bitwise_ops = []
     devices = set()
 
-    class _RecordDevices(torch.utils._python_dispatch.TorchDispatchMode):
+    class _RecordOps(torch.utils._python_dispatch.TorchDispatchMode):
         def __torch_dispatch__(self, func, types, args=(), kwargs=None):
             kwargs = kwargs or {}
+            name = str(func)
+            if any(tag in name for tag in ("bitwise_", "__lshift__", "__rshift__", "shift")):
+                bitwise_ops.append(name)
             out = func(*args, **kwargs)
             for value in (out if isinstance(out, (tuple, list)) else [out]):
                 if isinstance(value, torch.Tensor) and value.numel() > 1:
@@ -190,10 +225,16 @@ def case_device_residency(backend, n, metrics):
     vec = _random_vec(min(n, 12), seed=21)
     state = State.from_array(vec, backend=backend)
     ham = _tfim(min(n, 12))
-    with _RecordDevices():
+    with _RecordOps():
         ham.expectation(state, backend)
 
     metrics["devices_seen"] = sorted(devices)
+    metrics["bitwise_ops"] = sorted(set(bitwise_ops))
+
+    if bitwise_ops:
+        raise AssertionError(
+            f"期望值路径发出位运算（昇腾无内核，会回落 CPU）: {sorted(set(bitwise_ops))}"
+        )
     expected = getattr(backend._device, "type", "cpu")
     stray = devices - {expected}
     if expected == "npu" and stray:
@@ -208,17 +249,11 @@ def case_sparse_matches_dense(backend, n, metrics):
     ham = _tfim(small)
 
     sparse_value = ham.expectation(state, backend)
-    t0 = time.perf_counter()
-    for _ in range(5):
-        ham.expectation(state, backend)
-    sparse_s = (time.perf_counter() - t0) / 5
+    sparse_s = _time(backend, lambda: ham.expectation(state, backend), repeats=5)
 
     dense_matrix = ham.to_matrix(backend)
     dense_value = float(np.real(complex(state.expectation(dense_matrix))))
-    t0 = time.perf_counter()
-    for _ in range(5):
-        state.expectation(ham.to_matrix(backend))
-    dense_s = (time.perf_counter() - t0) / 5
+    dense_s = _time(backend, lambda: state.expectation(ham.to_matrix(backend)), repeats=5)
 
     metrics["sparse_s"] = sparse_s
     metrics["dense_s"] = dense_s
@@ -239,9 +274,7 @@ def case_scale_beyond_dense(backend, max_qubits, metrics):
         state = State.from_array(vec, backend=backend)
         ham = _tfim(n)
         value = ham.expectation(state, backend)  # 预热
-        t0 = time.perf_counter()
-        value = ham.expectation(state, backend)
-        elapsed = time.perf_counter() - t0
+        elapsed = _time(backend, lambda: ham.expectation(state, backend))
         dense_gb = (4 ** n) * 8 / 1e9
         timings[f"n{n}"] = {"seconds": elapsed, "value": float(value), "dense_would_need_gb": dense_gb}
         print(f"        n={n:2d}  {elapsed*1000:8.2f} ms   (稠密需 {dense_gb:9.2f} GB)")
@@ -263,9 +296,7 @@ def case_vqe_energy_loop(backend, n, metrics):
 
     estimator = StatevectorEstimator(backend=backend)
     energy = estimator.run(bound, ham).value  # 预热
-    t0 = time.perf_counter()
-    energy = estimator.run(bound, ham).value
-    elapsed = time.perf_counter() - t0
+    elapsed = _time(backend, lambda: estimator.run(bound, ham))
 
     metrics["vqe_energy"] = float(energy)
     metrics["vqe_seconds"] = elapsed

@@ -137,6 +137,70 @@ class TestNPUSafety:
                 state.expectation(ham.to_matrix(backend))
 
 
+class TestNoHostFallbackOps:
+    """位运算会在昇腾上静默回落 CPU——必须一个都不出现。
+
+    真机日志（commit 2d21ac3）：
+
+        aten::bitwise_right_shift.Tensor_out is not currently supported on the
+        NPU backend and will fall back to run on the CPU
+
+    这是移位版 popcount 求奇偶导致的。它**不报错**、结果也正确，只是每个 Pauli
+    项换来一次 device→host→device 往返：n=14 从 3 ms 劣化到 50 ms，n=16 的
+    run-to-run 波动达 4×。当时的 `device_residency` 探针照样 PASS——因为
+    `npu_cpu_fallback` 会把结果搬回 NPU，记录到的张量设备始终是 npu。
+    **一个无法失败的断言什么也没证明**，故在此改为直接拦截算子本身。
+    """
+
+    BITWISE = ("bitwise_", "__lshift__", "__rshift__", "shift")
+
+    def test_expectation_issues_no_bitwise_op(self):
+        recorded = []
+
+        class _RecordBitwise(TorchDispatchMode):
+            def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+                name = str(func)
+                if any(tag in name for tag in TestNoHostFallbackOps.BITWISE):
+                    recorded.append(name)
+                return func(*args, **(kwargs or {}))
+
+        backend = GPUBackend(device="cpu", dtype=torch.complex64)
+        n_qubits = 6
+        vec = _random_vec(n_qubits, seed=5)
+        state = _torch_state(vec, backend)
+        ham = Hamiltonian(
+            n_qubits=n_qubits,
+            terms=[("ZZ", [0, 1], 1.0), ("XY", [2, 3], 0.5), ("Y", [5], -0.25)],
+        )
+        with _RecordBitwise():
+            ham.expectation(state, backend)
+
+        assert not recorded, f"稀疏路径发出了位运算（昇腾会回落 CPU）: {sorted(set(recorded))}"
+
+    def test_expectation_materialises_no_int64_index_array(self):
+        """不得物化 2^n 的 int64 索引数组：n=20 时那是 8 MB 额外 HBM。"""
+
+        big = []
+
+        class _RecordIntTensors(TorchDispatchMode):
+            def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+                out = func(*args, **(kwargs or {}))
+                for value in (out if isinstance(out, (tuple, list)) else [out]):
+                    if isinstance(value, torch.Tensor) and value.dtype in (torch.int32, torch.int64):
+                        if value.numel() > 64:
+                            big.append((str(func), value.numel()))
+                return out
+
+        backend = GPUBackend(device="cpu", dtype=torch.complex64)
+        n_qubits = 8
+        state = _torch_state(_random_vec(n_qubits, seed=8), backend)
+        ham = Hamiltonian(n_qubits=n_qubits, terms=[("XZ", [0, 7], 1.0), ("Y", [3], 0.5)])
+        with _RecordIntTensors():
+            ham.expectation(state, backend)
+
+        assert not big, f"稀疏路径物化了大整数张量: {big}"
+
+
 class TestScale:
     def test_n14_needs_no_dense_matrix(self):
         """n=14 的 complex64 稠密 H 要 2.1 GB；跑得完即证明没走稠密。"""

@@ -286,52 +286,87 @@ def _popcount_parity(indices: np.ndarray, mask: int) -> np.ndarray:
     return 1.0 - 2.0 * (parity & 1).astype(np.float64)
 
 
-def _torch_parity(indices, mask: int, real_dtype):
-    """torch 版 ``(-1)^{popcount(indices & mask)}``，全程整数/实数算子。"""
+def _masked_qubits(mask: int, n_qubits: int):
+    """掩码里置位的比特对应的 qubit 下标（大端：qubit q ↔ 第 n-1-q 位）。"""
+
+    return [q for q in range(n_qubits) if mask & (1 << (n_qubits - 1 - q))]
+
+
+def _apply_z_signs_(flat, z_mask: int, n_qubits: int):
+    """就地施加 ``(-1)^{popcount(b & z_mask)}``：沿每个 Z 轴把 "1" 半边取负。
+
+    **不使用任何位运算。** 昇腾没有 ``aten::bitwise_right_shift`` 内核，用移位求
+    奇偶会静默回落 CPU（``npu_cpu_fallback``），每个 Pauli 项换来一次
+    device→host→device 往返——实测使 n=14 的期望值从 3 ms 劣化到 50 ms。
+    改用与 ``_apply_local_strided`` 相同的跨步视图：秩恒为 3，与比特数无关。
+    """
+
+    for qubit in _masked_qubits(z_mask, n_qubits):
+        left = 1 << qubit
+        right = 1 << (n_qubits - 1 - qubit)
+        view = flat.reshape(left, 2, right)
+        view[:, 1, :].neg_()
+    return flat
+
+
+def _apply_x_flips(flat, x_mask: int, n_qubits: int):
+    """返回 ``ψ[b ⊕ x_mask]``：沿每个 X 轴交换两个半边。
+
+    同样不使用位运算，也不物化 ``2^n`` 的 int64 索引数组（后者在 n=20 时是 8 MB
+    的额外 HBM 占用，且 gather 是随机访问）。
+    """
 
     import torch
 
-    if mask == 0:
-        return torch.ones(indices.shape, dtype=real_dtype, device=indices.device)
-    parity = torch.bitwise_and(indices, mask)
-    shift = 32
-    while shift:
-        parity = torch.bitwise_xor(parity, torch.bitwise_right_shift(parity, shift))
-        shift >>= 1
-    return 1.0 - 2.0 * torch.bitwise_and(parity, 1).to(real_dtype)
+    out = flat
+    for qubit in _masked_qubits(x_mask, n_qubits):
+        left = 1 << qubit
+        right = 1 << (n_qubits - 1 - qubit)
+        out = torch.flip(out.reshape(left, 2, right), dims=[1]).reshape(-1)
+    return out
 
 
 def _sparse_expectation_torch(pauli, data, is_density, x_mask, z_mask, phase, dim):
     """torch/NPU 的 real/imag 稀疏路径。
 
-    昇腾缺 ``aclnnIndex``(complex64)、``aclnnAdd``/``aclnnMul``(complex64) 与复数
-    归约，而稀疏公式恰好会命中全部三类。拆成实部/虚部后：索引变成两次**实数**
-    ``index_select``；``conj(ψ)·φ = (ac+bd) + i(ad−bc)`` 变成四次**实数**乘加。
-    与 ``aicir/simulator/mps.py:_permute_basis`` 同法。
+    昇腾缺三类内核，而稀疏公式恰好会命中全部三类：``aclnnIndex``(complex64)
+    高级索引、``aclnnAdd``/``aclnnMul``(complex64)、复数归约。拆成实部/虚部后
+    三类全部消失。
 
-    ``torch.real``/``torch.imag`` 只取实数视图，不产生复数算子（CLAUDE.md 推荐做法）。
+    **同样不能用位运算求奇偶。** 昇腾没有 ``aten::bitwise_right_shift`` 内核，
+    移位版 popcount 会静默回落 CPU（``npu_cpu_fallback``），每个 Pauli 项换来一次
+    device→host→device 往返——真机实测使 n=14 从 3 ms 劣化到 50 ms，且 n=16 的
+    run-to-run 波动达 4×。因此符号与置换全部改用**实数跨步视图**（秩恒为 3，
+    与比特数无关），与 ``_apply_local_strided`` 同一套写法。
+
+    数学上：先 ``χ[c] = sign(c)·ψ[c]``（沿 Z 轴把 "1" 半边取负），
+    再 ``φ[b] = χ[b⊕x]``（沿 X 轴交换两个半边），即得所需的
+    ``sign(b⊕x)·ψ[b⊕x]``。
     """
 
     import torch
 
+    n_qubits = pauli.n_qubits
     re = torch.real(data)
     im = torch.imag(data)
-    real_dtype = re.dtype
-    device = re.device
-    indices = torch.arange(dim, dtype=torch.int64, device=device)
-    signs = _torch_parity(indices, z_mask, real_dtype)
 
     if is_density:
         if tuple(re.shape) != (dim, dim):
             return None
-        cols = torch.bitwise_xor(indices, x_mask) if x_mask else indices
-        # 实数视图上做高级索引——复数索引在昇腾上不可用。
-        diag_re = re[indices, cols]
-        diag_im = im[indices, cols]
-        total = complex(
-            float(torch.sum(diag_re * signs)),
-            float(torch.sum(diag_im * signs)),
-        )
+        # Tr(ρP) = Σ_b ρ[b, b⊕x] · phase · sign(b)
+        # 沿**列轴**做 XOR 置换后取对角，即得 ρ[b, b⊕x]；符号取在 b 上。
+        perm_re, perm_im = re, im
+        for qubit in _masked_qubits(x_mask, n_qubits):
+            left = 1 << qubit
+            right = 1 << (n_qubits - 1 - qubit)
+            perm_re = torch.flip(perm_re.reshape(dim, left, 2, right), dims=[2]).reshape(dim, dim)
+            perm_im = torch.flip(perm_im.reshape(dim, left, 2, right), dims=[2]).reshape(dim, dim)
+        # diagonal 返回非连续视图，clone 后才能 reshape 成跨步视图并就地取负。
+        diag_re = torch.diagonal(perm_re).clone()
+        diag_im = torch.diagonal(perm_im).clone()
+        _apply_z_signs_(diag_re, z_mask, n_qubits)
+        _apply_z_signs_(diag_im, z_mask, n_qubits)
+        total = complex(float(torch.sum(diag_re)), float(torch.sum(diag_im)))
         return float((pauli.coefficient * phase * total).real)
 
     re = re.reshape(-1)
@@ -339,16 +374,13 @@ def _sparse_expectation_torch(pauli, data, is_density, x_mask, z_mask, phase, di
     if re.shape[0] != dim:
         return None
 
-    if x_mask == 0:
-        perm_re, perm_im, col_signs = re, im, signs
-    else:
-        cols = torch.bitwise_xor(indices, x_mask)
-        perm_re = re.index_select(0, cols)
-        perm_im = im.index_select(0, cols)
-        col_signs = _torch_parity(cols, z_mask, real_dtype)
+    work_re = re.clone()
+    work_im = im.clone()
+    _apply_z_signs_(work_re, z_mask, n_qubits)
+    _apply_z_signs_(work_im, z_mask, n_qubits)
+    perm_re = _apply_x_flips(work_re, x_mask, n_qubits)
+    perm_im = _apply_x_flips(work_im, x_mask, n_qubits)
 
-    perm_re = perm_re * col_signs
-    perm_im = perm_im * col_signs
     # ⟨ψ|φ⟩ = Σ conj(ψ)·φ = Σ(re·pr + im·pi) + i·Σ(re·pi − im·pr)
     # 用 sum(a*b) 而非 torch.dot：CLAUDE.md 明确不把 torch.dot 当作 NPU 规避手段。
     total = complex(
