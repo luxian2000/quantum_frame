@@ -1,0 +1,1465 @@
+{
+  "commit": "80618ce85fbdae566fc22394d5096406b5a3b49a",
+  "worktree_dirty": false,
+  "run_id": "09ab4bb3-3726-49f6-a4d0-412905ed032c",
+  "created_at": "2026-08-06T15:52:30.973335+00:00",
+  "release_gate": "PASS",
+  "failed_conditions": [],
+  "frameworks": {
+    "aicir": "0.1.0",
+    "qiskit": "2.4.2",
+    "qiskit_aer": "0.17.2",
+    "cirq": "1.7.0"
+  },
+  "environment": {
+    "python": "3.11.8",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "arm",
+    "threads": {
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": null,
+      "VECLIB_MAXIMUM_THREADS": "1",
+      "cpu_count": 10
+    },
+    "numpy_blas": "accelerate"
+  },
+  "n_results": 60,
+  "raw_sha256": "a86c9ddaea8e21f40c23139b01f63ecc999d27beabb6553a9caea9e41d5b3070",
+  "results": [
+    {
+      "axis": "parity",
+      "spec": "ghz-n4",
+      "framework": "aicir",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "ghz-n4",
+      "framework": "qiskit",
+      "overlap": 0.9999999999999998,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "ghz-n4",
+      "framework": "qiskit_aer",
+      "overlap": 0.9999999999999999,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "ghz-n4",
+      "framework": "cirq",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "qft-n4",
+      "framework": "aicir",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "qft-n4",
+      "framework": "qiskit",
+      "overlap": 0.9999999999999994,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "qft-n4",
+      "framework": "qiskit_aer",
+      "overlap": 0.9999999999999997,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "qft-n4",
+      "framework": "cirq",
+      "overlap": 0.9999999999999997,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "random-n5-d3-s11",
+      "framework": "aicir",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "random-n5-d3-s11",
+      "framework": "qiskit",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "random-n5-d3-s11",
+      "framework": "qiskit_aer",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "random-n5-d3-s11",
+      "framework": "cirq",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "layered_ansatz-n4-d2-s5",
+      "framework": "aicir",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "layered_ansatz-n4-d2-s5",
+      "framework": "qiskit",
+      "overlap": 1.0000000000000002,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "layered_ansatz-n4-d2-s5",
+      "framework": "qiskit_aer",
+      "overlap": 1.0000000000000002,
+      "passed": true
+    },
+    {
+      "axis": "parity",
+      "spec": "layered_ansatz-n4-d2-s5",
+      "framework": "cirq",
+      "overlap": 1.0,
+      "passed": true
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n10",
+      "family": "ghz",
+      "n_qubits": 10,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 10,
+      "n_two_qubit_gates": 9,
+      "gate_counts": {
+        "h": 1,
+        "cx": 9
+      },
+      "build": {
+        "median": 2.6749999960884452e-05,
+        "minimum": 2.616700112412218e-05,
+        "maximum": 2.8000000384054147e-05,
+        "iqr": 9.169998520519584e-07,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0002866670001822058,
+        "minimum": 0.0002721250002650777,
+        "maximum": 0.000308832999508013,
+        "iqr": 1.8500000805943273e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n10",
+      "family": "ghz",
+      "n_qubits": 10,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 10,
+      "n_two_qubit_gates": 9,
+      "gate_counts": {
+        "h": 1,
+        "cx": 9
+      },
+      "build": {
+        "median": 2.870800017262809e-05,
+        "minimum": 2.7041000066674314e-05,
+        "maximum": 3.3582999094505794e-05,
+        "iqr": 5.416999556473456e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00023662499916099478,
+        "minimum": 0.00022899999930814374,
+        "maximum": 0.0003113330003543524,
+        "iqr": 2.579099964350462e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n10",
+      "family": "ghz",
+      "n_qubits": 10,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 10,
+      "n_two_qubit_gates": 9,
+      "gate_counts": {
+        "h": 1,
+        "cx": 9
+      },
+      "build": {
+        "median": 3.8875001337146387e-05,
+        "minimum": 3.616599860833958e-05,
+        "maximum": 4.612500015355181e-05,
+        "iqr": 7.084001481416635e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00023383400002785493,
+        "minimum": 0.00019845799943141174,
+        "maximum": 0.0003364160002092831,
+        "iqr": 0.00011883300066983793,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n10",
+      "family": "ghz",
+      "n_qubits": 10,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 10,
+      "n_two_qubit_gates": 9,
+      "gate_counts": {
+        "h": 1,
+        "cx": 9
+      },
+      "build": {
+        "median": 6.750000102329068e-05,
+        "minimum": 4.73749987577321e-05,
+        "maximum": 9.200000022246968e-05,
+        "iqr": 2.8208000003360212e-05,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0005713330010621576,
+        "minimum": 0.0005515000011655502,
+        "maximum": 0.0007179580006777542,
+        "iqr": 7.308300155273173e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n11",
+      "family": "ghz",
+      "n_qubits": 11,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 11,
+      "n_two_qubit_gates": 10,
+      "gate_counts": {
+        "h": 1,
+        "cx": 10
+      },
+      "build": {
+        "median": 2.912499985541217e-05,
+        "minimum": 2.8957998438272625e-05,
+        "maximum": 5.966699973214418e-05,
+        "iqr": 2.333999873371795e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0003406249998079147,
+        "minimum": 0.00033016700035659596,
+        "maximum": 0.0004970420013705734,
+        "iqr": 0.00011116700079583097,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n11",
+      "family": "ghz",
+      "n_qubits": 11,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 11,
+      "n_two_qubit_gates": 10,
+      "gate_counts": {
+        "h": 1,
+        "cx": 10
+      },
+      "build": {
+        "median": 2.941699858638458e-05,
+        "minimum": 2.7874999432242475e-05,
+        "maximum": 3.5584000215749256e-05,
+        "iqr": 5.333000444807112e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0002684999999473803,
+        "minimum": 0.00026058300136355683,
+        "maximum": 0.0002749169998423895,
+        "iqr": 6.041998858563602e-06,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n11",
+      "family": "ghz",
+      "n_qubits": 11,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 11,
+      "n_two_qubit_gates": 10,
+      "gate_counts": {
+        "h": 1,
+        "cx": 10
+      },
+      "build": {
+        "median": 4.058299964526668e-05,
+        "minimum": 3.7166999391047284e-05,
+        "maximum": 4.475000059755985e-05,
+        "iqr": 5.541998689295724e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0002846249990398064,
+        "minimum": 0.00025758300034794956,
+        "maximum": 0.0003337499983899761,
+        "iqr": 4.9375001253793016e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n11",
+      "family": "ghz",
+      "n_qubits": 11,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 11,
+      "n_two_qubit_gates": 10,
+      "gate_counts": {
+        "h": 1,
+        "cx": 10
+      },
+      "build": {
+        "median": 5.587499981629662e-05,
+        "minimum": 5.29589997313451e-05,
+        "maximum": 9.854100062511861e-05,
+        "iqr": 1.0751000445452519e-05,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.000620750000962289,
+        "minimum": 0.0006109999994805548,
+        "maximum": 0.0008569580004404997,
+        "iqr": 5.3665999075747095e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n12",
+      "family": "ghz",
+      "n_qubits": 12,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 12,
+      "n_two_qubit_gates": 11,
+      "gate_counts": {
+        "h": 1,
+        "cx": 11
+      },
+      "build": {
+        "median": 3.312499939056579e-05,
+        "minimum": 3.2250000003841706e-05,
+        "maximum": 8.058399907895364e-05,
+        "iqr": 3.99999953515362e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00042020799992315006,
+        "minimum": 0.00041458299892838113,
+        "maximum": 0.000592250000408967,
+        "iqr": 4.508300116867758e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n12",
+      "family": "ghz",
+      "n_qubits": 12,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 12,
+      "n_two_qubit_gates": 11,
+      "gate_counts": {
+        "h": 1,
+        "cx": 11
+      },
+      "build": {
+        "median": 3.212500087101944e-05,
+        "minimum": 3.1208999644150026e-05,
+        "maximum": 3.508300142129883e-05,
+        "iqr": 8.33999365568161e-07,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.00034679099917411804,
+        "minimum": 0.0003370829999767011,
+        "maximum": 0.000363416998879984,
+        "iqr": 9.041001248988323e-06,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n12",
+      "family": "ghz",
+      "n_qubits": 12,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 12,
+      "n_two_qubit_gates": 11,
+      "gate_counts": {
+        "h": 1,
+        "cx": 11
+      },
+      "build": {
+        "median": 3.9667000237386674e-05,
+        "minimum": 3.833399932773318e-05,
+        "maximum": 4.479200106288772e-05,
+        "iqr": 3.667000783025287e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0003023749995918479,
+        "minimum": 0.0002766659999906551,
+        "maximum": 0.00038345799839589745,
+        "iqr": 3.670799924293533e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n12",
+      "family": "ghz",
+      "n_qubits": 12,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 12,
+      "n_two_qubit_gates": 11,
+      "gate_counts": {
+        "h": 1,
+        "cx": 11
+      },
+      "build": {
+        "median": 5.583300116995815e-05,
+        "minimum": 5.5374999647028744e-05,
+        "maximum": 6.516699977510143e-05,
+        "iqr": 3.457998900557868e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.000748542001019814,
+        "minimum": 0.0007001249996392289,
+        "maximum": 0.0008477499995933613,
+        "iqr": 0.00012783299825969152,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n13",
+      "family": "ghz",
+      "n_qubits": 13,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 13,
+      "n_two_qubit_gates": 12,
+      "gate_counts": {
+        "h": 1,
+        "cx": 12
+      },
+      "build": {
+        "median": 3.495800046948716e-05,
+        "minimum": 3.441700027906336e-05,
+        "maximum": 5.2208999477443285e-05,
+        "iqr": 2.6659981813281775e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0005997080006636679,
+        "minimum": 0.000578125000174623,
+        "maximum": 0.0007639169998583384,
+        "iqr": 5.137500193086453e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n13",
+      "family": "ghz",
+      "n_qubits": 13,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 13,
+      "n_two_qubit_gates": 12,
+      "gate_counts": {
+        "h": 1,
+        "cx": 12
+      },
+      "build": {
+        "median": 3.7666000935132615e-05,
+        "minimum": 3.5582999771577306e-05,
+        "maximum": 4.6499999371008016e-05,
+        "iqr": 4.708999767899513e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0005237919995124685,
+        "minimum": 0.0004856249997828854,
+        "maximum": 0.000720541000191588,
+        "iqr": 0.0001483329997427063,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n13",
+      "family": "ghz",
+      "n_qubits": 13,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 13,
+      "n_two_qubit_gates": 12,
+      "gate_counts": {
+        "h": 1,
+        "cx": 12
+      },
+      "build": {
+        "median": 4.324999827076681e-05,
+        "minimum": 4.187500053376425e-05,
+        "maximum": 4.987499960407149e-05,
+        "iqr": 4.999998054699972e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0003178749993821839,
+        "minimum": 0.0002731670010689413,
+        "maximum": 0.00038624999979219865,
+        "iqr": 6.262499846343417e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n13",
+      "family": "ghz",
+      "n_qubits": 13,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 13,
+      "n_two_qubit_gates": 12,
+      "gate_counts": {
+        "h": 1,
+        "cx": 12
+      },
+      "build": {
+        "median": 6.354099969030358e-05,
+        "minimum": 6.162499994388781e-05,
+        "maximum": 7.499999992433004e-05,
+        "iqr": 2.2920012270333245e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0008234159995481605,
+        "minimum": 0.0008052499997575069,
+        "maximum": 0.00117445899923041,
+        "iqr": 0.00026920900018012617,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n14",
+      "family": "ghz",
+      "n_qubits": 14,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 14,
+      "n_two_qubit_gates": 13,
+      "gate_counts": {
+        "h": 1,
+        "cx": 13
+      },
+      "build": {
+        "median": 3.708300027938094e-05,
+        "minimum": 3.6625000575440936e-05,
+        "maximum": 4.07919997087447e-05,
+        "iqr": 2.0839979697484523e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0010968750011670636,
+        "minimum": 0.0008357500009879004,
+        "maximum": 0.0013871249993826495,
+        "iqr": 0.0003682490005303407,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n14",
+      "family": "ghz",
+      "n_qubits": 14,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 14,
+      "n_two_qubit_gates": 13,
+      "gate_counts": {
+        "h": 1,
+        "cx": 13
+      },
+      "build": {
+        "median": 3.662499875645153e-05,
+        "minimum": 3.604199991968926e-05,
+        "maximum": 4.2583000322338194e-05,
+        "iqr": 1.915999746415764e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0007200000000011642,
+        "minimum": 0.000683250000292901,
+        "maximum": 0.0010190409993811045,
+        "iqr": 0.00011237400030950084,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n14",
+      "family": "ghz",
+      "n_qubits": 14,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 14,
+      "n_two_qubit_gates": 13,
+      "gate_counts": {
+        "h": 1,
+        "cx": 13
+      },
+      "build": {
+        "median": 4.916699981549755e-05,
+        "minimum": 4.491700019570999e-05,
+        "maximum": 5.479099854710512e-05,
+        "iqr": 7.417000233544968e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0004790839993802365,
+        "minimum": 0.00045354199937719386,
+        "maximum": 0.0006053329998394474,
+        "iqr": 6.14159998804098e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n14",
+      "family": "ghz",
+      "n_qubits": 14,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 14,
+      "n_two_qubit_gates": 13,
+      "gate_counts": {
+        "h": 1,
+        "cx": 13
+      },
+      "build": {
+        "median": 6.924999979673885e-05,
+        "minimum": 6.424999992304947e-05,
+        "maximum": 8.850000085658394e-05,
+        "iqr": 1.3791999663226306e-05,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0010432079998281552,
+        "minimum": 0.0009836249992076773,
+        "maximum": 0.0011992500003543682,
+        "iqr": 8.308299948112108e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n15",
+      "family": "ghz",
+      "n_qubits": 15,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 15,
+      "n_two_qubit_gates": 14,
+      "gate_counts": {
+        "h": 1,
+        "cx": 14
+      },
+      "build": {
+        "median": 3.9791000745026395e-05,
+        "minimum": 3.9167000068118796e-05,
+        "maximum": 4.266699943400454e-05,
+        "iqr": 7.080016075633466e-07,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0017506660005892627,
+        "minimum": 0.0016634160001558485,
+        "maximum": 0.002143374998922809,
+        "iqr": 0.00044345799869915936,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n15",
+      "family": "ghz",
+      "n_qubits": 15,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 15,
+      "n_two_qubit_gates": 14,
+      "gate_counts": {
+        "h": 1,
+        "cx": 14
+      },
+      "build": {
+        "median": 4.133400034334045e-05,
+        "minimum": 3.866600127366837e-05,
+        "maximum": 5.129199962539133e-05,
+        "iqr": 9.457999112783e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0014581250015908154,
+        "minimum": 0.0012504999995144317,
+        "maximum": 0.0016708750008547213,
+        "iqr": 9.449900062463712e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n15",
+      "family": "ghz",
+      "n_qubits": 15,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 15,
+      "n_two_qubit_gates": 14,
+      "gate_counts": {
+        "h": 1,
+        "cx": 14
+      },
+      "build": {
+        "median": 5.012499968870543e-05,
+        "minimum": 4.8541998694418e-05,
+        "maximum": 5.983299888612237e-05,
+        "iqr": 7.541999366367236e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0017205830008606426,
+        "minimum": 0.0016017079997254768,
+        "maximum": 0.0019650419999379665,
+        "iqr": 0.0002822919996106066,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n15",
+      "family": "ghz",
+      "n_qubits": 15,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 15,
+      "n_two_qubit_gates": 14,
+      "gate_counts": {
+        "h": 1,
+        "cx": 14
+      },
+      "build": {
+        "median": 6.720900091750082e-05,
+        "minimum": 6.604200098081492e-05,
+        "maximum": 7.370800085482188e-05,
+        "iqr": 3.083001502091065e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0012789579996024258,
+        "minimum": 0.0012287919998925645,
+        "maximum": 0.0016769579997344408,
+        "iqr": 0.00039529099922219757,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n16",
+      "family": "ghz",
+      "n_qubits": 16,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 16,
+      "n_two_qubit_gates": 15,
+      "gate_counts": {
+        "h": 1,
+        "cx": 15
+      },
+      "build": {
+        "median": 4.204200013191439e-05,
+        "minimum": 4.1290999433840625e-05,
+        "maximum": 6.354099969030358e-05,
+        "iqr": 3.167000613757409e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0035647090007842053,
+        "minimum": 0.003173750001224107,
+        "maximum": 0.003948292000131914,
+        "iqr": 0.0003947510012949351,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n16",
+      "family": "ghz",
+      "n_qubits": 16,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 16,
+      "n_two_qubit_gates": 15,
+      "gate_counts": {
+        "h": 1,
+        "cx": 15
+      },
+      "build": {
+        "median": 4.058299964526668e-05,
+        "minimum": 3.9291999200941063e-05,
+        "maximum": 4.995800009055529e-05,
+        "iqr": 7.832999472157098e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.002522624999983236,
+        "minimum": 0.0022488329996122047,
+        "maximum": 0.002952541999547975,
+        "iqr": 0.00043895800081372727,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n16",
+      "family": "ghz",
+      "n_qubits": 16,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 16,
+      "n_two_qubit_gates": 15,
+      "gate_counts": {
+        "h": 1,
+        "cx": 15
+      },
+      "build": {
+        "median": 5.149999924469739e-05,
+        "minimum": 4.8333000449929386e-05,
+        "maximum": 5.599999894911889e-05,
+        "iqr": 2.7500009309733286e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.003284417000031681,
+        "minimum": 0.0030615420000685845,
+        "maximum": 0.0033893750005518086,
+        "iqr": 0.00010770799963211175,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n16",
+      "family": "ghz",
+      "n_qubits": 16,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 16,
+      "n_two_qubit_gates": 15,
+      "gate_counts": {
+        "h": 1,
+        "cx": 15
+      },
+      "build": {
+        "median": 8.349999916390516e-05,
+        "minimum": 7.424999967042822e-05,
+        "maximum": 0.00015312499999708962,
+        "iqr": 6.491699787147809e-05,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0021419580007204786,
+        "minimum": 0.0019106660001853015,
+        "maximum": 0.002373875000557746,
+        "iqr": 0.0003146250019199215,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n17",
+      "family": "ghz",
+      "n_qubits": 17,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 17,
+      "n_two_qubit_gates": 16,
+      "gate_counts": {
+        "h": 1,
+        "cx": 16
+      },
+      "build": {
+        "median": 4.608300150721334e-05,
+        "minimum": 4.454099871509243e-05,
+        "maximum": 4.716700095741544e-05,
+        "iqr": 2.165999831049703e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.013080042001092806,
+        "minimum": 0.011206791999939014,
+        "maximum": 0.015190041000096244,
+        "iqr": 0.0026117079996765824,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n17",
+      "family": "ghz",
+      "n_qubits": 17,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 17,
+      "n_two_qubit_gates": 16,
+      "gate_counts": {
+        "h": 1,
+        "cx": 16
+      },
+      "build": {
+        "median": 4.2333000237704255e-05,
+        "minimum": 4.083400017407257e-05,
+        "maximum": 4.974999865225982e-05,
+        "iqr": 2.4589990061940625e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.011558500000319327,
+        "minimum": 0.010379416000432684,
+        "maximum": 0.013346125000680331,
+        "iqr": 0.0012833339987992076,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n17",
+      "family": "ghz",
+      "n_qubits": 17,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 17,
+      "n_two_qubit_gates": 16,
+      "gate_counts": {
+        "h": 1,
+        "cx": 16
+      },
+      "build": {
+        "median": 6.52920007269131e-05,
+        "minimum": 5.62919994990807e-05,
+        "maximum": 9.812499956751708e-05,
+        "iqr": 2.9541997719206847e-05,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0072083329996530665,
+        "minimum": 0.006840332998763188,
+        "maximum": 0.007646541000212892,
+        "iqr": 0.00021570799981418531,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n17",
+      "family": "ghz",
+      "n_qubits": 17,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 17,
+      "n_two_qubit_gates": 16,
+      "gate_counts": {
+        "h": 1,
+        "cx": 16
+      },
+      "build": {
+        "median": 8.49170010042144e-05,
+        "minimum": 7.766700036881957e-05,
+        "maximum": 0.00016387499999837019,
+        "iqr": 3.145800110360142e-05,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.0037950000005366746,
+        "minimum": 0.003732582999873557,
+        "maximum": 0.003844417000436806,
+        "iqr": 6.554199899255764e-05,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n18",
+      "family": "ghz",
+      "n_qubits": 18,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 18,
+      "n_two_qubit_gates": 17,
+      "gate_counts": {
+        "h": 1,
+        "cx": 17
+      },
+      "build": {
+        "median": 4.6292001570691355e-05,
+        "minimum": 4.570800047076773e-05,
+        "maximum": 5.52080000488786e-05,
+        "iqr": 2.6670004444895312e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.029179208000641665,
+        "minimum": 0.02666983299968706,
+        "maximum": 0.032001625000702916,
+        "iqr": 0.0026644989993656054,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n18",
+      "family": "ghz",
+      "n_qubits": 18,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 18,
+      "n_two_qubit_gates": 17,
+      "gate_counts": {
+        "h": 1,
+        "cx": 17
+      },
+      "build": {
+        "median": 5.07079985254677e-05,
+        "minimum": 4.462500146473758e-05,
+        "maximum": 0.0001267910010938067,
+        "iqr": 2.1624997316394e-05,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.024793665999823133,
+        "minimum": 0.020896916999845416,
+        "maximum": 0.028513749999547144,
+        "iqr": 0.004262126001776778,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n18",
+      "family": "ghz",
+      "n_qubits": 18,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 18,
+      "n_two_qubit_gates": 17,
+      "gate_counts": {
+        "h": 1,
+        "cx": 17
+      },
+      "build": {
+        "median": 6.020799992256798e-05,
+        "minimum": 5.4292000640998594e-05,
+        "maximum": 8.991600043373182e-05,
+        "iqr": 2.512500032025855e-05,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.013433582998914062,
+        "minimum": 0.013088625000818865,
+        "maximum": 0.013936707999164355,
+        "iqr": 0.0001804590010578977,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n18",
+      "family": "ghz",
+      "n_qubits": 18,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 18,
+      "n_two_qubit_gates": 17,
+      "gate_counts": {
+        "h": 1,
+        "cx": 17
+      },
+      "build": {
+        "median": 7.937500049592927e-05,
+        "minimum": 7.866600026318338e-05,
+        "maximum": 8.779200106801e-05,
+        "iqr": 5.582998710451648e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.005683542000042507,
+        "minimum": 0.005441958001028979,
+        "maximum": 0.006243083000299521,
+        "iqr": 0.0004849170018133009,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n19",
+      "family": "ghz",
+      "n_qubits": 19,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 19,
+      "n_two_qubit_gates": 18,
+      "gate_counts": {
+        "h": 1,
+        "cx": 18
+      },
+      "build": {
+        "median": 4.9250000301981345e-05,
+        "minimum": 4.879200059804134e-05,
+        "maximum": 5.2834000598522834e-05,
+        "iqr": 8.739989425521344e-07,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.064879708999797,
+        "minimum": 0.05668712499937101,
+        "maximum": 0.08493087500028196,
+        "iqr": 0.004881458000454586,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n19",
+      "family": "ghz",
+      "n_qubits": 19,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 19,
+      "n_two_qubit_gates": 18,
+      "gate_counts": {
+        "h": 1,
+        "cx": 18
+      },
+      "build": {
+        "median": 5.004199920222163e-05,
+        "minimum": 4.6958000893937424e-05,
+        "maximum": 0.00012916599916934501,
+        "iqr": 7.549899783043656e-05,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.05087150000144902,
+        "minimum": 0.04505987499942421,
+        "maximum": 0.06276370800151199,
+        "iqr": 0.014071707999391947,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n19",
+      "family": "ghz",
+      "n_qubits": 19,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 19,
+      "n_two_qubit_gates": 18,
+      "gate_counts": {
+        "h": 1,
+        "cx": 18
+      },
+      "build": {
+        "median": 6.912500066391658e-05,
+        "minimum": 6.650000068475492e-05,
+        "maximum": 0.00011595899923122488,
+        "iqr": 2.533300175855402e-05,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.02882083300028171,
+        "minimum": 0.02728762500009907,
+        "maximum": 0.03012779100026819,
+        "iqr": 0.002121792002071743,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n19",
+      "family": "ghz",
+      "n_qubits": 19,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 19,
+      "n_two_qubit_gates": 18,
+      "gate_counts": {
+        "h": 1,
+        "cx": 18
+      },
+      "build": {
+        "median": 8.741700003156438e-05,
+        "minimum": 8.4916999185225e-05,
+        "maximum": 0.0001264589991478715,
+        "iqr": 1.3458000466926023e-05,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.01093241700073122,
+        "minimum": 0.010506625001653447,
+        "maximum": 0.012322541999310488,
+        "iqr": 0.0010464580009283964,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n20",
+      "family": "ghz",
+      "n_qubits": 20,
+      "framework": "aicir",
+      "precision": "complex128",
+      "n_gates": 20,
+      "n_two_qubit_gates": 19,
+      "gate_counts": {
+        "h": 1,
+        "cx": 19
+      },
+      "build": {
+        "median": 5.1375000111875124e-05,
+        "minimum": 5.108400000608526e-05,
+        "maximum": 5.375000000640284e-05,
+        "iqr": 1.4990000636316836e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.12243479199969443,
+        "minimum": 0.11938220800038835,
+        "maximum": 0.13290466699982062,
+        "iqr": 0.008977957999377395,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n20",
+      "family": "ghz",
+      "n_qubits": 20,
+      "framework": "qiskit",
+      "precision": "complex128",
+      "n_gates": 20,
+      "n_two_qubit_gates": 19,
+      "gate_counts": {
+        "h": 1,
+        "cx": 19
+      },
+      "build": {
+        "median": 4.924999848299194e-05,
+        "minimum": 4.6459001168841496e-05,
+        "maximum": 5.608300125459209e-05,
+        "iqr": 7.749000360490754e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.2690162090002559,
+        "minimum": 0.26441670799977146,
+        "maximum": 0.2701483750006446,
+        "iqr": 0.004118332999496488,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n20",
+      "family": "ghz",
+      "n_qubits": 20,
+      "framework": "qiskit_aer",
+      "precision": "complex128",
+      "n_gates": 20,
+      "n_two_qubit_gates": 19,
+      "gate_counts": {
+        "h": 1,
+        "cx": 19
+      },
+      "build": {
+        "median": 6.0792001022491604e-05,
+        "minimum": 6.004200076858979e-05,
+        "maximum": 7.008399916230701e-05,
+        "iqr": 2.791999577311799e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.06985162499950093,
+        "minimum": 0.06854016699981003,
+        "maximum": 0.0721378750004078,
+        "iqr": 0.003018625000549946,
+        "repeats": 7,
+        "warmup": 1
+      }
+    },
+    {
+      "axis": "timing",
+      "spec": "ghz-n20",
+      "family": "ghz",
+      "n_qubits": 20,
+      "framework": "cirq",
+      "precision": "complex128",
+      "n_gates": 20,
+      "n_two_qubit_gates": 19,
+      "gate_counts": {
+        "h": 1,
+        "cx": 19
+      },
+      "build": {
+        "median": 8.833399988361634e-05,
+        "minimum": 8.674999844515696e-05,
+        "maximum": 9.675000001152512e-05,
+        "iqr": 3.1659983505960554e-06,
+        "repeats": 7,
+        "warmup": 1
+      },
+      "run": {
+        "median": 0.022925082999790902,
+        "minimum": 0.0204058340004849,
+        "maximum": 0.024264457999379374,
+        "iqr": 0.002941457998531405,
+        "repeats": 7,
+        "warmup": 1
+      }
+    }
+  ]
+}
