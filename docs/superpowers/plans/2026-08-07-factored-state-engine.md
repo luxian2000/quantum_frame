@@ -900,11 +900,13 @@ class TestMeasureIntegration:
         np.testing.assert_allclose(a, b, atol=1e-10)
 
     def test_factored_rejects_noisy_circuits(self):
+        """注意：拒绝检查读的是 **circuit.noise_model**，不是 Measure 的噪声模型
+        （与 method='mps' 分支一致）。"""
         backend = NumpyBackend()
         circuit = Circuit(A.hadamard(0), n_qubits=1)
-        measure = Measure(backend=backend, noise_model=object())
+        circuit.noise_model = object()
         with pytest.raises(ValueError, match="仅支持纯态"):
-            measure.run(circuit, shots=None, method="factored")
+            Measure(backend=backend).run(circuit, shots=None, method="factored")
 
     def test_factored_rejects_embedded_measure_markers(self):
         backend = NumpyBackend()
@@ -928,32 +930,37 @@ Expected: FAIL — the first test errors because `method="factored"` is unrecogn
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `aicir/measure/measure.py`, after the `method == "mps"` branch, add a branch
-mirroring it:
+In `aicir/measure/measure.py`, immediately after the `method == "mps"` branch
+(which ends with its delegating `return self.run(...)`), insert:
 
 ```python
         if method == "factored":
-            if self._noise_model is not None:
+            if getattr(circuit, "noise_model", None) is not None:
                 raise ValueError("method='factored' 仅支持纯态，无法用于含噪线路")
-            if _has_measure_marker(circuit):
+            if any(_is_measure(g) for g in circuit_instructions(circuit)):
                 raise ValueError("method='factored' 不支持线路内嵌 measure 标记")
             if initial_state is not None or initial_density_matrix is not None:
                 raise ValueError("method='factored' 始终从 |0...0> 出发，不接受 initial_state/initial_density_matrix")
-            if snap:
+            if snap not in (None, [], ()):  # 无逐门快照语义
                 raise ValueError("method='factored' 不支持非空 snap")
-            from ..simulator.factored import factored_statevector
-
-            final = factored_statevector(circuit, self._backend).to_statevector()
-            return self._result_from_state(
-                circuit, final, shots=shots, measure_qubits=measure_qubits,
-                observables=observables, return_state=return_state,
-                return_probabilities=return_probabilities, sm=sm, seed=seed,
+            from ..simulator import factored_statevector
+            psi = factored_statevector(circuit, backend=backend).to_statevector()
+            from ..core.circuit import Circuit as _Circuit
+            stripped = _Circuit(n_qubits=n)
+            return self.run(
+                stripped, shots=shots, measure_qubits=measure_qubits, snap=None,
+                sm=sm, seed=seed, initial_state=psi, observables=observables,
+                return_state=return_state, return_probabilities=return_probabilities,
+                method="statevector",
             )
 ```
 
-Read the surrounding `method == "mps"` branch first and match its exact helper
-names and argument shapes — the names above are illustrative of structure, not
-guaranteed to match; the branch must call whatever the `mps` branch calls.
+This mirrors the `mps` branch exactly, including its delegation trick: evolve
+with the alternate engine, then re-enter `self.run` on an **empty** circuit of
+the same width with the resulting state as `initial_state`, so all the
+downstream read-out, shots, and observable machinery is reused rather than
+duplicated. `_is_measure`, `circuit_instructions`, `backend`, and `n` are
+already in scope at that point in the function — do not re-derive them.
 
 - [ ] **Step 4: Run test to verify it passes**
 
