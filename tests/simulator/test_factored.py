@@ -250,3 +250,83 @@ class TestDriverMatchesDense:
         circuit = Circuit(if_(creg[0] == 1, body), n_qubits=1)
         with pytest.raises(ValueError, match="控制流"):
             factored_statevector(circuit, backend)
+
+
+class TestFactoredExpectation:
+    """Pauli 串在互不纠缠的因子间是乘性的：⟨P⟩ = ∏ᵢ ⟨Pᵢ⟩。"""
+
+    def test_matches_dense_expectation_on_product_state(self):
+        from aicir import Hamiltonian
+        from aicir.simulator.factored import factored_expectation, factored_statevector
+
+        backend = NumpyBackend()
+        circuit = Circuit(*[A.ry(0.4, q) for q in range(5)], n_qubits=5)
+        st = factored_statevector(circuit, backend)
+        ham = Hamiltonian(n_qubits=5, terms=[("Z", [q], 1.0) for q in range(5)])
+        assert factored_expectation(st, ham) == pytest.approx(
+            ham.expectation(st.to_statevector(), backend), abs=1e-10
+        )
+
+    def test_matches_dense_expectation_after_entangling(self):
+        from aicir import Hamiltonian
+        from aicir.simulator.factored import factored_expectation, factored_statevector
+
+        backend = NumpyBackend()
+        gates = [A.hadamard(0), A.cnot(1, [0]), A.ry(0.3, 2)]
+        st = factored_statevector(Circuit(*gates, n_qubits=3), backend)
+        ham = Hamiltonian(n_qubits=3, terms=[("ZZ", [0, 1], 1.0), ("X", [2], 0.5)])
+        assert factored_expectation(st, ham) == pytest.approx(
+            ham.expectation(st.to_statevector(), backend), abs=1e-10
+        )
+
+    def test_term_spanning_two_factors_multiplies_their_expectations(self):
+        from aicir import Hamiltonian
+        from aicir.simulator.factored import factored_expectation, factored_statevector
+
+        backend = NumpyBackend()
+        st = factored_statevector(Circuit(A.ry(0.4, 0), A.ry(0.9, 1), n_qubits=2), backend)
+        assert st.n_factors == 2                      # 前提：确实是两个因子
+        ham = Hamiltonian(n_qubits=2, terms=[("ZZ", [0, 1], 1.0)])
+        assert factored_expectation(st, ham) == pytest.approx(
+            ham.expectation(st.to_statevector(), backend), abs=1e-10
+        )
+
+    def test_y_containing_term_matches_dense(self):
+        """Y 的符号约定是稀疏路径最容易错的地方，这里也要覆盖。"""
+        from aicir import Hamiltonian
+        from aicir.simulator.factored import factored_expectation, factored_statevector
+
+        backend = NumpyBackend()
+        gates = [A.ry(0.4, 0), A.rx(0.7, 1), A.ry(0.2, 2)]
+        st = factored_statevector(Circuit(*gates, n_qubits=3), backend)
+        ham = Hamiltonian(n_qubits=3, terms=[("YY", [0, 2], 1.0), ("Y", [1], -0.5)])
+        assert factored_expectation(st, ham) == pytest.approx(
+            ham.expectation(st.to_statevector(), backend), abs=1e-10
+        )
+
+    def test_does_not_materialise_full_state(self):
+        """20 比特全可分：稠密化需 16 MB，因子化只碰 20 个 2 维张量。"""
+        from aicir import Hamiltonian
+        from aicir.simulator.factored import factored_expectation, factored_statevector
+
+        backend = NumpyBackend()
+        n = 20
+        st = factored_statevector(Circuit(*[A.ry(0.2, q) for q in range(n)], n_qubits=n), backend)
+        assert st.max_factor_width == 1
+
+        calls = {"n": 0}
+        original = FactoredState.to_statevector
+
+        def _guard(self):
+            calls["n"] += 1
+            return original(self)
+
+        FactoredState.to_statevector = _guard
+        try:
+            ham = Hamiltonian(n_qubits=n, terms=[("Z", [0], 1.0), ("Z", [n - 1], 1.0)])
+            value = factored_expectation(st, ham)
+        finally:
+            FactoredState.to_statevector = original
+
+        assert calls["n"] == 0, "factored_expectation 稠密化了整个态"
+        assert np.isfinite(value)

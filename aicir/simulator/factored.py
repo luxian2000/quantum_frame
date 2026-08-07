@@ -18,7 +18,7 @@ from ..dtypes import resolve_dtype
 from ..ir import ControlFlow
 from .mps import _permute_basis
 
-__all__ = ["FactoredState", "factored_statevector"]
+__all__ = ["FactoredState", "factored_statevector", "factored_expectation"]
 
 
 def _kron_all(tensors, backend):
@@ -251,3 +251,45 @@ def factored_statevector(circuit, backend=None) -> FactoredState:
                 state = state.join_for(qubits)
             state = state.apply_local(matrix, qubits)
     return state
+
+
+def _restrict_labels(labels, factor_qubits):
+    """把全局 Pauli 标签限制到某因子的比特上，返回该因子的局部标签串。"""
+
+    return "".join(labels[q] for q in factor_qubits)
+
+
+def factored_expectation(state: FactoredState, observable) -> float:
+    """在因子化表示上求 Pauli 可观测量期望，**不构造完整态矢量**。
+
+    Pauli 串在互不纠缠的因子间是乘性的：``⟨P⟩ = ∏ᵢ ⟨Pᵢ⟩``，其中 ``Pᵢ`` 是 ``P``
+    限制到因子 i 的部分。逐因子求值再连乘，代价只与**最宽的因子**有关而非 ``2^n``
+    ——这是本引擎内存优势真正兑现的地方。
+
+    各因子上的局部期望仍复用 ``Hamiltonian.expectation`` 的稀疏路径，故 Y 的符号
+    约定等易错细节只有一份实现。
+    """
+
+    from ..core.operators import Hamiltonian
+
+    terms = observable.terms if isinstance(observable, Hamiltonian) else [observable]
+
+    total = 0.0
+    for term in terms:
+        labels = term.qubit_labels
+        product = 1.0
+        for factor_qubits, amplitudes in state.factors:
+            local_labels = _restrict_labels(labels, factor_qubits)
+            if set(local_labels) == {"I"}:
+                continue                      # 恒等因子贡献 1
+            width = len(factor_qubits)
+            local_state = State(
+                state.backend.cast(amplitudes).reshape(1 << width, 1),
+                width,
+                state.backend,
+            )
+            product *= Hamiltonian(
+                n_qubits=width, terms=[(local_labels, 1.0)]
+            ).expectation(local_state, state.backend)
+        total += float(np.real(term.coefficient)) * product
+    return float(total)
