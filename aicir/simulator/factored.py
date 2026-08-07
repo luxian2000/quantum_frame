@@ -10,9 +10,48 @@ v1 **只合并不拆分**——不做可分性检测。拆分需要 Schmidt/SVD�
 
 from __future__ import annotations
 
+import numpy as np
+
+from ..core.state import State
 from ..dtypes import resolve_dtype
+from .mps import _permute_basis
 
 __all__ = ["FactoredState"]
+
+
+def _kron_all(tensors, backend):
+    """按给定顺序做 Kronecker 积。
+
+    走 ``backend.kron`` 而非 ``*``：NPU 上该方法已是 real/imag 分解（4 次实数
+    kron），直接用复数乘会命中昇腾缺失的 ``aclnnMul``。
+    """
+
+    result = tensors[0]
+    for tensor in tensors[1:]:
+        result = backend.kron(result, tensor)
+    return result
+
+
+def _canonical_permutation(qubit_order, n_qubits):
+    """构造把 ``qubit_order`` 位序还原成 0..n-1 的基态置换。
+
+    ``kron`` 后的第 k 位对应 ``qubit_order[k]``（大端）。返回 ``src``，
+    使 ``out[i] = flat[src[i]]``。
+
+    索引运算全部用 Python int / numpy 完成：昇腾没有 ``bitwise_right_shift``
+    内核，用 torch 位运算会静默回落 CPU（见 CLAUDE.md 的缺口清单）。
+    """
+
+    dim = 1 << n_qubits
+    position = {q: k for k, q in enumerate(qubit_order)}
+    src = np.zeros(dim, dtype=np.int64)
+    for i in range(dim):
+        source = 0
+        for j in range(n_qubits):
+            if (i >> (n_qubits - 1 - j)) & 1:      # 目标态第 j 位（即 qubit j）
+                source |= 1 << (n_qubits - 1 - position[j])
+        src[i] = source
+    return src
 
 
 class FactoredState:
@@ -63,6 +102,31 @@ class FactoredState:
     @property
     def max_factor_width(self) -> int:
         return max((len(qs) for qs, _ in self._factors), default=0)
+
+    def to_statevector(self) -> State:
+        """合并所有因子并还原成规范比特序的稠密 ``State``。
+
+        ``kron`` 得到的比特序是各因子 qubits 的**拼接**顺序，不是 0..n-1，
+        故必须再做一次基态置换。置换走 ``mps._permute_basis``——torch 分支用
+        实/虚部 ``index_select``，因为昇腾不支持复数张量的高级索引。
+        """
+
+        ordered = sorted(self._factors, key=lambda item: item[0][0])
+        qubit_order = [q for qubits, _ in ordered for q in qubits]
+        amplitudes = _kron_all(
+            [self._backend.cast(amp).reshape(-1) for _, amp in ordered], self._backend
+        )
+        flat = self._backend.cast(amplitudes).reshape(-1)
+
+        src = _canonical_permutation(qubit_order, self._n_qubits)
+        if not np.array_equal(src, np.arange(1 << self._n_qubits)):
+            flat = _permute_basis(flat, src, self._backend)
+
+        return State(
+            self._backend.cast(flat).reshape(1 << self._n_qubits, 1),
+            self._n_qubits,
+            self._backend,
+        )
 
     def factor_index_of(self, qubit: int) -> int:
         """返回 ``qubit`` 所在因子的下标。"""
