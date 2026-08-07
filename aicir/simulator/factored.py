@@ -54,6 +54,23 @@ def _canonical_permutation(qubit_order, n_qubits):
     return src
 
 
+def _canonical_permutation_local(local_order, width):
+    """与 ``_canonical_permutation`` 同构，但作用在因子局部的 ``width`` 个比特上。
+
+    ``local_order[k]`` 表示 kron 结果的第 k 位在排序后应处的位置。
+    """
+
+    dim = 1 << width
+    src = np.zeros(dim, dtype=np.int64)
+    for i in range(dim):
+        source = 0
+        for k, position in enumerate(local_order):
+            if (i >> (width - 1 - position)) & 1:
+                source |= 1 << (width - 1 - k)
+        src[i] = source
+    return src
+
+
 class FactoredState:
     """乘积态：``factors`` 为 ``[(sorted_qubits, amplitude_tensor), ...]``。
 
@@ -127,6 +144,70 @@ class FactoredState:
             self._n_qubits,
             self._backend,
         )
+
+    def apply_local(self, matrix, qubits) -> "FactoredState":
+        """把 ``matrix`` 作用在**同一个因子内**的 ``qubits`` 上，返回新状态。
+
+        作用轴是各 qubit 在该因子内的局部下标，因子宽度就是局部的 n_qubits——
+        这正是 ``backend.apply_statevector_local`` 的契约，故不需要任何新原语，
+        NPU 上也自动复用其已验证过的实现。
+        """
+
+        qubits = tuple(int(q) for q in qubits)
+        indices = {self.factor_index_of(q) for q in qubits}
+        if len(indices) != 1:
+            raise ValueError(f"qubits {qubits} 跨因子，请先调用 join_for(qubits)")
+
+        index = indices.pop()
+        factor_qubits, amplitudes = self._factors[index]
+        axes = [factor_qubits.index(q) for q in qubits]
+        width = len(factor_qubits)
+
+        updated = self._backend.apply_statevector_local(
+            self._backend.cast(amplitudes).reshape(1 << width, 1),
+            self._backend.cast(matrix),
+            axes,
+            width,
+        )
+        if updated is None:
+            raise ValueError(f"后端不支持 {len(qubits)} 比特局部门")
+
+        factors = list(self._factors)
+        factors[index] = (factor_qubits, self._backend.cast(updated).reshape(-1))
+        return FactoredState(factors, self._n_qubits, self._backend)
+
+    def join_for(self, qubits) -> "FactoredState":
+        """把包含 ``qubits`` 中任一比特的所有因子合并成一个因子。
+
+        合并即 Kronecker 积；合并后 qubit 列表按升序排列，故还需按新比特序重排
+        幅度——与 ``to_statevector`` 是同一个置换问题，只是范围限于被合并的比特。
+        """
+
+        qubits = tuple(int(q) for q in qubits)
+        target = sorted({self.factor_index_of(q) for q in qubits})
+        if len(target) == 1:
+            return FactoredState(self._factors, self._n_qubits, self._backend)
+
+        merged_qubits = []
+        tensors = []
+        for index in target:
+            factor_qubits, amplitudes = self._factors[index]
+            merged_qubits.extend(factor_qubits)
+            tensors.append(self._backend.cast(amplitudes).reshape(-1))
+
+        combined = _kron_all(tensors, self._backend)
+        width = len(merged_qubits)
+        sorted_qubits = tuple(sorted(merged_qubits))
+        local_order = [sorted_qubits.index(q) for q in merged_qubits]
+        src = _canonical_permutation_local(local_order, width)
+        if not np.array_equal(src, np.arange(1 << width)):
+            combined = _permute_basis(self._backend.cast(combined).reshape(-1), src, self._backend)
+
+        chosen = set(target)
+        remaining = [f for i, f in enumerate(self._factors) if i not in chosen]
+        remaining.append((sorted_qubits, self._backend.cast(combined).reshape(-1)))
+        remaining.sort(key=lambda item: item[0][0])
+        return FactoredState(remaining, self._n_qubits, self._backend)
 
     def factor_index_of(self, qubit: int) -> int:
         """返回 ``qubit`` 所在因子的下标。"""
