@@ -330,3 +330,56 @@ class TestFactoredExpectation:
 
         assert calls["n"] == 0, "factored_expectation 稠密化了整个态"
         assert np.isfinite(value)
+
+
+class TestMeasureIntegration:
+    def test_factored_method_matches_statevector_method(self):
+        backend = NumpyBackend()
+        gates = [A.hadamard(0), A.cnot(1, [0]), A.ry(0.3, 2)]
+        circuit = Circuit(*gates, n_qubits=3)
+        a = np.asarray(
+            Measure(backend=backend).run(circuit, shots=None, method="factored").final_state
+        ).reshape(-1)
+        b = np.asarray(
+            Measure(backend=backend).run(circuit, shots=None, method="statevector").final_state
+        ).reshape(-1)
+        np.testing.assert_allclose(a, b, atol=1e-10)
+
+    def test_factored_rejects_noisy_circuits(self):
+        """拒绝检查读的是 circuit.noise_model（与 method='mps' 分支一致）。"""
+        backend = NumpyBackend()
+        circuit = Circuit(A.hadamard(0), n_qubits=1)
+        circuit.noise_model = object()
+        with pytest.raises(ValueError, match="仅支持纯态"):
+            Measure(backend=backend).run(circuit, shots=None, method="factored")
+
+    def test_factored_rejects_embedded_measure_markers(self):
+        from aicir.core.circuit import measure as measure_marker
+
+        backend = NumpyBackend()
+        circuit = Circuit(A.hadamard(0), measure_marker(0), n_qubits=1)
+        with pytest.raises(ValueError, match="measure"):
+            Measure(backend=backend).run(circuit, shots=None, method="factored")
+
+    def test_factored_rejects_initial_state(self):
+        backend = NumpyBackend()
+        circuit = Circuit(A.hadamard(0), n_qubits=1)
+        init = np.array([[0.0], [1.0]], dtype=np.complex128)
+        with pytest.raises(ValueError, match="initial_state"):
+            Measure(backend=backend).run(
+                circuit, shots=None, method="factored", initial_state=init
+            )
+
+    def test_factored_supports_observables(self):
+        """交给下游 statevector 路径后，observable 机制应原样可用。
+
+        ``observables`` 是 ``{name: matrix}`` 字典（见 measure.py 的 items() 调用）。
+        Bell 态是 Z⊗Z 的 +1 本征态。
+        """
+        backend = NumpyBackend()
+        circuit = Circuit(A.hadamard(0), A.cnot(1, [0]), n_qubits=2)
+        zz = np.diag([1.0, -1.0, -1.0, 1.0]).astype(np.complex128)
+        result = Measure(backend=backend).run(
+            circuit, shots=None, method="factored", observables={"ZZ": zz}
+        )
+        assert result.expectation_values["ZZ"] == pytest.approx(1.0, abs=1e-10)
