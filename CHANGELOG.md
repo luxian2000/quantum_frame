@@ -34,6 +34,31 @@ v1 **只合并不拆分**：拆分需 Schmidt/SVD，昇腾无复数 SVD 内核�
   （稠密路径同一入口，内部自行选择快路径或回退）。
 - **`zero_state` 把 numpy dtype 传给 `backend.zeros`**，GPUBackend 直接 `TypeError`。
 
+### 昇腾真机实测（commit `a665442`，`npu:0`，`fallback_to_cpu=false`）
+
+`scripts/npu/factored.sh --scale-qubits 28` **6/6 通过**，证据归档于
+`docs/evidence/factored/a665442/npu.json`。
+
+| 项 | 结果 |
+| --- | --- |
+| `bitwise_ops` | `[]`——未发出任何位运算，无静默 CPU 回落 |
+| 与 CPU 参考重叠度 | 0.99999993（complex64 精度） |
+| 因子划分 | `[[0,1],[2,3],[4],[5],[6],[7],[8],[9]]`，与 CPU 一致 |
+| n=28 全可分 | 21.42 ms，28 个宽度 1 的因子（稠密需 2.15 GB） |
+| 免稠密化期望 | `materialised=0`，`⟨H⟩=1.960133` |
+
+这是**唯一**能验证设备门控 real/imag 分解真正生效的途径（见下节）。
+
+**与稀疏 Pauli 路径的交叉印证**：n=28 每门 0.765 ms，正落在此前测得的
+Pauli 每项 0.66–0.83 ms 区间内。两条互不相关的代码路径收敛到同一个每操作常数，
+独立佐证了昇腾在这些规模上是 **kernel-launch 受限**而非算力受限——代价与张量
+大小几乎无关。
+
+**一处如实记录的数值现象**：`matches_dense_path` 的重叠度为 1.0000031，
+**超过 1** 约 3.1e-6。归一化态之间的重叠不应大于 1，这说明稠密对照路径在
+complex64 下有归一化漂移（n=10 上逐门累积），量级远大于因子化自身的 7e-8。
+在 1e-3 容差内，不是缺陷，但不应被当作"完美一致"。
+
 ### 已知边界：CPU 上无法验证复数算子的 NPU 安全性
 
 `NPUBackend` 的 real/imag 分解**按设备门控**（`_is_npu_complex` 要求
