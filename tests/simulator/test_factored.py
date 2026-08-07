@@ -383,3 +383,55 @@ class TestMeasureIntegration:
             circuit, shots=None, method="factored", observables={"ZZ": zz}
         )
         assert result.expectation_values["ZZ"] == pytest.approx(1.0, abs=1e-10)
+
+
+class TestBackendParity:
+    """引擎只用 backend 原语，跨后端一致性应当是**构造性**的，不需要额外适配。"""
+
+    def test_gpu_backend_matches_numpy(self):
+        torch = pytest.importorskip("torch")
+        from aicir import GPUBackend
+        from aicir.simulator.factored import factored_statevector
+
+        gates = [A.hadamard(0), A.cnot(1, [0]), A.ry(0.3, 2), A.cnot(2, [1])]
+        circuit = Circuit(*gates, n_qubits=4)
+
+        cpu = NumpyBackend(dtype=np.complex128)
+        gpu = GPUBackend(device="cpu", dtype=torch.complex128)
+
+        a = np.asarray(factored_statevector(circuit, cpu).to_statevector().to_numpy()).reshape(-1)
+        b = np.asarray(factored_statevector(circuit, gpu).to_statevector().to_numpy()).reshape(-1)
+        np.testing.assert_allclose(a, b, atol=1e-10)
+
+    def test_gpu_backend_factor_structure_matches(self):
+        """因子划分是纯 Python 记账，必须与设备无关。"""
+        torch = pytest.importorskip("torch")
+        from aicir import GPUBackend
+        from aicir.simulator.factored import factored_statevector
+
+        gates = [A.hadamard(0), A.cnot(1, [0]), A.ry(0.3, 2)]
+        circuit = Circuit(*gates, n_qubits=4)
+        cpu_part = [qs for qs, _ in factored_statevector(circuit, NumpyBackend()).factors]
+        gpu_part = [
+            qs for qs, _ in factored_statevector(
+                circuit, GPUBackend(device="cpu", dtype=torch.complex64)
+            ).factors
+        ]
+        assert cpu_part == gpu_part
+
+    def test_gpu_expectation_matches_numpy(self):
+        torch = pytest.importorskip("torch")
+        from aicir import GPUBackend, Hamiltonian
+        from aicir.simulator.factored import factored_expectation, factored_statevector
+
+        gates = [A.ry(0.4, 0), A.cnot(1, [0]), A.rx(0.2, 2)]
+        circuit = Circuit(*gates, n_qubits=3)
+        ham = Hamiltonian(n_qubits=3, terms=[("ZZ", [0, 1], 1.0), ("Y", [2], 0.5)])
+
+        cpu_val = factored_expectation(
+            factored_statevector(circuit, NumpyBackend(dtype=np.complex128)), ham
+        )
+        gpu_val = factored_expectation(
+            factored_statevector(circuit, GPUBackend(device="cpu", dtype=torch.complex128)), ham
+        )
+        assert gpu_val == pytest.approx(cpu_val, abs=1e-9)

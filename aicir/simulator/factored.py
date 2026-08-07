@@ -5,14 +5,19 @@
 
 v1 **只合并不拆分**——不做可分性检测。拆分需要 Schmidt/SVD，而昇腾没有复数 SVD
 内核（real-embedding 变通在秩亏时对阈值极敏感），把它排除在 v1 之外可使本引擎
-仅依赖 ``backend.apply_statevector_local`` 与 ``backend.kron`` 两个已 NPU-safe 的原语。
+只依赖两样东西：``_apply_local_matrix_to_state``（稠密路径的同一个门应用入口）
+与 ``backend.kron``（NPU 上已是 real/imag 分解）。
+
+跨后端可移植性由此**构造性**成立，无需任何后端专用分支。注意不要改调
+``backend.apply_statevector_local``——那是可选优化，基类默认返回 ``None``，
+只有 ``NumpyBackend`` 实现，直接依赖它会让本引擎在 GPU/NPU 上失效。
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from ..core.gates import gate_tensors
+from ..core.gates import _apply_local_matrix_to_state, gate_tensors
 from ..core.state import State
 from ..dtypes import resolve_dtype
 from ..ir import ControlFlow
@@ -94,12 +99,12 @@ class FactoredState:
         n_qubits = int(n_qubits)
         if n_qubits <= 0:
             raise ValueError(f"n_qubits 必须为正整数，收到 {n_qubits}")
-        dtype = resolve_dtype(backend)
-        factors = []
-        for qubit in range(n_qubits):
-            amp = backend.zeros((2,), dtype=dtype)
-            amp = backend.cast(_with_first_one(amp, backend))
-            factors.append(((qubit,), amp))
+        # 先用 numpy 造 |0>，再交给 backend.cast 转成后端张量并取后端 dtype。
+        # 不要写成 backend.zeros((2,), dtype=resolve_dtype(backend))——那会把
+        # **numpy** dtype 传给 torch 后端，GPUBackend 直接 TypeError。
+        amp = np.zeros(2, dtype=resolve_dtype(backend))
+        amp[0] = 1.0
+        factors = [((qubit,), backend.cast(amp.copy())) for qubit in range(n_qubits)]
         return cls(factors, n_qubits, backend)
 
     @property
@@ -150,9 +155,13 @@ class FactoredState:
     def apply_local(self, matrix, qubits) -> "FactoredState":
         """把 ``matrix`` 作用在**同一个因子内**的 ``qubits`` 上，返回新状态。
 
-        作用轴是各 qubit 在该因子内的局部下标，因子宽度就是局部的 n_qubits——
-        这正是 ``backend.apply_statevector_local`` 的契约，故不需要任何新原语，
-        NPU 上也自动复用其已验证过的实现。
+        作用轴是各 qubit 在该因子内的局部下标，因子宽度就是局部的 n_qubits。
+
+        走 ``_apply_local_matrix_to_state``（稠密路径的同一个入口）而**不是**
+        ``backend.apply_statevector_local``：后者是可选优化，基类默认返回 ``None``
+        表示"请用通用回退"，只有 ``NumpyBackend`` 实现了它。直接调用会让本引擎
+        在 GPU/NPU 上直接失效。通用入口内部会自行选择快路径或回退，因此跨后端
+        可移植性来自复用它，而非来自某个特定后端方法。
         """
 
         qubits = tuple(int(q) for q in qubits)
@@ -165,14 +174,13 @@ class FactoredState:
         axes = [factor_qubits.index(q) for q in qubits]
         width = len(factor_qubits)
 
-        updated = self._backend.apply_statevector_local(
+        updated = _apply_local_matrix_to_state(
             self._backend.cast(amplitudes).reshape(1 << width, 1),
             self._backend.cast(matrix),
             axes,
             width,
+            self._backend,
         )
-        if updated is None:
-            raise ValueError(f"后端不支持 {len(qubits)} 比特局部门")
 
         factors = list(self._factors)
         factors[index] = (factor_qubits, self._backend.cast(updated).reshape(-1))
@@ -217,15 +225,6 @@ class FactoredState:
             if qubit in qubits:
                 return index
         raise ValueError(f"qubit {qubit} 不在任何因子中")
-
-
-def _with_first_one(amp, backend):
-    """把长度 2 的零张量的第 0 个分量置 1（避免依赖具体张量类型的原地赋值语义）。"""
-    import numpy as np
-
-    arr = np.asarray(backend.to_numpy(amp)).reshape(-1).copy()
-    arr[0] = 1.0
-    return arr
 
 
 def factored_statevector(circuit, backend=None) -> FactoredState:
