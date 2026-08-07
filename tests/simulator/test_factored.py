@@ -1,9 +1,13 @@
-"""因子化（乘积态）引擎：容器与不变量。"""
+"""因子化（乘积态）引擎：容器、稠密化、门应用与合并。
+
+本文件以**稠密路径为唯一 oracle**：因子化只是表示方式不同，物理态必须逐值一致。
+"""
 
 import numpy as np
 import pytest
 
-from aicir import NumpyBackend
+import aicir as A
+from aicir import Circuit, Measure, NumpyBackend
 from aicir.simulator.factored import FactoredState
 
 
@@ -21,7 +25,6 @@ class TestZeroState:
 
     def test_factor_index_of_locates_qubit(self):
         st = FactoredState.zero_state(3, NumpyBackend())
-        assert st.factor_index_of(2) == st.factor_index_of(2)
         idx = st.factor_index_of(1)
         assert 1 in st.factors[idx][0]
 
