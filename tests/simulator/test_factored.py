@@ -165,3 +165,88 @@ class TestJoining:
         pair[0] = 1.0
         st = FactoredState([((0, 1), pair)], 2, backend)
         assert st.join_for((0, 1)).n_factors == 1
+
+
+def _dense(circuit, backend):
+    return np.asarray(
+        Measure(backend=backend).run(circuit, shots=None).final_state
+    ).reshape(-1)
+
+
+class TestDriverMatchesDense:
+    """稠密路径是唯一 oracle：因子化只是表示方式不同，物理态必须一致。"""
+
+    @pytest.mark.parametrize("n", [2, 3, 5, 7])
+    def test_ghz_matches_dense(self, n):
+        from aicir.simulator.factored import factored_statevector
+
+        backend = NumpyBackend()
+        gates = [A.hadamard(0)] + [A.cnot(q + 1, [q]) for q in range(n - 1)]
+        circuit = Circuit(*gates, n_qubits=n)
+        got = np.asarray(
+            factored_statevector(circuit, backend).to_statevector().to_numpy()
+        ).reshape(-1)
+        np.testing.assert_allclose(got, _dense(circuit, backend), atol=1e-10)
+
+    def test_product_circuit_never_joins(self):
+        """全单比特门的线路应保持完全因子化——这就是本引擎的收益来源。"""
+        from aicir.simulator.factored import factored_statevector
+
+        backend = NumpyBackend()
+        gates = [A.rx(0.3, q) for q in range(6)] + [A.ry(0.7, q) for q in range(6)]
+        st = factored_statevector(Circuit(*gates, n_qubits=6), backend)
+        assert st.n_factors == 6
+        assert st.max_factor_width == 1
+
+    def test_disjoint_entanglers_produce_pairwise_factors(self):
+        from aicir.simulator.factored import factored_statevector
+
+        backend = NumpyBackend()
+        gates = [A.hadamard(0), A.cnot(1, [0]), A.hadamard(2), A.cnot(3, [2])]
+        st = factored_statevector(Circuit(*gates, n_qubits=4), backend)
+        assert st.n_factors == 2
+        assert st.max_factor_width == 2
+
+    @pytest.mark.parametrize("seed", [1, 2, 3])
+    def test_random_circuit_matches_dense(self, seed):
+        from aicir.simulator.factored import factored_statevector
+
+        backend = NumpyBackend()
+        rng = np.random.default_rng(seed)
+        n = 5
+        gates = []
+        for _ in range(12):
+            if rng.random() < 0.5:
+                gates.append(A.ry(float(rng.uniform(0, 6.28)), int(rng.integers(n))))
+            else:
+                a = int(rng.integers(n - 1))
+                gates.append(A.cnot(a + 1, [a]))
+        circuit = Circuit(*gates, n_qubits=n)
+        got = np.asarray(
+            factored_statevector(circuit, backend).to_statevector().to_numpy()
+        ).reshape(-1)
+        np.testing.assert_allclose(got, _dense(circuit, backend), atol=1e-10)
+
+    def test_non_adjacent_entangler_matches_dense(self):
+        """非相邻 CNOT 会合并出交错的因子——比特序最容易错的地方。"""
+        from aicir.simulator.factored import factored_statevector
+
+        backend = NumpyBackend()
+        gates = [A.hadamard(0), A.ry(0.4, 1), A.cnot(3, [0]), A.ry(0.2, 2)]
+        circuit = Circuit(*gates, n_qubits=4)
+        got = np.asarray(
+            factored_statevector(circuit, backend).to_statevector().to_numpy()
+        ).reshape(-1)
+        np.testing.assert_allclose(got, _dense(circuit, backend), atol=1e-10)
+
+    def test_rejects_control_flow(self):
+        from aicir.core.circuit import if_
+        from aicir.core.classical import ClassicalRegister
+        from aicir.simulator.factored import factored_statevector
+
+        backend = NumpyBackend()
+        creg = ClassicalRegister(1, "c")
+        body = Circuit(A.pauli_x(0), n_qubits=1)
+        circuit = Circuit(if_(creg[0] == 1, body), n_qubits=1)
+        with pytest.raises(ValueError, match="控制流"):
+            factored_statevector(circuit, backend)

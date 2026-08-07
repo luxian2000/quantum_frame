@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..core.gates import gate_tensors
 from ..core.state import State
 from ..dtypes import resolve_dtype
+from ..ir import ControlFlow
 from .mps import _permute_basis
 
-__all__ = ["FactoredState"]
+__all__ = ["FactoredState", "factored_statevector"]
 
 
 def _kron_all(tensors, backend):
@@ -224,3 +226,28 @@ def _with_first_one(amp, backend):
     arr = np.asarray(backend.to_numpy(amp)).reshape(-1).copy()
     arr[0] = 1.0
     return arr
+
+
+def factored_statevector(circuit, backend=None) -> FactoredState:
+    """按因子化表示演化 ``circuit``，返回 ``FactoredState``。
+
+    门经 ``gate_tensors`` 降解为 ``[(matrix, axes)]``——与稠密路径、张量网络引擎
+    同一个来源，故门语义不会分叉。跨因子的门先 ``join_for`` 再 ``apply_local``。
+    """
+
+    from ..backends.numpy_backend import NumpyBackend
+
+    backend = backend if backend is not None else (circuit._backend or NumpyBackend())
+
+    for gate in circuit.gates:
+        if isinstance(gate, ControlFlow):
+            raise ValueError("控制流指令无法用因子化引擎执行；请用 Measure.run 的轨迹路径")
+
+    state = FactoredState.zero_state(circuit.n_qubits, backend)
+    for gate in circuit.gates:
+        for matrix, axes in gate_tensors(gate, backend):
+            qubits = tuple(int(a) for a in axes)
+            if len({state.factor_index_of(q) for q in qubits}) > 1:
+                state = state.join_for(qubits)
+            state = state.apply_local(matrix, qubits)
+    return state
