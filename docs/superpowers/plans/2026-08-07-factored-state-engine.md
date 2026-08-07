@@ -840,7 +840,6 @@ def factored_expectation(state: FactoredState, observable) -> float:
             local_labels = _restrict_labels(labels, factor_qubits)
             if set(local_labels) == {"I"}:
                 continue                       # 恒等因子贡献 1
-            local = PauliString(local_labels, n_qubits=len(factor_qubits))
             local_state = State(
                 state.backend.cast(amplitudes).reshape(1 << len(factor_qubits), 1),
                 len(factor_qubits),
@@ -1172,23 +1171,108 @@ and `_time` helpers — **NPU execution is asynchronous, and timing without
 
 - [ ] **Step 1: Write the probe**
 
-Cases, each raising `AssertionError` on failure and each recording into a
-`metrics` dict written out by `--output-json`:
+Copy `scripts/npu/pauli_sparse_probe.py` and keep its `_backend`, `_sync`,
+`_time`, and `main()` case-runner verbatim — only the case bodies differ. The
+five cases:
 
-1. `correctness_vs_cpu` — a 10-qubit circuit mixing single-qubit gates and two
-   disjoint CNOT pairs; compare `to_statevector()` against a `NumpyBackend`
-   `complex128` reference with `atol=1e-3` (complex64 precision on device).
-2. `factor_structure` — assert the factor partition on NPU equals the partition
-   on CPU for the same circuit. Structure is device-independent bookkeeping;
-   a mismatch means a device-specific code path leaked in.
-3. `no_ascend_gaps` — run under the `_BanAscendGaps` mode from Task 9 on device.
-4. `product_state_scale` — a fully separable 28-qubit circuit
-   (`ry` on every qubit, no entanglers). Dense would need 2^28 × 8 B = 2.1 GB;
-   the factored state holds 28 two-element tensors. Assert it completes and
-   `max_factor_width == 1`.
-5. `expectation_without_materialising` — `factored_expectation` on that same
-   28-qubit state with a two-term Z Hamiltonian; assert finite and that
-   `to_statevector()` is never called (guard with a counter attribute).
+```python
+def _mixed_circuit(n):
+    """单比特门 + 两对不相交 CNOT：保证既有因子内门也有合并。"""
+    gates = [A.ry(0.3, q) for q in range(n)]
+    gates += [A.cnot(1, [0]), A.cnot(3, [2])]
+    return Circuit(*gates, n_qubits=n)
+
+
+def case_correctness_vs_cpu(backend, n, metrics):
+    circuit = _mixed_circuit(min(n, 10))
+    got = np.asarray(
+        factored_statevector(circuit, backend).to_statevector().to_numpy()
+    ).reshape(-1)
+    cpu = NumpyBackend(dtype=np.complex128)
+    want = np.asarray(
+        factored_statevector(circuit, cpu).to_statevector().to_numpy()
+    ).reshape(-1)
+    overlap = abs(complex(np.vdot(want, got)))
+    metrics["correctness_overlap"] = overlap
+    if abs(overlap - 1.0) > 1e-3:       # complex64 精度
+        raise AssertionError(f"NPU 与 CPU 态重叠度 {overlap}，应为 1")
+
+
+def case_factor_structure(backend, n, metrics):
+    """因子划分是纯 Python 记账，必须与设备无关。不一致即说明混入了设备分支。"""
+    circuit = _mixed_circuit(min(n, 10))
+    npu_part = [qs for qs, _ in factored_statevector(circuit, backend).factors]
+    cpu_part = [qs for qs, _ in factored_statevector(circuit, NumpyBackend()).factors]
+    metrics["factor_partition"] = [list(qs) for qs in npu_part]
+    if npu_part != cpu_part:
+        raise AssertionError(f"因子划分不一致: NPU {npu_part} vs CPU {cpu_part}")
+
+
+def case_no_ascend_gaps(backend, n, metrics):
+    """真机复核：不发出复数索引/加乘、也不发出位运算。"""
+    circuit = _mixed_circuit(min(n, 8))
+    mode = _BanAscendGaps()             # 与 Task 9 的拦截器同一份实现
+    with mode:
+        factored_statevector(circuit, backend).to_statevector()
+    metrics["violations"] = sorted(set(mode.violations))
+    if mode.violations:
+        raise AssertionError(f"命中昇腾缺失内核: {metrics['violations']}")
+
+
+def case_product_state_scale(backend, n, metrics):
+    """28 比特全可分：稠密需 2^28 x 8B = 2.1 GB，因子化只有 28 个 2 维张量。"""
+    n_qubits = 28
+    circuit = Circuit(*[A.ry(0.2, q) for q in range(n_qubits)], n_qubits=n_qubits)
+    elapsed = _time(backend, lambda: factored_statevector(circuit, backend))
+    state = factored_statevector(circuit, backend)
+    metrics["scale_seconds"] = elapsed
+    metrics["scale_factors"] = state.n_factors
+    print(f"        n={n_qubits} 全可分 {elapsed*1000:.2f} ms, factors={state.n_factors}")
+    if state.max_factor_width != 1:
+        raise AssertionError(f"全可分线路却出现宽度 {state.max_factor_width} 的因子")
+
+
+def case_expectation_without_materialising(backend, n, metrics):
+    """28 比特求期望且**不得**稠密化——稠密化会立刻 OOM 或极慢。"""
+    n_qubits = 28
+    circuit = Circuit(*[A.ry(0.2, q) for q in range(n_qubits)], n_qubits=n_qubits)
+    state = factored_statevector(circuit, backend)
+
+    calls = {"n": 0}
+    original = type(state).to_statevector
+
+    def _guard(self):
+        calls["n"] += 1
+        return original(self)
+
+    type(state).to_statevector = _guard
+    try:
+        ham = Hamiltonian(n_qubits=n_qubits, terms=[("Z", [0], 1.0), ("Z", [27], 1.0)])
+        value = factored_expectation(state, ham)
+    finally:
+        type(state).to_statevector = original
+
+    metrics["expectation_value"] = float(value)
+    metrics["materialised"] = calls["n"]
+    if calls["n"] != 0:
+        raise AssertionError("factored_expectation 稠密化了整个态")
+    if not np.isfinite(value):
+        raise AssertionError(f"期望值非有限: {value}")
+```
+
+Register them in `main()`'s `cases` list in this order, matching the
+`pauli_sparse_probe.py` pattern:
+
+```python
+    cases = [
+        ("correctness_vs_cpu", lambda: case_correctness_vs_cpu(backend, n, metrics)),
+        ("factor_structure", lambda: case_factor_structure(backend, n, metrics)),
+        ("no_ascend_gaps", lambda: case_no_ascend_gaps(backend, n, metrics)),
+        ("product_state_scale", lambda: case_product_state_scale(backend, n, metrics)),
+        ("expectation_without_materialising",
+         lambda: case_expectation_without_materialising(backend, n, metrics)),
+    ]
+```
 
 - [ ] **Step 2: Create the shell wrapper**
 
