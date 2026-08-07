@@ -2,6 +2,48 @@
 
 本文件记录 `aicir` 库的功能新增与重要接口变化。日期使用本地开发日期。
 
+## 2026-08-08
+
+### 新增：因子化（乘积态）模拟引擎 `aicir.simulator.factored`
+
+把纯态保存为若干**互不纠缠的因子**，门只作用在自己所属的因子上，跨因子时才 kron
+合并。低纠缠线路因此只在小张量上演算，且**精确、无截断**（与 MPS 的 bond 截断不同）。
+
+- `FactoredState`（`zero_state`/`factors`/`n_factors`/`max_factor_width`/
+  `apply_local`/`join_for`/`to_statevector`）、`factored_statevector`、
+  `factored_expectation`，以及 `Measure.run(circuit, method="factored")`。
+- `factored_expectation` 利用 Pauli 串在因子间的乘性 `⟨P⟩ = ∏ᵢ⟨Pᵢ⟩`，
+  **全程不构造 `2^n` 态矢量**（测试用 monkeypatch 断言 `to_statevector` 调用数为 0）。
+- 实测因子结构：6 比特纯单比特门线路 → 6 个宽度 1 的因子；两组不相交纠缠块 →
+  2 个宽度 2 的因子；24 比特全可分 → 24 个宽度 1 的因子（稠密需 268 MB）。
+
+**这是补充，不是替代——稠密路径仍是默认。** 硬件高效 ansatz、QAOA、随机线路的
+纠缠一两层就饱和，本引擎在这些负载上退化成单因子加记账开销，而它们正是本框架的
+主力变分负载。收益与失效条件都写进了 `aicir/simulator/README.md` 第 8 节。
+
+v1 **只合并不拆分**：拆分需 Schmidt/SVD，昇腾无复数 SVD 内核。排除拆分使引擎只
+依赖 `_apply_local_matrix_to_state` 与 `backend.kron`，跨后端可移植性因此是构造性的。
+
+### 修复（实施本引擎时发现）
+
+- **`Measure.run` 的 method 白名单**（`measure.py:174`）会在分支之前就拒绝新方法，
+  新增引擎必须同时扩充它——只有实跑才会暴露的接入点。
+- **`backend.apply_statevector_local` 是可选优化，不是通用原语。** 基类默认返回
+  `None` 表示"请用通用回退"，只有 `NumpyBackend` 实现。原实现直接依赖它并在 `None`
+  时报错，等于让引擎在 GPU/NPU 上必然失效；改走 `_apply_local_matrix_to_state`
+  （稠密路径同一入口，内部自行选择快路径或回退）。
+- **`zero_state` 把 numpy dtype 传给 `backend.zeros`**，GPUBackend 直接 `TypeError`。
+
+### 已知边界：CPU 上无法验证复数算子的 NPU 安全性
+
+`NPUBackend` 的 real/imag 分解**按设备门控**（`_is_npu_complex` 要求
+`device.type == "npu"`），`fallback_to_cpu=True` 时 `kron`/`matmul` 走原生复数分支。
+因此 CPU 上的 `TorchDispatchMode` 测试**证明不了**复数算子的真机安全性——
+`tests/simulator/test_factored_npu_safety.py` 的范围据此收窄为引擎自己控制的部分
+（不发位运算、不索引复数张量，两者均配反证测试），复数算术交由
+`scripts/npu/factored.sh` 真机探针（6 个 case）确认。本机 `--allow-cpu-fallback`
+预验 6/6，但那**不是**真机正确性的证据。
+
 ## 2026-08-07
 
 ### 性能：Pauli 期望值改走稀疏路径，去掉稠密 `2^n × 2^n` 矩阵
