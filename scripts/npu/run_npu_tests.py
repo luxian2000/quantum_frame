@@ -176,6 +176,15 @@ SUITES: dict[str, Suite] = {
         ),
         scripts=(("scripts/npu/pauli_sparse_probe.py",),),
     ),
+    "factored": Suite(
+        name="factored",
+        description="Factored (product-state) engine: correctness vs dense, factor structure, and scale beyond the dense limit.",
+        targets=(
+            "tests/simulator/test_factored.py",
+            "tests/simulator/test_factored_npu_safety.py",
+        ),
+        scripts=(("scripts/npu/factored_probe.py",),),
+    ),
     "demos": Suite(
         name="demos",
         description="Demo and molecule smoke tests that are reasonable to run before long NPU jobs.",
