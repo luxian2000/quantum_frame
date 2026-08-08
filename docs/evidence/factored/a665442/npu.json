@@ -1,0 +1,47 @@
+{
+  "passed": 6,
+  "total": 6,
+  "failed": [],
+  "device": "npu:0",
+  "fallback_to_cpu": false,
+  "n_qubits": 10,
+  "scale_qubits": 28,
+  "metrics": {
+    "correctness_overlap": 0.9999999300177309,
+    "dense_overlap": 1.0000030994415283,
+    "factor_partition": [
+      [
+        0,
+        1
+      ],
+      [
+        2,
+        3
+      ],
+      [
+        4
+      ],
+      [
+        5
+      ],
+      [
+        6
+      ],
+      [
+        7
+      ],
+      [
+        8
+      ],
+      [
+        9
+      ]
+    ],
+    "bitwise_ops": [],
+    "scale_qubits": 28,
+    "scale_seconds": 0.02142233680933714,
+    "scale_factors": 28,
+    "expectation_value": 1.9601331949234009,
+    "materialised": 0
+  }
+}

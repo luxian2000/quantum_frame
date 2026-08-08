@@ -28,6 +28,11 @@
 需要更大比特数的低纠缠电路近似末态/期望（bond 截断，有损）？
   -> mps_statevector(circuit, max_bond_dim=..., cutoff=...) / mps_expectation(...)
      或 Measure.run(circuit, method="mps", max_bond_dim=..., cutoff=...)
+
+电路的纠缠只是局部的（乘积态制备、互不相交的纠缠块、浅编码器）？
+  -> factored_statevector(circuit, backend=...) / factored_expectation(state, H)
+     或 Measure.run(circuit, method="factored")
+     精确、无截断；只在小张量上演算。但纠缠一旦饱和就退化，见第 8 节。
 ```
 
 ---
@@ -149,3 +154,54 @@ python demos/demo_npu_tensor.py --allow-cpu-fallback   # 无 NPU 时允许回退
 
 - `Measure`（`aicir/measure/`）：`method="tensor"` 与 `method="mps"` 复用本模块的 `tn_statevector` 与 `mps_statevector`，其余聚合/读出逻辑与 `method="statevector"` 一致。
 - `Backend`（`aicir/backends/`）：本模块只依赖 `Backend` 抽象的张量原语，不感知具体后端实现；MPS/张量网络截断近似（有损压缩）见本模块的 `mps_statevector`/`mps_expectation`。
+
+---
+
+## 8. 因子化（乘积态）引擎
+
+把纯态保存为若干**互不纠缠的因子**：门只作用在自己所属的因子上，只有当一个门跨越两个因子时才把它们 kron 合并。低纠缠电路因此全程只在小张量上演算，且**精确、无截断**——与 MPS 的 bond 截断不同，这里没有近似误差。
+
+```python
+from aicir.simulator import factored_statevector, factored_expectation
+
+state = factored_statevector(circuit, backend)
+state.n_factors          # 因子个数
+state.max_factor_width   # 最宽因子的比特数——真正决定内存的量
+state.to_statevector()   # 需要时才稠密化
+
+factored_expectation(state, hamiltonian)   # 不稠密化即可求 Pauli 期望
+```
+
+也可经统一入口：`Measure.run(circuit, method="factored")`。拒绝条件与 `method="mps"` 一致（仅纯态、不支持线路内嵌 `measure`、不接受自定义初态与非空 `snap`）。
+
+### 8.1 什么时候有收益，什么时候没有
+
+**有收益**：乘积态制备、互不相交的纠缠块、浅层编码器——纠缠始终局部的电路。
+
+**没有收益**：硬件高效 ansatz、QAOA、随机电路。这些电路一两层之内纠缠就会饱和，状态退化成**单个因子（即稠密态）外加一层记账开销**。而这恰恰是本框架的主力变分负载，**所以稠密路径仍是默认**，本引擎是可选补充而非替代。
+
+实测的因子结构（见 `tests/simulator/test_factored.py`）：
+
+| 电路 | 结果 |
+| --- | --- |
+| 6 比特，仅单比特门 | 6 个因子，最大宽度 1 |
+| 两组不相交的 H+CNOT | 2 个因子，最大宽度 2 |
+| GHZ（n 比特） | 1 个因子，宽度 n —— 无收益 |
+| 24 比特全可分 | 24 个因子，最大宽度 1（稠密需 268 MB） |
+
+### 8.2 v1 只合并、不拆分
+
+因子一旦合并就不再拆开，**即使后续的门让它重新可分**。检测可分性需要 Schmidt 分解，而昇腾没有复数 SVD 内核（real-embedding 变通在秩亏时对阈值极敏感）。排除拆分使本引擎只依赖 `_apply_local_matrix_to_state` 与 `backend.kron`，跨后端可移植性因此是**构造性**的。拆分是推迟，不是遗忘。
+
+### 8.3 与 MPS 的关系
+
+乘积态就是 **bond 维为 1 的 MPS**。本引擎是精确、自动的 χ=1 情形；`method="mps"` 是通用、带截断的情形。若将来做"按需增长 χ 的精确 MPS"，本引擎会成为它的基础情形，而不是竞争者。
+
+### 8.4 NPU 上的验证边界
+
+`NPUBackend` 的 real/imag 分解是**按设备门控**的（`_is_npu_complex` 要求 `device.type == "npu"`），CPU 上走不到。因此：
+
+- `tests/simulator/test_factored_npu_safety.py` 只覆盖**引擎自己控制**的部分：不发出位运算（昇腾无内核、会静默回落 CPU）、不直接索引复数张量；
+- 复数算术的 NPU 安全性由 `scripts/npu/factored.sh` 的真机探针确认。
+
+CPU 上的 dispatch 测试**证明不了**复数算子的真机安全性，不要据此下结论。

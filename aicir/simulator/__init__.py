@@ -85,3 +85,4 @@ def tn_expectation(circuit, observable, *, backend=None, optimize="auto", memory
 
 
 from .mps import MPSState, mps_statevector, mps_expectation  # noqa: E402
+from .factored import FactoredState, factored_expectation, factored_statevector  # noqa: E402
