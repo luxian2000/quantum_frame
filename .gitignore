@@ -29,3 +29,6 @@ NEXT.md
 # NPU 内核缺口目录：唯一权威副本在 CLAUDE.md（本身也不入版本控制）。
 # 不要把这份清单整理成仓库内文档——单条代码注释是维护所需，汇编成目录是另一回事。
 docs/ascend-kernel-gaps.md
+
+# 论文草稿：暂不公开（§4 以昇腾内核缺口为论据）。权威副本在本地 paper-draft 分支。
+docs/paper/
