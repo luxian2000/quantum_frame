@@ -25,3 +25,7 @@ NEXT.md
 
 # SDD 工作区（子代理驱动开发的临时产物）
 .superpowers/
+
+# NPU 内核缺口目录：唯一权威副本在 CLAUDE.md（本身也不入版本控制）。
+# 不要把这份清单整理成仓库内文档——单条代码注释是维护所需，汇编成目录是另一回事。
+docs/ascend-kernel-gaps.md
